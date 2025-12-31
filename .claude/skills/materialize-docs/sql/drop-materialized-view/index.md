@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-materialized-view/
+complexity: intermediate
+description: '`DROP MATERIALIZED VIEW` removes a materialized view from Materialize.'
+doc_type: reference
+keywords:
+- DROP MATERIALIZED VIEW
+- DROP THEM
+- IF EXISTS
+- RESTRICT
+- CASCADE
+- DROP MATERIALIZED
+product_area: Views
+status: stable
+title: DROP MATERIALIZED VIEW
+---
+
 # DROP MATERIALIZED VIEW
+
+## Purpose
+`DROP MATERIALIZED VIEW` removes a materialized view from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP MATERIALIZED VIEW` removes a materialized view from Materialize.
 
@@ -10,9 +34,11 @@ them first, or use the `CASCADE` option.
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP MATERIALIZED VIEW [IF EXISTS] <view_name> [RESTRICT|CASCADE];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -23,20 +49,22 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ### Dropping a materialized view with no dependencies
 
 ```mzsql
 DROP MATERIALIZED VIEW winning_bids;
-```
+```text
 ```nofmt
 DROP MATERIALIZED VIEW
-```
+```bash
 
 ### Dropping a materialized view with dependencies
 
 ```mzsql
 DROP MATERIALIZED VIEW winning_bids;
-```
+```text
 
 ```nofmt
 ERROR:  cannot drop materialize.public.winning_bids: still depended
@@ -47,8 +75,9 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/drop-materialized-view.md" >}}
+- Ownership of the dropped materialized view.
+- `USAGE` privileges on the containing schema.
+
 
 ## Related pages
 

@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/validate-connection/
+complexity: intermediate
+description: '`VALIDATE CONNECTION` validates the connection and authentication parameters
+  provided in a `CREATE CONNECTION` statement against the target external system'
+doc_type: reference
+keywords:
+- CREATE CONNECTION
+- CREATE SOURCE
+- CREATE SINK
+- VALIDATE CONNECTION
+product_area: Indexes
+status: stable
+title: VALIDATE CONNECTION
+---
+
 # VALIDATE CONNECTION
+
+## Purpose
+`VALIDATE CONNECTION` validates the connection and authentication parameters provided in a `CREATE CONNECTION` statement against the target external system
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `VALIDATE CONNECTION` validates the connection and authentication parameters provided in a `CREATE CONNECTION` statement against the target external system
 
@@ -9,6 +32,8 @@ provided in a `CREATE CONNECTION` statement against the target external
 system.
 
 ## Syntax
+
+This section covers syntax.
 
 ```mzsql
 VALIDATE CONNECTION <connection_name>;
@@ -27,8 +52,9 @@ a validation error.
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/validate-connection.md" >}}
+- `USAGE` privileges on the containing schema.
+- `USAGE` privileges on the connection.
+
 
 ## Related pages
 

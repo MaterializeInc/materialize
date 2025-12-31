@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-sink/
+complexity: advanced
+description: '`ALTER SINK` allows cutting a sink over to a new upstream relation without
+  causing disruption to downstream consumers.'
+doc_type: reference
+keywords:
+- only
+- 'Note:'
+- ALTER SINK
+- Workarounds
+product_area: Sinks
+status: stable
+title: ALTER SINK
+---
+
 # ALTER SINK
 
+## Purpose
 `ALTER SINK` allows cutting a sink over to a new upstream relation without causing disruption to downstream consumers.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`ALTER SINK` allows cutting a sink over to a new upstream relation without causing disruption to downstream consumers.
 
 
 Use `ALTER SINK` to:
@@ -12,38 +34,35 @@ Use `ALTER SINK` to:
 
 ## Syntax
 
-{{< tabs>}}
-{{< tab "Change sink from relation" >}}
+This section covers syntax.
+
+#### Change sink from relation
 
 ### Change sink from relation
 
 To change the relation you want to sink from:
 
-{{% include-syntax file="examples/alter_sink" example="syntax-set-from" %}}
+<!-- Syntax example: examples/alter_sink / syntax-set-from -->
 
-{{< /tab >}}
-{{< tab "Rename" >}}
+#### Rename
 
 ### Rename
 
 To rename a sink:
 
-{{% include-syntax file="examples/alter_sink" example="syntax-rename" %}}
+<!-- Syntax example: examples/alter_sink / syntax-rename -->
 
-
-
-{{< /tab >}}
-{{< tab "Change owner" >}}
+#### Change owner
 
 ### Change owner
 
 To change the owner of a sink:
 
-{{% include-syntax file="examples/alter_sink" example="syntax-change-owner" %}}
-{{< /tab >}}
-{{< /tabs >}}
+<!-- Syntax example: examples/alter_sink / syntax-change-owner -->
 
 ## Details
+
+This section covers details.
 
 ### Changing sink from relation
 
@@ -74,12 +93,12 @@ relation, and
 - all updates that happened after the cutover timestamp for the new
 relation.
 
-{{< note >}}
+> **Note:** 
 To select a consistent timestamp, Materialize must wait for the previous
 definition of the sink to emit results up until the oldest timestamp at which
 the contents of the new upstream relation are known. Attempting to `ALTER` an
 unhealthy sink that can't make progress will result in the command timing out.
-{{</ note >}}
+
 
 #### Cutover scenarios and workarounds
 
@@ -146,57 +165,65 @@ create a sink on the materialized view.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-sink.md" >}}
+- Ownership of the sink being altered.
+- In addition,
+  - To change the sink from relation:
+    - `SELECT` privileges on the new relation being written out to an external system.
+    - `CREATE` privileges on the cluster maintaining the sink.
+    - `USAGE` privileges on all connections and secrets used in the sink definition.
+    - `USAGE` privileges on the schemas that all connections and secrets in the
+      statement are contained in.
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing schema if the sink is namespaced
+  by a schema.
+
 
 ## Examples
+
+This section covers examples.
 
 ### Alter sink
 
 The following example alters a sink originally created from `matview_old` to use
 `matview_new` instead.
 
-{{% include-example file="examples/alter_sink"
-example="alter-sink-create-original-sink" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
-{{% include-example file="examples/alter_sink" example="alter-sink-simple" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/alter_sink" exa... -->
 
 ### Handle cutover scenarios
 
-{{% include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-intro" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
-1. {{< include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-step-1-intro" >}}
+1. <!-- Example: examples/alter_sink / handle-cutover-scenarios-step-1-intro -->
 
-   {{% include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-create-transition-mv" %}}
+   <!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
-1. {{< include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-step-2-intro" >}}
+1. <!-- Example: examples/alter_sink / handle-cutover-scenarios-step-2-intro -->
 
-   {{% include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-alter-sink-to-transition" %}}
+   <!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
-1. {{< include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-step-3-intro" >}}
+1. <!-- Example: examples/alter_sink / handle-cutover-scenarios-step-3-intro -->
 
-   {{% include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-update-switch" %}}
+   <!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
-1. {{< include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-step-4-intro" >}}
+1. <!-- Example: examples/alter_sink / handle-cutover-scenarios-step-4-intro -->
 
-   {{% include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-alter-sink-to-new-mv" %}}
+   <!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
-1. {{< include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-step-5-intro" >}}
+1. <!-- Example: examples/alter_sink / handle-cutover-scenarios-step-5-intro -->
 
-   {{% include-example file="examples/alter_sink"
-example="handle-cutover-scenarios-drop-intermediary-objects" %}}
+   <!-- Unresolved shortcode: {{% include-example file="examples/alter_sink"
+exa... -->
 
 ## See also
 
 - [`CREATE SINK`](/sql/create-sink/)
 - [`SHOW SINKS`](/sql/show-sinks)
-

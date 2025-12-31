@@ -1,20 +1,44 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-azure/upgrade-on-azure/
+complexity: intermediate
+description: Procedure to upgrade your Materialize operator and instances running
+  on Azure
+doc_type: reference
+keywords:
+- UPDATE YOUR
+- v27
+- v26
+- 'Disambiguation:'
+- CREATE ONE
+- Upgrade on Azure (Terraform)
+- SELECT THE
+- not
+- 'Important:'
+product_area: Deployment
+status: stable
+title: Upgrade on Azure (Terraform)
+---
+
 # Upgrade on Azure (Terraform)
+
+## Purpose
+Procedure to upgrade your Materialize operator and instances running on Azure
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Procedure to upgrade your Materialize operator and instances running on Azure
 
 
-
-{{< annotation type="Disambiguation" >}}
-
-- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
-Terraform version to `v0.6.1` or higher, {{< include-md
-file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md" >}}.
+> **Disambiguation:** - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1` or higher, [Azure Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061)
+.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided Terraforms, you must
 prepare your nodes by adding the required labels. For detailed instructions, see
 [Prepare for swap and upgrade to v26.0](/installation/upgrade-to-swap/).
-
-{{< /annotation >}}
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on Azure Kubernetes Service (AKS).
@@ -26,32 +50,32 @@ directory or the root).
 
 ## Version compatibility
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+> **Important:** 
+
+When performing major version upgrades, you can upgrade only one major version
+at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
+but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
+not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](../self-managed/v25.2/release-notes/#v25216).
 
 
+#### Materialize on Azure Terraform Releases
 
-{{< tabs >}}
-
-{{< tab "Materialize on Azure Terraform Releases" >}}
 
 When upgrading, you may need or want to update your fork of the Terraform module
 to upgrade.
 
-{{< yaml-table data="self_managed/azure_terraform_versions" >}}
+<!-- Dynamic table: self_managed/azure_terraform_versions - see original docs -->
 
-{{</ tab >}}
-{{</ tabs >}}
 
 ## Prerequisites
 
-{{< important >}}
+> **Important:** 
 
 The following procedure performs a rolling upgrade, where both the old and new
 Materialize instances are running before the the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
-{{</ important >}}
 
 ### Azure subscription
 
@@ -88,7 +112,9 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+Starting in v26.0, Materialize requires a license key. If your existing
+deployment does not have a license key configured, contact [Materialize support](../support/).
+
 
 ## A. Authenticate with Azure
 
@@ -98,7 +124,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
     ```bash
     az login
-    ```
+    ```text
 
    The command opens a browser window to sign in to Azure. Sign in.
 
@@ -116,7 +142,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    The default is marked with an *; the default tenant is '<Tenant>' and
    subscription is '<Subscription Name>' (<Subscription ID>).
-   ```
+   ```text
 
    Select the subscription and tenant.
 
@@ -124,7 +150,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
     ```bash
     export ARM_SUBSCRIPTION_ID=<subscription-id>
-    ```
+    ```bash
 
 ## B. Upgrade process
 
@@ -133,36 +159,36 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    cd terraform-azurerm-materialize/examples/simple
-   ```
+   ```text
 
 1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
-   {{< yaml-table data="self_managed/azure_terraform_versions" >}}
+   <!-- Dynamic table: self_managed/azure_terraform_versions - see original docs -->
 
-   {{< tip >}}
+   > **Tip:** 
 
-   {{% self-managed/azure-terraform-upgrade-notes %}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-   {{</ tip >}}
+   
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
    environment:
 
     ```bash
     python3 -m venv <path to the new virtual environment>
-    ```
+    ```text
 
    Activate the virtual environment:
     ```bash
     source <path to the new virtual environment>/bin/activate
-    ```
+    ```text
 
 1. Install the required packages.
 
     ```bash
     pip install -r requirements.txt
-    ```
+    ```text
 
 1. Configure `kubectl` to connect to your cluster:
 
@@ -174,7 +200,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    az aks get-credentials --resource-group <resource_group_name> --name <cluster_name>
-   ```
+   ```text
 
    Alternatively, you can use the following command to get the cluster name and
    resource group name from the Terraform output (in your `terraform.tfstate`
@@ -182,7 +208,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -json aks_cluster | jq -r '.name')
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
@@ -193,5 +219,4 @@ If you want to use `jq` and do not have `jq` installed, install.
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
-
+<!-- Unresolved shortcode: {{% self-managed/versions/upgrade/upgrade-steps-cl... -->

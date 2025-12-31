@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/terraform/appendix-secret-stores/
+complexity: intermediate
+description: Materialize does not directly integrate with external secret stores,
+  but it's possible to manage this integration via Terraform.
+doc_type: reference
+keywords:
+- 'Appendix: External secret stores'
+- CREATE A
+product_area: Operations
+status: stable
+title: 'Appendix: External secret stores'
+---
+
 # Appendix: External secret stores
+
+## Purpose
+Materialize does not directly integrate with external secret stores, but it's possible to manage this integration via Terraform.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 
 
@@ -22,7 +43,7 @@ provider "vault" {
   address = "https://vault.example.com"
   token   = "your-vault-token"
 }
-```
+```text
 
 Next, fetch a secret from Vault and use it to create a new Materialize secret:
 

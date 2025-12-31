@@ -1,18 +1,44 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-sink/kafka/
+complexity: advanced
+description: Connecting Materialize to a Kafka or Redpanda broker sink
+doc_type: reference
+keywords:
+- CREATE A
+- reusable
+- Table
+- CREATE SOURCE
+- Materialized view
+- Source
+- 'CREATE SINK: Kafka/Redpanda'
+- 'Note:'
+- CREATE SINK
+product_area: Sinks
+status: experimental
+title: 'CREATE SINK: Kafka/Redpanda'
+---
+
 # CREATE SINK: Kafka/Redpanda
+
+## Purpose
+Connecting Materialize to a Kafka or Redpanda broker sink
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Connecting Materialize to a Kafka or Redpanda broker sink
 
 
-
-{{< note >}}
+> **Note:** 
 The `CREATE SINK` syntax, supported formats, and features are the
 same for Kafka and Redpanda broker. For simplicity, this page uses
 "Kafka" to refer to both Kafka and Redpanda.
-{{< /note >}}
 
-{{% create-sink/intro %}}
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: create-sink/intro --> --> -->
 To use a Kafka broker (and optionally a schema registry) as a sink, make sure that a connection that specifies access and authentication parameters to that broker already exists; otherwise, you first need to [create a connection](#creating-a-connection). Once created, a connection is **reusable** across multiple `CREATE SINK` and `CREATE SOURCE` statements.
-{{% /create-sink/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
 
 Sink source type      | Description
@@ -23,27 +49,27 @@ Sink source type      | Description
 
 ## Syntax
 
-{{< diagram "create-sink-kafka.svg" >}}
+[See diagram: create-sink-kafka.svg]
 
 #### `sink_definition`
 
-{{< diagram "sink-definition.svg" >}}
+[See diagram: sink-definition.svg]
 
 #### `sink_format_spec`
 
-{{< diagram "sink-format-spec.svg" >}}
+[See diagram: sink-format-spec.svg]
 
 #### `kafka_sink_connection`
 
-{{< diagram "kafka-sink-connection.svg" >}}
+[See diagram: kafka-sink-connection.svg]
 
 #### `csr_connection`
 
-{{< diagram "csr-connection.svg" >}}
+[See diagram: csr-connection.svg]
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+[See diagram: with-options-retain-history.svg]
 
 Field | Use
 ------|-----
@@ -55,7 +81,7 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 **KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
 **HEADERS** | An optional column containing headers to add to each Kafka message emitted by the sink. See [Headers](#headers) for details.
 **FORMAT** | Specifies the format to use for both keys and values: `AVRO USING csr_connection`, `JSON`, `TEXT`, or `BYTES`. See [Formats](#formats) for details.
-**KEY FORMAT .. VALUE FORMAT** | {{< warn-if-unreleased-inline "v0.108" >}} Specifies the key format and value formats separately. See [Formats](#formats) for details.
+**KEY FORMAT .. VALUE FORMAT** |  Specifies the key format and value formats separately. See [Formats](#formats) for details.
 **NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
 **ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
@@ -65,7 +91,7 @@ _item&lowbar;name_ | The name of the source, table or materialized view you want
 Field                               | Value  | Description
 ------------------------------------|--------|------------
 `TOPIC`                             | `text`              | The name of the Kafka topic to write to.
-`COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+`COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `none``lz4`
 `TRANSACTIONAL ID PREFIX`           | `text`              | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
 `PARTITION BY`                      | expression          | A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
 `PROGRESS GROUP ID PREFIX`          | `text`              | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
@@ -87,7 +113,7 @@ Field                | Value  | Description
 
 #### `DOC ON` option syntax
 
-{{< diagram "create-sink-doc-on-option.svg" >}}
+[See diagram: create-sink-doc-on-option.svg]
 
 The `DOC ON` option has special syntax, shown above, with the following
 mechanics:
@@ -112,7 +138,7 @@ Field                | Value  | Description
 
 ## Headers
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 Materialize always adds a header with key `materialize-timestamp` to each
 message emitted by the sink. The value of this header indicates the logical time
@@ -356,7 +382,7 @@ update event:
 
 // Update event.
 {"before": {"field1": "oldval1", ...}, "after": {"field1": "newval1", ...}}
-```
+```text
 
 Note that the sink will only produce update events if a `KEY` is specified.
 
@@ -367,6 +393,8 @@ Consider using the Debezium envelope if:
   * There is no natural `KEY` for the sink.
 
 ## Features
+
+This section covers features.
 
 ### Automatic topic creation
 
@@ -400,9 +428,9 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Compaction          | We recommend enabling compaction to avoid accumulating unbounded state. Disabling compaction may cause performance issues, but will not cause correctness issues.
 | Progress topic | Retention           | **Must be disabled.** Enabling retention can cause Materialize to violate its [exactly-once guarantees](#exactly-once-processing).
 | Progress topic | Tiered storage      | We recommend disabling tiered storage to allow for more aggressive data compaction. Fully compacted data requires minimal storage, typically only tens of bytes per sink, making it cost-effective to maintain directly on local disk.
-{{< warning >}}
-{{% kafka-sink-drop %}}
-{{</ warning >}}
+> **Warning:** 
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: kafka-sink-drop --> --> -->
+
 
 ### Exactly-once processing
 
@@ -458,7 +486,7 @@ CREATE SINK ... INTO KAFKA CONNECTION <name> (PARTITION BY = <expression>) ...;
 CREATE SINK ... INTO KAFKA CONNECTION <name> (
     PARTITION BY = kafka_murmur2(name || address)
 ) ...;
-```
+```text
 
 The expression:
   * Must have a type that can be assignment cast to [`uint8`].
@@ -490,7 +518,16 @@ partioning](#custom-partitioning).
 
 To execute the `CREATE SINK` command, you need:
 
-{{< include-md file="shared-content/sql-command-privileges/create-sink.md" >}}
+- `CREATE` privileges on the containing schema.
+- `SELECT` privileges on the item being written out to an external system.
+  - NOTE: if the item is a materialized view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the sink definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
+
 
 See also [Required Kafka ACLs](#required-kafka-acls).
 
@@ -516,9 +553,18 @@ Create           | Topic            | The specified `TOPIC` option
 
 ## Kafka transaction markers
 
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
+Materialize uses [Kafka
+transactions](https://www.confluent.io/blog/transactions-apache-kafka/). When
+Kafka transactions are used, special control messages known as **transaction
+markers** are published to the topic. Transaction markers inform both the broker
+and clients about the status of a transaction. When a topic is read using a
+standard Kafka consumer, these markers are not exposed to the application, which
+can give the impression that some offsets are being skipped.
+
 
 ## Troubleshooting
+
+This section covers troubleshooting.
 
 ### Upsert key selection
 
@@ -528,7 +574,7 @@ the sink's upstream relation.
 Materialize will attempt to validate the uniqueness of the specified key. If
 validation fails, you'll receive an error message like one of the following:
 
-```
+```text
 ERROR:  upsert key could not be validated as unique
 DETAIL: Materialize could not prove that the specified upsert envelope key
 ("col1") is a unique key of the upstream relation. There are no known
@@ -540,7 +586,7 @@ DETAIL: Materialize could not prove that the specified upsert envelope key
 are known to be unique for the upstream relation:
   ("col2")
   ("col3", "col4")
-```
+```text
 
 The first error message indicates that Materialize could not prove the existence
 of any unique keys for the sink's upstream relation. The second error message
@@ -571,13 +617,13 @@ There are three ways to resolve this error:
   INTO KAFKA CONNECTION kafka_connection (TOPIC 't')
   KEY (k)
   FORMAT JSON ENVELOPE UPSERT;
-  ```
+  ```text
 
-  {{< note >}}
+  > **Note:** 
   Maintaining the `deduped` materialized view requires memory proportional to the
   number of records in `original_input`. Be sure to assign `deduped`
   to a cluster with adequate resources to handle your data volume.
-  {{< /note >}}
+  
 
 * Use the `NOT ENFORCED` clause to disable Materialize's validation of the key's
   uniqueness:
@@ -590,21 +636,22 @@ There are three ways to resolve this error:
   -- Materialize cannot prove this, so we disable its key uniqueness check.
   KEY (k) NOT ENFORCED
   FORMAT JSON ENVELOPE UPSERT;
-  ```
+  ```text
 
   You should only disable this verification if you have outside knowledge of
   the properties of your data that guarantees the uniqueness of the key you
   have specified.
 
-  {{< warning >}}
+  > **Warning:** 
   If the key is not in fact unique, downstream consumers may not be able to
   correctly interpret the data in the topic, and Kafka key compaction may
   incorrectly garbage collect records from the topic.
-  {{< /warning >}}
-
+  
 
 
 ## Examples
+
+This section covers examples.
 
 ### Creating a connection
 
@@ -617,8 +664,9 @@ statements. For more details on creating connections, check the
 
 #### Broker
 
-{{< tabs tabID="1" >}}
-{{< tab "SSL">}}
+
+#### SSL
+
 
 ```mzsql
 CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
@@ -629,10 +677,11 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     SSL KEY = SECRET kafka_ssl_key,
     SSL CERTIFICATE = SECRET kafka_ssl_crt
 );
-```
+```json
 
-{{< /tab >}}
-{{< tab "SASL">}}
+
+#### SASL
+
 
 ```mzsql
 CREATE SECRET kafka_password AS '<BROKER_PASSWORD>';
@@ -643,15 +692,14 @@ CREATE CONNECTION kafka_connection TO KAFKA (
     SASL USERNAME = 'foo',
     SASL PASSWORD = SECRET kafka_password
 );
-```
+```json
 
-{{< /tab >}}
-{{< /tabs >}}
 
 #### Confluent Schema Registry
 
-{{< tabs tabID="1" >}}
-{{< tab "SSL">}}
+
+#### SSL
+
 
 ```mzsql
 CREATE SECRET csr_ssl_crt AS '<CSR_SSL_CRT>';
@@ -665,10 +713,11 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
     USERNAME = 'foo',
     PASSWORD = SECRET csr_password
 );
-```
+```json
 
-{{< /tab >}}
-{{< tab "Basic HTTP Authentication">}}
+
+#### Basic HTTP Authentication
+
 
 ```mzsql
 CREATE SECRET IF NOT EXISTS csr_username AS '<CSR_USERNAME>';
@@ -679,17 +728,14 @@ CREATE CONNECTION csr_basic_http
   URL '<CONFLUENT_REGISTRY_URL>',
   USERNAME = SECRET csr_username,
   PASSWORD = SECRET csr_password;
-```
+```json
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Creating a sink
 
 #### Upsert envelope
 
-{{< tabs >}}
-{{< tab "Avro">}}
+#### Avro
 
 ```mzsql
 CREATE SINK avro_sink
@@ -698,10 +744,9 @@ CREATE SINK avro_sink
   KEY (key_col)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT;
-```
+```bash
 
-{{< /tab >}}
-{{< tab "JSON">}}
+#### JSON
 
 ```mzsql
 CREATE SINK json_sink
@@ -710,15 +755,11 @@ CREATE SINK json_sink
   KEY (key_col)
   FORMAT JSON
   ENVELOPE UPSERT;
-```
-
-{{< /tab >}}
-{{< /tabs >}}
+```bash
 
 #### Debezium envelope
 
-{{< tabs >}}
-{{< tab "Avro">}}
+#### Avro
 
 ```mzsql
 CREATE SINK avro_sink
@@ -726,9 +767,7 @@ CREATE SINK avro_sink
   INTO KAFKA CONNECTION kafka_connection (TOPIC 'test_avro_topic')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
-```
-{{< /tab >}}
-{{< /tabs >}}
+```bash
 
 
 #### Topic configuration
@@ -745,7 +784,7 @@ CREATE SINK custom_topic_sink
   )
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE UPSERT;
-```
+```bash
 
 #### Schema compatibility levels
 
@@ -761,7 +800,7 @@ CREATE SINK compatibility_level_sink
     VALUE COMPATIBILITY LEVEL 'BACKWARD_TRANSITIVE'
   )
   ENVELOPE UPSERT;
-```
+```bash
 
 #### Documentation comments
 
@@ -783,7 +822,7 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection (
     VALUE DOC ON COLUMN t.key = 'Comment on column only in value schema'
 )
 ENVELOPE UPSERT;
-```
+```text
 
 When `docs_sink` is created, Materialize will publish the following Avro schemas
 to the Confluent Schema Registry:
@@ -803,7 +842,7 @@ to the Confluent Schema Registry:
         }
       ]
     }
-    ```
+    ```text
 
   * Value schema:
 
@@ -825,7 +864,7 @@ to the Confluent Schema Registry:
         }
       ]
     }
-    ```
+    ```text
 
 See [Avro schema documentation](#avro-schema-documentation) for details
 about the rules by which Materialize attaches `doc` fields to records.
@@ -886,4 +925,3 @@ CREATE SINK customer_orders
 [arrays]: ../../types/array
 [`kafka-topics.sh`]: https://docs.confluent.io/kafka/operations-tools/kafka-tools.html#kafka-topics-sh
 [SeaHash]: https://docs.rs/seahash/latest/seahash/
-

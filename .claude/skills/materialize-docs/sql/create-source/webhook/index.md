@@ -1,14 +1,40 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-source/webhook/
+complexity: advanced
+description: Ingesting data into Materialize with HTTP requests
+doc_type: reference
+keywords:
+- CREATE SOURCE
+- IN CLUSTER
+- INCLUDE HEADER
+- CHECK
+- INCLUDE HEADERS
+- 'CREATE SOURCE: Webhook'
+- AS
+product_area: Sources
+status: stable
+title: 'CREATE SOURCE: Webhook'
+---
+
 # CREATE SOURCE: Webhook
+
+## Purpose
+Ingesting data into Materialize with HTTP requests
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Ingesting data into Materialize with HTTP requests
 
 
-
-{{% create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: create-source/intro --> --> -->
 Webhook sources expose a [public URL](#webhook-url) that allows your applications to push webhook events into Materialize.
-{{% /create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
 ## Syntax
+
+This section covers syntax.
 
 ```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
@@ -23,7 +49,7 @@ FROM WEBHOOK
       <check_expression>
     )
   ]
-```
+```bash
 
 
 ### `webhook_check_option`
@@ -45,6 +71,8 @@ Field                  | Type                | Description
 `SECRET` _secret_name_ | `text` or `bytea`    | Securely provide a [`SECRET`](/sql/create-secret) to the check expression. The `constant_time_eq` validation function **does not support** fully qualified secret names: if the secret is in a different namespace to the source, the column can be renamed with the optional **AS** _alias_ statement. The data type can also be changed to `bytea` using the optional **BYTES** keyword.
 
 ## Supported formats
+
+This section covers supported formats.
 
 |<div style="width:290px">Body format</div> | Type      | Description       |
 --------------------------------------------| --------- |-------------------|
@@ -70,9 +98,9 @@ After source creation, the unique URL that allows you to **POST** events to the
 source can be looked up in the [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
 system catalog table. The URL will have the following format:
 
-```
+```text
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
-```
+```text
 
 A breakdown of each component is as follows:
 
@@ -81,13 +109,15 @@ A breakdown of each component is as follows:
 - `<schema>`: The schema name where the source gets created (default is `public`).
 - `<src_name>`: The name you provided for your source at the time of creation.
 
-{{< note >}}
+> **Note:** 
 This is a public URL that is open to the internet and has no security. To
 validate that requests are legitimate, see [Validating requests](#validating-requests).
 For limits imposed on this endpoint, see [Request limits](#request-limits).
-{{< /note >}}
+
 
 ## Features
+
+This section covers features.
 
 ### Exposing headers
 
@@ -100,7 +130,7 @@ CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADER 'timestamp' as ts
   INCLUDE HEADER 'x-event-type' as event_type;
-```
+```text
 
 This example would have the following columns:
 
@@ -124,7 +154,7 @@ sensitive information like authorization.
 CREATE SOURCE my_webhook_source FROM WEBHOOK
   BODY FORMAT JSON
   INCLUDE HEADERS ( NOT 'authorization', NOT 'x-api-key' );
-```
+```text
 
 This example would have the following columns:
 
@@ -138,11 +168,11 @@ the `headers` map column.
 
 ### Validating requests
 
-{{< warning >}}
+> **Warning:** 
 Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
-{{< /warning >}}
+
 
 It's common for applications using webhooks to provide a method for validating a
 request is legitimate. You can specify an expression to do this validation for
@@ -168,7 +198,7 @@ CREATE SOURCE my_webhook_source FROM WEBHOOK
         hmac(request_body, validation_secret, 'sha256')
     )
   );
-```
+```text
 
 The headers and body of the request are only subject to validation if `WITH
 ( BODY, HEADERS, ... )` is specified as part of the `CHECK` statement. By
@@ -192,7 +222,7 @@ CREATE SOURCE my_webhook_temporary_debug FROM WEBHOOK
   -- which is how it's provided to CHECK.
   BODY FORMAT TEXT
   INCLUDE HEADERS;
-```
+```text
 
 Once you have a few events in _my_webhook_temporary_debug_, you can query it with your would-be
 `CHECK` statement.
@@ -206,12 +236,12 @@ SELECT
   )
 FROM my_webhook_temporary_debug
 LIMIT 10;
-```
+```text
 
-{{< note >}}
+> **Note:** 
 It's not possible to use secrets in a `SELECT` statement, so you'll need to
 provide these values as raw text for debugging.
-{{< /note >}}
+
 
 ### Handling duplicated and partial events
 
@@ -225,7 +255,7 @@ CREATE MATERIALIZED VIEW my_webhook_idempotent AS (
   FROM my_webhook_source
   ORDER BY id
 );
-```
+```text
 
 We can take this technique a bit further to handle partial events. Let's pretend our application
 tracks the completion of build jobs, and it sends us JSON objects with following structure.
@@ -252,12 +282,12 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged AS (
   )
   ORDER BY id, finished_at NULLS LAST, started_at NULLS LAST
 );
-```
+```text
 
-{{< note >}}
+> **Note:** 
 When casting from `text` to `timestamp` you should prefer to use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/)
 function, which enables [temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
-{{< /note >}}
+
 
 ### Handling batch events
 
@@ -275,7 +305,7 @@ separate rows using `BODY FORMAT JSON ARRAY`.
 CREATE SOURCE webhook_source_json_array FROM WEBHOOK
   BODY FORMAT JSON ARRAY
   INCLUDE HEADERS;
-```
+```text
 
 If you `POST` a JSON array of three elements to `webhook_source_json_array`,
 three rows will get appended to the source.
@@ -287,13 +317,13 @@ POST webhook_source_json_array
   { "event_type": "b" },
   { "event_type": "c" }
 ]
-```
+```text
 
 ```mzsql
 SELECT COUNT(body) FROM webhook_source_json_array;
 ----
 3
-```
+```text
 
 You can also post a single object to the source, which will get appended as one
 row.
@@ -301,7 +331,7 @@ row.
 ```bash
 POST webhook_source_json_array
 { "event_type": "d" }
-```
+```text
 
 ```mzsql
 SELECT body FROM webhook_source_json_array;
@@ -310,7 +340,7 @@ SELECT body FROM webhook_source_json_array;
 { "event_type": "b" }
 { "event_type": "c" }
 { "event_type": "d" }
-```
+```bash
 
 #### Newline-delimited JSON (NDJSON)
 
@@ -321,7 +351,7 @@ separate rows using `BODY FORMAT JSON`.
 -- Webhook source that parses request bodies as NDJSON.
 CREATE SOURCE webhook_source_ndjson FROM WEBHOOK
 BODY FORMAT JSON;
-```
+```text
 
 If you `POST` two elements delimited by newlines to `webhook_source_ndjson`, two
 rows will get appended to the source.
@@ -330,13 +360,13 @@ rows will get appended to the source.
 POST 'webhook_source_ndjson'
   { 'event_type': 'foo' }
   { 'event_type': 'bar' }
-```
+```text
 
 ```mzsql
 SELECT COUNT(body) FROM webhook_source_ndjson;
 ----
 2
-```
+```bash
 
 ## Request limits
 
@@ -352,6 +382,8 @@ Webhook sources apply the following limits to received requests:
 
 ## Examples
 
+This section covers examples.
+
 ### Using basic authentication
 
 [Basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme)
@@ -363,7 +395,7 @@ To store the sensitive credentials and make them reusable across multiple
 
 ```mzsql
 CREATE SECRET basic_hook_auth AS 'Basic <base64_auth>';
-```
+```bash
 
 ### Creating a source
 
@@ -404,4 +436,3 @@ required data types. To avoid doing this tedious task manually, you can use
 - [`CREATE SOURCE`](../)
 - [`SHOW SOURCES`](/sql/show-sources)
 - [`DROP SOURCE`](/sql/drop-source)
-

@@ -1,31 +1,55 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-source/postgres-v2/
+complexity: advanced
+description: Creates a new source from PostgreSQL 11+.
+doc_type: reference
+keywords:
+- CREATE MULTIPLE
+- 'Private Preview:'
+- CREATE SOURCE
+- a single
+- CREATE TABLE
+- 'Tip:'
+- 'replication
+
+  slot'
+- CREATE TABLES
+- 'CREATE SOURCE: PostgreSQL (New Syntax)'
+product_area: Sources
+status: experimental
+title: 'CREATE SOURCE: PostgreSQL (New Syntax)'
+---
+
 # CREATE SOURCE: PostgreSQL (New Syntax)
+
+## Purpose
+Creates a new source from PostgreSQL 11+.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Creates a new source from PostgreSQL 11+.
 
 
+> **Private Preview:** This feature is in private preview.
 
-{{< private-preview />}}
 
-{{< source-versioning-disambiguation is_new=true
-other_ref="[old reference page](/sql/create-source/postgres/)" include_blurb=true >}}
-
-{{% create-source-intro external_source="PostgreSQL" version="11+"
-create_table="/sql/create-table/" %}}
+<!-- Unresolved shortcode: {{% create-source-intro external_source="PostgreSQ... -->
 
 ## Prerequisites
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-source-prereq" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ## Syntax
 
-{{% include-example file="examples/create_source/example_postgres_source"
- example="syntax" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_source/e... -->
 
-{{% include-example file="examples/create_source/example_postgres_source"
- example="syntax-options" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_source/e... -->
 
 ## Details
+
+This section covers details.
 
 ### Ingesting data
 
@@ -50,26 +74,22 @@ With the new syntax, after a PostgreSQL source is created, you [`CREATE TABLE
 FROM SOURCE`](/sql/create-table/) to create a corresponding table in
 Matererialize and start ingesting data.
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-supported-types" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
 
 #### Upstream table truncation restrictions
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 ### Publication membership
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-publication-membership" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-publication-membership-mitigation-legacy" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### PostgreSQL replication slots
 
@@ -87,40 +107,36 @@ The name of the replication slot created by Materialize is prefixed with
 
 ```mzsql
 SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
-```
+```text
 
-```
+```text
     id   |             replication_slot
 ---------+----------------------------------------------
   u8     | materialize_7f8a72d0bf2a4b6e9ebc4e61ba769b71
 ```
 
 
-{{< tip >}}
+> **Tip:** 
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-replication-slots-tip-list" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{</ tip >}}
 
 ## Examples
 
+This section covers examples.
+
 ### Prerequisites
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-source-prereq" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 
 ### Create a source {#create-source-example}
 
-{{% include-example file="examples/create_source/example_postgres_source"
- example="example-prereq" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_source/e... -->
 
-{{% include-example file="examples/create_source/example_postgres_source"
- example="create-source" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_source/e... -->
 
-{{% include-example file="examples/create_source/example_postgres_source"
- example="create-table" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_source/e... -->
 
 ## Related pages
 
@@ -131,4 +147,3 @@ name="postgres-source-prereq" %}}
 
 [`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html
-

@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/select/join/
+complexity: intermediate
+description: '`JOIN` lets you combine two or more table expressions.'
+doc_type: reference
+keywords:
+- EXPLAIN PLAN
+- NATURAL
+- 'ON'
+- JOIN
+- SELECT EMPLOYEES
+- )
+- LATERAL
+- SELECT COL_REF
+- SELECT COLS
+- USING (
+product_area: Indexes
+status: stable
+title: JOIN
+---
+
 # JOIN
+
+## Purpose
+`JOIN` lets you combine two or more table expressions.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `JOIN` lets you combine two or more table expressions.
 
@@ -19,17 +47,19 @@ expect.
 
 ## Syntax
 
+This section covers syntax.
+
 ### join_expr
 
-{{< diagram "join-expr.svg" >}}
+[See diagram: join-expr.svg]
 
 ### join_type
 
-{{< diagram "join-type.svg" >}}
+[See diagram: join-type.svg]
 
 ### table_ref
 
-{{< diagram "table-ref.svg" >}}
+[See diagram: table-ref.svg]
 
 Field | Use
 ------|-----
@@ -73,12 +103,12 @@ When a join contains a `LATERAL` cross-reference, the right-hand relation is
 recomputed for each row in the left-hand relation, then joined to the
 left-hand row according to the usual rules of the selected join type.
 
-{{< warning >}}
+> **Warning:** 
 `LATERAL` subqueries can be very expensive to compute. For best results, do not
 materialize a view containing a `LATERAL` subquery without first inspecting the
 plan via the [`EXPLAIN PLAN`](/sql/explain-plan/) statement. In many common patterns
 involving `LATERAL` joins, Materialize can optimize away the join entirely.
-{{< /warning >}}
+
 
 As a simple example, the following query uses `LATERAL` to count from 1 to `x`
 for all the values of `x` in `xs`.
@@ -87,7 +117,7 @@ for all the values of `x` in `xs`.
 SELECT * FROM
   (VALUES (1), (3)) xs (x)
   CROSS JOIN LATERAL generate_series(1, x) y;
-```
+```text
 ```nofmt
  x | y
 ---+---
@@ -95,7 +125,7 @@ SELECT * FROM
  3 | 1
  3 | 2
  3 | 3
-```
+```text
 
 For a real-world example of a `LATERAL` subquery, see the [Top-K by group
 idiom](/transform-data/idiomatic-materialize-sql/top-k/).
@@ -114,7 +144,7 @@ For these examples, we'll use a small data set:
   2 | Arjun
   3 | Nikhil
   4 | Cuong
-```
+```text
 
 **Managers**
 
@@ -124,7 +154,7 @@ For these examples, we'll use a small data set:
   1 | Arjun |       4
   2 | Cuong |       3
   3 | Frank |
-```
+```text
 
 In this table:
 
@@ -144,13 +174,13 @@ SELECT
   managers."name" AS manager
 FROM employees
 INNER JOIN managers ON employees.id = managers.manages;
-```
+```text
 ```nofmt
  employee | manager
 ----------+---------
  Cuong    | Arjun
  Nikhil   | Cuong
-```
+```bash
 
 ### Left outer join
 
@@ -168,7 +198,7 @@ SELECT
   managers."name" AS manager
 FROM employees
 LEFT OUTER JOIN managers ON employees.id = managers.manages;
-```
+```text
 ```nofmt
  employee | manager
 ----------+---------
@@ -176,7 +206,7 @@ LEFT OUTER JOIN managers ON employees.id = managers.manages;
  Nikhil   | Cuong
  Arjun    |
  Frank    |
- ```
+ ```bash
 
 ### Right outer join
 
@@ -196,14 +226,14 @@ SELECT
   managers."name" AS manager
 FROM employees
 RIGHT OUTER JOIN managers ON employees.id = managers.manages;
-```
+```text
 ```nofmt
  employee | manager
 ----------+---------
  Cuong    | Arjun
  Nikhil   | Cuong
           | Frank
- ```
+ ```bash
 
 ### Full outer join
 
@@ -222,7 +252,7 @@ SELECT
   managers."name" AS manager
 FROM employees
 FULL OUTER JOIN managers ON employees.id = managers.manages;
-```
+```text
 ```nofmt
  employee | manager
 ----------+---------

@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/first-value/
+complexity: advanced
+description: Use idiomatic Materialize SQL to find the first value in each group.
+doc_type: overview
+keywords:
+- 'Idiomatic Materialize SQL:'
+- First value in group
+- 'Note:'
+- SELECT FIELDA
+- SELECT TABLEA
+product_area: SQL
+status: stable
+title: First value in group
+---
+
 # First value in group
 
+## Purpose
 Use idiomatic Materialize SQL to find the first value in each group.
 
+This page provides detailed documentation for this topic.
+
+
+Use idiomatic Materialize SQL to find the first value in each group.
 
 
 ## Overview
@@ -9,13 +31,9 @@ Use idiomatic Materialize SQL to find the first value in each group.
 The "first value in each group" query pattern returns the first value, according
 to some ordering, in each group.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -51,7 +69,7 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -74,7 +92,7 @@ SELECT fieldA, fieldB,
  FIRST_VALUE(fieldZ) OVER (PARTITION BY fieldA ORDER BY ... DESC)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -101,19 +119,18 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  ) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 [Optimization](/transform-data/optimization/#query-hints).
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Use MIN() to find the first value
 
@@ -145,7 +162,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -171,7 +188,7 @@ SELECT order_id,
     OVER (PARTITION BY order_id ORDER BY price) AS diff_lowest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -209,7 +226,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -236,7 +253,7 @@ SELECT order_id,
     OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -280,7 +297,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -325,4 +342,3 @@ ORDER BY order_id, item;
 - [`MAX()`](/sql/functions/#max)
 - [Query hints for MIN/MAX](/transform-data/optimization/#query-hints)
 - [Window functions](/sql/functions/#window-functions)
-

@@ -1,7 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/postgres/faq/
+complexity: intermediate
+description: Frequently asked questions about PostgreSQL sources in Materialize
+doc_type: troubleshooting
+keywords:
+- Outbox Pattern (shadow tables)
+- CREATE DUPLICATE
+- CREATE A
+- Sidecar Pattern
+- 'FAQ: PostgreSQL sources'
+- 'Note:'
+product_area: Sources
+status: stable
+title: 'FAQ: PostgreSQL sources'
+---
+
 # FAQ: PostgreSQL sources
 
+## Purpose
 Frequently asked questions about PostgreSQL sources in Materialize
 
+This page provides detailed documentation for this topic.
+
+
+Frequently asked questions about PostgreSQL sources in Materialize
 
 
 This page addresses common questions and challenges when working with PostgreSQL
@@ -16,11 +39,11 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
 - **Outbox Pattern (shadow tables)**
 
-  {{< note >}}
+  > **Note:** 
 
   With the Outbox pattern, you will need to implement dual writes so that all changes apply to both the original and shadow tables.
 
-  {{</ note >}}
+  
 
   With the Outbox pattern, you create duplicate "shadow" tables for the ones you
   want to replicate and set the shadow tables to `REPLICA IDENTITY FULL`. You
@@ -28,12 +51,12 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
 - **Sidecar Pattern**
 
-  {{< note >}}
+  > **Note:** 
 
   With the Sidecar pattern, you will need to keep the sidecar in sync with the
   source database (e.g., via logical replication or ETL processes).
 
-  {{</ note >}}
+  
 
   With the Sidecar pattern, you create a separate PostgreSQL instance as an
   integration layer. That is, in the sidecar instance, you recreate the tables
@@ -42,7 +65,6 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
 ## What if my table contains data types that are unsupported in Materialize?
 
-{{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 See also: [PostgreSQL considerations](/ingest-data/postgres/#considerations).
-

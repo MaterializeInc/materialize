@@ -1,10 +1,36 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/fivetran/
+complexity: beginner
+description: How to use Fivetran to sync data into Materialize
+doc_type: reference
+keywords:
+- BOOLEAN
+- INT
+- SHORT
+- LONG
+- 'Private Preview:'
+- CREATE THE
+- Fivetran
+- SELECT THE
+product_area: Sources
+status: experimental
+title: Fivetran
+---
+
 # Fivetran
+
+## Purpose
+How to use Fivetran to sync data into Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use Fivetran to sync data into Materialize
 
 
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 [Fivetran](https://www.fivetran.com/) is a cloud-based automated data movement platform for
 extracting, loading and transforming data from a wide variety of connectors.
@@ -18,6 +44,8 @@ For relational databases like PostgreSQL or MySQL, and event streaming sources l
 you should prefer to use [Materialize native sources](/sql/create-source/).
 
 ## Before you begin
+This section covers before you begin.
+
 ### Terminology
 Fivetran syncs data from what they call
 [sources](https://fivetran.com/docs/getting-started/glossary#source) to what they call
@@ -37,6 +65,8 @@ Ensure that you have:
 target database in Materialize.
 
 ## Setup guide
+This section covers setup guide.
+
 ### Step 1: Create the Materialize destination
 Follow this
 [Materialize-authored guide in the Fivetran docs](https://fivetran.com/docs/destinations/materialize/setup-guide#materializesetupguide) to set up Materialize as a destination in Fivetran.
@@ -55,6 +85,8 @@ You can see the full list of available [Fivetran connectors](https://fivetran.co
 in their docs.
 
 ## Other setup information
+This section covers other setup information.
+
 ### Type transformation mapping
 As we extract your data, we match Fivetran data types to types that Materialize supports. If we don't
 support a specific data type, we automatically change that type to the closest supported data type.
@@ -64,22 +96,20 @@ The data types in Materialize follow Fivetran's standard data type storage.
 The following table illustrates how we transform Fivetran data types into Materialize-supported
 types:
 
-| FIVETRAN DATA TYPE | MATERIALIZE DATA TYPE |
-|--------------------|-----------------------|
-| BOOLEAN            | BOOLEAN               |
-| SHORT              | INT16                 |
-| INT                | INT32                 |
-| LONG               | INT64                 |
-| BIGDECIMAL         | DOUBLE                |
-| FLOAT              | FLOAT                 |
-| DOUBLE             | DOUBLE                |
-| LOCALDATE          | DATE                  |
-| LOCALDATETIME      | TIMESTAMP             |
-| INSTANT            | TIMESTAMP             |
-| STRING             | STRING                |
-| JSON               | JSONB                 |
-| BINARY             | STRING                |
-| XML                | Unsupported           |
+- **BOOLEAN**: BOOLEAN
+- **SHORT**: INT16
+- **INT**: INT32
+- **LONG**: INT64
+- **BIGDECIMAL**: DOUBLE
+- **FLOAT**: FLOAT
+- **DOUBLE**: DOUBLE
+- **LOCALDATE**: DATE
+- **LOCALDATETIME**: TIMESTAMP
+- **INSTANT**: TIMESTAMP
+- **STRING**: STRING
+- **JSON**: JSONB
+- **BINARY**: STRING
+- **XML**: Unsupported
 
 ----
 

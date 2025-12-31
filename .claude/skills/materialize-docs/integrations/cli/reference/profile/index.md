@@ -1,7 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/cli/reference/profile/
+complexity: intermediate
+description: The `mz profile` command manages authentication profiles for `mz`.
+doc_type: reference
+keywords:
+- mz profile
+- Required.
+product_area: General
+status: stable
+title: mz profile
+---
+
 # mz profile
 
+## Purpose
 The `mz profile` command manages authentication profiles for `mz`.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+The `mz profile` command manages authentication profiles for `mz`.
 
 
 The `mz profile` command manages [authentication profiles] for `mz`.
@@ -13,7 +32,7 @@ credentials for an app password.
 
 ```shell
 mz profile init [options...]
-```
+```bash
 
 ### Arguments
 
@@ -29,12 +48,12 @@ Argument                    | Environment variables | Description
 
 ```shell
 $ mz profile init --no-browser
-```
-```
+```text
+```text
 Email: remote@example.com
 Password: ...
 Successfully logged in.
-```
+```bash
 
 ## `list`, `ls`
 
@@ -42,20 +61,20 @@ List available authentication profiles.
 
 ```shell
 mz profile {list,ls} [options...]
-```
+```bash
 
 ### Examples
 
 ```shell
 $ mz profile list
-```
-```
+```text
+```text
 Name
 ------------
 development
 production
 staging
-```
+```bash
 
 ## `remove`, `rm`
 
@@ -63,7 +82,7 @@ Remove an authentication profile.
 
 ```shell
 mz profile {remove,rm} [options...]
-```
+```bash
 
 ### Arguments
 
@@ -77,7 +96,7 @@ Remove the `acme-corp` profile:
 
 ```shell
 mz profile remove --profile=acme-corp
-```
+```bash
 
 ## `config get`
 
@@ -85,7 +104,7 @@ Get a configuration parameter in an authentication profile.
 
 ```shell
 mz profile config get <NAME> <VALUE> [options...]
-```
+```bash
 
 ### Flags
 
@@ -100,10 +119,10 @@ Get the default region for the `acme-corp` profile:
 
 ```shell
 $ mz profile config get region --profile=acme-corp
-```
-```
+```text
+```text
 aws/us-east-1
-```
+```bash
 
 ## `config list`, `config ls`
 
@@ -111,18 +130,18 @@ List all configuration parameters in an authentication profile.
 
 ```shell
 mz profile config {list,ls} [options...]
-```
+```bash
 
 ### Examples
 
-```
+```bash
 $ mz profile config list
 
 Name                   | Value
 -----------------------|---------
 profile                | default
 vault                  | keychain
-```
+```bash
 
 ## `config set`
 
@@ -130,7 +149,7 @@ Set a configuration parameter in an authentication profile.
 
 ```shell
 mz profile config set <NAME> <VALUE> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -146,7 +165,7 @@ Set the default region for the active profile:
 
 ```shell
 mz profile config set region aws/eu-west-1
-```
+```bash
 
 ## `config remove`, `config rm`
 
@@ -154,7 +173,7 @@ Remove a configuration parameter in an authentication profile.
 
 ```shell
 mz profile config {remove,rm} <NAME> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -173,7 +192,6 @@ mz profile config rm region
 
 ## Global flags
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profiles]: ../../configuration/#authentication-profiles
-

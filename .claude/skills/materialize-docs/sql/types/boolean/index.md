@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/boolean/
+complexity: intermediate
+description: Expresses TRUE or FALSE
+doc_type: reference
+keywords:
+- SELECT TRUE
+- Quick Syntax
+- Catalog name
+- OID
+- Aliases
+- SELECT FALSE
+- Size
+- boolean type
+product_area: Indexes
+status: stable
+title: boolean type
+---
+
 # boolean type
+
+## Purpose
+Expresses TRUE or FALSE
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses TRUE or FALSE
 
@@ -16,9 +42,11 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-bool.svg" >}}
+[See diagram: type-bool.svg]
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -39,14 +67,16 @@ You can [cast](../../functions/cast) the following types to `boolean`:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT TRUE AS t_val;
-```
+```text
 ```nofmt
  t_val
 -------
  t
-```
+```text
 
 ```mzsql
 SELECT FALSE AS f_val;

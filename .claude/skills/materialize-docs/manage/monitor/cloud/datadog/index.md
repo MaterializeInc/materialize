@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/cloud/datadog/
+complexity: advanced
+description: How to monitor the performance and overall health of your Materialize
+  region using Datadog.
+doc_type: reference
+keywords:
+- CREATE A
+- 'Filename:'
+- Filename
+- Datadog
+- SELECT NAME
+- 'Note:'
+- 'Tip:'
+product_area: Operations
+status: stable
+title: Datadog
+---
+
 # Datadog
+
+## Purpose
+How to monitor the performance and overall health of your Materialize region using Datadog.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to monitor the performance and overall health of your Materialize region using Datadog.
 
@@ -17,10 +43,10 @@ the following additional services:
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
-{{< note >}}
+> **Note:** 
 As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts)
 to connect external applications, like Datadog, to Materialize.
-{{</ note >}}
+
 
 To export metrics from Materialize and expose them in a format that Datadog can
 consume, you need to configure and run a Prometheus SQL Exporter. This service
@@ -33,21 +59,21 @@ which has been tried and tested in production environments.
 1. In the host that will run the Prometheus SQL Exporter, create a configuration
    file (`config.yml`) to hold the Exporter configuration.
 
-   {{< tip >}}
+   > **Tip:** 
    You can use [this sample
    `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
-   {{</ tip >}}
+   
 
 
 1. In the configuration file, define the connection to your Materialize region
    under `connections` using the credentials provided in the [Materialize Console](/console/).
 
-   {{< note >}}
+   > **Note:** 
    You must escape the special `@` character in `USER` for a successful
    connection. Example: instead of `name@email.com`, use `name%40email.com`.
-   {{</ note >}}
+   
 
    **Filename:** config.yml
    ```yaml
@@ -60,7 +86,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
      ...
-   ```
+   ```text
 
    To specify different configurations for different sets of metrics, like a
    different `interval`, use additional jobs with a dedicated connection.
@@ -72,7 +98,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
      ...
-   ```
+   ```text
 
 1. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
 
@@ -101,7 +127,7 @@ which has been tried and tested in production environments.
                    memory_percent::float AS memory_percent
                 FROM mz_cluster_replicas r
                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
-   ```
+   ```text
 
 1. Once you are done with the Prometheus SQL Exporter configuration,
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)

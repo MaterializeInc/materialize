@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/system-catalog/mz_catalog/
+complexity: advanced
+description: mz_catalog is a system catalog that exposes metadata in Materialize's
+  native format.
+doc_type: reference
+keywords:
+- '`processes`'
+- 'Warning:'
+- ALTER ROLE
+- '`size`'
+- '`workers`'
+- mz_catalog
+- DROP EVENTS
+product_area: Indexes
+status: deprecated
+title: mz_catalog
+---
+
 # mz_catalog
 
+## Purpose
 mz_catalog is a system catalog that exposes metadata in Materialize's native format.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+mz_catalog is a system catalog that exposes metadata in Materialize's native format.
 
 
 The following sections describe the available relations in the `mz_catalog`
@@ -9,11 +34,11 @@ schema. These relations contain metadata about objects in Materialize,
 including descriptions of each database, schema, source, table, view, sink, and
 index in the system.
 
-{{< warning >}}
+> **Warning:** 
 Views that directly reference these objects cannot include `NATURAL JOIN` or
 `*` expressions. Instead, project the required columns and convert all `NATURAL JOIN`s
 to `USING` joins.
-{{< /warning >}}
+
 
 ### `mz_array_types`
 
@@ -62,7 +87,6 @@ Field          | Type       | Meaning
 
 ### `mz_cluster_replica_frontiers`
 
-{{< warn-if-unreleased "v0.118" >}}
 
 The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
 sources, sinks, materialized views, indexes, and subscriptions in the system,
@@ -94,21 +118,19 @@ The `mz_cluster_replica_sizes` table contains a mapping of logical sizes
 This table was previously in the `mz_internal` schema. All queries previously referencing
 `mz_internal.mz_cluster_replica_sizes` should now reference `mz_catalog.mz_cluster_replica_sizes`.
 
-{{< warning >}}
+> **Warning:** 
 The values in this table may change at any time. You should not rely on them for
 any kind of capacity planning.
-{{< /warning >}}
+
 
 <!-- RELATION_SPEC mz_catalog.mz_cluster_replica_sizes -->
-| Field                  | Type        | Meaning                                                                                                                                                      |
-|------------------------|-------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `size`                 | [`text`]    | The human-readable replica size.                                                                                                                             |
-| `processes`            | [`uint8`]   | The number of processes in the replica.                                                                                                                      |
-| `workers`              | [`uint8`]   | The number of Timely Dataflow workers per process.                                                                                                           |
-| `cpu_nano_cores`       | [`uint8`]   | The CPU allocation per process, in billionths of a vCPU core.                                                                                                |
-| `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in billionths of a vCPU core.                                                                                                |
-| `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
-| `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
+- **`size`**: [`text`] | The human-readable replica size.
+- **`processes`**: [`uint8`] | The number of processes in the replica.
+- **`workers`**: [`uint8`] | The number of Timely Dataflow workers per process.
+- **`cpu_nano_cores`**: [`uint8`] | The CPU allocation per process, in billionths of a vCPU core.
+- **`memory_bytes`**: [`uint8`] | The RAM allocation per process, in billionths of a vCPU core.
+- **`disk_bytes`**: [`uint8`] | The disk allocation per process.
+- **`credits_per_hour`**: [`numeric`] | The number of compute credits consumed per hour.
 
 ### `mz_cluster_replicas`
 
@@ -130,19 +152,17 @@ Field               | Type      | Meaning
 The `mz_clusters` table contains a row for each cluster in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_clusters -->
-| Field                | Type                 | Meaning                                                                                                                                  |
-|----------------------|----------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| `id`                      | [`text`]             | Materialize's unique ID for the cluster.                                                                                                 |
-| `name`                    | [`text`]             | The name of the cluster.                                                                                                                 |
-| `owner_id`                | [`text`]             | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).                       |
-| `privileges`              | [`mz_aclitem array`] | The privileges belonging to the cluster.                                                                                                 |
-| `managed`                 | [`boolean`]          | Whether the cluster is a [managed cluster](/sql/create-cluster/) with automatically managed replicas.                                    |
-| `size`                    | [`text`]             | If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.                                    |
-| `replication_factor`      | [`uint4`]            | If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.                                 |
-| `disk`                    | [`boolean`]          | **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.                   |
-| `availability_zones`      | [`text list`]        | **Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters. |
-| `introspection_debugging` | [`boolean`]          | Whether introspection of the gathering of the introspection data is enabled.                                                             |
-| `introspection_interval`  | [`interval`]         | The interval at which to collect introspection data.                                                                                     |
+- **`id`**: [`text`] | Materialize's unique ID for the cluster.
+- **`name`**: [`text`] | The name of the cluster.
+- **`owner_id`**: [`text`] | The role ID of the owner of the cluster. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
+- **`privileges`**: [`mz_aclitem array`] | The privileges belonging to the cluster.
+- **`managed`**: [`boolean`] | Whether the cluster is a [managed cluster](/sql/create-cluster/) with automatically managed replicas.
+- **`size`**: [`text`] | If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.
+- **`replication_factor`**: [`uint4`] | If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.
+- **`disk`**: [`boolean`] | **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.
+- **`availability_zones`**: [`text list`] | **Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.
+- **`introspection_debugging`**: [`boolean`] | Whether introspection of the gathering of the introspection data is enabled.
+- **`introspection_interval`**: [`interval`] | The interval at which to collect introspection data.
 
 ### `mz_columns`
 
@@ -293,7 +313,7 @@ Field                | Type     | Meaning
 
 ### `mz_kafka_sources`
 
-{{< warn-if-unreleased v0.115 >}}
+
 The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 
 This table was previously in the `mz_internal` schema. All queries previously referencing
@@ -306,7 +326,7 @@ This table was previously in the `mz_internal` schema. All queries previously re
 | `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
 | `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
 
-{{< hide >}}
+
 ### `mz_iceberg_sinks`
 
 The `mz_iceberg_sinks` table contains a row for each Iceberg sink in the system.
@@ -317,9 +337,6 @@ The `mz_iceberg_sinks` table contains a row for each Iceberg sink in the system.
 | `id`           | [`text`] | The ID of the sink.                                                                                       |
 | `namespace`     | [`text`] | The namespace of the Iceberg table into which the sink is writing.                                       |
 | `table`     | [`text`] | The Iceberg table into which the sink is writing.                                             |
-
-{{< /hide >}}
-
 
 
 ### `mz_list_types`
@@ -414,7 +431,6 @@ Field       | Type                 | Meaning
 
 ### `mz_recent_storage_usage`
 
-{{< warn-if-unreleased "v0.113" >}}
 
 The `mz_recent_storage_usage` table describes the storage utilization of each
 table, source, and materialized view in the system in the most recent storage
@@ -568,20 +584,20 @@ Field            | Type                 | Meaning
 
 ### `mz_storage_usage`
 
-{{< warning >}}
+> **Warning:** 
 This view is not indexed in the `mz_catalog_server` cluster. Querying this view
 can be slow due to the amount of unindexed data that must be scanned.
-{{< /warning >}}
+
 
 The `mz_storage_usage` table describes the historical storage utilization of
 each table, source, and materialized view in the system. Storage utilization is
 assessed approximately every hour.
 
-{{< if-released "v0.111" >}}
+
 Consider querying
 [`mz_catalog.mz_recent_storage_usage`](#mz_recent_storage_usage)
 instead if you are interested in only the most recent storage usage information.
-{{< /if-released >}}
+
 
 <!-- RELATION_SPEC mz_catalog.mz_storage_usage -->
 Field                  | Type                         | Meaning
@@ -701,4 +717,3 @@ Field          | Type                 | Meaning
 [`uint4`]: /sql/types/uint4
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_catalog.mz_operators -->
-

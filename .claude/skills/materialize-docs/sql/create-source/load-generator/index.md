@@ -1,25 +1,50 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-source/load-generator/
+complexity: intermediate
+description: Using Materialize's built-in load generators
+doc_type: reference
+keywords:
+- TPCH
+- CREATE THE
+- IF NOT EXISTS
+- AUCTION
+- CREATE SOURCE
+- IN CLUSTER
+- 'CREATE SOURCE: Load generator'
+- MARKETING
+product_area: Sources
+status: experimental
+title: 'CREATE SOURCE: Load generator'
+---
+
 # CREATE SOURCE: Load generator
+
+## Purpose
+Using Materialize's built-in load generators
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Using Materialize's built-in load generators
 
 
-
-{{% create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: create-source/intro --> --> -->
 Load generator sources produce synthetic data for use in demos and performance
 tests.
-{{% /create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
 ## Syntax
 
-{{< diagram "create-source-load-generator.svg" >}}
+[See diagram: create-source-load-generator.svg]
 
 #### `load_generator_option`
 
-{{< diagram "load-generator-option.svg" >}}
+[See diagram: load-generator-option.svg]
 
 #### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+[See diagram: with-options-retain-history.svg]
 
 Field | Use
 ------|-----
@@ -30,8 +55,8 @@ _src_name_  | The name for the source.
 **TPCH**     | Use the [tpch](#tpch) load generator.
 **IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
 **TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
-**AS OF**  | The tick at which to start producing data. Defaults to 0. {{< warn-if-unreleased-inline "v0.101" >}}
-**UP TO**  | The tick before which to stop producing data. Defaults to infinite. {{< warn-if-unreleased-inline "v0.101" >}}
+**AS OF**  | The tick at which to start producing data. Defaults to 0. 
+**UP TO**  | The tick before which to stop producing data. Defaults to infinite. 
 **SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
 **FOR ALL TABLES** | Creates subsources for all tables in the load generator.
 **EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
@@ -181,13 +206,15 @@ And can be queried using:
 ```mzsql
 SELECT "offset"
 FROM <src_name>_progress;
-```
+```text
 
 As long as the offset continues increasing, Materialize is generating data. For
 more details on monitoring source ingestion progress and debugging related
 issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Examples
+
+This section covers examples.
 
 ### Creating an auction load generator
 
@@ -198,13 +225,13 @@ CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
   (TICK INTERVAL '1s')
   FOR ALL TABLES;
-```
+```text
 
 To display the created subsources:
 
 ```mzsql
 SHOW SOURCES;
-```
+```text
 ```nofmt
           name          |      type
 ------------------------+----------------
@@ -215,20 +242,20 @@ SHOW SOURCES;
  bids                   | subsource
  organizations          | subsource
  users                  | subsource
-```
+```text
 
 To examine the simulated bids:
 
 ```mzsql
 SELECT * from bids;
-```
+```text
 ```nofmt
  id | buyer | auction_id | amount |          bid_time
 ----+-------+------------+--------+----------------------------
  10 |  3844 |          1 |     59 | 2022-09-16 23:24:07.332+00
  11 |  1861 |          1 |     40 | 2022-09-16 23:24:08.332+00
  12 |  3338 |          1 |     97 | 2022-09-16 23:24:09.332+00
-```
+```bash
 
 ### Creating a marketing load generator
 
@@ -238,13 +265,13 @@ To create a load generator source that simulates an online marketing campaign:
 CREATE SOURCE marketing
   FROM LOAD GENERATOR MARKETING
   FOR ALL TABLES;
-```
+```text
 
 To display the created subsources:
 
 ```mzsql
 SHOW SOURCES;
-```
+```text
 
 ```nofmt
           name          |      type
@@ -257,7 +284,7 @@ SHOW SOURCES;
  leads                  | subsource
  marketing              | load-generator
  marketing_progress     | progress
-```
+```text
 
 To find all impressions and clicks associated with a campaign over the last 30 days:
 
@@ -280,7 +307,7 @@ WITH
 SELECT campaign_id, sum(impressions) AS impressions, sum(clicks) AS clicks
 FROM impression_rollup LEFT JOIN click_rollup USING(id)
 GROUP BY campaign_id;
-```
+```text
 
 ```nofmt
  campaign_id | impressions | clicks
@@ -304,7 +331,7 @@ GROUP BY campaign_id;
           16 |         315 |     32
           17 |         329 |     36
           18 |         329 |     28
-```
+```bash
 
 ### Creating a TPCH load generator
 
@@ -314,13 +341,13 @@ To create the load generator source and its associated subsources:
 CREATE SOURCE tpch
   FROM LOAD GENERATOR TPCH (SCALE FACTOR 1)
   FOR ALL TABLES;
-```
+```text
 
 To display the created subsources:
 
 ```mzsql
 SHOW SOURCES;
-```
+```text
 ```nofmt
       name     |      type
 ---------------+---------------
@@ -334,7 +361,7 @@ SHOW SOURCES;
  nation        | subsource
  lineitem      | subsource
  customer      | subsource
-```
+```text
 
 To run the Pricing Summary Report Query (Q1), which reports the amount of
 billed, shipped, and returned items:
@@ -361,7 +388,7 @@ GROUP BY
 ORDER BY
     l_returnflag,
     l_linestatus;
-```
+```text
 ```nofmt
  l_returnflag | l_linestatus | sum_qty  | sum_base_price | sum_disc_price  |    sum_charge     |      avg_qty       |     avg_price      |      avg_disc       | count_order
 --------------+--------------+----------+----------------+-----------------+-------------------+--------------------+--------------------+---------------------+-------------
@@ -383,4 +410,3 @@ ORDER BY
 [`uint8`]: /sql/types/uint/#uint8-info
 [`timestamp with time zone`]: /sql/types/timestamp
 [feature request]: https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests
-

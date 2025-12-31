@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/jsonb/
+complexity: intermediate
+description: Expresses a JSON object
+doc_type: reference
+keywords:
+- SELECT JSONB_ARRAY_LENGTH
+- SELECT T
+- SELECT JSONB_BUILD_OBJECT
+- SELECT TO_JSONB
+- Catalog name
+- OID
+- SELECT JSONB_BUILD_ARRAY
+- Quick Syntax
+- Size
+- jsonb type
+product_area: Indexes
+status: stable
+title: jsonb type
+---
+
 # jsonb type
 
+## Purpose
 Expresses a JSON object
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Expresses a JSON object
 
 
 `jsonb` data expresses a JSON object similar to
@@ -19,7 +46,7 @@ implementation of `json`.
 
 ## Syntax
 
-{{< diagram "type-jsonb.svg" >}}
+[See diagram: type-jsonb.svg]
 
 Field | Use
 ------|-----
@@ -31,11 +58,10 @@ Materialize supports the following operators and functions.
 
 ### Operators
 
-{{% json-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: json-operators --> --> -->
 
 ### Functions
 
-{{< fnlist "JSON" >}}
 
 #### Detail
 
@@ -45,7 +71,7 @@ use `jsonb_object_keys` in the following way:
 
 ```mzsql
 SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::jsonb);
-```
+```bash
 
 ## Details
 
@@ -84,12 +110,12 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
 
     ```mzsql
     SELECT ('"a"'::jsonb)::text AS jsonb_elem;
-    ```
+    ```text
     ```nofmt
      jsonb_elem
     ------------
      "a"
-    ```
+    ```text
 
 - `->>` and the `_text` functions produce the printed version of the inner
   element, unless the output is a single JSON string in which case they print it
@@ -97,24 +123,24 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
 
     ```mzsql
     SELECT ('"a"'::jsonb)->>0 AS string_elem;
-    ```
+    ```text
     ```nofmt
      jsonb_elem
     ------------
      a
-    ```
+    ```text
 
 - `text` values passed to `to_jsonb` with quotes (`"`) produced `jsonb` strings
   with the quotes escaped.
 
     ```mzsql
     SELECT to_jsonb('"foo"') AS escaped_quotes;
-    ```
+    ```text
     ```nofmt
      escaped_quotes
     ----------------
      "\"foo\""
-    ```
+    ```bash
 
 ### Subscripting
 
@@ -132,12 +158,12 @@ subscript:
 
 ```mzsql
 SELECT ('[1, 2, 3]'::jsonb)[1]
-```
+```text
 ```nofmt
  jsonb
 -------
  2
-```
+```text
 
 Negative indexes count backwards from the end of the array. [Slice syntax] is
 not supported. Note also that 0-indexed positions are at variance with [`list`]
@@ -149,23 +175,23 @@ To extract a value from an object, supply the key as the subscript:
 
 ```mzsql
 SELECT ('{"a": 1, "b": 2, "c": 3}'::jsonb)['b'];
-```
+```text
 ```nofmt
  jsonb
 -------
  2
-```
+```text
 
 You can chain subscript operations to retrieve deeply nested elements:
 
 ```mzsql
 SELECT ('{"1": 2, "a": ["b", "c"]}'::jsonb)['a'][1];
-```
+```text
 ```nofmt
  jsonb
 -------
  "c"
-```
+```bash
 
 #### Remarks
 
@@ -175,15 +201,17 @@ to compare against:
 
 ```mzsql
 SELECT ('["a", "b"]::jsonb)[1] = '"b"'
-```
+```text
 
 Note the extra double quotes on the right-hand side of the comparison.
 
 ### Parsing
 
-{{< json-parser >}}
+<!-- JSON Parser Widget - see original docs -->
 
 ## Examples
+
+This section covers examples.
 
 ### Operators
 
@@ -195,33 +223,33 @@ The type of JSON element you're accessing dictates the RHS's type.
 
   ```mzsql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'1' AS field_jsonb;
-  ```
+  ```text
   ```nofmt
    field_jsonb
   -------------
    2
-  ```
+  ```text
 
 - Use an `int` to return the value in an array at a specific index:
 
   ```mzsql
   SELECT '["1", "a", 2]'::jsonb->1 AS field_jsonb;
-  ```
+  ```text
   ```nofmt
    field_jsonb
   -------------
    "a"
-  ```
+  ```text
 Field accessors can also be chained together.
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'a'->1 AS field_jsonb;
-```
+```text
 ```nofmt
  field_jsonb
 -------------
  "c"
-```
+```text
 
 Note that all returned values are `jsonb`.
 
@@ -235,35 +263,35 @@ The type of JSON element you're accessing dictates the RHS's type.
 
   ```mzsql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->>'1' AS field_text;
-  ```
+  ```text
   ```nofmt
    field_text
   -------------
    2
-  ```
+  ```text
 
 - Use an `int` to return the value in an array at a specific index:
 
   ```mzsql
   SELECT '["1", "a", 2]'::jsonb->>1 AS field_text;
-  ```
+  ```text
   ```nofmt
    field_text
   -------------
    a
-  ```
+  ```text
 
 Field accessors can also be chained together, as long as the LHS remains
 `jsonb`.
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'a'->>1 AS field_text;
-```
+```text
 ```nofmt
  field_text
 -------------
  c
-```
+```text
 
 Note that all returned values are `string`.
 
@@ -275,12 +303,12 @@ array element:
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #> '{a,1}' AS field_jsonb;
-```
+```text
 ```nofmt
  field_jsonb
 -------------
  "c"
-```
+```text
 
 The operator returns a value of type `jsonb`. If the path is invalid, it returns
 `NULL`.
@@ -292,12 +320,12 @@ except that the operator returns a value of type `text`.
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #>> '{a,1}' AS field_text;
-```
+```text
 ```nofmt
  field_text
 -------------
  c
-```
+```text
 
 <hr/>
 
@@ -306,12 +334,12 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #>> '{a,1}' AS field_text;
 ```mzsql
 SELECT '{"1": 2}'::jsonb ||
        '{"a": ["b", "c"]}'::jsonb AS concat;
-```
+```text
 ```nofmt
              concat
 ---------------------------------
  {"1":2,"a":["b","c"]}
-```
+```text
 
 <hr/>
 
@@ -319,12 +347,12 @@ SELECT '{"1": 2}'::jsonb ||
 
 ```mzsql
  SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb - 'a' AS rm_key;
-```
+```text
 ```nofmt
   rm_key
 -----------
  {"1":2}
-```
+```text
 
 <hr/>
 
@@ -335,12 +363,12 @@ Here, the left hand side does contain the right hand side, so the result is `t` 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb @>
        '{"1": 2}'::jsonb AS lhs_contains_rhs;
-```
+```text
 ```nofmt
  lhs_contains_rhs
 ------------------
  t
-```
+```text
 
 <hr/>
 
@@ -351,12 +379,12 @@ Here, the right hand side does contain the left hand side, so the result is `t` 
 ```mzsql
 SELECT '{"1": 2}'::jsonb <@
        '{"1": 2, "a": ["b", "c"]}'::jsonb AS lhs_contains_rhs;
-```
+```text
 ```nofmt
  rhs_contains_lhs
 ------------------
  t
-```
+```text
 
 <hr/>
 
@@ -364,21 +392,21 @@ SELECT '{"1": 2}'::jsonb <@
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'a' AS search_for_key;
-```
+```text
 ```nofmt
  search_for_key
 ----------------
  t
-```
+```text
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'b' AS search_for_key;
-```
+```text
 ```nofmt
  search_for_key
 ----------------
  f
-```
+```bash
 
 ### Functions
 
@@ -388,7 +416,7 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'b' AS search_for_key;
 
 ```mzsql
 SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
    value
 -----------
@@ -397,7 +425,7 @@ SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
  "a"
  {"b":2.0}
  null
-```
+```bash
 
 ##### Flattening a JSON array
 
@@ -411,7 +439,7 @@ FROM (
     (2, '[{"a":5,"b":6},{"a":7,"b":8}]'::jsonb)
 ) AS t(id, json_col)
 CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
-```
+```text
 
 ```nofmt
  id | a | b
@@ -420,7 +448,7 @@ CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
   1 | 3 | 4
   2 | 5 | 6
   2 | 7 | 8
-```
+```text
 
 <hr/>
 
@@ -429,7 +457,7 @@ CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
 
 ```mzsql
 SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
    value
 -----------
@@ -438,7 +466,7 @@ SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb)
  "a"
  {"b":2.0}
  null
-```
+```text
 
 <hr/>
 
@@ -446,12 +474,12 @@ SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb)
 
 ```mzsql
 SELECT jsonb_array_length('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
  jsonb_array_length
 --------------------
                   5
-```
+```text
 
 <hr/>
 
@@ -459,12 +487,12 @@ SELECT jsonb_array_length('[true, 1, "a", {"b": 2}, null]'::jsonb);
 
 ```mzsql
 SELECT jsonb_build_array('a', 1::float, 2.0::float, true);
-```
+```text
 ```nofmt
  jsonb_build_array
 --------------------
  ["a",1.0,2.0,true]
-```
+```text
 
 <hr/>
 
@@ -472,12 +500,12 @@ SELECT jsonb_build_array('a', 1::float, 2.0::float, true);
 
 ```mzsql
 SELECT jsonb_build_object(2.0::float, 'b', 'a', 1.1::float);
-```
+```text
 ```nofmt
  jsonb_build_object
 --------------------
  {"2":"b","a":1.1}
-```
+```text
 
 <hr/>
 
@@ -485,13 +513,13 @@ SELECT jsonb_build_object(2.0::float, 'b', 'a', 1.1::float);
 
 ```mzsql
 SELECT * FROM jsonb_each('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  key |   value
 -----+-----------
  1   | 2.1
  a   | ["b","c"]
-```
+```text
 
 Note that the `value` column is `jsonb`.
 
@@ -501,13 +529,13 @@ Note that the `value` column is `jsonb`.
 
 ```mzsql
 SELECT * FROM jsonb_each_text('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  key |   value
 -----+-----------
  1   | 2.1
  a   | ["b","c"]
-```
+```text
 
 Note that the `value` column is `string`.
 
@@ -517,13 +545,13 @@ Note that the `value` column is `string`.
 
 ```mzsql
 SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  jsonb_object_keys
 -------------------
  1
  a
-```
+```text
 
 <hr/>
 
@@ -531,7 +559,7 @@ SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::jsonb);
 
 ```mzsql
 SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  jsonb_pretty
 --------------
@@ -542,7 +570,7 @@ SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
      "c"     +
    ]         +
  }
-```
+```text
 
 <hr/>
 
@@ -550,21 +578,21 @@ SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
 
 ```mzsql
 SELECT jsonb_typeof('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
  jsonb_typeof
 --------------
  array
-```
+```text
 
 ```mzsql
 SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  jsonb_typeof
 --------------
  object
-```
+```text
 
 <hr/>
 
@@ -572,12 +600,12 @@ SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::jsonb);
 
 ```mzsql
 SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::jsonb);
-```
+```text
 ```nofmt
     jsonb_strip_nulls
 --------------------------
  [{"1":"a"},"b",null,"c"]
-```
+```text
 
 <hr/>
 
@@ -593,7 +621,7 @@ FROM (
   (4, 'salutations')
   ) AS t(id, content)
 WHERE t.content LIKE 'h%';
-```
+```text
 ```nofmt
       jsonified_row
 --------------------------
@@ -606,4 +634,3 @@ Note that the output is `jsonb`.
 [Slice syntax]: /sql/types/list#slicing-ranges
 [`list`]: /sql/types/list
 [`array`]: /sql/types/array
-

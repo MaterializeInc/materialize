@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/golang/
+complexity: advanced
+description: Use Go to connect, insert, manage, query and stream from Materialize.
+doc_type: reference
+keywords:
+- GORM
+- CREATE A
+- Golang cheatsheet
+- CREATE TABLES
+- CREATE TABLE
+- INSERT DATA
+- updated,
+- wire-compatible
+product_area: General
+status: stable
+title: Golang cheatsheet
+---
+
 # Golang cheatsheet
+
+## Purpose
+Use Go to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use Go to connect, insert, manage, query and stream from Materialize.
 
@@ -30,7 +56,7 @@ func main() {
 	}
 	defer conn.Close()
 }
-```
+```text
 
 To create a concurrency-safe connection pool, import the [`pgxpool` package](https://pkg.go.dev/github.com/jackc/pgx/v4/pgxpool) and use `pgxpool.Connect`.
 
@@ -54,7 +80,7 @@ _, err := conn.Exec(ctx, createTableSQL)
 if err != nil {
     log.Fatal(err)
 }
-```
+```bash
 
 ## Insert data into tables
 
@@ -67,7 +93,7 @@ _, err := conn.Exec(ctx, insertSQL, "GH", "GHANA")
 if err != nil {
     log.Fatal(err)
 }
-```
+```bash
 
 ## Query
 
@@ -91,7 +117,7 @@ for rows.Next() {
     }
     // operate on result
 }
-```
+```bash
 
 ## Manage sources, views, and indexes
 
@@ -109,7 +135,7 @@ _, err = conn.Exec(ctx, createSourceSQL)
 if err != nil {
     log.Fatal(err)
 }
-```
+```text
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
 ### Create a view from Go
@@ -125,7 +151,7 @@ _, err = conn.Exec(ctx, createViewSQL)
 if err != nil {
     log.Fatal(err)
 }
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -171,14 +197,14 @@ err = tx.Commit(ctx)
 if err != nil {
     log.Fatal(err)
 }
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `amount_sum`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
 
 ```go
 {MzTimestamp:1646868332570 MzDiff:1 row...}
 {MzTimestamp:1646868332570 MzDiff:-1 row...}
-```
+```text
 
 An `MzDiff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`MzDiff:-1`) and an insertion (`MzDiff:1`) with the same timestamp.
 

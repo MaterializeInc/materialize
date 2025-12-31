@@ -1,14 +1,40 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/
+complexity: advanced
+description: Querying results from Materialize using external BI/data collaboration
+  tools
+doc_type: reference
+keywords:
+- SELECT AN
+- '[Deepnote](https://deepnote.com/)'
+- CREATE A
+- CREATE AN
+- Menu
+- CREATE INTEGRATION
+- Use BI/data collaboration tools
+- Workspace integrations
+- Integrations
+- 'Note:'
+product_area: Sinks
+status: stable
+title: Use BI/data collaboration tools
+---
+
 # Use BI/data collaboration tools
 
+## Purpose
 Querying results from Materialize using external BI/data collaboration tools
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Querying results from Materialize using external BI/data collaboration tools
 
 
 Materialize uses the PostgreSQL wire protocol, which allows it to integrate out-of-the-box with various BI/data collaboration tools that support PostgreSQL.
 
 To help you get started, the following guides are available:
-
-
 
 
 ---
@@ -22,9 +48,9 @@ This guide walks you through the steps required to use the collaborative data no
 
 1. Sign in to **[Deepnote](https://deepnote.com/)**.
 2. Go to the **Workspace integrations** page.
-  {{< note >}}
-  If you are inside a workspace, in the {{% icons/burger_menu %}} **Menu**, click **Integrations**
-  {{</ note >}}
+  > **Note:** 
+  If you are inside a workspace, in the <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/burger_menu --> --> --> **Menu**, click **Integrations**
+  
 1. Click in the **+ Add Integration** button.
 2. Search and click the **Materialize** option.
 3. Enter the connection fields as follows:
@@ -42,7 +68,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Execute and visualize a query
 
@@ -64,12 +90,12 @@ This guide walks you through the steps required to use the collaborative data no
             SELECT generate_series(0, 1000) AS series_number
         ) AS subquery
     );
-    ```
+    ```text
 
     This query generates a series of 1000 numbers squared and assigns row numbers to each.
 3. Click the **Run Notebook** button.
 
-4. Inside the block, click the {{% icons/chart %}} **Visualize** button and configure as follows:
+4. Inside the block, click the <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/chart --> --> --> **Visualize** button and configure as follows:
    1. In the **Y Axis** options, select the **number** column and set the aggregation to **None**.
    2. In the **X Axis** options, select the **row_num** column and set the aggregation to **None**.
 
@@ -79,8 +105,6 @@ This guide walks you through the steps required to use the collaborative data no
 ### Related pages
 
 For more information about Deepnote and the integration, visit [their documentation.](https://deepnote.com/docs/materialize)
-
-
 
 
 ---
@@ -96,7 +120,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 2. Go to an existing project or create a new one.
 
-3. Go to {{% icons/hex_data_sources %}}**Data Sources > +Add > Create data connection... > Materialize**.
+3. Go to <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/hex_data_sources --> --> -->**Data Sources > +Add > Create data connection... > Materialize**.
 
 4. Search and click the **Materialize** option.
 
@@ -115,7 +139,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Execute and visualize a query
 
@@ -137,10 +161,10 @@ This guide walks you through the steps required to use the collaborative data no
             SELECT generate_series(0, 1000) AS series_number
         ) AS subquery
     );
-    ```
+    ```text
 
     This query generates a series of 1000 numbers squared and assigns row numbers to each.
-3. Click the {{% icons/hex_run %}} **Run** button.
+3. Click the <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/hex_run --> --> --> **Run** button.
 
 4. Inside the cell, click the **Chart** button and configure as follows:
    1. In the **X Axis** options, select the **row_num** column.
@@ -152,8 +176,6 @@ This guide walks you through the steps required to use the collaborative data no
 ### Related pages
 
 For more information about Hex and data connections, visit [their documentation.](https://learn.hex.tech/docs/connect-to-data/data-connections/overview)
-
-
 
 
 ---
@@ -184,7 +206,7 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Known limitations
 
@@ -192,9 +214,9 @@ When using Looker with Materialize, be aware of the following limitations:
 
 1. **Connection Test Error**: You might encounter this error when testing the connection to Materialize from Looker:
 
-   ```
+   ```text
    Test kill: Cannot cancel queries: Query could not be found in database.
-   ```
+   ```text
 
    This error occurs because Looker attempts to run a test query cancellation, which checks for `pg_stat_activity` (not currently supported in Materialize).
 
@@ -206,7 +228,7 @@ When using Looker with Materialize, be aware of the following limitations:
       SELECT pg_cancel_backend(connection_id)
       FROM mz_sessions
       WHERE id = 'your_session_id';
-      ```
+      ```text
 
    b. Via the Materialize Console:
       - Go to [Materialize Console](/console/)
@@ -229,8 +251,6 @@ When using Looker with Materialize, be aware of the following limitations:
    b. If you encounter performance issues, disable symmetric aggregates in your Looker setup using the link provided above.
 
    c. For use cases requiring symmetric aggregates, contact Materialize support for optimization guidance.
-
-
 
 
 ---
@@ -262,7 +282,7 @@ For more details and troubleshooting, check the
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Refresh rate
 
@@ -279,8 +299,6 @@ for any objects serving results to Metabase.
 
 [//]: # "TODO(morsapaes) Once we revamp quickstarts, add Related pages section
 pointing to a quickstart that uses Metabase"
-
-
 
 
 ---
@@ -310,7 +328,7 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Troubleshooting
 
@@ -347,7 +365,7 @@ To work around this Power BI limitation, you can use one of the following option
 
     ```mzsql
     CREATE VIEW my_view_bi AS SELECT * FROM my_view;
-    ```
+    ```text
 
     Then, in Power BI, you can use the `my_view_bi` view.
 
@@ -355,11 +373,9 @@ To work around this Power BI limitation, you can use one of the following option
 
 3. Use the [Power BI Native query folding](https://learn.microsoft.com/en-us/power-query/connectors/postgresql#native-query-folding) to write your own query rather than using the Power BI UI. For example:
 
-    ```
+    ```text
     = Value.NativeQuery(Source, "select * from my_view;")
-    ```
-
-
+    ```text
 
 
 ---
@@ -372,6 +388,8 @@ You can use [Tableau Cloud](https://www.tableau.com/products/cloud-bi) and
 dashboards based on the data maintained in Materialize.
 
 ## Tableau Cloud
+
+This section covers tableau cloud.
 
 ### Database connection details
 
@@ -396,10 +414,11 @@ connections"
 
 ## Tableau Desktop
 
+This section covers tableau desktop.
+
 ### Setup
 
-{{< tabs >}}
-{{< tab "macOS">}}
+#### macOS
 
 To set up a connection from Tableau Desktop to Materialize, you must:
 
@@ -408,9 +427,7 @@ To set up a connection from Tableau Desktop to Materialize, you must:
 
    `~/Library/Tableau/Drivers`
 
-{{< /tab >}}
-
-{{< tab "Linux">}}
+#### Linux
 
 To set up a connection from Tableau Desktop to Materialize, you must:
 
@@ -419,9 +436,7 @@ To set up a connection from Tableau Desktop to Materialize, you must:
 
    `/opt/tableau/tableau_driver/jdbc`
 
-{{< /tab >}}
-
-{{< tab "Windows">}}
+#### Windows
 
 To set up a connection from Tableau Desktop to Materialize, you must:
 
@@ -429,9 +444,6 @@ To set up a connection from Tableau Desktop to Materialize, you must:
 1. Copy the `.jar` file to the following directory (which may have to be created manually):
 
    `C:\Program Files\Tableau\Drivers`
-
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Database connection details
 
@@ -462,19 +474,19 @@ connections"
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ### Troubleshooting
 
 Errors like the following indicate that the JDBC driver was not successfully
 installed.
 
-```
+```text
 ERROR: Expected FOR, found WITH;
 Error while executing the query
-```
+```text
 
-```
+```text
 ERROR: WITH HOLD is unsupported for cursors;
 Error while executing the query
 ```
@@ -483,6 +495,3 @@ The errors occur because Tableau falls back to a legacy PostgreSQL ODBC driver
 that does not support connecting to Materialize. Follow the [Setup](#setup)
 instructions again and ensure you've downloaded the driver to the correct folder
 for your platform.
-
-
-

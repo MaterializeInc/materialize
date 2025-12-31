@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/time/
+complexity: intermediate
+description: Expresses a time without a specific date
+doc_type: reference
+keywords:
+- time type
+- Quick Syntax
+- Catalog name
+- OID
+- SELECT TIME
+- Size
+- Min value
+- SELECT DATE
+product_area: Indexes
+status: stable
+title: time type
+---
+
 # time type
+
+## Purpose
+Expresses a time without a specific date
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses a time without a specific date
 
@@ -17,13 +43,15 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-time.svg" >}}
+[See diagram: type-time.svg]
 
 Field | Use
 ------|------------
 _time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -56,20 +84,22 @@ Operation | Computes
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT TIME '01:23:45' AS t_v;
-```
+```text
 ```nofmt
    t_v
 ----------
  01:23:45
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT DATE '2001-02-03' + TIME '12:34:56' AS d_t;
-```
+```text
 ```nofmt
          d_t
 ---------------------

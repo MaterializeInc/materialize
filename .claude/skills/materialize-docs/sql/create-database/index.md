@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-database/
+complexity: intermediate
+description: '`CREATE DATABASE` creates a new database.'
+doc_type: reference
+keywords:
+- CREATE DATABASE
+- IF NOT EXISTS
+- SHOW DATABASES
+product_area: Indexes
+status: stable
+title: CREATE DATABASE
+---
+
 # CREATE DATABASE
+
+## Purpose
+`CREATE DATABASE` creates a new database.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `CREATE DATABASE` creates a new database.
 
@@ -22,7 +43,7 @@ For more information, see [Namespaces](../namespaces).
 
 ## Syntax
 
-{{< diagram "create-database.svg" >}}
+[See diagram: create-database.svg]
 
 Field | Use
 ------|-----
@@ -36,12 +57,14 @@ details](../namespaces/#database-details).
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 CREATE DATABASE IF NOT EXISTS my_db;
-```
+```text
 ```mzsql
 SHOW DATABASES;
-```
+```text
 ```nofmt
 materialize
 my_db
@@ -51,8 +74,8 @@ my_db
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-database.md"
->}}
+- `CREATEDB` privileges on the system.
+
 
 ## Related pages
 

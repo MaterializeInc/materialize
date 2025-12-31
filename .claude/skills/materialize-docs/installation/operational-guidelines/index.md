@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/operational-guidelines/
+complexity: intermediate
+description: '- ARM-based CPU'
+doc_type: howto
+keywords:
+- Operational guidelines
+product_area: Deployment
+status: stable
+title: Operational guidelines
+---
+
 # Operational guidelines
+
+## Purpose
+
+
+Follow the steps below to complete this task.
+
 
 
 

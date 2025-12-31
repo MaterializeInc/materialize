@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/tableau/
+complexity: intermediate
+description: How to create real-time dashboards with Tableau
+doc_type: reference
+keywords:
+- Connect to a Server
+- Tableau
+- CREATE REAL
+- materialize
+- PostgreSQL
+- '6875'
+- More
+product_area: Sinks
+status: stable
+title: Tableau
+---
+
 # Tableau
 
+## Purpose
 How to create real-time dashboards with Tableau
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to create real-time dashboards with Tableau
 
 
 You can use [Tableau Cloud](https://www.tableau.com/products/cloud-bi) and
@@ -9,6 +33,8 @@ You can use [Tableau Cloud](https://www.tableau.com/products/cloud-bi) and
 dashboards based on the data maintained in Materialize.
 
 ## Tableau Cloud
+
+This section covers tableau cloud.
 
 ### Database connection details
 
@@ -33,10 +59,11 @@ connections"
 
 ## Tableau Desktop
 
+This section covers tableau desktop.
+
 ### Setup
 
-{{< tabs >}}
-{{< tab "macOS">}}
+#### macOS
 
 To set up a connection from Tableau Desktop to Materialize, you must:
 
@@ -45,9 +72,7 @@ To set up a connection from Tableau Desktop to Materialize, you must:
 
    `~/Library/Tableau/Drivers`
 
-{{< /tab >}}
-
-{{< tab "Linux">}}
+#### Linux
 
 To set up a connection from Tableau Desktop to Materialize, you must:
 
@@ -56,9 +81,7 @@ To set up a connection from Tableau Desktop to Materialize, you must:
 
    `/opt/tableau/tableau_driver/jdbc`
 
-{{< /tab >}}
-
-{{< tab "Windows">}}
+#### Windows
 
 To set up a connection from Tableau Desktop to Materialize, you must:
 
@@ -66,9 +89,6 @@ To set up a connection from Tableau Desktop to Materialize, you must:
 1. Copy the `.jar` file to the following directory (which may have to be created manually):
 
    `C:\Program Files\Tableau\Drivers`
-
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Database connection details
 
@@ -99,19 +119,19 @@ connections"
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ### Troubleshooting
 
 Errors like the following indicate that the JDBC driver was not successfully
 installed.
 
-```
+```text
 ERROR: Expected FOR, found WITH;
 Error while executing the query
-```
+```text
 
-```
+```text
 ERROR: WITH HOLD is unsupported for cursors;
 Error while executing the query
 ```
@@ -120,4 +140,3 @@ The errors occur because Tableau falls back to a legacy PostgreSQL ODBC driver
 that does not support connecting to Materialize. Follow the [Setup](#setup)
 instructions again and ensure you've downloaded the driver to the correct folder
 for your platform.
-

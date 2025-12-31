@@ -1,10 +1,35 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-local-kind/
+complexity: advanced
+description: Deploy Self-managed Materialize to a local kind cluster.
+doc_type: reference
+keywords:
+- Install locally on kind (via Helm)
+- v26
+- UPDATE MATERIALIZE
+- UPDATE THE
+- CREATE CLUSTER
+- CREATE A
+- 'Tip:'
+- 'Important:'
+product_area: Deployment
+status: stable
+title: Install locally on kind (via Helm)
+---
+
 # Install locally on kind (via Helm)
+
+## Purpose
+Deploy Self-managed Materialize to a local kind cluster.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Deploy Self-managed Materialize to a local kind cluster.
 
 
-
-{{% self-managed/materialize-components-sentence %}}
+<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence %... -->
 
 The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
 and deploys the following components:
@@ -14,7 +39,7 @@ and deploys the following components:
 - PostgreSQL database as the metadata database for your Materialize.
 - Materialize as a containerized application into your local `kind` cluster.
 
-{{< important >}}
+> **Important:** 
 
 This tutorial is for local evaluation/testing purposes only.
 
@@ -23,9 +48,10 @@ This tutorial is for local evaluation/testing purposes only.
 - The tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
   refer to your organization's official security practices.
 
-{{< /important >}}
 
 ## Prerequisites
+
+This section covers prerequisites.
 
 ### kind
 
@@ -37,7 +63,7 @@ Install [`Docker`](https://docs.docker.com/get-started/get-docker/).
 
 #### Docker resource requirements
 
-{{% self-managed/local-resource-requirements %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ### Helm 3.2.0+
 
@@ -56,13 +82,13 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 Starting in v26.0, Self-Managed Materialize requires a license key.
 
-{{< yaml-table data="self_managed/license_key" >}}
+<!-- Dynamic table: self_managed/license_key - see original docs -->
 
 ## Installation
 
 1. Start Docker if it is not already running.
 
-   {{% self-managed/local-resource-requirements %}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 1. Open a Terminal window.
 
@@ -71,13 +97,13 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    ```shell
    mkdir my-local-mz
    cd my-local-mz
-   ```
+   ```text
 
 1. Create a `kind` cluster.
 
    ```shell
    kind create cluster
-   ```
+   ```text
 
 1. Add labels `materialize.cloud/disk=true`, `materialize.cloud/swap=true` and
    `workload=materialize-instance` to the `kind` node (in this example, the
@@ -88,26 +114,26 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    kubectl label node  $MYNODE materialize.cloud/disk=true
    kubectl label node  $MYNODE materialize.cloud/swap=true
    kubectl label node  $MYNODE workload=materialize-instance
-   ```
+   ```text
 
    Verify that the labels were successfully applied by running the following
    command:
 
    ```shell
    kubectl get nodes --show-labels
-   ```
+   ```text
 
 1. To help you get started for local evaluation/testing, Materialize provides
    some sample configuration files. Download the sample configuration files from
    the Materialize repo:
 
-   {{% self-managed/versions/curl-sample-files-local-install %}}
+   <!-- Unresolved shortcode: {{% self-managed/versions/curl-sample-files-local-... -->
 
 1. Add your license key:
 
    a. To get your license key:
 
-      {{% yaml-table data="self_managed/license_key" %}}
+      <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- Dynamic table - see original docs --> --> -->
 
    b. Edit `sample-materialize.yaml` to add your license key to the
    `license_key` field in the backend secret.
@@ -124,7 +150,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
    license_key: "<enter your license key here>"
    ---
-   ```
+   ```text
 
 1. Install the Materialize Helm chart.
 
@@ -132,21 +158,21 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       ```shell
       helm repo add materialize https://materializeinc.github.io/materialize
-      ```
+      ```text
 
    1. Update the repository.
 
       ```shell
       helm repo update materialize
-      ```
+      ```text
 
-   {{% self-managed/versions/step-install-helm-version-local-kind-install %}}
+   <!-- Unresolved shortcode: {{% self-managed/versions/step-install-helm-versio... -->
 
    1. Verify the installation and check the status:
 
       ```shell
       kubectl get all -n materialize
-      ```
+      ```text
 
       Wait for the components to be ready and in the `Running` state:
 
@@ -159,7 +185,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       NAME                                                 DESIRED   CURRENT         READY   AGE
       replicaset.apps/my-materialize-operator-6c4c7d6fc9   1         1               1       16s
-      ```
+      ```text
 
       If you run into an error during deployment, refer to the
       [Troubleshooting](/installation/troubleshooting) guide.
@@ -171,19 +197,19 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
         ```shell
         kubectl apply -f sample-postgres.yaml
-        ```
+        ```text
 
     1. Use the `sample-minio.yaml` file to install MinIO as the blob storage:
 
         ```shell
         kubectl apply -f sample-minio.yaml
-        ```
+        ```text
 
     1. Verify the installation and check the status:
 
        ```shell
        kubectl get all -n materialize
-       ```
+       ```text
 
        Wait for the components to be ready and in the `Running` state:
 
@@ -206,7 +232,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
        replicaset.apps/minio-777db75dd4                     1          1               1       84s
        replicaset.apps/my-materialize-operator-6c4c7d6fc9   1          1               1       107s
        replicaset.apps/postgres-55fbcd88bf                  1          1               1       86s
-       ```
+       ```text
 
 1. Install the metrics service to the `kube-system` namespace.
 
@@ -214,42 +240,42 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       ```shell
       helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
-      ```
+      ```text
 
    1. Update the repository.
 
       ```shell
       helm repo update metrics-server
-      ```
+      ```text
 
    1. Install the metrics server to the `kube-system` namespace.
 
-      {{< important >}}
+      > **Important:** 
 
       This tutorial is for local evaluation/testing purposes only. For simplicity,
       the tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
       refer to your organization's official security practices.
 
-      {{< /important >}}
+      
 
       ```shell
       helm install metrics-server metrics-server/metrics-server \
          --namespace kube-system \
          --set args="{--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP\,Hostname\,ExternalIP}"
-      ```
+      ```text
 
       You can verify the installation by running the following command:
 
       ```bash
       kubectl get pods -n kube-system -l app.kubernetes.io/instance=metrics-server
-      ```
+      ```text
 
       Wait for the `metrics-server` pod to be ready and in the `Running` state:
 
       ```none
       NAME                             READY   STATUS    RESTARTS   AGE
       metrics-server-89dfdc559-bq59m   1/1     Running   0          2m6s
-      ```
+      ```text
 
 1. Install Materialize into a new `materialize-environment` namespace:
 
@@ -258,13 +284,13 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       ```shell
       kubectl apply -f sample-materialize.yaml
-      ```
+      ```text
 
     1. Verify the installation and check the status:
 
        ```shell
        kubectl get all -n materialize-environment
-       ```
+       ```text
 
        Wait for the components to be ready and in the `Running` state.
 
@@ -298,24 +324,24 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
        statefulset.apps/mz32bsnzerqo-cluster-s2-replica-s1-gen-1   1/1     14s
        statefulset.apps/mz32bsnzerqo-cluster-u1-replica-u1-gen-1   1/1     14s
        statefulset.apps/mz32bsnzerqo-environmentd-1                1/1     19s
-       ```
+       ```text
 
        If you run into an error during deployment, refer to the
        [Troubleshooting](/self-hosted/troubleshooting) guide.
 
 1. Open the Materialize Console in your browser:
 
-   {{% self-managed/port-forwarding-handling-local %}}
+   <!-- Unresolved shortcode: {{% self-managed/port-forwarding-handling-local %}... -->
 
-      {{< tip >}}
+      > **Tip:** 
 
-      {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+      <!-- Unresolved shortcode: {{% self-managed/troubleshoot-console-mz_catalog_s... -->
 
-      {{< /tip >}}
+      
 
 ## Next steps
 
-{{% self-managed/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Clean up
 
@@ -332,8 +358,6 @@ kind delete cluster
 - [Installation](/installation/)
 
 
-
-
 ---
 
 ## Upgrade on kind
@@ -345,9 +369,17 @@ cluster.
 The tutorial assumes you have installed Materialize on `kind` using the
 instructions on [Install locally on kind](/installation/install-on-local-kind/).
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+> **Important:** 
+
+When performing major version upgrades, you can upgrade only one major version
+at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
+but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
+not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](../self-managed/v25.2/release-notes/#v25216).
+
 
 ## Prerequisites
+
+This section covers prerequisites.
 
 ### Helm 3.2.0+
 
@@ -364,26 +396,24 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+Starting in v26.0, Materialize requires a license key. If your existing
+deployment does not have a license key configured, contact [Materialize support](../support/).
+
 
 ## Upgrade
 
-{{< important >}}
+> **Important:** 
 
 The following procedure performs a rolling upgrade, where both the old and new
 Materialize instances are running before the the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
-{{</ important >}}
 
-{{% self-managed/versions/upgrade/upgrade-steps-local-kind %}}
+<!-- Unresolved shortcode: {{% self-managed/versions/upgrade/upgrade-steps-lo... -->
 
 ## See also
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
 - [Installation](/installation/)
-
-
-

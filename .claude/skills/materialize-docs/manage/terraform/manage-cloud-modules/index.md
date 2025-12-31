@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/terraform/manage-cloud-modules/
+complexity: beginner
+description: Use Terraform modules to set up cloud resources
+doc_type: reference
+keywords:
+- CREATE CONNECTION
+- CREATE AN
+- CREATE A
+- 'Note:'
+- Manage cloud resources
+product_area: Operations
+status: stable
+title: Manage cloud resources
+---
+
 # Manage cloud resources
+
+## Purpose
+Use Terraform modules to set up cloud resources
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use Terraform modules to set up cloud resources
 
@@ -13,10 +36,10 @@ You can use the modules to establish the underlying cloud
 resources and then use the Materialize provider to build Materialize-specific
 objects. A few use cases are captured in the sections below.
 
-{{< note >}}
+> **Note:** 
 While Materialize offers support for its Terraform provider, Materialize does
 not offer support for these cloud resources modules.
-{{</ note >}}
+
 
 ### AWS PrivateLink
 
@@ -55,7 +78,7 @@ resource "materialize_connection_kafka" "example_kafka_connection_multiple_broke
     }
   }
 }
-```
+```text
 
 For a complete example of the Amazon MSK module with the Materialize provider,
 check out this [demo](https://github.com/MaterializeInc/demos/tree/main/integrations/terraform/msk-privatelink). The demo adds the Materialize provider configuration to the modules and bundles the entire deployment into one Terraform configuration file.

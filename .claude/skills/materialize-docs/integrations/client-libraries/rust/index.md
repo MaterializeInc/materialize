@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/rust/
+complexity: advanced
+description: Use Rust postgres-openssl to connect, insert, manage, query and stream
+  from Materialize.
+doc_type: reference
+keywords:
+- wire-compatible
+- Rust cheatsheet
+- CREATE A
+- CREATE TABLES
+- INSERT DATA
+- CREATE TABLE
+- INSERT A
+product_area: General
+status: stable
+title: Rust cheatsheet
+---
+
 # Rust cheatsheet
+
+## Purpose
+Use Rust postgres-openssl to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use Rust postgres-openssl to connect, insert, manage, query and stream from Materialize.
 
@@ -23,7 +49,7 @@ pub(crate) fn create_client() -> Result<Client, Error> {
     let config = "postgres://MATERIALIZE_USERNAME:APP_SPECIFIC_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=require";
     Client::connect(config, connector)
 }
-```
+```bash
 
 ## Create tables
 
@@ -49,7 +75,7 @@ pub(crate) fn create_table() -> Result<u64, Error> {
         &[],
     )
 }
-```
+```bash
 
 ## Insert data into tables
 
@@ -71,7 +97,7 @@ pub(crate) fn insert() -> Result<u64, Error> {
         &[&code, &name],
     )
 }
-```
+```bash
 
 ## Query
 
@@ -89,7 +115,7 @@ pub(crate) fn run_query () {
         println!("{:} - {:}", row.get::<usize, String>(0), row.get::<usize, String>(1));
     };
 }
-```
+```bash
 
 ## Manage sources, views, and indexes
 
@@ -113,7 +139,7 @@ pub(crate) fn create_source() -> Result<u64, Error> {
         &[],
     )
 }
-```
+```bash
 
 ### Create a view from Rust
 
@@ -134,7 +160,7 @@ pub(crate) fn create_materialized_view() -> Result<u64, Error> {
         &[],
     )
 }
-```
+```bash
 
 ## Stream
 
@@ -155,7 +181,7 @@ pub(crate) fn subscribe() {
         }
     }
 }
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of the `amount_sum` view contains all of the columns of the view, prepended with several additional columns that describe the nature of the update.
 

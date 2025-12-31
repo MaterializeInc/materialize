@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/explain-plan/
+complexity: advanced
+description: Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect
+  the plans of `SELECT` statements, indexes, and materialized views.
+doc_type: reference
+keywords:
+- create_index
+- 'Warning:'
+- create_view
+- create_materialized_view
+- EXPLAIN PLAN
+- select_stmt
+product_area: Indexes
+status: stable
+title: EXPLAIN PLAN
+---
+
 # EXPLAIN PLAN
 
+## Purpose
 Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views.
 
 
 `EXPLAIN PLAN` displays the plans used for:
@@ -10,16 +34,18 @@ Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans o
 |-----------------------------|-----------------------|
 | <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
 
-{{< warning >}}
+> **Warning:** 
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 change arbitrarily in future versions of Materialize.
-{{< /warning >}}
+
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "FOR SELECT">}}
+This section covers syntax.
+
+#### FOR SELECT
+
 ```mzsql
 EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
     [ WITH (<output_modifier> [, <output_modifier> ...])]
@@ -27,9 +53,9 @@ EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
 FOR ]       -- The FOR keyword is required if the PLAN keyword is specified
     <SELECT ...>
 ;
-```
-{{</tab>}}
-{{< tab "FOR CREATE VIEW">}}
+```bash
+
+#### FOR CREATE VIEW
 
 ```mzsql
 EXPLAIN <RAW | DECORRELATED | LOCALLY OPTIMIZED> PLAN
@@ -38,9 +64,10 @@ EXPLAIN <RAW | DECORRELATED | LOCALLY OPTIMIZED> PLAN
 FOR
     <CREATE VIEW ...>
 ;
-```
-{{</tab>}}
-{{< tab "FOR CREATE INDEX">}}
+```bash
+
+#### FOR CREATE INDEX
+
 ```mzsql
 EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
     [ WITH (<output_modifier> [, <output_modifier> ...]) ]
@@ -48,9 +75,10 @@ EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
 FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
     <CREATE INDEX ...>
 ;
-```
-{{</tab>}}
-{{< tab "FOR CREATE MATERIALIZED VIEW">}}
+```bash
+
+#### FOR CREATE MATERIALIZED VIEW
+
 ```mzsql
 EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
     [ WITH (<output_modifier> [, <output_modifier> ...])]
@@ -58,9 +86,10 @@ EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
 FOR ]          -- The FOR keyword is required if the PLAN keyword is specified
     <CREATE MATERIALIZED VIEW ...>
 ;
-```
-{{</tab>}}
-{{< tab "FOR VIEW">}}
+```bash
+
+#### FOR VIEW
+
 ```mzsql
 EXPLAIN <RAW | LOCALLY OPTIMIZED> PLAN
     [ WITH (<output_modifier> [, <output_modifier> ...])]
@@ -68,9 +97,10 @@ EXPLAIN <RAW | LOCALLY OPTIMIZED> PLAN
 FOR
   VIEW <name>
 ;
-```
-{{</tab>}}
-{{< tab "FOR INDEX">}}
+```bash
+
+#### FOR INDEX
+
 ```mzsql
 EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
       [ WITH (<output_modifier> [, <output_modifier> ...]) ]
@@ -78,9 +108,10 @@ EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
 FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
   INDEX <name>
 ;
-```
-{{</tab>}}
-{{< tab "FOR MATERIALIZED VIEW">}}
+```bash
+
+#### FOR MATERIALIZED VIEW
+
 ```mzsql
 EXPLAIN [[ RAW | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
     [ WITH (<output_modifier> [, <output_modifier> ...]) ]
@@ -88,9 +119,7 @@ EXPLAIN [[ RAW | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
 FOR ] -- The FOR keyword is required if the PLAN keyword is specified
   MATERIALIZED VIEW <name>
 ;
-```
-{{</tab>}}
-{{</tabs>}}
+```text
 
 Note that the `FOR` keyword is required if the `PLAN` keyword is present. The following three statements are equivalent:
 
@@ -98,14 +127,14 @@ Note that the `FOR` keyword is required if the `PLAN` keyword is present. The fo
 EXPLAIN <explainee>;
 EXPLAIN PLAN FOR <explainee>;
 EXPLAIN PHYSICAL PLAN AS TEXT FOR <explainee>;
-```
+```text
 
 If `PHSYICAL PLAN` is specified without an `AS`-format, we will provide output similar to the above, but more verbose. The following two statements are equivalent (and produce the more verbose output):
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR <explainee>;
 EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR <explainee>;
-```
+```bash
 
 ### Explained object
 
@@ -178,7 +207,7 @@ dataflow program. We get there via a series of progressively lower-level plans:
 
 ```text
 SQL ⇒ raw plan ⇒ decorrelated plan ⇒ optimized plan ⇒ physical plan ⇒ dataflow
-```
+```bash
 
 #### From SQL to raw plan
 
@@ -240,7 +269,7 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.t1_x_idx (lookup)
-```
+```bash
 
 
 ### Reading plans
@@ -281,7 +310,7 @@ CREATE TABLE
    filter=((#0{x} > #1{y}))                            +
                                                        +
  Target cluster: quickstart                            +
-```
+```text
 
 Note that CTEs in optimized plans do not directly correspond to CTEs in your original SQL query: For example, CTEs might disappear due to inlining (i.e., when a CTE is used only once, its definition is copied to that usage site); new CTEs can appear due to the optimizer recognizing that a part of the query appears more than once (aka common subexpression elimination). Also, certain SQL-level concepts, such as outer joins or subqueries, do not have an explicit representation in optimized plans, and are instead expressed as a pattern of operators involving CTEs. CTE names are always `l0`, `l1`, `l2`, ..., and do not correspond to SQL-level CTE names.
 
@@ -309,7 +338,7 @@ Join on=(#1 = #2 AND #3 = #4) type=delta
     ReadStorage materialize.public.u
   ArrangeBy keys=[[#0]]
     ReadStorage materialize.public.v
-```
+```text
 The `%0`, `%1`, etc. refer to each of the join inputs.
 A *differential* join shows one join path, which is simply a sequence of binary
 joins (each of whose results need to be maintained as state).
@@ -331,12 +360,12 @@ project the result data. This operator is special, as it can only occur at the
 top of the plan. Finishing actions are executed outside the parallel dataflow
 that implements the rest of the plan.
 
-```
+```text
 Finish order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5 output=[#0, #1]
   CrossJoin
     ReadStorage materialize.public.r
     ReadStorage materialize.public.s
-```
+```text
 
 Below the plan, a "Used indexes" section indicates which indexes will be used by the query, [and in what way](/transform-data/optimization/#use-explain-to-verify-index-usage).
 
@@ -355,28 +384,21 @@ closer to LIR than SQL. The raw plans from `EXPLAIN RAW PLAN FOR ...`
 are closer to SQL (and therefore less indicative of how the query will
 actually run).
 
-{{< tabs >}}
+#### In fully optimized physical (LIR) plans
 
-{{< tab "In fully optimized physical (LIR) plans" >}}
-{{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
-{{< /tab >}}
 
-{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
-{{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
-{{< /tab >}}
+#### In decorrelated and optimized plans (default EXPLAIN)
 
-{{< tab "In raw plans" >}}
-{{< explain-plans/operator-table data="explain_plan_operators" planType="raw" >}}
-{{< /tab >}}
 
-{{< /tabs >}}
+#### In raw plans
+
 
 Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
 
-```
+```text
 →Fused X
   →Y
-```
+```text
 
 Then the `X` and `Y` operators will be combined into a single, more efficient operator.
 
@@ -393,35 +415,35 @@ Explain the optimized plan as text:
 ```mzsql
 EXPLAIN
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
-```
+```text
 
 Same explanation as above, but with the `EXPLAIN` expressed a bit more verbosely:
 
 ```mzsql
 EXPLAIN PLAN FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
-```
+```text
 
 Same explanation as above, but expressed even more verbosely:
 
 ```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
-```
+```text
 
 Same as above, but every sub-plan is annotated with its schema types:
 
 ```mzsql
 EXPLAIN WITH(types) FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
-```
+```text
 
 Explain the physical plan as verbose text (i.e., in complete detail):
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
-```
+```bash
 
 ### Explaining an index on a view
 
@@ -433,7 +455,7 @@ CREATE VIEW my_view AS
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
 -- create an index on the view
 CREATE INDEX my_view_idx ON my_view(id);
-```
+```text
 
 You can inspect the plan of the dataflow that will maintain your index with the following statements.
 
@@ -442,35 +464,35 @@ Explain the optimized plan as text:
 ```mzsql
 EXPLAIN
 INDEX my_view_idx;
-```
+```text
 
 Same as above, but a bit more verbose:
 
 ```mzsql
 EXPLAIN PLAN FOR
 INDEX my_view_idx;
-```
+```text
 
 Same as above, but even more verbose:
 
 ```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 INDEX my_view_idx;
-```
+```text
 
 Same as above, but every sub-plan is annotated with its schema types:
 
 ```mzsql
 EXPLAIN WITH(types) FOR
 INDEX my_view_idx;
-```
+```text
 
 Explain the physical plan as verbose text:
 
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR
 INDEX my_view_idx;
-```
+```bash
 
 ### Explaining a materialized view
 
@@ -479,7 +501,7 @@ Let's create a materialized view for the above `SELECT` query.
 ```mzsql
 CREATE MATERIALIZED VIEW my_mat_view AS
 SELECT a.id, sum(b.amount) FROM accounts a JOIN bids b ON(a.id = b.buyer) GROUP BY a.id;
-```
+```text
 
 You can inspect the plan of the dataflow that will maintain your view with the following statements.
 
@@ -488,28 +510,28 @@ Explain the optimized plan as text:
 ```mzsql
 EXPLAIN
 MATERIALIZED VIEW my_mat_view;
-```
+```text
 
 Same as above, but a bit more verbose:
 
 ```mzsql
 EXPLAIN PLAN FOR
 MATERIALIZED VIEW my_mat_view;
-```
+```text
 
 Same as above, but even more verbose:
 
 ```mzsql
 EXPLAIN OPTIMIZED PLAN AS TEXT FOR
 MATERIALIZED VIEW my_mat_view;
-```
+```text
 
 Same as above, but every sub-plan is annotated with its schema types:
 
 ```mzsql
 EXPLAIN WITH(types)
 MATERIALIZED VIEW my_mat_view;
-```
+```text
 
 Explain the physical plan as verbose text:
 
@@ -526,5 +548,5 @@ The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memo
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-plan.md" >}}
-
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.

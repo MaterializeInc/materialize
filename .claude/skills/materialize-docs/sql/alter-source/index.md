@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-source/
+complexity: intermediate
+description: '`ALTER SOURCE` changes certain characteristics of a source.'
+doc_type: reference
+keywords:
+- ALTER SOURCE
+- 'Important:'
+- 'Note:'
+product_area: Sources
+status: stable
+title: ALTER SOURCE
+---
+
 # ALTER SOURCE
+
+## Purpose
+`ALTER SOURCE` changes certain characteristics of a source.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `ALTER SOURCE` changes certain characteristics of a source.
 
@@ -13,67 +34,73 @@ Use `ALTER SOURCE` to:
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "Add subsource" >}}
+This section covers syntax.
+
+#### Add subsource
 
 ### Add subsource
 
 To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Server source:
 
-{{% include-syntax file="examples/alter_source" example="syntax-add-subsource" %}}
+<!-- Syntax example: examples/alter_source / syntax-add-subsource -->
 
-{{< note >}}
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
-{{< /note >}}
+> **Note:** 
+When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
+process for the new subsource. During this snapshotting, the data ingestion for
+the existing subsources for the same source is temporarily blocked. As such, if
+possible, you can resize the cluster to speed up the snapshotting process and
+once the process finishes, resize the cluster for steady-state.
 
-{{< /tab >}}
 
-{{< tab "Rename" >}}
+
+#### Rename
 
 ### Rename
 
 To rename a source:
 
-{{% include-syntax file="examples/alter_source" example="syntax-rename" %}}
+<!-- Syntax example: examples/alter_source / syntax-rename -->
 
-{{< /tab >}}
-{{< tab "Change owner" >}}
+#### Change owner
 
 ### Change owner
 
 To change the owner of a source:
 
-{{% include-syntax file="examples/alter_source" example="syntax-change-owner" %}}
+<!-- Syntax example: examples/alter_source / syntax-change-owner -->
 
-{{< /tab >}}
-{{< tab "(Re)Set retain history config" >}}
+#### (Re)Set retain history config
 
 ### (Re)Set retain history config
 
 To set the retention history for a source:
 
-{{% include-syntax file="examples/alter_source" example="syntax-set-retain-history" %}}
+<!-- Syntax example: examples/alter_source / syntax-set-retain-history -->
 
 To reset the retention history to the default for a source:
 
-{{% include-syntax file="examples/alter_source" example="syntax-reset-retain-history" %}}
-
-{{< /tab >}}
-{{< /tabs >}}
+<!-- Syntax example: examples/alter_source / syntax-reset-retain-history -->
 
 
 ## Context
+
+This section covers context.
 
 ### Adding subsources to a PostgreSQL/MySQL/SQL Server source
 
 Note that using a combination of dropping and adding subsources lets you change
 the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
 
-{{< important >}}
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
-{{< /important >}}
+> **Important:** 
+When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
+process for the new subsource. During this snapshotting, the data ingestion for
+the existing subsources for the same source is temporarily blocked. As such, if
+possible, you can resize the cluster to speed up the snapshotting process and
+once the process finishes, resize the cluster for steady-state.
+
+
 
 ### Dropping subsources from a PostgreSQL/MySQL/SQL Server source
 
@@ -89,16 +116,23 @@ You cannot drop the "progress subsource".
 
 ## Examples
 
+This section covers examples.
+
 ### Adding subsources
 
 ```mzsql
 ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
-```
+```text
 
-{{< important >}}
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
-{{< /important >}}
+> **Important:** 
+When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
+process for the new subsource. During this snapshotting, the data ingestion for
+the existing subsources for the same source is temporarily blocked. As such, if
+possible, you can resize the cluster to speed up the snapshotting process and
+once the process finishes, resize the cluster for steady-state.
+
+
 
 ### Dropping subsources
 
@@ -112,7 +146,12 @@ DROP SOURCE tbl_a, b CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-source.md" >}}
+- Ownership of the source being altered.
+- In addition, to change owners:
+   - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the source is namespaced
+  by a schema.
+
 
 ## See also
 

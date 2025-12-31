@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/python/
+complexity: advanced
+description: Use Python to connect, insert, manage, query and stream from Materialize.
+doc_type: reference
+keywords:
+- CREATE A
+- CREATE TABLES
+- SHOW TABLES
+- 'Basic Example:'
+- Python cheatsheet
+- CREATE TABLE
+- INSERT DATA
+- updated,
+- wire-compatible
+product_area: General
+status: stable
+title: Python cheatsheet
+---
+
 # Python cheatsheet
+
+## Purpose
+Use Python to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use Python to connect, insert, manage, query and stream from Materialize.
 
@@ -18,7 +45,7 @@ import sys
 
 dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
-```
+```bash
 
 ## Create tables
 
@@ -41,7 +68,7 @@ with conn.cursor() as cur:
 with conn.cursor() as cur:
     cur.execute("SHOW TABLES")
     print(cur.fetchone())
-```
+```bash
 
 ## Insert data into tables
 
@@ -69,7 +96,7 @@ with conn.cursor() as cur:
     print(cur.fetchone())
 
 conn.close()
-```
+```bash
 
 ## Query
 
@@ -92,7 +119,7 @@ with conn.cursor() as cur:
     cur.execute("SELECT * FROM countries;")
     for row in cur:
         print(row)
-```
+```text
 
 For more details, see the [Psycopg](https://www.psycopg.org/docs/usage.html) documentation.
 
@@ -118,7 +145,7 @@ with conn.cursor() as cur:
 with conn.cursor() as cur:
     cur.execute("SHOW SOURCES")
     print(cur.fetchone())
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -142,7 +169,7 @@ with conn.cursor() as cur:
 with conn.cursor() as cur:
     cur.execute("SHOW VIEWS")
     print(cur.fetchone())
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -167,7 +194,7 @@ with conn.cursor() as cur:
         cur.execute("FETCH ALL c")
         for row in cur:
             print(row)
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
@@ -179,7 +206,7 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access 
 (Decimal('1648737065479'), -1, 'my_value_3')
 (Decimal('1648737065479'), 1, 'my_value_4')
     ...
-```
+```text
 
 A `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
@@ -200,7 +227,7 @@ conn = psycopg.connect(dsn)
 with conn.cursor() as cur:
     for row in cur.stream("SUBSCRIBE amount_sum"):
         print(row)
-```
+```bash
 
 ## Clean up
 

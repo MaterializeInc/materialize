@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/hex/
+complexity: beginner
+description: How to create collaborative data notebooks with Hex
+doc_type: reference
+keywords:
+- Data Sources > +Add > Create data connection... > Materialize
+- CREATE DATA
+- Materialize
+- CREATE A
+- CREATE COLLABORATIVE
+- '[Hex](https://hex.tech/)'
+- CREATE AN
+- materialize
+- '6875'
+- Hex
+product_area: Sinks
+status: stable
+title: Hex
+---
+
 # Hex
 
+## Purpose
 How to create collaborative data notebooks with Hex
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to create collaborative data notebooks with Hex
 
 
 This guide walks you through the steps required to use the collaborative data notebook [Hex](https://hex.tech/) with Materialize.
@@ -12,7 +39,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 2. Go to an existing project or create a new one.
 
-3. Go to {{% icons/hex_data_sources %}}**Data Sources > +Add > Create data connection... > Materialize**.
+3. Go to <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/hex_data_sources --> --> -->**Data Sources > +Add > Create data connection... > Materialize**.
 
 4. Search and click the **Materialize** option.
 
@@ -31,7 +58,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Execute and visualize a query
 
@@ -56,7 +83,7 @@ This guide walks you through the steps required to use the collaborative data no
     ```
 
     This query generates a series of 1000 numbers squared and assigns row numbers to each.
-3. Click the {{% icons/hex_run %}} **Run** button.
+3. Click the <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/hex_run --> --> --> **Run** button.
 
 4. Inside the cell, click the **Chart** button and configure as follows:
    1. In the **X Axis** options, select the **row_num** column.
@@ -68,4 +95,3 @@ This guide walks you through the steps required to use the collaborative data no
 ### Related pages
 
 For more information about Hex and data connections, visit [their documentation.](https://learn.hex.tech/docs/connect-to-data/data-connections/overview)
-

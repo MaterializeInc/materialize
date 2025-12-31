@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/fetch/
+complexity: intermediate
+description: '`FETCH` retrieves rows from a cursor.'
+doc_type: reference
+keywords:
+- FETCH
+product_area: Indexes
+status: stable
+title: FETCH
+---
+
 # FETCH
+
+## Purpose
+`FETCH` retrieves rows from a cursor.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `FETCH` retrieves rows from a cursor.
 
@@ -8,7 +27,7 @@
 
 ## Syntax
 
-{{< diagram "fetch.svg" >}}
+[See diagram: fetch.svg]
 
 Field | Use
 ------|-----

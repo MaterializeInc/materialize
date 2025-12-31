@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/patterns/percentiles/
+complexity: beginner
+description: How to use histograms to efficiently calculate percentiles in Materialize.
+doc_type: reference
+keywords:
+- INSERT INTO
+- histograms
+- 'High
+
+  Dynamic Range (HDR) histograms'
+- 'Tip:'
+- CREATE A
+- CREATE TABLE
+- 'Note:'
+- Percentile calculation
+product_area: SQL
+status: stable
+title: Percentile calculation
+---
+
 # Percentile calculation
 
+## Purpose
 How to use histograms to efficiently calculate percentiles in Materialize.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to use histograms to efficiently calculate percentiles in Materialize.
 
 
 Percentiles are a useful statistic to understand and interpret data distribution. This pattern covers how to use histograms to efficiently calculate percentiles in Materialize.
@@ -46,13 +73,13 @@ To use histograms to compute exact percentiles:
   counts (sum of the counts for all buckets up to and including that bucket) by
   the total count.
 
-  {{< note >}}
+  > **Note:** 
 
   The use of the cross join produces a number of outputs that is quadratic in
   the input. And, while the results will only be linear in size, it may take a
   disproportionate amount of time to produce and maintain.
 
-  {{</ note >}}
+  
 
 ### Example
 
@@ -60,14 +87,14 @@ To use histograms to compute exact percentiles:
 
    ```mzsql
    CREATE TABLE input (value BIGINT);
-   ```
+   ```text
 
 2. Insert into the `input` table values `1` to `10`.
 
    ```mzsql
    INSERT INTO input
    SELECT n FROM generate_series(1,10) AS n;
-   ```
+   ```text
 
 1. Create a `histogram` view to track unique values from the
    `input` table and their count:
@@ -79,7 +106,7 @@ To use histograms to compute exact percentiles:
      count(*) AS count_of_bucket_values
    FROM input
    GROUP BY value;
-   ```
+   ```text
 
 1. Create a view `distribution` to calculate the cumulative count and the
    cumulative density for each bucket. The cumulative density is calculated by
@@ -97,15 +124,15 @@ To use histograms to compute exact percentiles:
    WHERE g.bucket <= h.bucket
    GROUP BY h.bucket, h.count_of_bucket_values
    ORDER BY cumulative_density;
-   ```
+   ```text
 
-   {{< note >}}
+   > **Note:** 
 
    The use of the cross join produces a number of outputs that is quadratic in
    the input. And, while the results will only be linear in size, it may take a
    disproportionate amount of time to produce and maintain.
 
-   {{</ note >}}
+   
 
 1. You can then query `distribution` by the `cumulative_density` field to
    return specific percentiles. For example, the following query returns the
@@ -117,7 +144,7 @@ To use histograms to compute exact percentiles:
    WHERE cumulative_density >= 0.9
    ORDER BY cumulative_density
    LIMIT 1;
-   ```
+   ```bash
 
 
 ## Using HDR histograms to compute approximate percentiles
@@ -148,27 +175,26 @@ same for HDR histograms.
 
 ### Example
 
-{{< tip >}}
+> **Tip:** 
 
 The following example assumes you have not previously created and populated the
 `input` table from the [Using histograms to compute exact percentiles
 example](#example). If you have created and populated the table, skip the
 corresponding steps.
 
-{{</ tip >}}
 
 1. Create a table `input`:
 
    ```mzsql
    CREATE TABLE input (value BIGINT);
-   ```
+   ```text
 
 2. Insert into the `input` table values `1` to `10`.
 
    ```mzsql
    INSERT INTO input
    SELECT n FROM generate_series(1,10) AS n;
-   ```
+   ```text
 
 1. Create a `hdr_histogram` view. To reduce the number of buckets, the values
    are rounded down to the nearest multiple of 1/16. Specifically, the values
@@ -176,9 +202,10 @@ corresponding steps.
    precision of the significand to 1/16 (4 bits), the value is reconstructed to
    an approximated value.
 
-   {{< tabs >}}
+   
 
-   {{< tab "Materialize Console" >}}
+   #### Materialize Console
+
 
 ```mzsql
 CREATE VIEW hdr_histogram AS
@@ -206,11 +233,12 @@ SELECT
   count(*) AS count_of_bucket_values
 FROM buckets
 GROUP BY bucket;
-```
+```json
 
-   {{</ tab >}}
+   
 
-   {{< tab "psql" >}}
+   #### psql
+
 
 ```mzsql
 -- precision for the representation of the significand in bits
@@ -241,9 +269,9 @@ SELECT
   count(*) AS count_of_bucket_values
 FROM buckets
 GROUP BY bucket;
-```
-   {{</ tab >}}
-   {{</ tabs >}}
+```json
+   
+   
 
 1. Create a view `hdr_distribution` to calculate the cumulative count and the
    cumulative density for each bucket. The cumulative density is calculated by
@@ -260,7 +288,7 @@ GROUP BY bucket;
    FROM hdr_histogram g, hdr_histogram h
    WHERE g.bucket <= h.bucket
    GROUP BY h.bucket, h.count_of_bucket_values;
-   ```
+   ```text
 
 1. You can then query `hdr_distribution` by the `cumulative_density` field
    to return _approximate_ percentiles. More precisely, the query returns the
@@ -276,7 +304,7 @@ GROUP BY bucket;
    WHERE cumulative_density >= 0.9
    ORDER BY cumulative_density
    LIMIT 1;
-   ```
+   ```bash
 
 ### HDR Histograms and approximate values
 
@@ -286,7 +314,7 @@ verify, query `hdr_distribution`:
 
 ```mzsql
 SELECT * FROM hdr_distribution;
-```
+```text
 
 The query returns the following:
 
@@ -304,13 +332,13 @@ The query returns the following:
       9 |         1 |                    9 |                     0.9
      10 |         1 |                   10 |                       1
 (10 rows)
-```
+```text
 
 But if values grow larger, buckets can contain more than one value. Let's see what happens if more values are added to the `input` table.
 
 ```mzsql
 INSERT INTO input SELECT n FROM generate_series(11,10001) AS n;
-```
+```text
 
 Unlike the `distribution` view (used in the histogram approach) where each
 bucket contains only a single value and has 10001 rows, a single bucket in
@@ -318,7 +346,7 @@ bucket contains only a single value and has 10001 rows, a single bucket in
 
 ```mzsql
 SELECT * FROM hdr_distribution ORDER BY cumulative_density;
-```
+```text
 
 The query returns the following:
 
@@ -339,7 +367,7 @@ The query returns the following:
    9216 |       512 |                 9727 | 0.972602739726027397260273972602739726027
    9728 |       274 |                10001 |                                         1
 (163 rows)
-```
+```text
 
 When querying `hdr_distribution`  for the 90-th percentile value:
 
@@ -349,7 +377,7 @@ FROM hdr_distribution
 WHERE cumulative_density >= 0.9
 ORDER BY cumulative_density
 LIMIT 1;
-```
+```text
 
 The query returns an approximate
 percentile of `8704` (or more precisely between `8704`and `9216`) whereas the
@@ -363,4 +391,3 @@ precise percentile is `9001`.
 ```
 
 The precision of the approximation can be adapted by changing the `precision` in the definition of `hdr_histogram`. The higher the `precision`, the fewer items are kept in the same bucket and therefore the more precise the approximate percentile becomes. The lower the `precision`, the more items are kept in the same bucket and therefore the less memory is required.
-

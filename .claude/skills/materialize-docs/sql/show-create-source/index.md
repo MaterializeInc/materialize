@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-create-source/
+complexity: intermediate
+description: '`SHOW CREATE SOURCE` returns the statement used to create the source.'
+doc_type: reference
+keywords:
+- CREATE THE
+- SHOW CREATE SOURCE
+- SHOW CREATE
+product_area: Sources
+status: stable
+title: SHOW CREATE SOURCE
+---
+
 # SHOW CREATE SOURCE
+
+## Purpose
+`SHOW CREATE SOURCE` returns the statement used to create the source.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW CREATE SOURCE` returns the statement used to create the source.
 
@@ -8,19 +29,23 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```sql
 SHOW [REDACTED] CREATE SOURCE <source_name>;
-```
+```text
 
-{{< yaml-table data="show_create_redacted_option" >}}
+<!-- Dynamic table: show_create_redacted_option - see original docs -->
 
 For available source names, see [`SHOW SOURCES`](/sql/show-sources).
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW CREATE SOURCE market_orders_raw;
-```
+```text
 
 ```nofmt
                  name                 |                                      create_sql
@@ -32,8 +57,8 @@ SHOW CREATE SOURCE market_orders_raw;
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/show-create-source.md" >}}
+- `USAGE` privileges on the schema containing the source.
+
 
 ## Related pages
 

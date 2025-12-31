@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/uint/
+complexity: intermediate
+description: Express unsigned integers
+doc_type: reference
+keywords:
+- Unsigned Integer types
+- Catalog name
+- OID
+- Size
+- Range
+- SELECT 123
+- SELECT 1
+product_area: Indexes
+status: stable
+title: Unsigned Integer types
+---
+
 # Unsigned Integer types
+
+## Purpose
+Express unsigned integers
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Express unsigned integers
 
@@ -32,6 +57,8 @@ Detail | Info
 **Range** | [0, 18,446,744,073,709,551,615]
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -76,20 +103,22 @@ From | Required context
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 123::uint4 AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------
    123
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 1.23::uint4 AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------

@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/explain-schema/
+complexity: intermediate
+description: '`EXPLAIN KEY SCHEMA` or `EXPLAIN VALUE SCHEMA` is used to see the generated
+  schemas for a `CREATE SINK` statement'
+doc_type: reference
+keywords:
+- 'Warning:'
+- EXPLAIN VALUE
+- JSON
+- CREATE SINK
+- EXPLAIN SCHEMA
+- EXPLAIN KEY
+product_area: Indexes
+status: stable
+title: EXPLAIN SCHEMA
+---
+
 # EXPLAIN SCHEMA
+
+## Purpose
+`EXPLAIN KEY SCHEMA` or `EXPLAIN VALUE SCHEMA` is used to see the generated schemas for a `CREATE SINK` statement
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `EXPLAIN KEY SCHEMA` or `EXPLAIN VALUE SCHEMA` is used to see the generated schemas for a `CREATE SINK` statement
 
@@ -6,19 +31,19 @@
 
 `EXPLAIN KEY SCHEMA` or `EXPLAIN VALUE SCHEMA` shows the generated schemas for a `CREATE SINK` statement without creating the sink.
 
-{{< warning >}}
+> **Warning:** 
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 change arbitrarily in future versions of Materialize.
-{{< /warning >}}
+
 
 ## Syntax
 
-{{< diagram "explain-schema.svg" >}}
+[See diagram: explain-schema.svg]
 
 #### `sink_definition`
 
-{{< diagram "sink-definition.svg" >}}
+[See diagram: sink-definition.svg]
 
 ### Output format
 
@@ -34,6 +59,8 @@ This command shows what the generated schemas would look like, without creating 
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 CREATE TABLE t (c1 int, c2 text);
 COMMENT ON TABLE t IS 'materialize comment on t';
@@ -46,7 +73,7 @@ EXPLAIN VALUE SCHEMA FOR
   KEY (c1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
-```
+```text
 
 ```
                    Schema
@@ -79,6 +106,7 @@ EXPLAIN VALUE SCHEMA FOR
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-schema.md"
->}}
+- `USAGE` privileges on the schemas that all items in the query are contained
+  in.
+
 

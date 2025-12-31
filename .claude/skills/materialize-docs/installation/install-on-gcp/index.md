@@ -1,8 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-gcp/
+complexity: advanced
+description: '<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence
+  %... -->'
+doc_type: reference
+keywords:
+- 'Warning:'
+- CREATE SERVICE
+- Install on GCP (via Terraform)
+- CREATE A
+- 'Tip:'
+- 'Note:'
+- SHOW THE
+product_area: Deployment
+status: stable
+title: Install on GCP (via Terraform)
+---
+
 # Install on GCP (via Terraform)
 
+## Purpose
+<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence %... -->
+
+If you need to understand the syntax and options for this command, you're in the right place.
 
 
-{{% self-managed/materialize-components-sentence %}}
+<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence %... -->
 
 This tutorial deploys Materialize to GCP Google Kubernetes Engine (GKE) cluster
 with a Cloud SQL PostgreSQL database as the metadata database and Cloud Storage
@@ -17,15 +41,14 @@ module](https://github.com/MaterializeInc/terraform-google-materialize) to:
    module to deploy Materialize Operator and Materialize instances to the GKE
    cluster.
 
-{{< warning >}}
+> **Warning:** 
 
-{{< self-managed/terraform-disclaimer >}}
+> **Note:** Terraform configurations may vary based on your environment.
 
-{{< self-managed/tutorial-disclaimer >}}
-
-{{< /warning >}}
 
 ## Prerequisites
+
+This section covers prerequisites.
 
 ### Google cloud provider project
 
@@ -53,13 +76,12 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 
 ### kubectl and plugins
 
-{{< tip >}}
+> **Tip:** 
 
 Using `gcloud` to install `kubectl` will also install the needed plugins.
 Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 `kubectl`.
 
-{{< /tip >}}
 
 - If you do not have `kubectl`, install `kubectl`.  To install, see [Install
   kubectl and configure cluster
@@ -86,7 +108,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 Starting in v26.0, Self-Managed Materialize requires a license key.
 
-{{< yaml-table data="self_managed/license_key" >}}
+<!-- Dynamic table: self_managed/license_key - see original docs -->
 
 ## A. Configure GCP project and service account
 
@@ -96,10 +118,10 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    to use. For details, see the [Initializing the gcloud CLI
    documentation](https://cloud.google.com/sdk/docs/initializing#initialize_the).
 
-   {{< tip >}}
+   > **Tip:** 
    You do not need to configure a default Compute Region and Zone as you will
    specify the region.
-   {{</ tip >}}
+   
 
 1. Enable the following services for your GCP project, if not already enabled:
 
@@ -109,7 +131,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
    gcloud services enable cloudresourcemanager.googleapis.com # For managing GCP resources
    gcloud services enable servicenetworking.googleapis.com  # For private network connections
    gcloud services enable iamcredentials.googleapis.com     # For security and authentication
-   ```
+   ```text
 
 1. To the service account that will run the Terraform script,
    grant the following IAM roles:
@@ -124,19 +146,19 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
       ```bash
       read -s PROJECT_ID
-      ```
+      ```text
 
    1. Find your service account email for your GCP project
 
       ```bash
       gcloud iam service-accounts list --project $PROJECT_ID
-      ```
+      ```text
 
    1. Enter your service account email.
 
       ```bash
       read -s SERVICE_ACCOUNT
-      ```
+      ```text
 
    1. Grant the service account the neccessary IAM roles.
 
@@ -160,7 +182,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       gcloud projects add-iam-policy-binding $PROJECT_ID \
       --member="serviceAccount:$SERVICE_ACCOUNT" \
       --role="roles/container.admin"
-      ```
+      ```text
 
 1. For the service account, authenticate to allow Terraform to
    interact with your GCP project. For details, see [Terraform: Google Cloud
@@ -173,53 +195,49 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
    ```bash
    gcloud auth application-default login
-   ```
+   ```text
 
-   {{< tip >}}
+   > **Tip:** 
    If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
-   {{</ tip >}}
+   
 
 ## B. Set up GCP Kubernetes environment and install Materialize
 
-{{< warning >}}
+> **Warning:** 
 
-{{< self-managed/terraform-disclaimer >}}
+> **Note:** Terraform configurations may vary based on your environment.
 
-{{< /warning >}}
 
-{{< tabs >}}
+#### Deployed components
 
-{{< tab "Deployed components" >}}
 [Materialize on GCP Terraform
 module](https://github.com/MaterializeInc/terraform-google-materialize) deploys
 a sample infrastructure on GCP (region `us-central1`) with the following
 components:
 
-{{< yaml-table data="self_managed/gcp_terraform_deployed_components" >}}
+<!-- Dynamic table: self_managed/gcp_terraform_deployed_components - see original docs -->
 
-{{< tip >}}
-{{< self-managed/gcp-terraform-configs >}}
-{{< /tip >}}
-{{</ tab >}}
-{{< tab "Releases" >}}
+> **Tip:** 
 
-{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
 
-{{</ tab >}}
-{{</ tabs >}}
+#### Releases
 
-{{% self-managed/versions/step-clone-google-terraform-repo %}}
+
+<!-- Dynamic table: self_managed/gcp_terraform_versions - see original docs -->
+
+
+<!-- Unresolved shortcode: {{% self-managed/versions/step-clone-google-terraf... -->
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
 
    ```bash
    cd terraform-google-materialize/examples/simple
-   ```
+   ```text
 
-   {{< tip >}}
-   {{< self-managed/gcp-terraform-configs >}}
-   {{< /tip >}}
+   > **Tip:** 
+   
+   
 
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify the following variables:
@@ -234,31 +252,31 @@ components:
    project_id = "enter-your-gcp-project-id"
    prefix  = "enter-your-prefix" //  Maximum of 15 characters, contain lowercase alphanumeric and hyphens only (e.g., mz-simple)
    region = "us-central1"
-   ```
+   ```text
 
-   {{< tip >}}
+   > **Tip:** 
 
-   {{< self-managed/gcp-terraform-configs >}}
+   
 
-   {{< /tip >}}
+   
 
 1. Initialize the terraform directory.
 
     ```bash
     terraform init
-    ```
+    ```text
 
 1. Run terraform plan and review the changes to be made.
 
     ```bash
     terraform plan
-    ```
+    ```text
 
 1. If you are satisfied with the changes, apply.
 
     ```bash
     terraform apply
-    ```
+    ```text
 
    To approve the changes and apply, enter `yes`.
 
@@ -281,7 +299,7 @@ components:
       "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
       "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
    }
-   ```
+   ```text
 
 1. Configure `kubectl` to connect to your GKE cluster, specifying:
 
@@ -297,7 +315,7 @@ components:
    gcloud container clusters get-credentials <cluster-name>  \
     --region <region> \
     --project <project>
-   ```
+   ```text
 
    Alternatively, you can use the following command to get the cluster name and
    region from the Terraform output and the project ID from the environment
@@ -306,13 +324,13 @@ components:
    ```bash
    gcloud container clusters get-credentials $(terraform output -json gke_cluster | jq -r .name) \
     --region $(terraform output -json gke_cluster | jq -r .location) --project $PROJECT_ID
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
    ```bash
    kubectl cluster-info
-   ```
+   ```text
 
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
@@ -321,14 +339,15 @@ components:
    starting in v0.3.0, a `cert-manager`. Verify the
    installation and check the status:
 
-   {{< tabs >}}
-   {{< tab "Materialize Operator" >}}
+   
+   #### Materialize Operator
+
 
    Verify the installation and check the status:
 
    ```shell
    kubectl get all -n materialize
-   ```
+   ```text
 
    Wait for the components to be in the `Running` state:
 
@@ -341,18 +360,19 @@ components:
 
    NAME                                                                        DESIRED   CURRENT   READY   AGE
    replicaset.apps/materialize-mz-simple-materialize-operator-74d8f549d6       1         1         1       36m
-   ```
+   ```json
 
-   {{</ tab >}}
-   {{< tab "cert-manager (Starting in version 0.3.0)" >}}
+   
+   #### cert-manager (Starting in version 0.3.0)
+
 
    Verify the installation and check the status:
 
    ```shell
    kubectl get all -n cert-manager
-   ```
+   ```text
    Wait for the components to be in the `Running` state:
-   ```
+   ```text
    NAME                                           READY   STATUS    RESTARTS   AGE
    pod/cert-manager-6794b8d569-vt264              1/1     Running   0          22m
    pod/cert-manager-cainjector-7f69cd69f7-7brqw   1/1     Running   0          22m
@@ -372,10 +392,10 @@ components:
    replicaset.apps/cert-manager-6794b8d569              1         1         1       22m
    replicaset.apps/cert-manager-cainjector-7f69cd69f7   1         1         1       22m
    replicaset.apps/cert-manager-webhook-6cc5dccc4b      1         1         1       22m
-   ```
+   ```json
 
-   {{</ tab >}}
-   {{</ tabs >}}
+   
+   
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
@@ -401,11 +421,11 @@ components:
        }
    ]
    EOF
-   ```
+   ```text
 
    - **Starting in v26.0**, Self-Managed Materialize requires a license key. To
      get your license key:
-     {{% yaml-table data="self_managed/license_key" %}}
+     <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- Dynamic table - see original docs --> --> -->
 
    - **Starting in v0.3.0**, the Materialize on GCP Terraform module also
      deploys, by default:
@@ -418,31 +438,31 @@ components:
    - **Starting in v0.4.3**, you can specify addition configuration options via
      `environmentd_extra_args`.
 
-   {{< tip >}}
-   {{% self-managed/gcp-terraform-upgrade-notes %}}
+   > **Tip:** 
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
    See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module) for notable changes.
-   {{</ tip >}}
+   
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
    ```bash
    terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
-   ```
+   ```text
 
    The plan should show the changes to be made, with a summary similar to the
    following:
 
-   ```
+   ```text
    Plan: 9 to add, 1 to change, 0 to destroy.
-   ```
+   ```text
 
 1. If you are satisfied with the changes, apply.
 
     ```bash
     terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
-    ```
+    ```text
 
    To approve the changes and apply, enter `yes`.
 
@@ -471,13 +491,13 @@ components:
       "gke_sa" = "mz-simple-gke-sa@my-project.iam.gserviceaccount.com"
       "materialize_sa" = "mz-simple-materialize-sa@my-project.iam.gserviceaccount.com"
    }
-   ```
+   ```text
 
 1. Verify the installation and check the status:
 
    ```bash
    kubectl get all -n materialize-environment
-   ```
+   ```text
 
    Wait for the components to be in the `Running` state.
 
@@ -518,16 +538,17 @@ components:
    NAME                   STATUS     COMPLETIONS   DURATION   AGE
    job.batch/db-demo-db   Complete   1/1           12s        4m27s
 
-   ```
+   ```text
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
 
 1. Open the Materialize Console in your browser:
 
-   {{< tabs >}}
+   
 
-   {{< tab  "Via Network Load Balancer" >}}
+   #### Via Network Load Balancer
+
 
    Starting in v0.3.0, for each Materialize instance, Materialize on GCP
    Terraform module also deploys load balancers (by default, internal) with the
@@ -548,29 +569,30 @@ components:
    from an official Certificate Authority (CA) rather than self-signed
    certificates.
 
-   {{</ tab >}}
+   
 
-   {{< tab "Via port forwarding" >}}
-
-   {{% self-managed/port-forwarding-handling console="console-lb"%}}
-
-   {{</ tab>}}
-   {{</ tabs >}}
+   #### Via port forwarding
 
 
-   {{< tip >}}
+   <!-- Unresolved shortcode: {{% self-managed/port-forwarding-handling console=... -->
 
-   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+   
+   
 
-   {{< /tip >}}
+
+   > **Tip:** 
+
+   <!-- Unresolved shortcode: {{% self-managed/troubleshoot-console-mz_catalog_s... -->
+
+   
 
 ## Next steps
 
-{{% self-managed/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Cleanup
 
-{{% self-managed/cleanup-cloud %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## See also
 
@@ -580,12 +602,12 @@ components:
 - [Installation](/installation/)
 
 
-
-
 ---
 
 ## Appendix: GCP deployment guidelines
 
+
+This section covers appendix: gcp deployment guidelines.
 
 ## Recommended instance types
 
@@ -619,13 +641,12 @@ of local SSDs
 to ensure your total disk space is at least twice the amount of RAM in your
 machine type for optimal Materialize performance.
 
-{{< note >}}
+> **Note:** 
 
 Your machine type may only supports predefined number of local SSDs. For instance, `n2d-highmem-32` allows only the following number of local
 SSDs: `4`,`8`,`16`, or `24`. To determine the valid number of Local SSDs to attach for your machine type, see the [GCP
 documentation](https://cloud.google.com/compute/docs/disks/local-ssd#lssd_disk_options).
 
-{{</ note >}}
 
 For example, the following table provides a minimum local SSD count to ensure
 the 2:1 disk-to-RAM ratio. Your actual
@@ -698,12 +719,12 @@ to meet any data-recovery requirements.
 - [Troubleshooting](/installation/troubleshooting/)
 
 
-
-
 ---
 
 ## Appendix: Required configuration
 
+
+This section covers appendix: required configuration.
 
 ## Required variables
 
@@ -711,7 +732,7 @@ The following variables are required when using the [Materialize on Google Cloud
 Provider Terraform
 module](https://github.com/MaterializeInc/terraform-google-materialize).
 
-{{< yaml-table data="self_managed/gcp_required_variables" >}}
+<!-- Dynamic table: self_managed/gcp_required_variables - see original docs -->
 
 For a list of all variables, see the
 [README.md](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#inputs)
@@ -746,15 +767,13 @@ you need to declare:
       cluster_ca_certificate = base64decode(module.gke.cluster_ca_certificate)
     }
   }
-  ```
+  ```text
 
 - The following data source:
 
   ```hcl
   data "google_client_config" "current" {}
-  ```
-
-
+  ```text
 
 
 ---
@@ -762,18 +781,15 @@ you need to declare:
 ## Upgrade on GCP (Terraform)
 
 
-{{< annotation type="Disambiguation" >}}
-
-- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
-Terraform version to `v0.6.1` or higher, {{< include-md
-file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
+> **Disambiguation:** - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1` or higher, [GCP Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061)
+.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided
 Terraforms, you must prepare your nodes by adding the required labels. For
 detailed instructions, see [Prepare for swap and upgrade to
 v26.0](/installation/upgrade-to-swap/).
-
-{{< /annotation >}}
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on GCP Google Kubernetes Engine (GKE).
@@ -785,27 +801,29 @@ or the root).
 
 ## Version compatibility
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+> **Important:** 
 
-{{< tabs >}}
+When performing major version upgrades, you can upgrade only one major version
+at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
+but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
+not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](../self-managed/v25.2/release-notes/#v25216).
 
-{{< tab "Materialize on GCP Terraform Releases" >}}
 
-{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+#### Materialize on GCP Terraform Releases
 
-{{</ tab >}}
-{{</ tabs >}}
+
+<!-- Dynamic table: self_managed/gcp_terraform_versions - see original docs -->
+
 
 ## Prerequisites
 
-{{< important >}}
+> **Important:** 
 
 The following procedure performs a rolling upgrade, where both the old and new
 Materialize instances are running before the the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
-{{</ important >}}
 
 ### Google cloud project
 
@@ -833,13 +851,12 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 
 ### kubectl and plugins
 
-{{< tip >}}
+> **Tip:** 
 
 Using `gcloud` to install `kubectl` will also install the needed plugins.
 Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 `kubectl`.
 
-{{< /tip >}}
 
 - If you do not have `kubectl`, install `kubectl`.  To install, see [Install
   kubectl and configure cluster
@@ -864,9 +881,13 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+Starting in v26.0, Materialize requires a license key. If your existing
+deployment does not have a license key configured, contact [Materialize support](../support/).
+
 
 ## Procedure
+
+This section covers procedure.
 
 ### A. Setup GCP service account and authenticate
 
@@ -876,10 +897,10 @@ If you want to use `jq` and do not have `jq` installed, install.
    to use. For details, see the [Initializing the gcloud CLI
    documentation](https://cloud.google.com/sdk/docs/initializing#initialize_the).
 
-   {{< tip >}}
+   > **Tip:** 
    You do not need to configure a default Compute Region and Zone as you will
    specify the region.
-   {{</ tip >}}
+   
 
 1. To the service account that will be used to perform the upgrade,
    grant the following IAM roles (if the account does not have them already):
@@ -892,19 +913,19 @@ If you want to use `jq` and do not have `jq` installed, install.
 
       ```bash
       read -s PROJECT_ID
-      ```
+      ```text
 
    1. Find your service account email for your GCP project
 
       ```bash
       gcloud iam service-accounts list --project $PROJECT_ID
-      ```
+      ```text
 
    1. Enter your service account email.
 
       ```bash
       read -s SERVICE_ACCOUNT
-      ```
+      ```text
 
    1. Grant the service account the neccessary IAM roles.
 
@@ -920,7 +941,7 @@ If you want to use `jq` and do not have `jq` installed, install.
       gcloud projects add-iam-policy-binding $PROJECT_ID \
       --member="serviceAccount:$SERVICE_ACCOUNT" \
       --role="roles/storage.admin"
-      ```
+      ```text
 
 1. For the service account, authenticate to allow Terraform to interact with
    your GCP project. For details, see [Terraform: Google Cloud Provider
@@ -933,11 +954,11 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    gcloud auth application-default login
-   ```
+   ```text
 
-   {{< tip >}}
+   > **Tip:** 
    If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
-   {{</ tip >}}
+   
 
 ### B. Upgrade Materialize operator and instances
 
@@ -946,17 +967,17 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    cd terraform-google-materialize/examples/simple
-   ```
+   ```text
 
 1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
-   {{< tip >}}
-   {{% self-managed/gcp-terraform-upgrade-notes %}}
+   > **Tip:** 
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
    See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module) for notable changes.
 
-   {{</ tip >}}
+   
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
 
@@ -972,7 +993,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    gcloud container clusters get-credentials <cluster-name>  \
     --region <region> \
     --project <project>
-   ```
+   ```text
 
    Alternatively, you can use the following command to get the cluster name and
    region from the Terraform output and the project ID from the environment
@@ -981,7 +1002,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    ```bash
    gcloud container clusters get-credentials $(terraform output -json gke_cluster | jq -r .name) \
     --region $(terraform output -json gke_cluster | jq -r .location) --project $PROJECT_ID
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
@@ -992,7 +1013,4 @@ If you want to use `jq` and do not have `jq` installed, install.
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
-
-
-
+<!-- Unresolved shortcode: {{% self-managed/versions/upgrade/upgrade-steps-cl... -->

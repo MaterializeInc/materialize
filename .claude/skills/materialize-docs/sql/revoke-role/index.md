@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/revoke-role/
+complexity: advanced
+description: '`REVOKE` revokes membership of one role from another role.'
+doc_type: reference
+keywords:
+- SHOW ROLE
+- DROP USER
+- REVOKE ROLE
+- CREATE ROLE
+- ALTER ROLE
+- DROP ROLE
+product_area: Indexes
+status: stable
+title: REVOKE ROLE
+---
+
 # REVOKE ROLE
+
+## Purpose
+`REVOKE` revokes membership of one role from another role.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `REVOKE` revokes membership of one role from another role.
 
@@ -8,9 +32,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 REVOKE <role_to_remove> [, ...] FROM <target_role> [, ...];
-```
+```text
 
 Syntax element       | Description
 ---------------------|------------------
@@ -20,9 +46,11 @@ Syntax element       | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 REVOKE data_scientist FROM joe;
-```
+```text
 
 ```mzsql
 REVOKE data_scientist FROM joe, mike;
@@ -32,7 +60,8 @@ REVOKE data_scientist FROM joe, mike;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/revoke-role.md" >}}
+- `CREATEROLE` privileges on the systems.
+
 
 ## Useful views
 

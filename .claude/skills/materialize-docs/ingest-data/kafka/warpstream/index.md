@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/kafka/warpstream/
+complexity: intermediate
+description: How to securely connect WarpStream to Materialize for efficient data
+  streaming.
+doc_type: reference
+keywords:
+- CREATE A
+- WarpStream
+- CREATE CREDENTIALS
+- CREATE THE
+- CREATE SECRET
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: WarpStream
+---
+
 # WarpStream
+
+## Purpose
+How to securely connect WarpStream to Materialize for efficient data streaming.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to securely connect WarpStream to Materialize for efficient data streaming.
 
@@ -16,9 +42,9 @@ Storage, Azure Blob Storage) and offers benefits such as no inter-AZ bandwidth
 costs and no local disks management. This guide highlights its integration with
 Materialize using [Fly.io](https://fly.io/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 #### Before you begin
 
@@ -49,7 +75,7 @@ Ensure you have the following:
                     -bootstrap-host $CLUSTER_NAME.fly.dev \
                     -tls -username ccun_XXXXXXXXXX \
                     -password ccp_XXXXXXXXXX
-    ```
+    ```text
 
     Change the `bootstrap-host` to the name of your WarpStream cluster on
     Fly.io.
@@ -62,7 +88,7 @@ Ensure you have the following:
                     -password ccp_XXXXXXXXXX \
                     -type create-topic \
                     -topic materialize_click_streams
-    ```
+    ```text
 
     f. Generate and push sample records for testing:
 
@@ -73,7 +99,7 @@ Ensure you have the following:
                     -type produce \
                     -topic materialize_click_streams \
                     --records '{"action": "click", "user_id": "user_0", "page_id": "home"},,{"action": "hover", "user_id": "user_0", "page_id": "home"},,{"action": "scroll", "user_id": "user_0", "page_id": "home"}'
-    ```
+    ```text
 
     > **Note:** The WarpStream CLI uses `,,` as a delimiter between JSON records.
 
@@ -90,7 +116,7 @@ Ensure you have the following:
     ```mzsql
     CREATE SECRET warpstream_username AS '<username>';
     CREATE SECRET warpstream_password AS '<password>';
-    ```
+    ```text
 
     b. Set up a connection to the WarpStream broker:
 
@@ -101,7 +127,7 @@ Ensure you have the following:
         SASL USERNAME = SECRET warpstream_username,
         SASL PASSWORD = SECRET warpstream_password
     );
-    ```
+    ```text
 
     c. Create a source in Materialize to consume messages. By default, the
     source will be created in the active cluster; to use a different cluster,
@@ -111,13 +137,13 @@ Ensure you have the following:
     CREATE SOURCE warpstream_click_stream_source
         FROM KAFKA CONNECTION warpstream_kafka (TOPIC 'materialize_click_streams')
         FORMAT JSON;
-    ```
+    ```text
 
     d. Verify the ingestion and query the data in Materialize:
 
     ```mzsql
     SELECT * FROM warpstream_click_stream_source LIMIT 10;
-    ```
+    ```text
 
     e. Furthermore, create a materialized view to aggregate the data:
 
@@ -129,7 +155,7 @@ Ensure you have the following:
             COUNT(*) AS count
         FROM warpstream_click_stream_source
         GROUP BY user_id, page_id;
-    ```
+    ```text
 
     f. Produce additional records to monitor real-time updates:
 
@@ -140,7 +166,7 @@ Ensure you have the following:
                     -type produce \
                     -topic materialize_click_streams \
                     --records '{"action": "click", "user_id": "user_1", "page_id": "home"}'
-    ```
+    ```text
 
     g. Query the materialized view to monitor the real-time updates:
 

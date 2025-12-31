@@ -1,17 +1,45 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/postgres/postgres-debezium/
+complexity: intermediate
+description: How to propagate Change Data Capture (CDC) data from a PostgreSQL database
+  to Materialize using Kafka and Debezium
+doc_type: reference
+keywords:
+- 'strongly
+
+  recommend'
+- 'Warning:'
+- CREATE AND
+- 'Minimum requirements:'
+- SHOW WAL_LEVEL
+- ALTER TABLE
+- CREATE A
+- 'Note:'
+- not
+- PostgreSQL CDC using Kafka and Debezium
+product_area: Sources
+status: stable
+title: PostgreSQL CDC using Kafka and Debezium
+---
+
 # PostgreSQL CDC using Kafka and Debezium
+
+## Purpose
+How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize using Kafka and Debezium
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize using Kafka and Debezium
 
 
-
-{{< warning >}}
+> **Warning:** 
 You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
 (CDC) data to Materialize from a PostgreSQL database, but we **strongly
 recommend** using the native [PostgreSQL](/sql/create-source/postgres/) source
 instead.
-{{</ warning >}}
 
-{{< guided-tour-blurb-for-ingest-data >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
 PostgreSQL database to downstream consumers based on its Write-Ahead Log
@@ -35,8 +63,7 @@ to Kafka using Kafka Connect-compatible connectors.
 Before deploying a Debezium connector, you need to ensure that the upstream
 database is configured to support [logical replication](https://www.postgresql.org/docs/current/logical-replication.html).
 
-{{< tabs >}}
-{{< tab "Self-hosted">}}
+#### Self-hosted
 
 As a _superuser_:
 
@@ -45,7 +72,7 @@ As a _superuser_:
 
     ```postgres
     SHOW wal_level;
-    ```
+    ```text
 
     The default value is `replica`. For CDC, you'll need to set it to `logical`
     in the database configuration file (`postgresql.conf`). Keep in mind that
@@ -54,9 +81,7 @@ As a _superuser_:
 
 1. Restart the database so all changes can take effect.
 
-{{< /tab >}}
-
-{{< tab "AWS RDS">}}
+#### AWS RDS
 
 We recommend following the [AWS RDS](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html#PostgreSQL.Concepts.General.FeatureSupport.LogicalReplication)
 documentation for detailed information on logical replication configuration and
@@ -76,15 +101,13 @@ As a _superuser_ (`rds_superuser`):
 
 1. Restart the database so all changes can take effect.
 
-{{< /tab >}}
+#### AWS Aurora
 
-{{< tab "AWS Aurora">}}
-
-{{< note >}}
+> **Note:** 
 Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations)
 logical replication, so it's not possible to use this service with
 Materialize.
-{{</ note >}}
+
 
 We recommend following the [AWS Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure)
 documentation for detailed information on logical replication configuration and
@@ -112,9 +135,7 @@ As a _superuser_:
 
 1. Restart the database so all changes can take effect.
 
-{{< /tab >}}
-
-{{< tab "Azure DB">}}
+#### Azure DB
 
 We recommend following the [Azure DB for PostgreSQL](https://docs.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-logical#pre-requisites-for-logical-replication-and-logical-decoding)
 documentation for detailed information on logical replication configuration and
@@ -129,9 +150,7 @@ best practices.
 
 1. Restart the database so all changes can take effect.
 
-{{< /tab >}}
-
-{{< tab "Cloud SQL">}}
+#### Cloud SQL
 
 We recommend following the [Cloud SQL for PostgreSQL](https://cloud.google.com/sql/docs/postgres/replication/configure-logical-replication#configuring-your-postgresql-instance)
 documentation for detailed information on logical replication configuration and
@@ -148,10 +167,6 @@ list of allowed IP addresses. You can find these addresses by querying the
 
 1. Restart the database so all changes can take effect.
 
-{{< /tab >}}
-
-{{< /tabs >}}
-
 Once logical replication is enabled:
 
 1. Grant enough privileges to ensure Debezium can operate in the database. The
@@ -165,7 +180,7 @@ Once logical replication is enabled:
 
     ```postgres
     ALTER TABLE repl_table REPLICA IDENTITY FULL;
-    ```
+    ```text
 
     This setting determines the amount of information that is written to the WAL
     in `UPDATE` and `DELETE` operations. Setting it to `FULL` will include the
@@ -183,14 +198,12 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors, so you
 first need to define a SQL connector configuration and then start the connector
 by adding it to Kafka Connect.
 
-{{< warning >}}
+> **Warning:** 
 If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html),
 you **must** override the default value of `After-state only` to `false`.
 
-{{</ warning >}}
 
-{{< tabs >}}
-{{< tab "Debezium 1.5+">}}
+#### Debezium 1.5+
 
 1. Create a connector configuration file and save it as `register-postgres.json`:
 
@@ -214,7 +227,7 @@ you **must** override the default value of `After-state only` to `false`.
             "value.converter.schemas.enable": false
         }
     }
-    ```
+    ```text
 
     You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-connector-properties).
     By default, the connector writes events for each table to a Kafka topic
@@ -227,13 +240,13 @@ you **must** override the default value of `After-state only` to `false`.
 
     curl -i -X POST -H "Accept:application/json" -H  "Content-Type:application/json" \
     http://$CURRENT_HOST:8083/connectors/ -d @register-postgres.json
-    ```
+    ```text
 
 1. Check that the connector is running:
 
     ```bash
     curl http://$CURRENT_HOST:8083/connectors/your-connector/status
-    ```
+    ```text
 
     The first time it connects to a PostgreSQL server, Debezium takes a
     [consistent snapshot](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-snapshots)
@@ -246,10 +259,9 @@ you **must** override the default value of `After-state only` to `false`.
       --bootstrap-server kafka:9092 \
       --from-beginning \
       --topic pg_repl.public.table1
-    ```
+    ```bash
 
-{{< /tab >}}
-{{< tab "Debezium 2.0+">}}
+#### Debezium 2.0+
 
 1. Beginning with Debezium 2.0.0, Confluent Schema Registry support is not
    included in the Debezium containers. To enable the Confluent Schema Registry
@@ -292,7 +304,7 @@ you **must** override the default value of `After-state only` to `false`.
             "value.converter.schemas.enable": false
         }
     }
-    ```
+    ```text
 
     You can read more about each configuration property in the [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/postgresql.html#postgresql-connector-properties).
     By default, the connector writes events for each table to a Kafka topic
@@ -305,13 +317,13 @@ you **must** override the default value of `After-state only` to `false`.
 
     curl -i -X POST -H "Accept:application/json" -H  "Content-Type:application/json" \
     http://$CURRENT_HOST:8083/connectors/ -d @register-postgres.json
-    ```
+    ```text
 
 1. Check that the connector is running:
 
     ```bash
     curl http://$CURRENT_HOST:8083/connectors/your-connector/status
-    ```
+    ```text
 
     The first time it connects to a Postgres server, Debezium takes a
     [consistent snapshot](https://debezium.io/documentation/reference/1.6/connectors/postgresql.html#postgresql-snapshots)
@@ -324,14 +336,10 @@ you **must** override the default value of `After-state only` to `false`.
       --bootstrap-server kafka:9092 \
       --from-beginning \
       --topic pg_repl.public.table1
-    ```
-
-{{< /tab >}}
-{{< /tabs >}}
+    ```bash
 
 ### C. Create a source
 
-{{< debezium-json >}}
 
 Debezium emits change events using an envelope that contains detailed
 information about upstream database operations, like the `before` and `after`
@@ -353,9 +361,8 @@ This allows you to replicate tables with `REPLICA IDENTITY DEFAULT`, `INDEX`, or
 
 ### D. Create a view on the source
 
-{{% ingest-data/ingest-data-kafka-debezium-view %}}
+<!-- Unresolved shortcode: {{% ingest-data/ingest-data-kafka-debezium-view %}... -->
 
 ### E. Create an index on the view
 
-{{% ingest-data/ingest-data-kafka-debezium-index %}}
-
+<!-- Unresolved shortcode: {{% ingest-data/ingest-data-kafka-debezium-index %... -->

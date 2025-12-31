@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/mongodb/
+complexity: beginner
+description: Connecting Materialize to a MongoDB database for Change Data Capture
+  (CDC).
+doc_type: reference
+keywords:
+- replica set
+- "a sharded\n  cluster"
+- CREATE A
+- 'Source Component: MongoDB'
+- MongoDB
+- CREATE THE
+- 'Streaming Ingestion Component: Debezium + Kafka (with Schema Registry)'
+product_area: Sources
+status: stable
+title: MongoDB
+---
+
 # MongoDB
+
+## Purpose
+Connecting Materialize to a MongoDB database for Change Data Capture (CDC).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Connecting Materialize to a MongoDB database for Change Data Capture (CDC).
 
@@ -10,6 +36,8 @@ MongoDB replica set (`rs0`) into Materialize; specifically from the collections
 `items` and `orders` in the `test` database.
 
 ## High-level architecture
+
+This section covers high-level architecture.
 
 ```mermaid
 flowchart LR
@@ -32,7 +60,7 @@ flowchart LR
     Schema -. "Validates Schemas" .- Kafka
     Kafka -- "Consumes Topic" --> MZ
     Schema -. "Decodes Data" .- MZ
-```
+```text
 
 The architecture consists of the following components:
 
@@ -68,10 +96,10 @@ The architecture consists of the following components:
 
 ## A. Create a Debezium user in MongoDB.
 
-{{< important >}}
+> **Important:** 
 For Debezium to capture changes, your MongoDB deployment must be configured as a
 replica set or a sharded cluster.
-{{< /important >}}
+
 
 Create a user (e.g., `debezium_materialize_user`) with the necessary permissions
 to read from the database. Depending on the connector's
@@ -90,7 +118,7 @@ db.getSiblingDB("test").createUser({
       { role: "read", db: "test" }
     ]
 });
-```
+```text
 
 For simplicity, the user is created in the `test` database; however, the user
 can be created in a different database.
@@ -129,24 +157,22 @@ variables/properties are set on your Connect worker:
 
 Register the MongoDB connector with the following configuration:
 
-| Parameter | Description |
-|-----------|-------------|
-| `name` | A unique name for the connector instance. |
-| [`connector.class`](https://docs.confluent.io/kafka-connectors/debezium-mongodb-source/current/mongodb_source_connector_config.html) | The Debezium MongoDB connector class, `"io.debezium.connector.mongodb.MongoDbConnector"`. |
-| [`mongodb.connection.string`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-mongodb-connection-string) | Your [MongoDB connection string](https://www.mongodb.com/docs/manual/reference/connection-string-formats/) with the `debezium_materialize_user`.  |
-| [`topic.prefix`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-topic-prefix) | A unique prefix for Kafka topics. Topics are created as `<prefix>.<db>.<collection>`. **Recommended** Once set, do not change the value of this property. See the [official documentation](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-topic-prefix) for details. |
-| [`collection.include.list`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-collection-include-list) | Comma-separated list of collections to capture in the format `<db>.<collection>`, e.g., `"test.orders,test.items"`. |
-| [`capture.mode`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-capture-mode) | <red>**Must**</red> be `"change_streams_update_full"` (the default). This captures full document state on updates, which is required for Materialize's `UPSERT` envelope. |
-| [`capture.scope`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-capture-scope) | The scope of the change stream: `"database"` or `"deployment"`. This value affects the required MongoDB user permissions. |
-| [`capture.target`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-capture-target) | The database to monitor for changes. Required only when `capture.scope` is `"database"`. |
-| [`transforms`](https://debezium.io/documentation/reference/stable/transformations/mongodb-event-flattening.html#mongodb-event-flattening-configuration) | Optional. Set to `"unwrap"` to extract the document state from Debezium's change event envelope. |
-| [`transforms.unwrap.type`](https://debezium.io/documentation/reference/stable/transformations/mongodb-event-flattening.html#mongodb-event-flattening-configuration) | Optional. Set to `"io.debezium.connector.mongodb.transforms.ExtractNewDocumentState"` to use the MongoDB-specific unwrap transform. |
+- **`name`**: A unique name for the connector instance.
+- **[`connector.class`](https://docs.confluent.io/kafka-connectors/debezium-mongodb-source/current/mongodb_source_connector_config.html)**: The Debezium MongoDB connector class, `"io.debezium.connector.mongodb.MongoDbConnector"`.
+- **[`mongodb.connection.string`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-mongodb-connection-string)**: Your [MongoDB connection string](https://www.mongodb.com/docs/manual/reference/connection-string-formats/) with the `debezium_materialize_user`.
+- **[`topic.prefix`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-topic-prefix)**: A unique prefix for Kafka topics. Topics are created as `<prefix>.<db>.<collection>`. **Recommended** Once set, do not change the value of this property. See the [official documentation](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-topic-prefix) for details.
+- **[`collection.include.list`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-collection-include-list)**: Comma-separated list of collections to capture in the format `<db>.<collection>`, e.g., `"test.orders,test.items"`.
+- **[`capture.mode`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-capture-mode)**: <red>**Must**</red> be `"change_streams_update_full"` (the default). This captures full document state on updates, which is required for Materialize's `UPSERT` envelope.
+- **[`capture.scope`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-capture-scope)**: The scope of the change stream: `"database"` or `"deployment"`. This value affects the required MongoDB user permissions.
+- **[`capture.target`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-property-capture-target)**: The database to monitor for changes. Required only when `capture.scope` is `"database"`.
+- **[`transforms`](https://debezium.io/documentation/reference/stable/transformations/mongodb-event-flattening.html#mongodb-event-flattening-configuration)**: Optional. Set to `"unwrap"` to extract the document state from Debezium's change event envelope.
+- **[`transforms.unwrap.type`](https://debezium.io/documentation/reference/stable/transformations/mongodb-event-flattening.html#mongodb-event-flattening-configuration)**: Optional. Set to `"io.debezium.connector.mongodb.transforms.ExtractNewDocumentState"` to use the MongoDB-specific unwrap transform.
 
-{{< important >}}
+> **Important:** 
 The `capture.mode` must be `change_streams_update_full`, the default. This
 forces Debezium to send the entire document state for every change, which allows
 Materialize to use the `UPSERT` envelope.
-{{< /important >}}
+
 
 1. Create a `dbz_mongodb_connector.json` file with your connector configuration:
 
@@ -165,7 +191,7 @@ Materialize to use the `UPSERT` envelope.
         "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState"
       }
    }
-   ```
+   ```text
 
    **Required updates:**
    - Update `mongodb.connection.string` with your [MongoDB connection
@@ -186,7 +212,7 @@ Materialize to use the `UPSERT` envelope.
    - `capture.target`: Only needed if `capture.scope` is `"database"`.
    - `transforms` and `transforms.unwrap.type`: You can omit or customize.
 
-   {{< tip >}}
+   > **Tip:** 
    When using the `unwrap` transform of type `ExtractNewDocumentState` with
    MongoDB and Avro serialization, the Avro schema is inferred from the first
    document processed. Because MongoDB allows the same field to have
@@ -202,7 +228,7 @@ Materialize to use the `UPSERT` envelope.
    NumberDecimal("2.25")`.
 
    If you cannot enforce a consistent BSON type, you can omit the unwrap.
-   {{< /tip >}}
+   
 
 2. Register the connector with Kafka Connect:
 
@@ -210,12 +236,14 @@ Materialize to use the `UPSERT` envelope.
    curl -X POST -H "Content-Type:application/json" \
      http://<your-host>:8083/connectors \
      -d @dbz_mongodb_connector.json
-   ```
+   ```text
 
    Replace `<your-host>` with your Kafka Connect hostname or IP address.
 
 
 ## C. Ingest data in Materialize
+
+This section covers c. ingest data in materialize.
 
 ### 1. Create the Kafka and CSR connections.
 
@@ -235,7 +263,7 @@ Schema Registry connection](/sql/create-connection/#confluent-schema-registry)
       SASL USERNAME = '<kafka-SASL-username>',
       SASL PASSWORD = SECRET kafka_secret
     );
-   ```
+   ```text
 
 1. Create the [Confluent Schema Registry
 connection](/sql/create-connection/#confluent-schema-registry):
@@ -244,7 +272,7 @@ connection](/sql/create-connection/#confluent-schema-registry):
    CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
       URL 'http://schema-registry:8081'
    );
-   ```
+   ```bash
 
 ### 2. Start ingesting data
 
@@ -261,7 +289,7 @@ CREATE SOURCE mdb_orders
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'mdb-prod-rs0.test.items')
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
 ENVELOPE UPSERT;
-```
+```bash
 
 ### 3. Query the data
 
@@ -271,11 +299,11 @@ Query the data using standard SQL.
 
   ```mzsql
   SELECT * FROM mdb_items;
-  ```
+  ```text
 
-  {{< note >}}
+  > **Note:** 
   The query includes the Kafka message `id` field as a column in the table.
-  {{< /note >}}
+  
 
   ```none
               id            |           _id            | item_id |         item          | price | currency
@@ -284,25 +312,25 @@ Query the data using standard SQL.
   693c608a8de2a41c2ba365ec | 693c608a8de2a41c2ba365ec |       1 | brownie               | 2.25  | USD
   693c608a8de2a41c2ba365f2 | 693c608a8de2a41c2ba365f2 |       7 | cupcake               | 3.00  | USD
   693c608a8de2a41c2ba365f4 | 693c608a8de2a41c2ba365f4 |       9 | egg tart              | 2.50  | USD
-  ```
+  ```text
 
-  {{< tip >}}
+  > **Tip:** 
 
   If you did not use the `unwrap` transform, the document is stored as a JSON
   string in the `after` field in `mdb_items`. You can create a [parsing
   view](/sql/types/jsonb/#parsing) to map the individual document fields to columns instead.
 
-  {{< /tip >}}
+  
 
 - To query the mdb_orders:
 
   ```mzsql
   SELECT * FROM mdb_orders;
-  ```
+  ```text
 
-  {{< note >}}
+  > **Note:** 
   The query includes the Kafka message `id` field as a column in the table.
-  {{< /note >}}
+  
 
   ```none
               id            |           _id            | order_id |       order_date        |         item          | quantity |   status
@@ -313,14 +341,14 @@ Query the data using standard SQL.
   693c608a8de2a41c2ba365d2 | 693c608a8de2a41c2ba365d2 |        2 | 2025-12-12 18:20:54.648 | brownie               |       20 | Pending
   ```
 
-  {{< tip >}}
+  > **Tip:** 
 
   If you did not use the `unwrap` transform, the document is stored as a JSON
   string in the `after` field in `mdb_orders`. You can create a [parsing
   view](/sql/types/jsonb/#parsing) to map the individual document fields to
   columns instead.
 
-  {{< /tip >}}
+  
 
 ## Troubleshooting
 

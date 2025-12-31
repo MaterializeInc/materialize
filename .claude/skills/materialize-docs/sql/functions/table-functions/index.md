@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/table-functions/
+complexity: beginner
+description: Functions that return multiple rows
+doc_type: reference
+keywords:
+- '1'
+- SELECT SCORES
+- CREATE TABLE
+- INSERT INTO
+- Table functions
+- 'Tip:'
+product_area: Indexes
+status: stable
+title: Table functions
+---
+
 # Table functions
+
+## Purpose
+Functions that return multiple rows
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Functions that return multiple rows
 
@@ -16,14 +40,14 @@ integers:
 ```mzsql
 CREATE TABLE quizzes(scores int list);
 INSERT INTO quizzes VALUES (LIST[5, 7, 8]), (LIST[3, 3]);
-```
+```text
 
 Query the `scores` column from the table:
 
 ```mzsql
 SELECT scores
 FROM quizzes;
-```
+```text
 
 The query returns two rows, where each row is a list:
 
@@ -33,7 +57,7 @@ The query returns two rows, where each row is a list:
  {3,3}
  {5,7,8}
 (2 rows)
-```
+```text
 
 Now, apply the [`unnest`](/sql/functions/#unnest) table function to expand the
 `scores` list into a collection of rows, where each row contains one list item:
@@ -43,7 +67,7 @@ SELECT scores, score
 FROM
   quizzes,
   unnest(scores) AS score; -- In Materialize, shorthand for AS t(score)
-```
+```text
 
 The query returns 5 rows, one row for each list item:
 
@@ -56,15 +80,15 @@ The query returns 5 rows, one row for each list item:
  {5,7,8} |     7
  {5,7,8} |     8
 (5 rows)
-```
+```text
 
-{{< tip >}}
+> **Tip:** 
 
 For illustrative purposes, the original `scores` column is included in the
 results (i.e., query projection). In practice, you generally would omit
 including the original list to minimize the return data size.
 
-{{</ tip >}}
+
 
 ## `WITH ORDINALITY`
 
@@ -79,7 +103,7 @@ SELECT scores, score, ordinality
 FROM
   quizzes,
   unnest(scores) WITH ORDINALITY AS t(score,ordinality);
-```
+```text
 
 The results includes the `ordinality` column:
 ```
@@ -91,7 +115,7 @@ The results includes the `ordinality` column:
  {5,7,8} |     7 |          2
  {5,7,8} |     8 |          3
 (5 rows)
-```
+```bash
 
 ## Table- and column aliases
 
@@ -101,7 +125,7 @@ SELECT scores, t.score, t.listidx
 FROM
   quizzes,
   unnest(scores) WITH ORDINALITY AS t(score,listidx);
-```
+```text
 
 You can also name fewer columns in the column alias list than the number of
 columns in the output of the table function (plus `WITH ORDINALITY`, if
@@ -122,7 +146,7 @@ SELECT *
 FROM
   generate_series(1, 2) AS g1,
   generate_series(6, 7) AS g2;
-```
+```text
 
 The query returns every combination of rows from both:
 
@@ -135,7 +159,7 @@ The query returns every combination of rows from both:
   2 |  6
   2 |  7
 (4 rows)
-```
+```text
 
 Using `ROWS FROM` clause with the multiple table functions, you can zip the
 outputs of the table functions (i.e., combine the n-th output row from each
@@ -153,7 +177,7 @@ FROM
     generate_series(1, 2),
     generate_series(6, 7)
   ) AS t(g1, g2);
-```
+```text
 
 Instead of the cross product, the results are the "zipped" rows:
 
@@ -163,7 +187,7 @@ Instead of the cross product, the results are the "zipped" rows:
   1 |  6
   2 |  7
 (2 rows)
-```
+```text
 
 If the table functions in a `ROWS FROM` clause produce a different number of
 rows, nulls are used for padding:
@@ -174,7 +198,7 @@ FROM
     generate_series(1, 3),  -- 3 rows
     generate_series(6, 7)   -- 2 rows
   ) AS t(g1, g2);
-```
+```text
 
 The row with the `g1` value of 3 has a null `g2` value (note that if using psql,
 psql prints null as an empty string):
@@ -186,7 +210,7 @@ psql prints null as an empty string):
 | 1  | 6    |
 | 2  | 7    |
 (3 rows)
-```
+```text
 
 For `ROWS FROM` clauses:
 - you can use `WITH ORDINALITY` on the entire `ROWS FROM` clause, not on the
@@ -203,7 +227,7 @@ FROM
     generate_series(5, 6),
     generate_series(8, 9)
   ) WITH ORDINALITY AS t(g1, g2, o);
-```
+```text
 
 The results contain the ordinality value in the `o` column:
 

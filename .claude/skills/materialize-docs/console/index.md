@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/
+complexity: advanced
+description: Introduction to the Materialize Console, user interface for Materialize
+doc_type: reference
+keywords:
+- Materialize console
+- CREATE AND
+- New cluster
+- Cloud-only
+- "New app\n    password"
+- CREATE A
+- Create New
+- New source
+- DELETE CLIENT
+- CREATE NEW
+product_area: General
+status: stable
+title: Materialize console
+---
+
 # Materialize console
 
+## Purpose
 Introduction to the Materialize Console, user interface for Materialize
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Introduction to the Materialize Console, user interface for Materialize
 
 
 The Materialize Console is a graphical user
@@ -41,8 +68,6 @@ view billing information.
 - [User Profile](/console/user-profile/): Manage your user profile
   (***Cloud-only***), find links to links to the documentation, Materialize
   Community slack, and Help Center.
-
-
 
 
 ---
@@ -85,8 +110,6 @@ create a new app password.
 ![Image of the Billing](/images/console/console-billing.png "Usage and Billing")
 
 
-
-
 ---
 
 ## Clusters
@@ -109,8 +132,6 @@ From the **Clusters** starting page, you can:
 ![Image of the `quickstart` cluster details](/images/console/console-clusters-view.png "Details about the `quickstart` cluster")
 
 
-
-
 ---
 
 ## Connect (Cloud-only)
@@ -120,8 +141,6 @@ The **Connect** modal provides details needed to connect your [applications](/co
 
 ![Image of the Connect modal](/images/console/console-connect-modal.png
 "Materialize Connect modal")
-
-
 
 
 ---
@@ -161,7 +180,7 @@ From the Materialize Console:
 
 ### Create new source
 
-{{< tip >}}
+> **Tip:** 
 
 - For PostgreSQL and MySQL, you must configure your upstream database first.
   Refer to the [Ingest data](/ingest-data/) section for your data source.
@@ -170,7 +189,6 @@ From the Materialize Console:
   is created as well as some best practice guidelines, see [Ingest
   data](/ingest-data/).
 
-{{</ tip >}}
 
 ![Image of the Create New Source start for
 PostgreSQL](/images/console/console-create-new/postgresql/create-new-source-start.png
@@ -183,12 +201,12 @@ From the Materialize Console:
 
 1. Choose the source type and follow the instructions to configure a new source.
 
-    {{< tip >}}
+    > **Tip:** 
 
     For PostgreSQL and MySQL, you must configure your upstream database first. Refer
     to the [Ingest data](/ingest-data/) section for your data source.
 
-    {{</ tip >}}
+    
 
 
 ### Create new app password (Cloud-only)
@@ -204,7 +222,7 @@ application password")
 1. In the  **New app password** modal, specify the **Type** (either **Personal**
    or **Service**) and the associated details:
 
-   {{< note >}}
+   > **Note:** 
 
 - Only **Organization admins** can create a service account.
 - **Personal** apps are run under your user account.
@@ -212,11 +230,12 @@ application password")
    Service account user does not exist, it will be automatically created the
    **first time** the app password is used.
 
-   {{</ note >}}
+   
 
 
-   {{< tabs >}}
-   {{< tab "Personal" >}}
+   
+   #### Personal
+
 
    For a personal app that you will run under your user account, specify the
    type and required field(s):
@@ -226,38 +245,40 @@ application password")
    | **Type** | Select **Personal** |
    | **Name** | Specify a descriptive name. |
 
-   {{</ tab >}}
-   {{< tab "Service account" >}}
+   
+   #### Service account
+
 
    For an app that you will run under a Service account, specify the
    type and required field(s):
 
-   {{< yaml-table data="console/service_account_fields" >}}
+   <!-- Dynamic table: console/service_account_fields - see original docs -->
 
    See also [Create service
    accounts](/security/cloud/users-service-accounts/create-service-accounts/)
    for creating service accounts via Terraform.
 
-   {{</ tab >}}
-   {{</ tabs >}}
+   
+   
 
 
 1. Click **Create password** to generate the app password.
 
 1. Store the new password securely.
 
-   {{< note >}}
+   > **Note:** 
 
    Do not reload or navigate away from the screen before storing the
    password. This information is not displayed again.
 
-   {{</ note >}}
+   
 
 1. **For a new service account only**.
 
    For a new service account, after creating the new app password, you must
-   connect with the service account to complete the account creation. {{<
-   include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+   connect with the service account to complete the account creation. The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
+
 
    To connect:
 
@@ -266,8 +287,9 @@ application password")
    1. Click on the **Connect** button to get details on connecting with the new
       account.
 
-      {{< tabs >}}
-      {{< tab "psql" >}}
+      
+      #### psql
+
 If you have `psql` installed:
 
 1. Click on the **Terminal** tab.
@@ -277,8 +299,9 @@ If you have `psql` installed:
 Once connected, the service account creation is complete and you can grant roles
 to the new service account.
 
-      {{</ tab >}}
-      {{< tab "Other clients" >}}
+      
+      #### Other clients
+
 To use a non-psql client to connect,
 
 1. Click on the **External tools** tab to get the connection details.
@@ -287,13 +310,11 @@ To use a non-psql client to connect,
 
 Once connected, the service account creation is complete and you can grant roles
 to the new service account.
-      {{</ tab >}}
-      {{</ tabs >}}
+      
+      
 
 To view the created app accounts, go to [Admin > App
 Passwords](/console/admin/).
-
-
 
 
 ---
@@ -314,16 +335,14 @@ object explorer.
 
 You can inspect the objects in your databases by navigating to the object.
 
-|Object|Available information|
-|---|---|
-|Connections|<li>Details: The [`CREATE CONNECTION`](/sql/create-connection/) SQL statement.</li>|
-|Indexes|<li>Details: The [`CREATE INDEX`](/sql/create-index/) SQL statement.</li><li>Workflow: Details about the index (e.g., status), freshness, upstream and downstream objects. </li><li>Visualize: Dataflow visualization.</li>|
-|Materialized Views|<li>Details: The [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/) SQL statement.</li><li>Workflow: Details about the materialized view (e.g., status), freshness, upstream and downstream objects.</li><li>Visualize: Dataflow visualization.</li>|
-|Sinks|<li>Overview: View the sink metrics (e.g., messages/bytes produced) and details (e.g., Kafka topic).</li><li>Details: The [`CREATE SINK`](/sql/create-sink/) SQL statement.</li><li>Errors: Errors associated with the sink.</li><li>Workflow: Details about the sink (e.g., status), freshness, upstream and downstream objects.</li>|
-|Sources|<li>Overview: View the ingestion metrics (e.g., Ingestion lag, messages/bytes received, Ingestion rate), Memory/CPU/Disk usage</li><li>Details: The [`CREATE SOURCE`](/sql/create-source/) SQL statement.</li><li>Errors: Errors associated with the source.</li><li>Subsources: List of associated subsources and their status.</li><li>Workflow: Details about the source (e.g.,status), freshness, upstream and downstream objects.</li><li>Indexes: Indexes on the source.</li>|
-|Subsources|<li>Details: The `CREATE SUBSOURCE` SQL statement.</li><li>Columns: Column details.</li><li>Workflow: Details about the subsource (e.g.,status), freshness, upstream and downstream objects.</li><li>Indexes: Indexes on the subsource.</li>|
-|Tables|<li>Details: The [`CREATE TABLE`](/sql/create-table/) SQL statement.</li><li>Workflow: Details about the table (e.g., status), freshness, upstream and downstream objects.</li><li>Columns: Column details.</li><li>Indexes: Indexes on the table.</li>|
-|Views|<li>Details: The [`CREATE VIEW`](/sql/create-view/) SQL statement.</li><li>Columns: Column details.</li><li>Indexes: Indexes on the view. </li>|
+- **Connections**: <li>Details: The [`CREATE CONNECTION`](/sql/create-connection/) SQL statement.</li>
+- **Indexes**: <li>Details: The [`CREATE INDEX`](/sql/create-index/) SQL statement.</li><li>Workflow: Details about the index (e.g., status), freshness, upstream and downstream objects. </li><li>Visualize: Dataflow visualization.</li>
+- **Materialized Views**: <li>Details: The [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/) SQL statement.</li><li>Workflow: Details about the materialized view (e.g., status), freshness, upstream and downstream objects.</li><li>Visualize: Dataflow visualization.</li>
+- **Sinks**: <li>Overview: View the sink metrics (e.g., messages/bytes produced) and details (e.g., Kafka topic).</li><li>Details: The [`CREATE SINK`](/sql/create-sink/) SQL statement.</li><li>Errors: Errors associated with the sink.</li><li>Workflow: Details about the sink (e.g., status), freshness, upstream and downstream objects.</li>
+- **Sources**: <li>Overview: View the ingestion metrics (e.g., Ingestion lag, messages/bytes received, Ingestion rate), Memory/CPU/Disk usage</li><li>Details: The [`CREATE SOURCE`](/sql/create-source/) SQL statement.</li><li>Errors: Errors associated with the source.</li><li>Subsources: List of associated subsources and their status.</li><li>Workflow: Details about the source (e.g.,status), freshness, upstream and downstream objects.</li><li>Indexes: Indexes on the source.</li>
+- **Subsources**: <li>Details: The `CREATE SUBSOURCE` SQL statement.</li><li>Columns: Column details.</li><li>Workflow: Details about the subsource (e.g.,status), freshness, upstream and downstream objects.</li><li>Indexes: Indexes on the subsource.</li>
+- **Tables**: <li>Details: The [`CREATE TABLE`](/sql/create-table/) SQL statement.</li><li>Workflow: Details about the table (e.g., status), freshness, upstream and downstream objects.</li><li>Columns: Column details.</li><li>Indexes: Indexes on the table.</li>
+- **Views**: <li>Details: The [`CREATE VIEW`](/sql/create-view/) SQL statement.</li><li>Columns: Column details.</li><li>Indexes: Indexes on the view. </li>
 
 #### Sample source overview
 
@@ -334,8 +353,6 @@ index](/images/console/console-data-explorer-source-overview.png "Source Overvie
 
 ![Image of the Index Workflow for wins_by_item
 index](/images/console/console-data-explorer-index-workflow.png "Index Workflow for wins_by_item index")
-
-
 
 
 ---
@@ -351,8 +368,6 @@ specifying:
 - A link to the associated documentation in Materialize.
 
 ![Image of the Materialize Console Integrations page](/images/console/console-integrations.png "Materialize Console Integrations")
-
-
 
 
 ---
@@ -374,8 +389,6 @@ The **Monitoring** section contains the following screens:
 | **Query History** | Access your query history. |
 | **Sources** | Review your sources. You can select a source to go to its [Database object explorer page](/console/data/). |
 | **Sinks** | Review your sinks. You can select a sink to go to its [Database object explorer page](/console/data/). |
-
-
 
 
 ---
@@ -401,12 +414,12 @@ The SQL Shell also includes:
   corner.
 
 
-
-
 ---
 
 ## User profile
 
+
+This section covers user profile.
 
 ## Materialize Cloud
 
@@ -423,6 +436,3 @@ Materialize Community slack, and Help Center from the profile menu.
 
 ![Image of the user profile menu](/images/console/sm-console-user-profile.png
 "User profile menu")
-
-
-

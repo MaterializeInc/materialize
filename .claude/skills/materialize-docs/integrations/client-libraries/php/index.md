@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/php/
+complexity: advanced
+description: Use PHP PDO to connect, insert, manage, query and stream from Materialize.
+doc_type: reference
+keywords:
+- wire-compatible
+- CREATE A
+- PHP cheatsheet
+- CREATE TABLES
+- 'Basic Example:'
+- INSERT DATA
+- CREATE TABLE
+- Eloquent
+- updated,
+- INSERT A
+product_area: General
+status: stable
+title: PHP cheatsheet
+---
+
 # PHP cheatsheet
+
+## Purpose
+Use PHP PDO to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use PHP PDO to connect, insert, manage, query and stream from Materialize.
 
@@ -31,7 +59,7 @@ function connect(string $host, int $port, string $db, string $user, string $pass
 }
 
 $connection = connect('MATERIALIZE_HOST', 6875, 'materialize', 'MATERIALIZE_USERNAME', 'MATERIALIZE_PASSWORD');
-```
+```text
 
 You can add the above code to a `config.php` file and then include it in your application with `require 'connect.php';`.
 
@@ -53,7 +81,7 @@ $sql = 'CREATE TABLE IF NOT EXISTS countries (
 
 $statement = $connection->prepare($sql);
 $statement->execute();
-```
+```bash
 
 ## Insert data into tables
 
@@ -76,7 +104,7 @@ $count = $connection->query($countStmt);
 while (($row = $count->fetch(PDO::FETCH_ASSOC)) !== false) {
     var_dump($row);
 }
-```
+```bash
 
 ## Query
 
@@ -97,7 +125,7 @@ $statement = $connection->query($sql);
 while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
     var_dump($row);
 }
-```
+```text
 
 For more details, see the [PHP `PDOStatement`](https://www.php.net/manual/en/pdostatement.fetch.php) documentation.
 
@@ -122,7 +150,7 @@ $statement = $connection->query($sources);
 $result = $statement->fetchAll(PDO::FETCH_ASSOC);
 var_dump($result);
 
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -142,7 +170,7 @@ $views = "SHOW MATERIALIZED VIEWS";
 $statement = $connection->query($views);
 $result = $statement->fetchAll(PDO::FETCH_ASSOC);
 var_dump($result);
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -172,7 +200,7 @@ while (true) {
     $result = $subscribe->fetchAll(PDO::FETCH_ASSOC);
     print_r($result);
 }
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of view updates objects. When a row of a subscribed view is **updated,** two objects will show up in the `result` array:
 
@@ -199,7 +227,7 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of
 
         )
     ...
-```
+```text
 
 An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 

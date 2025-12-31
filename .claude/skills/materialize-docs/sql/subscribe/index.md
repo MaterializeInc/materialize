@@ -1,4 +1,37 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/subscribe/
+complexity: advanced
+description: '`SUBSCRIBE` streams updates from a source, table, view, or materialized
+  view as they occur.'
+doc_type: reference
+keywords:
+- UPDATE DESCRIBES
+- SUBSCRIBE
+- ENVELOPE DEBEZIUM (KEY (
+- ))
+- ': If specified, use the upsert envelope, which takes a list of `KEY` columns. The
+  upsert envelope supports inserts, updates and deletes in the subscription output.
+  For more information, see [Modifying the output format](#modifying-the-output-format).
+
+  - '
+- ENVELOPE UPSERT (KEY (
+- CREATE VIEW
+- UPDATE AND
+- INSERT THAT
+- SELECT 1
+product_area: Indexes
+status: experimental
+title: SUBSCRIBE
+---
+
 # SUBSCRIBE
+
+## Purpose
+`SUBSCRIBE` streams updates from a source, table, view, or materialized view as they occur.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SUBSCRIBE` streams updates from a source, table, view, or materialized view as they occur.
 
@@ -25,6 +58,8 @@ You can use `SUBSCRIBE` to:
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SUBSCRIBE [TO] <object_name | (SELECT ...)>
 [ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
@@ -34,7 +69,7 @@ SUBSCRIBE [TO] <object_name | (SELECT ...)>
 [UP TO <timestamp_expression>]
 ;
 
-```
+```text
 
 where:
 
@@ -46,14 +81,12 @@ where:
 The generated schemas have a Debezium-style diff envelope to capture changes in
 the input view or source.
 
-| Syntax element                  | Description                                                                                                                                      |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **ENVELOPE UPSERT (KEY (**\<key1\>, ...**))**                | If specified, use the upsert envelope, which takes a list of `KEY` columns. The upsert envelope supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **ENVELOPE DEBEZIUM (KEY (**\<key1\>, ...**))**           | If specified, use a [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope), which takes a list of `KEY` columns. The Debezium envelope supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **WITHIN TIMESTAMP ORDER BY** \<column1\>, ... | If specified, use an `ORDER BY` clause to sort the subscription output within a timestamp. For each `ORDER BY` column, you can optionally specify: <ul><li> `ASC` or `DESC`</li><li> `NULLS FIRST` or `NULLS LAST`</li></ul> For more information, see [Modifying the output format](#modifying-the-output-format). |
-| **WITH** \<option_name\> [= \<option_value\>] | If specified, use the specified option. For more information, see [`WITH` options](#with-options). |
-| **AS OF** \<timestamp_expression\> | If specified, no rows whose timestamp is earlier than the specified timestamp will be returned. For more information, see [`AS OF`](#as-of). |
-| **UP TO** \<timestamp_expression\> | If specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned. For more information, see [`UP TO`](#up-to). |
+- ****ENVELOPE UPSERT (KEY (**\<key1\>, ...**))****: If specified, use the upsert envelope, which takes a list of `KEY` columns. The upsert envelope supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format).
+- ****ENVELOPE DEBEZIUM (KEY (**\<key1\>, ...**))****: If specified, use a [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope), which takes a list of `KEY` columns. The Debezium envelope supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format).
+- ****WITHIN TIMESTAMP ORDER BY** \<column1\>, ...**: If specified, use an `ORDER BY` clause to sort the subscription output within a timestamp. For each `ORDER BY` column, you can optionally specify: <ul><li> `ASC` or `DESC`</li><li> `NULLS FIRST` or `NULLS LAST`</li></ul> For more information, see [Modifying the output format](#modifying-the-output-format).
+- ****WITH** \<option_name\> [= \<option_value\>]**: If specified, use the specified option. For more information, see [`WITH` options](#with-options).
+- ****AS OF** \<timestamp_expression\>**: If specified, no rows whose timestamp is earlier than the specified timestamp will be returned. For more information, see [`AS OF`](#as-of).
+- ****UP TO** \<timestamp_expression\>**: If specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned. For more information, see [`UP TO`](#up-to).
 
 
 #### `WITH` options
@@ -66,6 +99,8 @@ The following options are valid within the `WITH` clause.
 | `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
 
 ## Details
+
+This section covers details.
 
 ### Output
 
@@ -171,7 +206,7 @@ signal an error.
 `SUBSCRIBE` will continue to run until canceled, the session ends, the `UP TO` timestamp is reached, or all updates have been presented. The latter case typically occurs when
 tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`).
 
-{{< warning >}}
+> **Warning:** 
 
 Many PostgreSQL drivers wait for a query to complete before returning its
 results. Since `SUBSCRIBE` can run forever, naively executing a `SUBSCRIBE` using your
@@ -182,7 +217,7 @@ Either use an API in your driver that does not buffer rows or use the
 to fetch rows from `SUBSCRIBE` in batches.
 See the [examples](#examples) for details.
 
-{{< /warning >}}
+
 
 ### `SNAPSHOT`
 
@@ -223,7 +258,7 @@ mz_timestamp | mz_progressed | mz_diff | column1
 2            | false         | 1       | more data
 3            | false         | 1       | even more data
 4            | true          | NULL    | NULL
-```
+```text
 
 Notice how Materialize did not emit explicit progress messages for timestamps
 `1` or `2`. The receipt of the update at timestamp `2` implies that there
@@ -250,7 +285,7 @@ As an example, we'll create a [auction load generator](/sql/create-source/load-g
 
 ```mzsql
 CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;
-```
+```bash
 
 ### Subscribing with `FETCH`
 
@@ -264,13 +299,13 @@ First, declare a `SUBSCRIBE` cursor:
 ```mzsql
 BEGIN;
 DECLARE c CURSOR FOR SUBSCRIBE (SELECT * FROM bids);
-```
+```text
 
 Then, use [`FETCH`](/sql/fetch) in a loop to retrieve each batch of results as soon as it's ready:
 
 ```mzsql
 FETCH ALL c;
-```
+```text
 
 That will retrieve all of the rows that are currently available.
 If there are no rows available, it will wait until there are some ready and return those.
@@ -278,19 +313,19 @@ A `timeout` can be used to specify a window in which to wait for rows. This will
 
 ```mzsql
 FETCH 100 c WITH (timeout='1s');
-```
+```text
 
 To retrieve all available rows available over the next `1s`:
 
 ```mzsql
 FETCH ALL c WITH (timeout='1s');
-```
+```text
 
 A `0s` timeout can be used to return rows that are available now without waiting:
 
 ```mzsql
 FETCH ALL c WITH (timeout='0s');
-```
+```bash
 
 ### Using clients
 
@@ -298,17 +333,15 @@ If you want to use `SUBSCRIBE` from an interactive SQL session (e.g.`psql`), wra
 
 ```mzsql
 COPY (SUBSCRIBE (SELECT * FROM bids)) TO STDOUT;
-```
+```text
 
-| Additional guides |
-| ---------------------- |
-| [Go](/integrations/client-libraries/golang/#stream)|
-| [Java](/integrations/client-libraries/java-jdbc/#stream)|
-| [Node.js](/integrations/client-libraries/node-js/#stream)|
-| [PHP](/integrations/client-libraries/php/#stream)|
-| [Python](/integrations/client-libraries/python/#stream)|
-| [Ruby](/integrations/client-libraries/ruby/#stream)|
-| [Rust](/integrations/client-libraries/rust/#stream)|
+- [Go](/integrations/client-libraries/golang/#stream)
+- [Java](/integrations/client-libraries/java-jdbc/#stream)
+- [Node.js](/integrations/client-libraries/node-js/#stream)
+- [PHP](/integrations/client-libraries/php/#stream)
+- [Python](/integrations/client-libraries/python/#stream)
+- [Ruby](/integrations/client-libraries/ruby/#stream)
+- [Rust](/integrations/client-libraries/rust/#stream)
 
 ### Mapping rows to their updates
 
@@ -347,14 +380,14 @@ structure:
 
    ```mzsql
    SUBSCRIBE mview ENVELOPE UPSERT (KEY (key));
-   ```
+   ```text
 
    ```mzsql
    mz_timestamp | mz_state | key  | value
    -------------|----------|------|--------
    100          | upsert   | 1    | 2
    100          | upsert   | 2    | 4
-   ```
+   ```text
 
 * For inserts and updates, the value columns for each key are set to the
   resulting value of the series of operations, and `mz_state` is set to
@@ -369,7 +402,7 @@ structure:
    ...
    200          | upsert   | 3    | 6
    ...
-  ```
+  ```text
 
   _Update_
 
@@ -380,7 +413,7 @@ structure:
    ...
    300          | upsert   | 1    | 10
    ...
-  ```
+  ```text
 
 * If only deletes occur within a timestamp, the value columns for each key are
   set to `NULL`, and `mz_state` is set to `delete`.
@@ -396,7 +429,7 @@ structure:
    400          | delete   | 2    | NULL
    400          | delete   | 3    | NULL
    ...
-  ```
+  ```text
 
 * Only use `ENVELOPE UPSERT` when there is at most one live value per key.
   If materialize detects that a given key has multiple values, it will generate
@@ -413,14 +446,14 @@ structure:
    ...
    500          | key_violation   | 1    | NULL
    ...
-  ```
+  ```text
 
 * If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
 column. Each progress row will have a `NULL` key and a `NULL` value.
 
 #### `ENVELOPE DEBEZIUM`
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 To modify the output of `SUBSCRIBE` to support upserts using a
 [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope),
@@ -440,14 +473,14 @@ structure:
 
    ```mzsql
    SUBSCRIBE mview ENVELOPE DEBEZIUM (KEY (key));
-   ```
+   ```text
 
    ```mzsql
    mz_timestamp | mz_state | key  | before_value | after_value
    -------------|----------|------|--------------|-------
    100          | upsert   | 1    | NULL         | 2
    100          | upsert   | 2    | NULL         | 4
-   ```
+   ```text
 
 * For inserts: the before values are `NULL`, the current value is the newly inserted
   value and `mz_state` is set to `insert`.
@@ -461,7 +494,7 @@ structure:
    ...
    200          | insert   | 3    | NULL         | 6
    ...
-  ```
+  ```text
 
 * For updates: the before values are the old values, the value columns are the resulting
   values of the update, and `mz_state` is set to`upsert`.
@@ -475,7 +508,7 @@ structure:
    ...
    300          | upsert   | 1    | 2            | 10
    ...
-  ```
+  ```text
 
 * If only deletes occur within a timestamp, the value columns for each key are
   set to `NULL`, the before values are set to the old value and `mz_state` is set to `delete`.
@@ -491,7 +524,7 @@ structure:
    400          | delete   | 2    | 4            | NULL
    400          | delete   | 3    | 6            | NULL
    ...
-  ```
+  ```text
 
 * Like `ENVELOPE UPSERT`, using `ENVELOPE DEBEZIUM` requires that there is at
   most one live value per key. If Materialize detects that a given key has
@@ -508,7 +541,7 @@ structure:
    ...
    500          | key_violation   | 1    | NULL         | NULL
    ...
-  ```
+  ```text
 
 * If [`PROGRESS`](#progress) is set, Materialize also returns the
 `mz_progressed` column. Each progress row will have a `NULL` key and a `NULL`
@@ -516,7 +549,7 @@ before and after value.
 
 #### `WITHIN TIMESTAMP ORDER BY`
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 To modify the ordering of the output of `SUBSCRIBE`, use `WITHIN TIMESTAMP ORDER
 BY`. This clause allows you to specify an `ORDER BY` expression which is used
@@ -536,7 +569,7 @@ to sort the rows within each distinct timestamp.
    100          | +1      | 1             | 0    | data
    100          | -1      | 2             | 0    | old
    100          | +1      | 2             | 0    | new
-   ```
+   ```text
 
 * If [`PROGRESS`](#progress) is set, progress messages are unaffected.
 
@@ -565,5 +598,12 @@ subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/subscribe.md" >}}
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+  execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+    granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
+
 

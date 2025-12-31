@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/
+complexity: advanced
+description: Learn more about the SQL data types supported in Materialize
+doc_type: reference
+keywords:
+- Named
+- Anonymous
+- CREATE NAMED
+- CREATE NAMES
+- 'Warning:'
+- Unnameable
+- SQL data types
+- CREATE TYPE
+- Quick Syntax
+- CREATE CUSTOM
+product_area: Indexes
+status: stable
+title: SQL data types
+---
+
 # SQL data types
 
+## Purpose
 Learn more about the SQL data types supported in Materialize
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Learn more about the SQL data types supported in Materialize
 
 
 Materialize's type system consists of two classes of types:
@@ -128,12 +155,12 @@ SELECT pg_typeof(
   list_cat('{1}'::custom_list, '{2}'::int4 list)
 ) AS custom_list_built_in_list_cat;
 
-```
+```text
 ```nofmt
  custom_list_built_in_list_cat
 -------------------------------
  custom_list
-```
+```text
 
 When appending an element to a list, we'll use `list_append` whose signature is
 `list_append(l: listany, e: listelementany)`.
@@ -147,12 +174,12 @@ SELECT pg_typeof(
   list_append('{1}'::custom_list, 2)
 ) AS custom_list_built_in_element_cat;
 
-```
+```text
 ```nofmt
  custom_list_built_in_element_cat
 ----------------------------------
  custom_list
-```
+```text
 
 If we append a structurally appropriate custom element (`custom_list`) to a
 built-in `list` (`int4 list list`), the result is a `list` of custom elements.
@@ -162,12 +189,12 @@ SELECT pg_typeof(
   list_append('{{1}}'::int4 list list, '{2}'::custom_list)
 ) AS built_in_list_custom_element_append;
 
-```
+```text
 ```nofmt
  built_in_list_custom_element_append
 -------------------------------------
  custom_list list
-```
+```text
 
 This is the "least custom type" we could support for these values––i.e.
 Materialize will not create or discover a custom type whose elements are
@@ -190,10 +217,10 @@ SELECT list_cat(
   -- result is custom_nested_list
   '{{3}}'::custom_nested_list
 );
-```
+```text
 ```nofmt
 ERROR: Cannot call function list_cat(custom_list list, custom_nested_list)...
-```
+```text
 
 As another example, when using `custom_list list` values for `listany`
 parameters, you can only use `custom_list` or `int4 list` values for
@@ -209,10 +236,10 @@ SELECT list_append(
   -- are custom
   '{2}'::second_custom_list
 );
-```
+```text
 ```nofmt
 ERROR:  Cannot call function list_append(custom_nested_list, second_custom_list)...
-```
+```text
 
 To make custom types interoperable, you must cast them to the same type. For
 example, casting `custom_nested_list` to `custom_list list` (or vice versa)
@@ -230,16 +257,14 @@ SELECT pg_typeof(
     '{{3}}'::custom_nested_list::custom_list list
   )
 ) AS complex_list_cat;
-```
+```text
 ```nofmt
  complex_list_cat
 ------------------
  custom_list list
-```
+```json
 
 [create-type]: ../create-type
-
-
 
 
 ---
@@ -249,7 +274,7 @@ SELECT pg_typeof(
 
 Arrays are a multidimensional sequence of any non-array type.
 
-{{< warning >}}
+> **Warning:** 
 We do not recommend using arrays, which exist in Materialize primarily to
 facilitate compatibility with PostgreSQL. Specifically, many of the PostgreSQL
 compatibility views in the [system catalog](/sql/system-catalog/) must expose
@@ -257,9 +282,11 @@ array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 interoperate well with modern data formats like JSON and Avro.
 
 Use the [`list` type](/sql/types/list) instead.
-{{< /warning >}}
+
 
 ## Details
+
+This section covers details.
 
 ### Type name
 
@@ -282,35 +309,35 @@ You can construct arrays using the special `ARRAY` expression:
 
 ```mzsql
 SELECT ARRAY[1, 2, 3]
-```
+```text
 ```nofmt
   array
 ---------
  {1,2,3}
-```
+```text
 
 You can nest `ARRAY` constructors to create multidimensional arrays:
 
 ```mzsql
 SELECT ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]
-```
+```text
 ```nofmt
      array
 ---------------
  {{a,b},{c,d}}
-```
+```text
 
 Alternatively, you can construct an array from the results subquery.  These subqueries must return a single column. Note
 that, in this form of the `ARRAY` expression, parentheses are used rather than square brackets.
 
 ```mzsql
 SELECT ARRAY(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
-```
+```text
 ```nofmt
     x
 ---------
  {4,3,2}
-```
+```text
 
 Arrays cannot be "ragged." The length of each array expression must equal the
 length of all other array constructors in the same dimension. For example, the
@@ -318,10 +345,10 @@ following ragged array is rejected:
 
 ```mzsql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[3]]
-```
+```text
 ```nofmt
 ERROR:  number of array elements (3) does not match declared cardinality (4)
-```
+```bash
 
 ### Textual format
 
@@ -345,12 +372,12 @@ aforementioned special cases.
 
 ```mzsql
 SELECT ARRAY[ARRAY['a', 'white space'], ARRAY[NULL, ''], ARRAY['escape"m\e', 'nUlL']]
-```
+```text
 ```nofmt
                          array
 -------------------------------------------------------
  {{a,"white space"},{NULL,""},{"escape\"m\\e","nUlL"}}
-```
+```bash
 
 ### Catalog names
 
@@ -395,32 +422,32 @@ list`, as long as the array is empty or does not contain any arrays itself.
 
 ```mzsql
 SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
-```
-```
+```text
+```text
 integer list
-```
+```bash
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT '{1,2,3}'::int[]
-```
+```text
 ```nofmt
   int4
 ---------
  {1,2,3}
-```
+```text
 
 ```mzsql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[NULL, 4]]::text
-```
+```text
 ```nofmt
       array
 ------------------
  {{1,2},{NULL,4}}
-```
-
-
+```text
 
 
 ---
@@ -440,9 +467,11 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-bool.svg" >}}
+[See diagram: type-bool.svg]
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -463,23 +492,23 @@ You can [cast](../../functions/cast) the following types to `boolean`:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT TRUE AS t_val;
-```
+```text
 ```nofmt
  t_val
 -------
  t
-```
+```text
 
 ```mzsql
 SELECT FALSE AS f_val;
  f_val
 -------
  f
-```
-
-
+```text
 
 
 ---
@@ -502,15 +531,17 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 ### Hex format
 
-{{< diagram "type-bytea-hex.svg" >}}
+[See diagram: type-bytea-hex.svg]
 
 In some cases, the initial backslash may need to be escaped by doubling it (`\\`). For more information, see the PostgreSQL documentation on [string constants](https://www.postgresql.org/docs/13/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS).
 
 ### Escape format
 
-{{< diagram "type-bytea-esc.svg" >}}
+[See diagram: type-bytea-esc.svg]
 
 In the escape format, octet values can be escaped by converting them into their three-digit octal values and preceding them with backslashes; the backslash itself can be escaped as a double backslash. While any octet value *can* be escaped, the values in the table below *must* be escaped.
 
@@ -523,18 +554,20 @@ Decimal octet value | Description | Escaped input representation | Example | Hex
 
 ## Details
 
+This section covers details.
+
 ### Valid casts
 
 #### From `bytea`
 
 You can [cast](../../functions/cast) `bytea` to [`text`](../text) by assignment.
 
-{{< warning >}}
+> **Warning:** 
 Casting a `bytea` value to `text` unconditionally returns a
 [hex-formatted](#hex-format) string, even if the byte array consists entirely of
 printable characters. See [handling character data](#handling-character-data)
 for alternatives.
-{{< /warning >}}
+
 
 #### To `bytea`
 
@@ -547,12 +580,12 @@ Unless a `text` value is a [hex-formatted](#hex-format) string, casting to
 
 ```mzsql
 SELECT 'hello 👋'::bytea;
-```
+```text
 ```text
          bytea
 ------------------------
  \x68656c6c6f20f09f918b
-```
+```text
 
 The reverse, however, is not true. Casting a `bytea` value to `text` will not
 decode UTF-8 bytes into characters. Instead, the cast unconditionally produces a
@@ -560,49 +593,49 @@ decode UTF-8 bytes into characters. Instead, the cast unconditionally produces a
 
 ```mzsql
 SELECT '\x68656c6c6f20f09f918b'::bytea::text
-```
+```text
 ```text
            text
 ----------------------------
  \x68656c6c6f2c20776f726c6
-```
+```text
 
 To decode UTF-8 bytes into characters, use the
 [`convert_from`](../../functions#convert_from) function instead of casting:
 
 ```mzsql
 SELECT convert_from('\x68656c6c6f20f09f918b', 'utf8') AS text;
-```
+```text
 ```mzsql
   text
 ---------
  hello 👋
-```
+```bash
 
 ## Examples
 
 
+This section covers examples.
+
 ```mzsql
 SELECT '\xDEADBEEF'::bytea AS bytea_val;
-```
+```text
 ```nofmt
  bytea_val
 ---------
  \xdeadbeef
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT '\000'::bytea AS bytea_val;
-```
+```text
 ```nofmt
    bytea_val
 -----------------
  \x00
-```
-
-
+```text
 
 
 ---
@@ -624,7 +657,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-date.svg" >}}
+[See diagram: type-date.svg]
 
 Field | Use
 ------|----
@@ -633,6 +666,8 @@ _time&lowbar;str_ | _(NOP)_ A string representing a time of day in `H:M:S.NS` fo
 _tz&lowbar;offset_ | _(NOP)_ The timezone's distance, in hours, from UTC.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -665,22 +700,24 @@ Operation | Computes
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT DATE '2007-02-01' AS date_v;
-```
+```text
 ```nofmt
    date_v
 ------------
  2007-02-01
-```
-
-
+```text
 
 
 ---
 
 ## Floating-point types
 
+
+This section covers floating-point types.
 
 ## `real` info
 
@@ -704,9 +741,11 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-float.svg" >}}
+[See diagram: type-float.svg]
 
 ## Details
+
+This section covers details.
 
 ### Literals
 
@@ -729,12 +768,12 @@ the desired floating-point type. For example:
 
 ```mzsql
 SELECT 'NaN'::real AS nan
-```
+```text
 ```nofmt
  nan
 -----
  NaN
-```
+```text
 
 The strings are recognized case insensitively.
 
@@ -761,22 +800,24 @@ You can [cast](../../functions/cast) to `real` or `double precision` from the fo
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 1.23::real AS real_v;
-```
+```text
 ```nofmt
  real_v
 ---------
     1.23
-```
-
-
+```text
 
 
 ---
 
 ## Integer types
 
+
+This section covers integer types.
 
 ## `smallint` info
 
@@ -809,6 +850,8 @@ Detail | Info
 **Range** | [-9,223,372,036,854,775,808, 9,223,372,036,854,775,807]
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -855,27 +898,27 @@ From | Required context
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 123::integer AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------
    123
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 1.23::integer AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------
      1
-```
-
-
+```text
 
 
 ---
@@ -901,17 +944,19 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 #### INTERVAL
 
-{{< diagram "type-interval-val.svg" >}}
+[See diagram: type-interval-val.svg]
 
 #### `time_expr`
 
-{{< diagram "type-interval-time-expr.svg" >}}
+[See diagram: type-interval-time-expr.svg]
 
 #### `time_unit`
 
-{{< diagram "time-unit.svg" >}}
+[See diagram: time-unit.svg]
 
 Field | Use
 ------|----
@@ -921,6 +966,8 @@ _head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger 
 _tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`.
 
 ## Details
+
+This section covers details.
 
 ### `time_expr` Syntax
 
@@ -992,39 +1039,41 @@ Operation | Computes | Notes
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT INTERVAL '1' MINUTE AS interval_m;
-```
+```text
 
 ```nofmt
  interval_m
 ------------
  00:01:00
-```
+```bash
 
 ### SQL Standard syntax
 
 ```mzsql
 SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
-```
+```text
 
 ```nofmt
             interval_f
 -----------------------------------
  1 year 2 months 3 days 04:05:06.7
-```
+```bash
 
 ### PostgreSQL syntax
 
 ```mzsql
 SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
-```
+```text
 
 ```nofmt
         interval_p
 --------------------------
  1 year 2 days 07:12:04.5
-```
+```bash
 
 ### Negative intervals
 
@@ -1032,13 +1081,13 @@ SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
 
 ```mzsql
 SELECT INTERVAL '-1 day 2:3:4.5' AS interval_n;
-```
+```text
 
 ```nofmt
  interval_n
 -------------
  -1 days +02:03:04.5
-```
+```bash
 
 ### Truncating interval
 
@@ -1047,13 +1096,13 @@ interval.
 
 ```mzsql
 SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO MINUTE AS interval_r;
-```
+```text
 
 ```nofmt
    interval_r
 -----------------
  3 days 04:05:00
-```
+```bash
 
 ### Complex example
 
@@ -1063,27 +1112,25 @@ of the `interval` string.
 
 ```mzsql
 SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
-```
+```text
 
 ```nofmt
            interval_w
 ---------------------------------
  2 years 3 months 1 day 00:04:00
-```
+```bash
 
 ### Interaction with timestamps
 
 ```mzsql
 SELECT TIMESTAMP '2020-01-01 8:00:00' + INTERVAL '1' DAY AS ts_interaction;
-```
+```text
 
 ```nofmt
    ts_interaction
 ---------------------
  2020-01-02 08:00:00
-```
-
-
+```text
 
 
 ---
@@ -1106,7 +1153,7 @@ implementation of `json`.
 
 ## Syntax
 
-{{< diagram "type-jsonb.svg" >}}
+[See diagram: type-jsonb.svg]
 
 Field | Use
 ------|-----
@@ -1118,11 +1165,10 @@ Materialize supports the following operators and functions.
 
 ### Operators
 
-{{% json-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: json-operators --> --> -->
 
 ### Functions
 
-{{< fnlist "JSON" >}}
 
 #### Detail
 
@@ -1132,7 +1178,7 @@ use `jsonb_object_keys` in the following way:
 
 ```mzsql
 SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::jsonb);
-```
+```bash
 
 ## Details
 
@@ -1171,12 +1217,12 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
 
     ```mzsql
     SELECT ('"a"'::jsonb)::text AS jsonb_elem;
-    ```
+    ```text
     ```nofmt
      jsonb_elem
     ------------
      "a"
-    ```
+    ```text
 
 - `->>` and the `_text` functions produce the printed version of the inner
   element, unless the output is a single JSON string in which case they print it
@@ -1184,24 +1230,24 @@ You can explicitly [cast](../../functions/cast) from [`text`](../text) to `jsonb
 
     ```mzsql
     SELECT ('"a"'::jsonb)->>0 AS string_elem;
-    ```
+    ```text
     ```nofmt
      jsonb_elem
     ------------
      a
-    ```
+    ```text
 
 - `text` values passed to `to_jsonb` with quotes (`"`) produced `jsonb` strings
   with the quotes escaped.
 
     ```mzsql
     SELECT to_jsonb('"foo"') AS escaped_quotes;
-    ```
+    ```text
     ```nofmt
      escaped_quotes
     ----------------
      "\"foo\""
-    ```
+    ```bash
 
 ### Subscripting
 
@@ -1219,12 +1265,12 @@ subscript:
 
 ```mzsql
 SELECT ('[1, 2, 3]'::jsonb)[1]
-```
+```text
 ```nofmt
  jsonb
 -------
  2
-```
+```text
 
 Negative indexes count backwards from the end of the array. [Slice syntax] is
 not supported. Note also that 0-indexed positions are at variance with [`list`]
@@ -1236,23 +1282,23 @@ To extract a value from an object, supply the key as the subscript:
 
 ```mzsql
 SELECT ('{"a": 1, "b": 2, "c": 3}'::jsonb)['b'];
-```
+```text
 ```nofmt
  jsonb
 -------
  2
-```
+```text
 
 You can chain subscript operations to retrieve deeply nested elements:
 
 ```mzsql
 SELECT ('{"1": 2, "a": ["b", "c"]}'::jsonb)['a'][1];
-```
+```text
 ```nofmt
  jsonb
 -------
  "c"
-```
+```bash
 
 #### Remarks
 
@@ -1262,15 +1308,17 @@ to compare against:
 
 ```mzsql
 SELECT ('["a", "b"]::jsonb)[1] = '"b"'
-```
+```text
 
 Note the extra double quotes on the right-hand side of the comparison.
 
 ### Parsing
 
-{{< json-parser >}}
+<!-- JSON Parser Widget - see original docs -->
 
 ## Examples
+
+This section covers examples.
 
 ### Operators
 
@@ -1282,33 +1330,33 @@ The type of JSON element you're accessing dictates the RHS's type.
 
   ```mzsql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'1' AS field_jsonb;
-  ```
+  ```text
   ```nofmt
    field_jsonb
   -------------
    2
-  ```
+  ```text
 
 - Use an `int` to return the value in an array at a specific index:
 
   ```mzsql
   SELECT '["1", "a", 2]'::jsonb->1 AS field_jsonb;
-  ```
+  ```text
   ```nofmt
    field_jsonb
   -------------
    "a"
-  ```
+  ```text
 Field accessors can also be chained together.
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'a'->1 AS field_jsonb;
-```
+```text
 ```nofmt
  field_jsonb
 -------------
  "c"
-```
+```text
 
 Note that all returned values are `jsonb`.
 
@@ -1322,35 +1370,35 @@ The type of JSON element you're accessing dictates the RHS's type.
 
   ```mzsql
   SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->>'1' AS field_text;
-  ```
+  ```text
   ```nofmt
    field_text
   -------------
    2
-  ```
+  ```text
 
 - Use an `int` to return the value in an array at a specific index:
 
   ```mzsql
   SELECT '["1", "a", 2]'::jsonb->>1 AS field_text;
-  ```
+  ```text
   ```nofmt
    field_text
   -------------
    a
-  ```
+  ```text
 
 Field accessors can also be chained together, as long as the LHS remains
 `jsonb`.
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb->'a'->>1 AS field_text;
-```
+```text
 ```nofmt
  field_text
 -------------
  c
-```
+```text
 
 Note that all returned values are `string`.
 
@@ -1362,12 +1410,12 @@ array element:
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #> '{a,1}' AS field_jsonb;
-```
+```text
 ```nofmt
  field_jsonb
 -------------
  "c"
-```
+```text
 
 The operator returns a value of type `jsonb`. If the path is invalid, it returns
 `NULL`.
@@ -1379,12 +1427,12 @@ except that the operator returns a value of type `text`.
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #>> '{a,1}' AS field_text;
-```
+```text
 ```nofmt
  field_text
 -------------
  c
-```
+```text
 
 <hr/>
 
@@ -1393,12 +1441,12 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb #>> '{a,1}' AS field_text;
 ```mzsql
 SELECT '{"1": 2}'::jsonb ||
        '{"a": ["b", "c"]}'::jsonb AS concat;
-```
+```text
 ```nofmt
              concat
 ---------------------------------
  {"1":2,"a":["b","c"]}
-```
+```text
 
 <hr/>
 
@@ -1406,12 +1454,12 @@ SELECT '{"1": 2}'::jsonb ||
 
 ```mzsql
  SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb - 'a' AS rm_key;
-```
+```text
 ```nofmt
   rm_key
 -----------
  {"1":2}
-```
+```text
 
 <hr/>
 
@@ -1422,12 +1470,12 @@ Here, the left hand side does contain the right hand side, so the result is `t` 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb @>
        '{"1": 2}'::jsonb AS lhs_contains_rhs;
-```
+```text
 ```nofmt
  lhs_contains_rhs
 ------------------
  t
-```
+```text
 
 <hr/>
 
@@ -1438,12 +1486,12 @@ Here, the right hand side does contain the left hand side, so the result is `t` 
 ```mzsql
 SELECT '{"1": 2}'::jsonb <@
        '{"1": 2, "a": ["b", "c"]}'::jsonb AS lhs_contains_rhs;
-```
+```text
 ```nofmt
  rhs_contains_lhs
 ------------------
  t
-```
+```text
 
 <hr/>
 
@@ -1451,21 +1499,21 @@ SELECT '{"1": 2}'::jsonb <@
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'a' AS search_for_key;
-```
+```text
 ```nofmt
  search_for_key
 ----------------
  t
-```
+```text
 
 ```mzsql
 SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'b' AS search_for_key;
-```
+```text
 ```nofmt
  search_for_key
 ----------------
  f
-```
+```bash
 
 ### Functions
 
@@ -1475,7 +1523,7 @@ SELECT '{"1": 2, "a": ["b", "c"]}'::jsonb ? 'b' AS search_for_key;
 
 ```mzsql
 SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
    value
 -----------
@@ -1484,7 +1532,7 @@ SELECT * FROM jsonb_array_elements('[true, 1, "a", {"b": 2}, null]'::jsonb);
  "a"
  {"b":2.0}
  null
-```
+```bash
 
 ##### Flattening a JSON array
 
@@ -1498,7 +1546,7 @@ FROM (
     (2, '[{"a":5,"b":6},{"a":7,"b":8}]'::jsonb)
 ) AS t(id, json_col)
 CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
-```
+```text
 
 ```nofmt
  id | a | b
@@ -1507,7 +1555,7 @@ CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
   1 | 3 | 4
   2 | 5 | 6
   2 | 7 | 8
-```
+```text
 
 <hr/>
 
@@ -1516,7 +1564,7 @@ CROSS JOIN jsonb_array_elements(t.json_col) AS obj;
 
 ```mzsql
 SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
    value
 -----------
@@ -1525,7 +1573,7 @@ SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb)
  "a"
  {"b":2.0}
  null
-```
+```text
 
 <hr/>
 
@@ -1533,12 +1581,12 @@ SELECT * FROM jsonb_array_elements_text('[true, 1, "a", {"b": 2}, null]'::jsonb)
 
 ```mzsql
 SELECT jsonb_array_length('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
  jsonb_array_length
 --------------------
                   5
-```
+```text
 
 <hr/>
 
@@ -1546,12 +1594,12 @@ SELECT jsonb_array_length('[true, 1, "a", {"b": 2}, null]'::jsonb);
 
 ```mzsql
 SELECT jsonb_build_array('a', 1::float, 2.0::float, true);
-```
+```text
 ```nofmt
  jsonb_build_array
 --------------------
  ["a",1.0,2.0,true]
-```
+```text
 
 <hr/>
 
@@ -1559,12 +1607,12 @@ SELECT jsonb_build_array('a', 1::float, 2.0::float, true);
 
 ```mzsql
 SELECT jsonb_build_object(2.0::float, 'b', 'a', 1.1::float);
-```
+```text
 ```nofmt
  jsonb_build_object
 --------------------
  {"2":"b","a":1.1}
-```
+```text
 
 <hr/>
 
@@ -1572,13 +1620,13 @@ SELECT jsonb_build_object(2.0::float, 'b', 'a', 1.1::float);
 
 ```mzsql
 SELECT * FROM jsonb_each('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  key |   value
 -----+-----------
  1   | 2.1
  a   | ["b","c"]
-```
+```text
 
 Note that the `value` column is `jsonb`.
 
@@ -1588,13 +1636,13 @@ Note that the `value` column is `jsonb`.
 
 ```mzsql
 SELECT * FROM jsonb_each_text('{"1": 2.1, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  key |   value
 -----+-----------
  1   | 2.1
  a   | ["b","c"]
-```
+```text
 
 Note that the `value` column is `string`.
 
@@ -1604,13 +1652,13 @@ Note that the `value` column is `string`.
 
 ```mzsql
 SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  jsonb_object_keys
 -------------------
  1
  a
-```
+```text
 
 <hr/>
 
@@ -1618,7 +1666,7 @@ SELECT * FROM jsonb_object_keys('{"1": 2, "a": ["b", "c"]}'::jsonb);
 
 ```mzsql
 SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  jsonb_pretty
 --------------
@@ -1629,7 +1677,7 @@ SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
      "c"     +
    ]         +
  }
-```
+```text
 
 <hr/>
 
@@ -1637,21 +1685,21 @@ SELECT jsonb_pretty('{"1": 2, "a": ["b", "c"]}'::jsonb);
 
 ```mzsql
 SELECT jsonb_typeof('[true, 1, "a", {"b": 2}, null]'::jsonb);
-```
+```text
 ```nofmt
  jsonb_typeof
 --------------
  array
-```
+```text
 
 ```mzsql
 SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::jsonb);
-```
+```text
 ```nofmt
  jsonb_typeof
 --------------
  object
-```
+```text
 
 <hr/>
 
@@ -1659,12 +1707,12 @@ SELECT * FROM jsonb_typeof('{"1": 2, "a": ["b", "c"]}'::jsonb);
 
 ```mzsql
 SELECT jsonb_strip_nulls('[{"1":"a","2":null},"b",null,"c"]'::jsonb);
-```
+```text
 ```nofmt
     jsonb_strip_nulls
 --------------------------
  [{"1":"a"},"b",null,"c"]
-```
+```text
 
 <hr/>
 
@@ -1680,21 +1728,19 @@ FROM (
   (4, 'salutations')
   ) AS t(id, content)
 WHERE t.content LIKE 'h%';
-```
+```text
 ```nofmt
       jsonified_row
 --------------------------
  {"content":"hi","id":3}
  {"content":"hey","id":1}
-```
+```text
 
 Note that the output is `jsonb`.
 
 [Slice syntax]: /sql/types/list#slicing-ranges
 [`list`]: /sql/types/list
 [`array`]: /sql/types/array
-
-
 
 
 ---
@@ -1713,13 +1759,15 @@ be other lists, known as "layered lists."
 
 ## Syntax
 
-{{< diagram "type-list.svg" >}}
+[See diagram: type-list.svg]
 
 | Field     | Use                                                                                                       |
 | --------- | --------------------------------------------------------------------------------------------------------- |
 | _element_ | An element of any [data type](../) to place in the list. Note that all elements must be of the same type. |
 
 ## List functions + operators
+
+This section covers list functions + operators.
 
 #### Polymorphism
 
@@ -1739,13 +1787,14 @@ constraints to their arguments:
 
 ### Operators
 
-{{% list-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: list-operators --> --> -->
 
 ### Functions
 
-{{< fnlist "List" >}}
 
 ## Details
+
+This section covers details.
 
 ### Type name
 
@@ -1759,34 +1808,34 @@ You can construct lists using the `LIST` expression:
 
 ```mzsql
 SELECT LIST[1, 2, 3];
-```
+```text
 ```nofmt
   list
 ---------
  {1,2,3}
-```
+```text
 
 You can nest `LIST` constructors to create layered lists:
 
 ```mzsql
 SELECT LIST[LIST['a', 'b'], LIST['c']];
-```
+```text
 ```nofmt
     list
 -------------
  {{a,b},{c}}
-```
+```text
 
 You can also elide the `LIST` keyword from the interior list expressions:
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']];
-```
+```text
 ```nofmt
     list
 -------------
  {{a,b},{c}}
-```
+```text
 
 Alternatively, you can construct a list from the results of a subquery. The
 subquery must return a single column. Note that, in this form of the `LIST`
@@ -1794,12 +1843,12 @@ expression, parentheses are used rather than square brackets.
 
 ```mzsql
 SELECT LIST(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
-```
+```text
 ```nofmt
     x
 ---------
  {4,3,2}
-```
+```text
 
 Layered lists can be “ragged”, i.e. the length of lists in each layer can differ
 from one another. This differs from `array`, which requires that each dimension
@@ -1822,35 +1871,35 @@ To access an individual element of list, you can “index” into it using brack
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1];
-```
+```text
 ```nofmt
  ?column?
 ----------
  {a,b}
-```
+```text
 
 Indexing operations can be chained together to descend the list’s layers:
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][2];
-```
+```text
 ```nofmt
  ?column?
 ----------
  b
-```
+```text
 
 If the index is invalid (either less than 1 or greater than the maximum index),
 lists return _NULL_.
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][5] AS exceed_index;
-```
+```text
 ```nofmt
  exceed_index
 --------------
 
-```
+```text
 
 Lists have types based on their layers (unlike arrays' dimension), and error if
 you attempt to index a non-list element (i.e. indexing past the list’s last
@@ -1858,10 +1907,10 @@ layer):
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][2][3];
-```
+```text
 ```nofmt
 ERROR:  cannot subscript type string
-```
+```bash
 
 #### Slicing ranges
 
@@ -1870,57 +1919,57 @@ last index]`, using 1-indexed positions:
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][2:4] AS two_to_four;
-```
+```text
 ```nofmt
   slice
 ---------
  {2,3,4}
-```
+```text
 
 You can omit the first index to use the first value in the list, and omit the
 last index to use all elements remaining in the list.
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][:3] AS one_to_three;
-```
+```text
 ```nofmt
  one_to_three
 --------------
  {1,2,3}
-```
+```text
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
-```
+```text
 ```nofmt
  three_to_five
 ---------------
  {3,4,5}
-```
+```text
 
 If the first index exceeds the list's maximum index, the operation returns an
 empty list:
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
-```
+```text
 ```nofmt
  exceed_index
 --------------
  {}
-```
+```text
 
 If the last index exceeds the list’s maximum index, the operation returns all
 remaining elements up to its final element.
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][2:10] AS two_to_end;
-```
+```text
 ```nofmt
  two_to_end
 ------------
  {2,3,4,5}
-```
+```text
 
 Performing successive slices behaves more like a traditional programming
 language taking slices of an array, rather than PostgreSQL's slicing, which
@@ -1928,12 +1977,12 @@ descends into each layer.
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][2:][2:3] AS successive;
-```
+```text
 ```nofmt
  successive
 ------------
  {3,4}
-```
+```bash
 
 ### Output format
 
@@ -1956,12 +2005,12 @@ aforementioned special cases.
 
 ```mzsql
 SELECT LIST[['a', 'white space'], [NULL, ''], ['escape"m\e', 'nUlL']];
-```
+```text
 ```nofmt
                         list
 -----------------------------------------------------
  {{a,"white space"},{NULL,""},{"escape\"m\\e",nUlL}}
-```
+```bash
 
 ### `text` to `list` casts
 
@@ -1981,13 +2030,13 @@ The text you cast must:
 
     ```mzsql
     SELECT '{2001-02-03, 2004-05-06}'::date list as date_list;
-    ```
+    ```text
 
     ```nofmt
             date_list
     -------------------------
      {2001-02-03,2004-05-06}
-    ```
+    ```text
 
     You cannot include the `DATE` keyword.
 - Escape any special representations (`{`, `}`, `"`, `\`, whitespace, or the
@@ -2010,13 +2059,13 @@ The text you cast must:
         trailing space\ ,
         \NULL
     }'::text list as escape_examples;
-    ```
+    ```text
 
     ```nofmt
                                        escape_examples
     -------------------------------------------------------------------------------------
      {"{brackets}","\"quotes\"","\\slashes\\"," leading space","trailing space ","NULL"}
-    ```
+    ```text
 
     Note that all unescaped whitespace is trimmed.
 
@@ -2063,12 +2112,12 @@ different length:
 
 ```mzsql
 SELECT LIST[[1,2], [3]] AS ragged_list;
-```
-```
+```text
+```text
 ragged_list
 -------------
 {{1,2},{3}}
-```
+```text
 
 This is known as a "ragged list."
 
@@ -2078,10 +2127,10 @@ members must also have a length of 2.
 
 ```mzsql
 SELECT ARRAY[[1,2], [3]] AS ragged_array;
-```
-```
+```text
+```text
 ERROR:  number of array elements (3) does not match declared cardinality (4)
-```
+```bash
 #### Accessing single elements
 
 **Lists** support accessing single elements via [indexing](#indexing-elements).
@@ -2090,22 +2139,22 @@ For example, indexing a two-layer list returns a one-layer list.
 
 ```mzsql
 SELECT LIST[['foo'],['bar']][1] AS indexing;
-```
-```
+```text
+```text
  indexing
 --------------
  {foo}
-```
+```text
 
 Attempting to index twice into a `text list` (i.e. a one-layer list), fails
 because you cannot index `text`.
 
 ```mzsql
 SELECT LIST['foo'][1][2];
-```
-```
+```text
+```text
 ERROR:  cannot subscript type text
-```
+```bash
 
 ##### Accessing ranges of elements
 
@@ -2154,109 +2203,107 @@ You can [cast](../../functions/cast) the following types to `list`:
 
 ## Examples
 
+This section covers examples.
+
 ### Literals
 
 ```mzsql
 SELECT LIST[[1.5, NULL],[2.25]];
-```
+```text
 ```nofmt
          list
 ----------------------
  {{1.50,NULL},{2.25}}
-```
+```bash
 
 ### Casting between lists
 
 ```mzsql
 SELECT LIST[[1.5, NULL],[2.25]]::int list list;
-```
+```text
 ```nofmt
       list
 ----------------
  {{2,NULL},{2}}
-```
+```bash
 
 ### Casting to text
 
 ```mzsql
 SELECT LIST[[1.5, NULL],[2.25]]::text;
-```
+```text
 ```nofmt
       list
 ------------------
  {{1,NULL},{2}}
-```
+```text
 
 Despite the fact that the output looks the same as the above examples, it is, in
 fact, `text`.
 
 ```mzsql
 SELECT length(LIST[[1.5, NULL],[2.25]]::text);
-```
+```text
 ```nofmt
  length
 --------
      20
-```
+```bash
 
 ### Casting from text
 
 ```mzsql
 SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
-```
+```text
 ```nofmt
      text_to_list
 ----------------------
  {{1.50,NULL},{2.25}}
-```
+```bash
 
 ### List containment
 
-{{< note >}}
+> **Note:** 
 Like [array containment operators in PostgreSQL](https://www.postgresql.org/docs/current/functions-array.html#FUNCTIONS-ARRAY),
 list containment operators in Materialize **do not** account for duplicates.
-{{< /note >}}
 
-{{< warn-if-unreleased "v0.107" >}}
 
 ```mzsql
 SELECT LIST[1,4,3] @> LIST[3,1] AS contains;
-```
+```text
 ```nofmt
  contains
 ----------
  t
-```
+```text
 
 ```mzsql
 SELECT LIST[2,7] <@ LIST[1,7,4,2,6] AS is_contained_by;
-```
+```text
 ```nofmt
  is_contained_by
 -----------------
  t
-```
+```text
 
 
 ```mzsql
 SELECT LIST[7,3,1] @> LIST[1,3,3,3,3,7] AS contains;
-```
+```text
 ```nofmt
  contains
 ----------
  t
-```
+```text
 
 ```mzsql
 SELECT LIST[1,3,7,NULL] @> LIST[1,3,7,NULL] AS contains;
-```
+```text
 ```nofmt
  contains
 ----------
  f
-```
-
-
+```text
 
 
 ---
@@ -2275,7 +2322,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-map.svg" >}}
+[See diagram: type-map.svg]
 
 Field | Use
 ------|-----
@@ -2284,15 +2331,18 @@ _value&lowbar;type_ | The [type](../../types) of the map's values.
 
 ## Map functions + operators
 
+This section covers map functions + operators.
+
 ### Operators
 
-{{% map-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: map-operators --> --> -->
 
 ### Functions
 
-{{< fnlist "Map" >}}
 
 ## Details
+
+This section covers details.
 
 ### Construction
 
@@ -2300,45 +2350,45 @@ You can construct maps using the `MAP` expression:
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2];
-```
+```text
 ```nofmt
      map
 -------------
  {a=>1,b=>2}
-```
+```text
 
 You can nest `MAP` constructors:
 
 ```mzsql
 SELECT MAP['a' => MAP['b' => 'c']];
-```
+```text
 ```nofmt
      map
 -------------
  {a=>{b=>c}}
-```
+```text
 
 You can also elide the `MAP` keyword from the interior map expressions:
 
 ```mzsql
 SELECT MAP['a' => ['b' => 'c']];
-```
+```text
 ```nofmt
      map
 -------------
  {a=>{b=>c}}
-```
+```text
 
 `MAP` expressions evalute expressions for both keys and values:
 
 ```mzsql
 SELECT MAP['a' || 'b' => 1 + 2];
-```
+```text
 ```nofmt
      map
 -------------
  {ab=>3}
-```
+```text
 
 Alternatively, you can construct a map from the results of a subquery. The
 subquery must return two columns: a key column of type `text` and a value column
@@ -2347,12 +2397,12 @@ parentheses are used rather than square brackets.
 
 ```mzsql
 SELECT MAP(SELECT key, value FROM test0 ORDER BY x DESC LIMIT 3);
-```
+```text
 ```nofmt
        map
 ------------------
  {a=>1,b=>2,c=>3}
-```
+```text
 
 With all constructors, if the same key appears multiple times, the last value
 for the key wins.
@@ -2383,22 +2433,22 @@ separated by commas and surrounded by curly braces (`{}`). For example:
 
 ```mzsql
 SELECT '{a=>123.4, b=>111.1}'::map[text=>double] as m;
-```
+```text
 ```nofmt
   m
 ------------------
  {a=>123.4,b=>111.1}
-```
+```text
 
 You can create nested maps the same way:
 ```mzsql
 SELECT '{a=>{b=>{c=>d}}}'::map[text=>map[text=>map[text=>text]]] as nested_map;
-```
+```text
 ```nofmt
   nested_map
 ------------------
  {a=>{b=>{c=>d}}}
-```
+```bash
 
 ### Valid casts
 
@@ -2424,6 +2474,8 @@ You can [cast](../../functions/cast) `map` to and from the following types:
 
 ## Examples
 
+This section covers examples.
+
 ### Operators
 
 #### Retrieve value with key (`->`)
@@ -2432,32 +2484,32 @@ Retrieves and returns the target value or `NULL`.
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] -> 'a' as field_map;
-```
+```text
 ```nofmt
  field_map
 -----------
  1
-```
+```text
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] -> 'c' as field_map;
-```
+```text
 ```nofmt
  field_map
 ----------
  NULL
-```
+```text
 
 Field accessors can also be chained together.
 
 ```mzsql
 SELECT MAP['a' => ['b' => 1], 'c' => ['d' => 2]] -> 'a' -> 'b' as field_map;
-```
+```text
 ```nofmt
  field_map
 -------------
  1
-```
+```text
 
 Note that all returned values are of the map's value type.
 
@@ -2467,12 +2519,12 @@ Note that all returned values are of the map's value type.
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] @> MAP['a' => 1] AS lhs_contains_rhs;
-```
+```text
 ```nofmt
  lhs_contains_rhs
 ------------------
  t
-```
+```text
 
 <hr/>
 
@@ -2480,12 +2532,12 @@ SELECT MAP['a' => 1, 'b' => 2] @> MAP['a' => 1] AS lhs_contains_rhs;
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] <@ MAP['a' => 1] as rhs_contains_lhs;
-```
+```text
 ```nofmt
  rhs_contains_lhs
 ------------------
  f
-```
+```text
 
 <hr/>
 
@@ -2493,21 +2545,21 @@ SELECT MAP['a' => 1, 'b' => 2] <@ MAP['a' => 1] as rhs_contains_lhs;
 
 ```mzsql
 SELECT MAP['a' => 1.9, 'b' => 2.0] ? 'a' AS search_for_key;
-```
+```text
 ```nofmt
  search_for_key
 ----------------
  t
-```
+```text
 
 ```mzsql
 SELECT MAP['a' => ['aa' => 1.9], 'b' => ['bb' => 2.0]] ? 'aa' AS search_for_key;
-```
+```text
 ```nofmt
  search_for_key
 ----------------
  f
-```
+```bash
 
 #### Search for all top-level keys (`?&`)
 
@@ -2516,21 +2568,21 @@ the map, `false` otherwise.
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?& ARRAY['b', 'a'] as search_for_all_keys;
-```
+```text
 ```nofmt
  search_for_all_keys
 ---------------------
  t
-```
+```text
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?& ARRAY['c', 'b'] as search_for_all_keys;
-```
+```text
 ```nofmt
  search_for_all_keys
 ---------------------
  f
-```
+```bash
 
 #### Search for any top-level keys (`?|`)
 
@@ -2539,21 +2591,21 @@ the map, `false` otherwise.
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?| ARRAY['c', 'b'] as search_for_any_keys;
-```
+```text
 ```nofmt
  search_for_any_keys
 ---------------------
  t
-```
+```text
 
 ```mzsql
 SELECT MAP['a' => 1, 'b' => 2] ?| ARRAY['c', 'd', '1'] as search_for_any_keys;
-```
+```text
 ```nofmt
  search_for_any_keys
 ---------------------
  f
-```
+```bash
 
 #### Count entries in map (`map_length`)
 
@@ -2561,14 +2613,12 @@ Returns the number of entries in the map.
 
 ```mzsql
 SELECT map_length(MAP['a' => 1, 'b' => 2]);
-```
+```text
 ```nofmt
  map_length
 ------------
  2
-```
-
-
+```text
 
 
 ---
@@ -2596,18 +2646,16 @@ is `<grantee>=<privileges>/<grantor>`.
 
 A list of all privileges and their abbreviations are below:
 
-| Privilege             | Description                                                                                    | Abbreviation        | Applicable Object Types                       |
-|-----------------------|------------------------------------------------------------------------------------------------|---------------------|-----------------------------------------------|
-| `SELECT`              | Allows reading rows from an object.                                                            | r(”read”)           | Table, View, Materialized View, Source        |
-| `INSERT`              | Allows inserting into an object.                                                               | a(”append”)         | Table                                         |
-| `UPDATE`              | Allows updating an object (requires SELECT if a read is necessary).                            | w(”write”)          | Table                                         |
-| `DELETE`              | Allows deleting from an object (requires SELECT if a read is necessary).                       | d                   | Table                                         |
-| `CREATE`              | Allows creating a new object within another object.                                            | C                   | Database, Schema, Cluster                     |
-| `USAGE`               | Allows using an object or looking up members of an object.                                     | U                   | Database, Schema, Connection, Secret, Cluster |
-| `CREATEROLE`          | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. | R("Role")           | System                                        |
-| `CREATEDB`            | Allows creating databases.                                                                     | B("dataBase")       | System                                        |
-| `CREATECLUSTER`       | Allows creating clusters.                                                                      | N("compute Node")   | System                                        |
-| `CREATENETWORKPOLICY` | Allows creating network policies.                                                              | P("network Policy") | System                                        |
+- **`SELECT`**: Allows reading rows from an object. | r(”read”) | Table, View, Materialized View, Source
+- **`INSERT`**: Allows inserting into an object. | a(”append”) | Table
+- **`UPDATE`**: Allows updating an object (requires SELECT if a read is necessary). | w(”write”) | Table
+- **`DELETE`**: Allows deleting from an object (requires SELECT if a read is necessary). | d | Table
+- **`CREATE`**: Allows creating a new object within another object. | C | Database, Schema, Cluster
+- **`USAGE`**: Allows using an object or looking up members of an object. | U | Database, Schema, Connection, Secret, Cluster
+- **`CREATEROLE`**: Allows creating, altering, deleting roles and the ability to grant and revoke role membership. | R("Role") | System
+- **`CREATEDB`**: Allows creating databases. | B("dataBase") | System
+- **`CREATECLUSTER`**: Allows creating clusters. | N("compute Node") | System
+- **`CREATENETWORKPOLICY`**: Allows creating network policies. | P("network Policy") | System
 
 The `CREATEROLE` privilege is very powerful. It allows roles to grant and revoke membership in
 other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role
@@ -2627,8 +2675,6 @@ From | To | Required context
 ### Valid operations
 
 There are no supported operations or functions on `mz_aclitem` types.
-
-
 
 
 ---
@@ -2680,8 +2726,6 @@ From | To | Required context
 There are no supported operations or functions on `mz_timestamp` types.
 
 
-
-
 ---
 
 ## numeric type
@@ -2700,9 +2744,11 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 ### Numeric values
 
-{{< diagram "type-numeric-val.svg" >}}
+[See diagram: type-numeric-val.svg]
 
 Field | Use
 ------|-----------
@@ -2710,7 +2756,7 @@ Field | Use
 
 ### Numeric definitions
 
-{{< diagram "type-numeric-dec.svg" >}}
+[See diagram: type-numeric-dec.svg]
 
 Field | Use
 ------|-----------
@@ -2718,6 +2764,8 @@ _precision_ | **Ignored**: All `numeric` values in Materialize have a precision 
 _scale_ | The total number of fractional decimal digits to track, e.g. `.321` has a scale of 3. _scale_ cannot exceed the maximum precision.
 
 ## Details
+
+This section covers details.
 
 ### Input
 
@@ -2765,7 +2813,7 @@ SELECT c FROM unscaled;
    987654321098765432109876543210987654321
  0.987654321098765432109876543210987654321
   9876543210987654321.09876543210987654321
-```
+```text
 
 However, if you specify a scale on a `numeric` value, values will be rescaled
 appropriately. If the resulting value exceeds the maximum precision for
@@ -2776,10 +2824,10 @@ CREATE TABLE scaled (c NUMERIC(39, 20));
 
 INSERT INTO scaled VALUES
   (987654321098765432109876543210987654321);
-```
-```
+```text
+```text
 ERROR:  numeric field overflow
-```
+```text
 ```mzsql
 INSERT INTO scaled VALUES
   (9876543210987654321.09876543210987654321),
@@ -2791,7 +2839,7 @@ SELECT c FROM scaled;
 ------------------------------------------
                    0.98765432109876543211
  9876543210987654321.09876543210987654321
-```
+```bash
 
 ### Rounding
 
@@ -2804,7 +2852,7 @@ SELECT 2 * 9876543210987654321.09876543210987654321 AS rounded;
                  rounded
 ------------------------------------------
  19753086421975308642.1975308642197530864
-```
+```text
 
 However, if a value exceeds is >= 1E39 or <= -1E39, it generates an
 overflow, i.e. it will not be rounded.
@@ -2868,37 +2916,37 @@ You can [cast](../../functions/cast) from the following types to `numeric`:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 1.23::numeric AS num_v;
-```
+```text
 ```nofmt
  num_v
 -------
   1.23
-```
+```text
 <hr/>
 
 ```mzsql
 SELECT 1.23::numeric(38,3) AS num_38_3_v;
-```
+```text
 ```nofmt
  num_38_3_v
 ------------
       1.230
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 1.23e4 AS num_w_exp;
-```
+```text
 ```nofmt
  num_w_exp
 -----------
      12300
-```
-
-
+```text
 
 
 ---
@@ -2944,8 +2992,6 @@ You can [cast](../../functions/cast) from the following types to `oid`:
 [pg-oid]: https://www.postgresql.org/docs/current/datatype-oid.html
 
 
-
-
 ---
 
 ## record type
@@ -2962,7 +3008,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-record.svg" >}}
+[See diagram: type-record.svg]
 
 ## Details
 
@@ -2986,25 +3032,27 @@ You cannot cast from any other types to `record`.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT ROW(1, 2) AS record;
-```
+```text
 ```nofmt
  record
 --------
  (1,2)
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT record, (record).f2 FROM (SELECT ROW(1, 2) AS record);
-```
+```text
 ```nofmt
 record | f2
 --------+----
  (1,2)  |  2
-```
+```text
 
 <hr>
 
@@ -3013,16 +3061,14 @@ will result in errors like the following
 
 ```mzsql
 SELECT record.f2 FROM (SELECT ROW(1, 2) AS record);
-```
+```text
 ```nofmt
 ERROR:  column "record.f2" does not exist
-```
+```text
 
 as the expression `record.f2` specifies a column named `f2` from a table named
 `record`, rather than the field `f2` from the record-typed column named
 `record`.
-
-
 
 
 ---
@@ -3043,21 +3089,23 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 ### Standard
 
-{{< diagram "type-text.svg" >}}
+[See diagram: type-text.svg]
 
 To escape a single quote character (`'`) in a standard string literal, write two
 adjacent single quotes:
 
 ```mzsql
 SELECT 'single''quote' AS output
-```
+```text
 ```nofmt
    output
 ------------
 single'quote
-```
+```text
 
 All other characters are taken literally.
 
@@ -3066,7 +3114,7 @@ All other characters are taken literally.
 A string literal that is preceded by an `e` or `E` is an "escape" string
 literal:
 
-{{< diagram "type-escape-text.svg" >}}
+[See diagram: type-escape-text.svg]
 
 Escape string literals follow the same rules as standard string literals, except
 that backslash character (`\`) starts an escape sequence. The following escape
@@ -3090,6 +3138,8 @@ in order to ensure that escape string literals are always valid UTF-8.
 
 ## Details
 
+This section covers details.
+
 ### Valid casts
 
 #### From `text`
@@ -3103,28 +3153,28 @@ You can [cast](../../functions/cast) [all types](../) to `text`. All casts are b
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 'hello' AS text_val;
-```
+```text
 ```nofmt
  text_val
 ---------
  hello
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT E'behold\nescape strings\U0001F632' AS escape_val;
-```
+```text
 ```nofmt
    escape_val
 -----------------
  behold         +
  escape strings😲
-```
-
-
+```text
 
 
 ---
@@ -3145,13 +3195,15 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-time.svg" >}}
+[See diagram: type-time.svg]
 
 Field | Use
 ------|------------
 _time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -3184,27 +3236,27 @@ Operation | Computes
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT TIME '01:23:45' AS t_v;
-```
+```text
 ```nofmt
    t_v
 ----------
  01:23:45
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT DATE '2001-02-03' + TIME '12:34:56' AS d_t;
-```
+```text
 ```nofmt
          d_t
 ---------------------
  2001-02-03 12:34:56
-```
-
-
+```text
 
 
 ---
@@ -3242,7 +3294,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-timestamp.svg" >}}
+[See diagram: type-timestamp.svg]
 
 Field | Use
 ------|-----
@@ -3300,38 +3352,40 @@ Operation | Computes
 
 ## Examples
 
+This section covers examples.
+
 ### Return timestamp
 
 ```mzsql
 SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
-```
+```text
 ```nofmt
         ts_v
 ---------------------
  2007-02-01 15:04:05
-```
+```bash
 
 ### Return timestamp with time zone
 
 ```mzsql
 SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
-```
+```text
 ```nofmt
          tstz_v
 -------------------------
  2007-02-01 09:04:05 UTC
-```
+```bash
 
 ## Related topics
 * [`TIMEZONE` and `AT TIME ZONE` functions](../../functions/timezone-and-at-time-zone)
-
-
 
 
 ---
 
 ## Unsigned Integer types
 
+
+This section covers unsigned integer types.
 
 ## `uint2` info
 
@@ -3361,6 +3415,8 @@ Detail | Info
 **Range** | [0, 18,446,744,073,709,551,615]
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -3405,27 +3461,27 @@ From | Required context
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 123::uint4 AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------
    123
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 1.23::uint4 AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------
      1
-```
-
-
+```text
 
 
 ---
@@ -3449,28 +3505,30 @@ bytes.
 
 ## Syntax
 
-{{< diagram "type-uuid.svg" >}}
+[See diagram: type-uuid.svg]
 
 The standard form of a UUID consists of five groups of lowercase hexadecimal
 digits separated by hyphens, where the first group contains 8 digits, the next
 three groups contain 4 digits each, and the last group contains 12 digits:
 
-```
+```text
 a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11
-```
+```text
 
 Materialize also accepts UUID input where the hyphens are omitted, or where some
 or all of the hexadecimal digits are uppercase:
 
-```
+```text
 a0eebc999c0b4ef8bb6d6bb9bd380a11
 A0eeBc99-9c0b-4ef8-bB6d-6bb9bd380A11
 A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11
-```
+```text
 
 Materialize will always output UUIDs in the standard form.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -3478,14 +3536,13 @@ You can [cast](../../functions/cast) `uuid` to [`text`](../text) by assignment a
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT UUID 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11' AS uuid
-```
+```text
 ```nofmt
                  uuid
 --------------------------------------
  a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11
 ```
-
-
-

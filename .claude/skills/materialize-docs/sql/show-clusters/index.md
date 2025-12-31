@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-clusters/
+complexity: advanced
+description: '`SHOW CLUSTERS` lists the clusters configured in Materialize.'
+doc_type: reference
+keywords:
+- WHERE
+- not billed
+- SHOW CLUSTERS
+- 'Note:'
+- LIKE
+product_area: Indexes
+status: stable
+title: SHOW CLUSTERS
+---
+
 # SHOW CLUSTERS
+
+## Purpose
+`SHOW CLUSTERS` lists the clusters configured in Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW CLUSTERS` lists the clusters configured in Materialize.
 
@@ -8,11 +31,13 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```sql
 SHOW CLUSTERS
 [LIKE <pattern> | WHERE <condition(s)>]
 ;
-```
+```text
 
 Syntax element                | Description
 ------------------------------|------------
@@ -31,13 +56,13 @@ A cluster named `quickstart` with a size of `25cc` and a replication factor of
 `1` will be pre-installed in every environment. You can modify or drop this
 cluster at any time.
 
-{{< note >}}
+> **Note:** 
 The default value for the `cluster` session parameter is `quickstart`.
 If the `quickstart` cluster is dropped, you must run [`SET cluster`](/sql/select/#ad-hoc-queries)
 to choose a valid cluster in order to run `SELECT` queries. A _superuser_ (i.e. `Organization Admin`)
 can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
 default value.
-{{< /note >}}
+
 
 ### `mz_catalog_server` system cluster
 
@@ -98,11 +123,13 @@ The following characteristics apply to the `mz_system` cluster:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SET CLUSTER = mz_catalog_server;
 
 SHOW CLUSTERS;
-```
+```text
 
 ```nofmt
        name                  replicas
@@ -113,11 +140,11 @@ SHOW CLUSTERS;
  mz_system            |  r1 (50cc)
  mz_probe             |  r1 (mz_probe)
  mz_support           |
-```
+```text
 
 ```mzsql
 SHOW CLUSTERS LIKE 'auction_%';
-```
+```text
 
 ```nofmt
       name                  replicas

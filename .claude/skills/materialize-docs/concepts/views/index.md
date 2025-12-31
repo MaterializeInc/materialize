@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/views/
+complexity: advanced
+description: Learn about views in Materialize.
+doc_type: concept
+keywords:
+- Materialized views
+- incrementally updated
+- '[index](/concepts/indexes/)'
+- in memory
+- CREATE INDEX
+- CREATE VIEW
+- Views
+- CREATE AN
+product_area: Concepts
+status: stable
+title: Views
+---
+
 # Views
 
+## Purpose
 Learn about views in Materialize.
 
+Read this to understand how this concept works in Materialize.
+
+
+Learn about views in Materialize.
 
 
 ## Overview
@@ -26,7 +51,7 @@ is accessed, view results are recomputed from scratch.
 ```mzsql
 CREATE VIEW my_view_name AS
   SELECT ... FROM ...  ;
-```
+```text
 
 **However**, in Materialize, you can create an [index](/concepts/indexes/) on a
 view to keep view results **incrementally updated** in memory within a cluster.
@@ -36,7 +61,7 @@ view results in memory.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 See [Indexes and views](#indexes-on-views) for more information.
 
@@ -56,13 +81,13 @@ For example, to create an index in the current cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 You can also explicitly specify the cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
-```
+```text
 
 **As new data arrives**, the index **incrementally updates** view results in
 memory within that [cluster](/concepts/clusters/). Within the cluster, the
@@ -88,7 +113,7 @@ VIEW`](/sql/create-materialized-view) command:
 ```mzsql
 CREATE MATERIALIZED VIEW my_mat_view_name AS
   SELECT ... FROM ...  ;
-```
+```text
 
 See also:
 
@@ -123,12 +148,11 @@ Because materialized views already maintain the up-to-date results in durable
 storage, indexes on materialized views can serve up-to-date results without
 having to perform additional computation.
 
-{{< note >}}
+> **Note:** 
 Querying a materialized view, whether indexed or not, from any cluster is
 computationally free. However, querying an indexed materialized view within the
 cluster associated with the index is faster since the results are served from
 memory rather than from storage.
-{{</ note >}}
 
 
 See also:
@@ -139,11 +163,11 @@ See also:
 
 ## Indexed views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
-{{% views-indexes/table-usage-pattern %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
-{{% include-md file="shared-content/mat-view-use-cases.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/mat-view-use-c... -->
 
 ## General information
 
@@ -161,4 +185,3 @@ See also:
 <style>
 red { color: Red; font-weight: 500; }
 </style>
-

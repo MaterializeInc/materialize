@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/cloud/alerting/
+complexity: advanced
+description: Alerting thresholds to use for monitoring.
+doc_type: reference
+keywords:
+- 'Note:'
+- Alerting
+product_area: Operations
+status: stable
+title: Alerting
+---
+
 # Alerting
+
+## Purpose
+Alerting thresholds to use for monitoring.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Alerting thresholds to use for monitoring.
 
@@ -21,14 +41,14 @@ For each threshold level, use the following table as a guide to set up your own 
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-Memory utilization | 80% | 90% | Average [memory utilization](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_cluster_replica_utilization), (defined using heap_percent) for a cluster in the last *15 minutes*.
+Memory utilization | 80% | 90% | Average [memory utilization](../sql/system-catalog/mz_internal/#mz_cluster_replica_utilization), (defined using heap_percent) for a cluster in the last *15 minutes*.
 Source status | - | On Change | Source status change in the last *1 minute*.
 Cluster status | - | On Change | Cluster replica status change in the last *1 minute*.
 Freshness | > 5s | > 1m | Average [lag behind an input](/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
 
-{{<note>}}
+> **Note:** 
 Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](/support/) for questions.
-{{</note>}}
+
 
 ### Custom Thresholds
 

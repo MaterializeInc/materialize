@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/oid/
+complexity: intermediate
+description: Express a PostgreSQL-compatible object identifier
+doc_type: reference
+keywords:
+- oid type
+- Catalog name
+- OID
+- Size
+product_area: Indexes
+status: stable
+title: oid type
+---
+
 # oid type
+
+## Purpose
+Express a PostgreSQL-compatible object identifier
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Express a PostgreSQL-compatible object identifier
 

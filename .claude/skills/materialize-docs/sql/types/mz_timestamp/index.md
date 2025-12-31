@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/mz_timestamp/
+complexity: advanced
+description: Expresses an internal timestamp
+doc_type: reference
+keywords:
+- mz_timestamp type
+- OID
+- Catalog name
+- Max value
+- Size
+- Min value
+product_area: Indexes
+status: stable
+title: mz_timestamp type
+---
+
 # mz_timestamp type
+
+## Purpose
+Expresses an internal timestamp
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses an internal timestamp
 

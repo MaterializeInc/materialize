@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-type/
+complexity: intermediate
+description: '`DROP TYPE` removes a user-defined data type.'
+doc_type: reference
+keywords:
+- DROP TYPE
+- IF EXISTS
+- CREATE TYPE
+- RESTRICT
+- CASCADE
+product_area: Indexes
+status: stable
+title: DROP TYPE
+---
+
 # DROP TYPE
+
+## Purpose
+`DROP TYPE` removes a user-defined data type.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP TYPE` removes a user-defined data type.
 
@@ -8,9 +31,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP TYPE [IF EXISTS] <data_type_name> [RESTRICT|CASCADE];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -21,29 +46,31 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ### Remove a type with no dependent objects
 ```mzsql
 CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 SHOW TYPES;
-```
+```text
 ```
     name
 --------------
   int4_map
 (1 row)
-```
+```text
 
 ```mzsql
 DROP TYPE int4_map;
 
 SHOW TYPES;
-```
+```text
 ```
   name
 --------------
 (0 rows)
-```
+```bash
 
 ### Remove a type with dependent objects
 
@@ -59,14 +86,14 @@ CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
 CREATE TABLE t (a int4_list);
 
 SHOW TYPES;
-```
+```text
 ```
       name
 ----------------
  int4_list
  int4_list_list
 (2 rows)
-```
+```text
 
 ```mzsql
 DROP TYPE int4_list CASCADE;
@@ -74,13 +101,13 @@ DROP TYPE int4_list CASCADE;
 SHOW TYPES;
 
 SELECT * FROM t;
-```
+```text
 ```
  name
 ------
 (0 rows)
 ERROR:  unknown catalog item 't'
-```
+```bash
 
 ### Remove a type only if it has no dependent objects
 
@@ -88,10 +115,10 @@ You can use either of the following commands:
 
 - ```mzsql
   DROP TYPE int4_list;
-  ```
+  ```text
 - ```mzsql
   DROP TYPE int4_list RESTRICT;
-  ```
+  ```bash
 
 ### Do not issue an error if attempting to remove a nonexistent type
 
@@ -103,7 +130,9 @@ DROP TYPE IF EXISTS int4_list;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-type.md" >}}
+- Ownership of the dropped type.
+- `USAGE` privileges on the containing schema.
+
 
 ## Related pages
 

@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/clusters/
+complexity: advanced
+description: Learn about clusters in Materialize.
+doc_type: concept
+keywords:
+- fault tolerance
+- ALTER CLUSTER
+- resource isolation.
+- Clusters
+- up to and including `3200cc`
+- not
+- CREATE CLUSTER
+- 'Note:'
+product_area: Concepts
+status: stable
+title: Clusters
+---
+
 # Clusters
 
+## Purpose
 Learn about clusters in Materialize.
 
+Read this to understand how this concept works in Materialize.
+
+
+Learn about clusters in Materialize.
 
 
 ## Overview
@@ -42,11 +67,18 @@ hardware that cause a replica to become unreachable. As long as one replica of
 the cluster remains available, the cluster can continue to maintain dataflows
 and serve queries.
 
-{{< note >}}
+> **Note:** 
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
+- Each replica incurs cost, calculated as `cluster size *
+  replication factor` per second. See [Usage &
+  billing](/administration/billing/) for more details.
 
-{{< /note >}}
+- Increasing the replication factor does **not** increase the cluster's work
+  capacity. Replicas are exact copies of one another: each replica must do
+  exactly the same work as all the other replicas of the cluster(i.e., maintain
+  the same dataflows and process the same queries). To increase the capacity of
+  a cluster, you must increase its size.
+
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
 view information about individual replicas in the Materialize console and the
@@ -56,7 +88,13 @@ system catalog.
 
 When provisioning replicas,
 
-{{< include-md file="shared-content/multi-replica-az.md" >}}
+- For clusters sized **up to and including `3200cc`**, Materialize guarantees
+  that all provisioned replicas in a cluster are distributed across the
+  underlying cloud provider's availability zones.
+
+- For clusters sized **above `3200cc`**, even distribution of replicas
+  across availability zones **cannot** be guaranteed.
+
 
 <a name="sizing-your-clusters"></a>
 
@@ -72,12 +110,11 @@ volumes.
 
 As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
 
-{{< tip >}}
+> **Tip:** 
 
 To gauge the performance and utilization of your clusters, use the
 [**Environment Overview** page in the Materialize Console](/console/monitoring/).
 
-{{< /tip >}}
 
 ## Best practices
 
@@ -86,7 +123,7 @@ The following provides some general guidelines for clusters. See also
 
 ### Three-tier architecture in production
 
-{{% best-practices/architecture/three-tier %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 See also [Operational guidelines](/manage/operational-guidelines/).
 
@@ -117,4 +154,3 @@ hydration cost and the steady-state cost.
 - [System clusters](/sql/system-clusters)
 - [Usage & billing](/administration/billing/)
 - [Operational guidelines](/manage/operational-guidelines/)
-

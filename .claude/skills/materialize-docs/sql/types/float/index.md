@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/float/
+complexity: intermediate
+description: Express signed, inexact numbers
+doc_type: reference
+keywords:
+- Catalog name
+- OID
+- Aliases
+- Size
+- Range
+- SELECT 1
+- Floating-point types
+product_area: Indexes
+status: stable
+title: Floating-point types
+---
+
 # Floating-point types
+
+## Purpose
+Express signed, inexact numbers
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Express signed, inexact numbers
 
@@ -26,9 +51,11 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-float.svg" >}}
+[See diagram: type-float.svg]
 
 ## Details
+
+This section covers details.
 
 ### Literals
 
@@ -51,12 +78,12 @@ the desired floating-point type. For example:
 
 ```mzsql
 SELECT 'NaN'::real AS nan
-```
+```text
 ```nofmt
  nan
 -----
  NaN
-```
+```text
 
 The strings are recognized case insensitively.
 
@@ -83,9 +110,11 @@ You can [cast](../../functions/cast) to `real` or `double precision` from the fo
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 1.23::real AS real_v;
-```
+```text
 ```nofmt
  real_v
 ---------

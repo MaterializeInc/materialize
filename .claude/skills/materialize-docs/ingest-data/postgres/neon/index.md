@@ -1,12 +1,38 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/postgres/neon/
+complexity: beginner
+description: How to stream data from Neon to Materialize
+doc_type: reference
+keywords:
+- Ingest data from Neon
+- autoscaling
+- 'Warning:'
+- SELECT YOUR
+- SHOW WAL_LEVEL
+- ALTER TABLE
+- CREATE A
+- 'Tip:'
+- branching
+- bottomless storage
+product_area: Sources
+status: stable
+title: Ingest data from Neon
+---
+
 # Ingest data from Neon
+
+## Purpose
+How to stream data from Neon to Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to stream data from Neon to Materialize
 
 
+> **Tip:** 
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
 
 [Neon](https://neon.tech) is a fully managed serverless PostgreSQL provider. It
 separates compute and storage to offer features like **autoscaling**,
@@ -30,11 +56,11 @@ Console.
 
 ### 1. Enable logical replication
 
-{{< warning >}}
+> **Warning:** 
 Enabling logical replication applies **globally** to all databases in your Neon
 project, and **cannot be reverted**. It also **restarts all computes**, which
 means that any active connections are dropped and have to reconnect.
-{{< /warning >}}
+
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
 protocol to track changes in your database and propagate them to Materialize.
@@ -53,15 +79,15 @@ You can verify that logical replication is enabled by running:
 
 ```sql
 SHOW wal_level;
-```
+```text
 
 The result should be:
 
-```
+```text
  wal_level
 -----------
  logical
-```
+```bash
 
 ### 2. Create a publication and a replication user
 
@@ -75,11 +101,11 @@ user for Materialize with sufficient privileges to manage replication.
 
    ```postgres
    ALTER TABLE <table1> REPLICA IDENTITY FULL;
-   ```
+   ```text
 
    ```postgres
    ALTER TABLE <table2> REPLICA IDENTITY FULL;
-   ```
+   ```text
 
    `REPLICA IDENTITY FULL` ensures that the replication stream includes the
     previous data of changed rows, in the case of `UPDATE` and `DELETE`
@@ -94,13 +120,13 @@ user for Materialize with sufficient privileges to manage replication.
 
     ```postgres
     CREATE PUBLICATION mz_source FOR TABLE <table1>, <table2>;
-    ```
+    ```text
 
     _For all tables in the database:_
 
     ```postgres
     CREATE PUBLICATION mz_source FOR ALL TABLES;
-    ```
+    ```text
 
     The `mz_source` publication will contain the set of change events generated
     from the specified tables, and will later be used to ingest the replication
@@ -117,19 +143,16 @@ role, which has the required `REPLICATION` privilege.
    While you can use the default user for replication, we recommend creating a
    dedicated user for security reasons.
 
-    {{< tabs >}}
-{{< tab "Neon CLI">}}
+    #### Neon CLI
 
 Use the [`roles create` CLI command](https://neon.tech/docs/reference/cli-roles)
 to create a new role.
 
 ```bash
 neon roles create --name materialize
-```
+```bash
 
-{{< /tab >}}
-
-{{< tab "Neon Console">}}
+#### Neon Console
 
 1. Navigate to the [Neon Console](https://console.neon.tech).
 2. Select a project.
@@ -141,9 +164,7 @@ neon roles create --name materialize
 8. Click **Create**. The role is created, and you are provided with the
 password for the role.
 
-{{< /tab >}}
-
-{{< tab "API">}}
+#### API
 
 Use the [`roles` endpoint](https://api-docs.neon.tech/reference/createprojectbranchrole)
 to create a new role.
@@ -158,11 +179,7 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
     "name": "materialize"
 }
 }' | jq
-```
-
-{{< /tab >}}
-
-    {{< /tabs >}}
+```text
 
 4. Grant the user the required permissions on the schema(s) you want to
    replicate:
@@ -173,7 +190,7 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
    GRANT SELECT ON ALL TABLES IN SCHEMA public TO materialize;
 
    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO materialize;
-   ```
+   ```text
 
    Granting `SELECT ON ALL TABLES IN SCHEMA` instead of on specific tables
    avoids having to add privileges later if you add tables to your
@@ -181,15 +198,13 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
 
 ## B. (Optional) Configure network security
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and your Neon instance is publicly accessible, **you can
 skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 to limit the IP addresses that can connect to your Neon instance.
-{{</ note >}}
 
-{{< tabs >}}
 
-{{< tab "Cloud" >}}
+#### Cloud
 
 If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 feature to limit the IP addresses that can connect to your Neon instance, you
@@ -202,7 +217,7 @@ will need to allow inbound traffic from Materialize IP addresses.
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
-    ```
+    ```text
 
 2. In your Neon project, add the IPs to your **IP Allow** list:
 
@@ -211,15 +226,13 @@ will need to allow inbound traffic from Materialize IP addresses.
    3. Select **IP Allow**.
    4. Add each Materialize IP address to the list.
 
-{{< /tab >}}
+#### Self-Managed
 
-{{< tab "Self-Managed" >}}
-
-{{< note >}}
+> **Note:** 
 If you are prototyping and your Neon instance is publicly accessible, **you can
 skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 to limit the IP addresses that can connect to your Neon instance.
-{{</ note >}}
+
 
 If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 feature to limit the IP addresses that can connect to your Neon instance, you
@@ -232,9 +245,6 @@ will need to allow inbound traffic from Materialize IP addresses.
    3. Select **IP Allow**.
    4. Add Materialize IP addresses to the list.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 ## C. Ingest data in Materialize
 
 The steps in this section are specific to Materialize. You can run them in the
@@ -243,14 +253,14 @@ preferred SQL client connected to Materialize.
 
 ### 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/create-a-cluster --> --> -->
 
 ### 2. Create a connection
 
@@ -262,7 +272,7 @@ your networking configuration.
 
     ```mzsql
     CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
+    ```text
 
     You can access the password for your Neon user from
     the **Connection Details** widget on the Neon **Dashboard**.
@@ -281,7 +291,7 @@ your networking configuration.
       SSL MODE 'require',
       DATABASE '<database>'
     );
-    ```
+    ```text
 
     You can find the connection details for your replication user in
     the **Connection Details** widget on the Neon **Dashboard**. A Neon
@@ -300,22 +310,20 @@ your networking configuration.
 
 ### 3. Start ingesting data
 
-{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="ingest-data-step" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/ingest_data/pos... -->
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/check-the-ingestion-stat --> --> -->
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/right-size-the-cluster --> --> -->
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/next-steps --> --> -->
 
 ## Considerations
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-considerations" %}}
-
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->

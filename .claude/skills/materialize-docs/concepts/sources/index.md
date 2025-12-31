@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/sources/
+complexity: beginner
+description: Learn about sources in Materialize.
+doc_type: concept
+keywords:
+- CREATE SOURCE
+- Envelope
+- Message Brokers
+- Connector
+- Databases (CDC)
+- Sources
+- Format
+product_area: Concepts
+status: stable
+title: Sources
+---
+
 # Sources
 
+## Purpose
 Learn about sources in Materialize.
 
+Read this to understand how this concept works in Materialize.
+
+
+Learn about sources in Materialize.
 
 
 ## Overview
@@ -37,7 +61,21 @@ Component      | Use                                                            
 
 Materialize bundles native connectors for the following external systems:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+
+**Databases (CDC)**
+- [PostgreSQL](/ingest-data/postgres/)
+- [MySQL](/ingest-data/mysql/)
+- [SQL Server](/ingest-data/sql-server/)
+- [CockroachDB](/ingest-data/cdc-cockroachdb/)
+- [MongoDB](/ingest-data/mongodb/)
+**Message Brokers**
+- [Kafka](/ingest-data/kafka/)
+- [Redpanda](/sql/create-source/kafka)
+**Webhooks**
+- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
+- [Segment](/ingest-data/webhooks/segment/)
+- [Other webhooks](/sql/create-source/webhook)
+
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
 
@@ -53,4 +91,3 @@ See also [Operational guidelines](/manage/operational-guidelines/).
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source)
-

@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/faq/
+complexity: intermediate
+description: Frequently asked questions about self-managed installations.
+doc_type: troubleshooting
+keywords:
+- 'FAQ: Self-managed installation'
+product_area: Deployment
+status: stable
+title: 'FAQ: Self-managed installation'
+---
+
 # FAQ: Self-managed installation
+
+## Purpose
+Frequently asked questions about self-managed installations.
+
+This page provides detailed documentation for this topic.
+
 
 Frequently asked questions about self-managed installations.
 
@@ -11,7 +30,7 @@ keys will vary based on the terms of your contract.
 
 ## How do I get a license key?
 
-{{< yaml-table data="self_managed/license_key" >}}
+<!-- Dynamic table: self_managed/license_key - see original docs -->
 
 ## How do I add a license key to an existing installation?
 

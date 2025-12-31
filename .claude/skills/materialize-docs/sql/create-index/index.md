@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-index/
+complexity: advanced
+description: '`CREATE INDEX` creates an in-memory index on a source, view, or materialized
+  view.'
+doc_type: reference
+keywords:
+- Private preview.
+- incrementally updated
+- CREATE INDEX
+- CREATE INDEXES
+- DEFAULT
+- '...'
+- 'Note:'
+product_area: Indexes
+status: experimental
+title: CREATE INDEX
+---
+
 # CREATE INDEX
 
+## Purpose
 `CREATE INDEX` creates an in-memory index on a source, view, or materialized view.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`CREATE INDEX` creates an in-memory index on a source, view, or materialized view.
 
 
 `CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized view.
@@ -17,8 +42,8 @@ Because indexes are scoped to a single cluster, they are most useful for acceler
 
 #### Indexes on views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
 #### Indexes and query optimizations
 
@@ -28,19 +53,19 @@ You might want to create indexes when...
     this case, you could create an index on the columns in the join condition.
 -   You want to speed up searches filtering by literal values or expressions.
 
-{{% views-indexes/index-query-optimization-specific-instances %}}
+<!-- Unresolved shortcode: {{% views-indexes/index-query-optimization-specifi... -->
 
 #### Best practices
 
-{{% views-indexes/index-best-practices %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
 ## Syntax
 
-{{< diagram "create-index.svg" >}}
+[See diagram: create-index.svg]
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+[See diagram: with-options-retain-history.svg]
 
 Field | Use
 ------|-----
@@ -53,6 +78,8 @@ _col&lowbar;expr_**...** | The expressions to use as the key for the index.
 _retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* <br>Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). **Note:** Configuring indexes to retain history is not recommended. As an alternative, consider creating a materialized view for your subscription query and configuring the history retention period on the view instead. See [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). <br>Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). <br>Default: `1s`.
 
 ## Details
+
+This section covers details.
 
 ### Restrictions
 
@@ -73,7 +100,7 @@ Indexes in Materialize have the following structure for each unique row:
 
 ```nofmt
 ((tuple of indexed expressions), (tuple of the row, i.e. stored columns))
-```
+```bash
 
 #### Indexed expressions vs. stored columns
 
@@ -107,6 +134,8 @@ of the index.
 
 ## Examples
 
+This section covers examples.
+
 ### Optimizing joins with indexes
 
 You can optimize the performance of `JOIN` on two relations by ensuring their
@@ -125,7 +154,7 @@ CREATE MATERIALIZED VIEW active_customer_per_geo AS
     FROM geo_regions AS geo
     JOIN active_customers ON active_customers.geo_id = geo.id
     GROUP BY geo.name;
-```
+```text
 
 In the above example, the index `active_customers_geo_idx`...
 
@@ -173,10 +202,14 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-index.md" >}}
+- Ownership of the object on which to create the index.
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the index definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
+
 
 ## Related pages
 
 -   [`SHOW INDEXES`](../show-indexes)
 -   [`DROP INDEX`](../drop-index)
-

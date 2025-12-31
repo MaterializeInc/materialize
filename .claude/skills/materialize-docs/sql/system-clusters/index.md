@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/system-clusters/
+complexity: advanced
+description: Reference page on system clusters
+doc_type: reference
+keywords:
+- ALTER SYSTEM
+- not billed
+- CREATE OBJECTS
+- System clusters
+- DROP THIS
+- 'Note:'
+product_area: Indexes
+status: stable
+title: System clusters
+---
+
 # System clusters
+
+## Purpose
+Reference page on system clusters
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Reference page on system clusters
 
@@ -16,7 +40,7 @@ A cluster named `quickstart` with a size of `25cc` and a replication factor of
 `1` will be pre-installed in every environment. You can modify or drop this
 cluster at any time.
 
-{{< note >}}
+> **Note:** 
 The default value for the `cluster` session parameter is `quickstart`.
 This cluster functions as a default option, pre-created for your convenience.
 It allows you to quickly start running queries without needing to configure a cluster first.
@@ -24,7 +48,7 @@ If the `quickstart` cluster is dropped, you must run [`SET cluster`](/sql/select
 to choose a valid cluster in order to run `SELECT` queries. A _superuser_ (i.e. `Organization Admin`)
 can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
 default value.
-{{< /note >}}
+
 
 ### `mz_catalog_server` system cluster
 

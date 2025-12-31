@@ -1,12 +1,41 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/
+complexity: advanced
+description: Learn more about the SQL functions and operators supported in Materialize
+doc_type: reference
+keywords:
+- Implicit
+- unmaterializable
+- 'Warning:'
+- CREATE MATERIALIZED
+- SELECT COUNT
+- SQL functions & operators
+- SELECT SIDE_EFFECTING_FUNCTION
+- CREATE A
+- Assignment
+- side-effecting
+product_area: Indexes
+status: stable
+title: SQL functions & operators
+---
+
 # SQL functions & operators
 
+## Purpose
 Learn more about the SQL functions and operators supported in Materialize
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Learn more about the SQL functions and operators supported in Materialize
 
 
 This page details Materialize's supported SQL [functions](#functions) and [operators](#operators).
 
 ## Functions
+
+This section covers functions.
 
 ### Unmaterializable functions
 
@@ -30,7 +59,7 @@ only at the top level of a `SELECT` statement, like so:
 
 ```mzsql
 SELECT side_effecting_function(arg, ...);
-```
+```text
 
 You cannot manipulate or alias the function call expression, call multiple
 side-effecting functions in the same `SELECT` statement, nor add any additional
@@ -38,9 +67,11 @@ clauses to the `SELECT` statement (e.g., `FROM`, `WHERE`).
 
 Side-effecting functions are marked as such in the table below.
 
-{{% fnlist %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: fnlist --> --> -->
 
 ## Operators
+
+This section covers operators.
 
 ### Generic operators
 
@@ -110,10 +141,10 @@ The regular expression syntax supported by Materialize is documented by the
 The maximum length of a regular expression is 1 MiB in its raw form, and 10 MiB
 after compiling it.
 
-{{< warning >}}
+> **Warning:** 
 Materialize regular expressions are similar to, but not identical to, PostgreSQL
 regular expressions.
-{{< /warning >}}
+
 
 ### Time-like operators
 
@@ -132,19 +163,17 @@ Operation | Computes
 
 ### JSON operators
 
-{{% json-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: json-operators --> --> -->
 
 ### Map operators
 
-{{% map-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: map-operators --> --> -->
 
 ### List operators
 
 List operators are [polymorphic](../types/list/#polymorphism).
 
-{{% list-operators %}}
-
-
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: list-operators --> --> -->
 
 
 ---
@@ -158,9 +187,11 @@ Temporal filters cannot be used in aggregate function filters.
 
 ## Syntax
 
-{{< diagram "aggregate-with-filter.svg" >}}
+[See diagram: aggregate-with-filter.svg]
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT
@@ -168,9 +199,7 @@ SELECT
     -- The FILTER guards the evaluation which might otherwise error.
     COUNT(1 / (5 - i)) FILTER (WHERE i < 5) AS filtered
 FROM generate_series(1,10) AS s(i)
-```
-
-
+```text
 
 
 ---
@@ -183,7 +212,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "array-agg.svg" >}}
+[See diagram: array-agg.svg]
 
 ## Signatures
 
@@ -200,6 +229,8 @@ ignored. If you need to perform aggregation in a specific order, you must specif
 
 ## Details
 
+This section covers details.
+
 ### Usage in dataflows
 
 While `array_agg` is available in Materialize, materializing `array_agg(values)`
@@ -214,9 +245,11 @@ on top of that. That pattern is illustrated in the following statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT array_agg(foo_view.bar) FROM foo_view;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT
@@ -230,9 +263,7 @@ FROM
     film
 GROUP BY
     title;
-```
-
-
+```text
 
 
 ---
@@ -244,9 +275,9 @@ The `cast` function and operator return a value converted to the specified [type
 
 ## Signatures
 
-{{< diagram "func-cast.svg" >}}
+[See diagram: func-cast.svg]
 
-{{< diagram "op-cast.svg" >}}
+[See diagram: op-cast.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -255,13 +286,15 @@ _type_ | [Typename](../../types) | The return value's type.
 
 The following special syntax is permitted if _val_ is a string literal:
 
-{{< diagram "lit-cast.svg" >}}
+[See diagram: lit-cast.svg]
 
 ### Return value
 
 `cast` returns the value with the type specified by the _type_ parameter.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -410,41 +443,41 @@ Source type                                | Return type                        
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT INT '4';
-```
+```text
 ```nofmt
  ?column?
 ----------
          4
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT CAST (CAST (100.21 AS numeric(10, 2)) AS float) AS dec_to_float;
-```
+```text
 ```nofmt
  dec_to_float
 --------------
        100.21
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 100.21::numeric(10, 2)::float AS dec_to_float;
-```
+```text
 ```nofmt
  dec_to_float
 --------------
        100.21
-```
+```bash
 
 ## Related topics
 * [Data Types](../../types/)
-
-
 
 
 ---
@@ -466,16 +499,16 @@ All elements of the parameters for `coalesce` must be of the same type; `coalesc
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT coalesce(NULL, 3, 2, 1) AS coalesce_res;
-```
+```text
 ```nofmt
  res
 -----
    3
-```
-
-
+```text
 
 
 ---
@@ -487,7 +520,7 @@ SELECT coalesce(NULL, 3, 2, 1) AS coalesce_res;
 
 ## Signatures
 
-{{< diagram "func-csv-extract.svg" >}}
+[See diagram: func-csv-extract.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -506,14 +539,14 @@ Create a table where one column is in CSV format and insert some rows:
 CREATE TABLE t (id int, data string);
 INSERT INTO t
   VALUES (1, 'some,data'), (2, 'more,data'), (3, 'also,data');
-```
+```text
 
 Extract the component columns from the table column which is a CSV string, sorted by column `id`:
 
 ```mzsql
 SELECT csv.* FROM t, csv_extract(2, data) csv
   ORDER BY t.id;
-```
+```text
 ```nofmt
  column1 | column2
 ---------+---------
@@ -521,9 +554,7 @@ SELECT csv.* FROM t, csv_extract(2, data) csv
  more    | data
  some    | data
 (3 rows)
-```
-
-
+```text
 
 
 ---
@@ -541,7 +572,7 @@ For example, on this number line of abstract units:
           x
 ...|---|---|---|...
    7   8   9   10
-```
+```text
 
 With a `stride` of 1, we would have bins (...7, 8, 9, 10...).
 
@@ -558,7 +589,7 @@ strides, rather than only unit times.
 
 ## Signatures
 
-{{< diagram "func-date-bin.svg" >}}
+[See diagram: func-date-bin.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -578,6 +609,8 @@ _origin_ | Must be the same as _source_ | Align bins to this value.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT
   date_bin(
@@ -585,12 +618,12 @@ SELECT
     timestamp '2001-02-16 20:38:40',
     timestamp '2001-02-16 20:05:00'
   );
-```
+```text
 ```nofmt
       date_bin
 ---------------------
  2001-02-16 20:35:00
-```
+```text
 
 ```mzsql
 SELECT
@@ -607,7 +640,7 @@ FROM (
   ('second', '1 s')
 ) intervals (str, interval),
 (VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
-```
+```text
 ```nofmt
   str   | interval | equal
 --------+----------+-------
@@ -616,14 +649,12 @@ FROM (
  week   | 7 d      | t
  minute | 1 m      | t
  second | 1 s      | t
-```
+```json
 
 [`date_trunc`]: ../date-trunc
 [`interval`]: ../../types/interval
 [`timestamp`]: ../../types/timestamp
 [`timestamp with time zone`]: ../../types/timestamptz
-
-
 
 
 ---
@@ -638,7 +669,7 @@ result in a loss of precision in certain uses. Using [`EXTRACT`](../extract) is 
 
 ## Signatures
 
-{{< diagram "func-date-part.svg" >}}
+[See diagram: func-date-part.svg]
 
 Parameter | Type                                                                                                                                                          | Description
 ----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -674,29 +705,29 @@ day of year | `DOY`
 
 ## Examples
 
+This section covers examples.
+
 ### Extract second from timestamptz
 
 ```mzsql
 SELECT date_part('S', TIMESTAMP '2006-01-02 15:04:05.06');
-```
+```text
 ```nofmt
  date_part
 -----------
       5.06
-```
+```bash
 
 ### Extract century from date
 
 ```mzsql
 SELECT date_part('CENTURIES', DATE '2006-01-02');
-```
+```text
 ```nofmt
  date_part
 -----------
         21
-```
-
-
+```text
 
 
 ---
@@ -711,7 +742,7 @@ To align values along arbitrary values, see [`date_bin`].
 
 ## Signatures
 
-{{< diagram "func-date-trunc.svg" >}}
+[See diagram: func-date-trunc.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -723,39 +754,39 @@ _val_ | [`timestamp`], [`timestamp with time zone`], [`interval`] | The value yo
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT date_trunc('hour', TIMESTAMP '2019-11-26 15:56:46.241150') AS hour_trunc;
-```
+```text
 ```nofmt
           hour_trunc
 -------------------------------
  2019-11-26 15:00:00.000000000
-```
+```text
 
 ```mzsql
 SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150') AS year_trunc;
-```
+```text
 ```nofmt
           year_trunc
 -------------------------------
  2019-01-01 00:00:00.000000000
-```
+```text
 
 ```mzsql
 SELECT date_trunc('millennium', INTERVAL '1234 years 11 months 23 days 23:59:12.123456789') AS millennium_trunc;
-```
+```text
 ```nofmt
           millennium_trunc
 -------------------------------
  1000 years
-```
+```json
 
 [`date_bin`]: ../date-bin
 [`interval`]: ../../types/interval/
 [`timestamp`]: ../../types/timestamp
 [`timestamp with time zone`]: ../../types/timestamptz
-
-
 
 
 ---
@@ -775,37 +806,35 @@ _end_ | [date](../../types), [time](../../types), [timestamp](../../types), [tim
 
 ### `datepart` specifiers
 
-| Specifier                                                        | Description      |
-|------------------------------------------------------------------|------------------|
-| `millenniums`, `millennium`, `millennia`, `mil`                  | Millennia        |
-| `centuries`, `century`, `cent`, `c`                              | Centuries        |
-| `decades`, `decade`, `decs`, `dec`                               | Decades          |
-| `years`, `year`, `yrs`, `yr`, `y`                                | Years            |
-| `quarter`, `qtr`                                                 | Quarters         |
-| `months`, `month`, `mons`, `mon`                                 | Months           |
-| `weeks`, `week`, `w`                                             | Weeks            |
-| `days`, `day`, `d`                                               | Days             |
-| `hours`, `hour`, `hrs`, `hr`, `h`                                | Hours            |
-| `minutes`, `minute`, `mins`, `min`, `m`                          | Minutes          |
-| `seconds`, `second`, `secs`, `sec`, `s`                          | Seconds          |
-| `milliseconds`, `millisecond`, `mseconds`, `msecs`, `msec`, `ms` | Milliseconds     |
-| `microseconds`, `microsecond`, `useconds`, `usecs`, `usec`, `us` | Microseconds     |
+- **`millenniums`, `millennium`, `millennia`, `mil`**: Millennia
+- **`centuries`, `century`, `cent`, `c`**: Centuries
+- **`decades`, `decade`, `decs`, `dec`**: Decades
+- **`years`, `year`, `yrs`, `yr`, `y`**: Years
+- **`quarter`, `qtr`**: Quarters
+- **`months`, `month`, `mons`, `mon`**: Months
+- **`weeks`, `week`, `w`**: Weeks
+- **`days`, `day`, `d`**: Days
+- **`hours`, `hour`, `hrs`, `hr`, `h`**: Hours
+- **`minutes`, `minute`, `mins`, `min`, `m`**: Minutes
+- **`seconds`, `second`, `secs`, `sec`, `s`**: Seconds
+- **`milliseconds`, `millisecond`, `mseconds`, `msecs`, `msec`, `ms`**: Milliseconds
+- **`microseconds`, `microsecond`, `useconds`, `usecs`, `usec`, `us`**: Microseconds
 
 ## Examples
 
 To calculate the difference between two dates in millennia:
 
-```
+```sql
 SELECT datediff('millennia', '2000-12-31', '2001-01-01') as d;
   d
 -----
   1
-```
+```text
 
 Even though the difference between `2000-12-31` and `2001-01-01` is a single day, a millennium boundary is crossed from one date to the other, so the result is `1`.
 
 To see how this function handles leap years:
-```
+```sql
 SELECT datediff('day', '2004-02-28', '2004-03-01') as leap;
     leap
 ------------
@@ -815,11 +844,9 @@ SELECT datediff('day', '2005-02-28', '2005-03-01') as non_leap;
   non_leap
 ------------
      1
-```
+```text
 
 In the statement that uses a leap year (`2004`), the number of day boundaries crossed is `2`. When using a non-leap year (`2005`), only `1` day boundary is crossed.
-
-
 
 
 ---
@@ -832,12 +859,16 @@ representations. The `decode` function does the reverse.
 
 ## Signatures
 
-```
+This section covers signatures.
+
+```text
 encode(b: bytea, format: text) -> text
 decode(s: text, format: text) -> bytea
-```
+```bash
 
 ## Details
+
+This section covers details.
 
 ### Supported formats
 
@@ -871,31 +902,31 @@ Encoding and decoding in the `base64` format:
 
 ```mzsql
 SELECT encode('\x00404142ff', 'base64');
-```
+```text
 ```nofmt
   encode
 ----------
  AEBBQv8=
-```
+```text
 
 ```mzsql
 SELECT decode('A   EB BQv8 =', 'base64');
-```
+```text
 ```nofmt
     decode
 --------------
  \x00404142ff
-```
+```text
 
 ```mzsql
 SELECT encode('This message is long enough that the output will run to multiple lines.', 'base64');
-```
+```text
 ```nofmt
                                     encode
 ------------------------------------------------------------------------------
  VGhpcyBtZXNzYWdlIGlzIGxvbmcgZW5vdWdoIHRoYXQgdGhlIG91dHB1dCB3aWxsIHJ1biB0byBt+
  dWx0aXBsZSBsaW5lcy4=
-```
+```text
 
 <hr>
 
@@ -903,21 +934,21 @@ Encoding and decoding in the `escape` format:
 
 ```mzsql
 SELECT encode('\x00404142ff', 'escape');
-```
+```text
 ```nofmt
    encode
 -------------
  \000@AB\377
-```
+```text
 
 ```mzsql
 SELECT decode('\000@AB\377', 'escape');
-```
+```text
 ```nofmt
     decode
 --------------
  \x00404142ff
-```
+```text
 
 <hr>
 
@@ -925,25 +956,23 @@ Encoding and decoding in the `hex` format:
 
 ```mzsql
 SELECT encode('\x00404142ff', 'hex');
-```
+```text
 ```nofmt
    encode
 ------------
  00404142ff
-```
+```text
 
 ```mzsql
 SELECT decode('00  40  41  42  ff', 'hex');
-```
+```text
 ```nofmt
     decode
 --------------
  \x00404142ff
-```
+```json
 
 [rfc2045]: https://tools.ietf.org/html/rfc2045#section-6.8
-
-
 
 
 ---
@@ -955,7 +984,7 @@ SELECT decode('00  40  41  42  ff', 'hex');
 
 ## Signatures
 
-{{< diagram "func-extract.svg" >}}
+[See diagram: func-extract.svg]
 
 Parameter | Type                                                                                                                                                                                    | Description
 ----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -991,29 +1020,29 @@ decade  |  `DEC`, `DECS`, `DECADE`, `DECADES`
 
 ## Examples
 
+This section covers examples.
+
 ### Extract second from timestamptz
 
 ```mzsql
 SELECT EXTRACT(S FROM TIMESTAMP '2006-01-02 15:04:05.06');
-```
+```text
 ```nofmt
  extract
 ---------
     5.06
-```
+```bash
 
 ### Extract century from date
 
 ```mzsql
 SELECT EXTRACT(CENTURIES FROM DATE '2006-01-02');
-```
+```text
 ```nofmt
  extract
 ---------
       21
-```
-
-
+```text
 
 
 ---
@@ -1027,7 +1056,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "jsonb-agg.svg" >}}
+[See diagram: jsonb-agg.svg]
 
 ## Signatures
 
@@ -1044,6 +1073,8 @@ ignored. If you need to perform aggregation in a specific order, you must specif
 
 ## Details
 
+This section covers details.
+
 ### Usage in dataflows
 
 While `jsonb_agg` is available in Materialize, materializing `jsonb_agg(expression)`
@@ -1058,9 +1089,11 @@ on top of that. That pattern is illustrated in the following statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT jsonb_agg(foo_view.bar) FROM foo_view;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT
@@ -1073,18 +1106,16 @@ FROM (
   (3, 'hi'),
   (4, 'salutations')
   ) AS t(id, content);
-```
+```text
 ```nofmt
                        my_agg
 ----------------------------------------------------
  [{"content":"hi","id":3},{"content":"hey","id":1}]
-```
+```bash
 
 ## See also
 
 * [`jsonb_object_agg`](/sql/functions/jsonb_object_agg)
-
-
 
 
 ---
@@ -1098,7 +1129,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "jsonb-object-agg.svg" >}}
+[See diagram: jsonb-object-agg.svg]
 
 ## Signatures
 
@@ -1136,7 +1167,7 @@ statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT key_col, val_col FROM foo;
 CREATE VIEW bar AS SELECT jsonb_object_agg(key_col, val_col) FROM foo_view;
-```
+```bash
 
 ## Examples
 
@@ -1155,12 +1186,12 @@ FROM (
   ('k2', -1, now()),
   ('k2', NULL, now() + INTERVAL '1s')
   ) AS t(col1, col2, ts);
-```
+```text
 ```nofmt
       my_agg
 ------------------
  {"k1": 1, "k2": -1}
-```
+```text
 In this example, there are multiple values associated with the `k2` key.
 
 The `FILTER` clause in the statement above returns values that are not `NULL` and orders them by the timestamp column to return the most recent associated value.
@@ -1168,8 +1199,6 @@ The `FILTER` clause in the statement above returns values that are not `NULL` an
 ## See also
 
 * [`jsonb_agg`](/sql/functions/jsonb_agg)
-
-
 
 
 ---
@@ -1182,7 +1211,7 @@ converted to months.
 
 ## Signatures
 
-{{< diagram "func-justify-days.svg" >}}
+[See diagram: func-justify-days.svg]
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -1195,16 +1224,16 @@ _interval_ | [`interval`](../../types/interval) | The interval value to justify.
 
 ## Example
 
+This section covers example.
+
 ```mzsql
 SELECT justify_days(interval '35 days');
-```
+```text
 ```nofmt
   justify_days
 ----------------
  1 month 5 days
-```
-
-
+```text
 
 
 ---
@@ -1217,7 +1246,7 @@ converted to days.
 
 ## Signatures
 
-{{< diagram "func-justify-hours.svg" >}}
+[See diagram: func-justify-hours.svg]
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -1230,16 +1259,16 @@ _interval_ | [`interval`](../../types/interval) | The interval value to justify.
 
 ## Example
 
+This section covers example.
+
 ```mzsql
 SELECT justify_hours(interval '27 hours');
-```
+```text
 ```nofmt
  justify_hours
 ----------------
  1 day 03:00:00
-```
-
-
+```text
 
 
 ---
@@ -1254,7 +1283,7 @@ adjustment.
 
 ## Signatures
 
-{{< diagram "func-justify-interval.svg" >}}
+[See diagram: func-justify-interval.svg]
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -1267,16 +1296,16 @@ _interval_ | [`interval`](../../types/interval) | The interval value to justify.
 
 ## Example
 
+This section covers example.
+
 ```mzsql
 SELECT justify_interval(interval '1 mon -1 hour');
-```
+```text
 ```nofmt
  justify_interval
 ------------------
  29 days 23:00:00
-```
-
-
+```text
 
 
 ---
@@ -1289,7 +1318,7 @@ an encoded string.
 
 ## Signatures
 
-{{< diagram "func-length.svg" >}}
+[See diagram: func-length.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -1301,6 +1330,8 @@ _encoding&lowbar;name_ | [`string`](../../types/string) | The [encoding](#encodi
 `length` returns an [`int`](../../types/int).
 
 ## Details
+
+This section covers details.
 
 ### Errors
 
@@ -1332,27 +1363,27 @@ following cases:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT length('你好') AS len;
-```
+```text
 ```nofmt
  len
 -----
    2
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT length('你好', 'big5') AS len;
-```
+```text
 ```nofmt
  len
 -----
    3
-```
-
-
+```text
 
 
 ---
@@ -1366,7 +1397,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "list-agg.svg" >}}
+[See diagram: list-agg.svg]
 
 ## Signatures
 
@@ -1383,6 +1414,8 @@ ignored. If you need to perform aggregation in a specific order, you must specif
 
 ## Details
 
+This section covers details.
+
 ### Usage in dataflows
 
 While `list_agg` is available in Materialize, materializing `list_agg(values)`
@@ -1397,9 +1430,11 @@ on top of that. That pattern is illustrated in the following statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT list_agg(foo_view.bar) FROM foo_view;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT
@@ -1413,9 +1448,7 @@ FROM
     film
 GROUP BY
     title;
-```
-
-
+```text
 
 
 ---
@@ -1430,9 +1463,11 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "func-map-agg.svg" >}}
+[See diagram: func-map-agg.svg]
 
 ## Signatures
+
+This section covers signatures.
 
 | Parameter | Type                       | Description              |
 | --------- | -------------------------- | ------------------------ |
@@ -1467,7 +1502,7 @@ statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT key_col, val_col FROM foo;
 CREATE VIEW bar AS SELECT map_agg(key_col, val_col) FROM foo_view;
-```
+```bash
 
 ## Examples
 
@@ -1494,13 +1529,13 @@ FROM (
     (NULL, 99, now()),
     (NULL, 100, now())
   ) AS t(k, v, ts);
-```
+```text
 
 ```nofmt
       my_agg
 ------------------
  {k1=>1,k2=>-9}
-```
+```text
 
 In this example:
 
@@ -1514,8 +1549,6 @@ In this example:
     however, this `FILTER` also removes the `NULL` value at `now() + INTERVAL '1s'` because `WHERE null != -8` evaluates to `false`.
 
 
-
-
 ---
 
 ## normalize function
@@ -1525,7 +1558,7 @@ In this example:
 
 ## Signatures
 
-{{% include-example file="examples/normalize" example="syntax" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 Parameter | Type | Description
 ----------|------|------------
@@ -1553,25 +1586,23 @@ For more information, see:
 
 ## Examples
 
-{{% include-example file="examples/normalize" example="normalize-default" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfc" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfd" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfkc-ligatures" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfkc-superscript" %}}
-
-
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 
 ---
@@ -1587,9 +1618,26 @@ as a [`mz_timestamp`] value.
 
 ## Details
 
+This section covers details.
+
 ### `mz_now()` clause
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+```mzsql
+mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
+```text
+
+- `mz_now()` must be used with one of the following comparison operators: `=`,
+`<`, `<=`, `>`, `>=`, or an operator that desugars to them or to a conjunction
+(`AND`) of them (for example, `BETWEEN...AND...`). That is, you cannot use
+date/time operations directly on  `mz_now()` to calculate a timestamp in the
+past or future. Instead, rewrite the query expression to move the operation to
+the other side of the comparison.
+
+
+- `mz_now()` can only be compared to either a
+  [`numeric`](/sql/types/numeric) expression or a
+  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
+
 
 ### Usage patterns
 
@@ -1643,11 +1691,20 @@ materialized would be resource prohibitive.
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- When used in a materialized view definition, a view definition that is being
+indexed (i.e., although you can create the view and perform ad-hoc query on
+the view, you cannot create an index on that view), or a `SUBSCRIBE`
+statement:
+
+- `mz_now()` clauses can only be combined using an `AND`, and
+
+- All top-level `WHERE` or `HAVING` conditions must be combined using an `AND`,
+  even if the `mz_now()` clause is nested.
+
 
   For example:
 
-  {{< yaml-table data="mz_now/mz_now_combination" >}}
+  <!-- Dynamic table: mz_now/mz_now_combination - see original docs -->
 
   For alternatives, see [Disjunction (OR)
   alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
@@ -1656,6 +1713,8 @@ restrictions:
  `FILTER` expression](/sql/functions/filters).
 
 ## Examples
+
+This section covers examples.
 
 ### Temporal filters
 
@@ -1675,13 +1734,13 @@ CREATE VIEW last_30_sec AS
 SELECT event_ts, content
 FROM events
 WHERE mz_now() <= event_ts + INTERVAL '30s';
-```
+```text
 
 Next, subscribe to the results of the view.
 
 ```mzsql
 COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
-```
+```text
 
 In a separate session, insert a record.
 
@@ -1690,14 +1749,14 @@ INSERT INTO events VALUES (
     'hello',
     now()
 );
-```
+```text
 
 Back in the first session, watch the record expire after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 ```nofmt
 1686868190714   1       2023-06-15 22:29:50.711 hello
 1686868220712   -1      2023-06-15 22:29:50.711 hello
-```
+```text
 
 You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
 
@@ -1724,13 +1783,13 @@ INSERT INTO events VALUES (
     'goodbye',
     now()
 );
-```
+```text
 
 Execute this ad hoc query that adds the current system timestamp and current logical timestamp to the events in the `events` table.
 
 ```mzsql
 SELECT now(), mz_now(), * FROM events
-```
+```text
 
 ```nofmt
             now            |    mz_now     | content |       event_ts
@@ -1739,24 +1798,22 @@ SELECT now(), mz_now(), * FROM events
  2023-06-15 22:38:14.18+00 | 1686868693480 | goodbye | 2023-06-15 22:29:51.233
  2023-06-15 22:38:14.18+00 | 1686868693480 | welcome | 2023-06-15 22:29:50.874
 (3 rows)
-```
+```text
 
 Notice when you try to materialize this query, you get errors:
 
 ```mzsql
 CREATE MATERIALIZED VIEW cant_materialize
     AS SELECT now(), mz_now(), * FROM events;
-```
+```text
 
 ```nofmt
 ERROR:  cannot materialize call to current_timestamp
 ERROR:  cannot materialize call to mz_now
-```
+```json
 
 [`mz_timestamp`]: /sql/types/mz_timestamp
 [`timestamp with time zone`]: /sql/types/timestamptz
-
-
 
 
 ---
@@ -1799,32 +1856,32 @@ optimization for your query.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z') AS ts;
-```
+```text
 ```nofmt
  ts
 --------
  2015-09-18 23:56:04.123
-```
+```text
 
  <hr/>
 
 ```mzsql
 SELECT try_parse_monotonic_iso8601_timestamp('nope') AS ts;
-```
+```text
 ```nofmt
  ts
 --------
  NULL
-```
+```json
 
 [ISO 8601]: https://en.wikipedia.org/wiki/ISO_8601
 [Date.toISOString()]: https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date/toISOString
 [temporal filter pushdown]: /transform-data/patterns/temporal-filters/#temporal-filter-pushdown
 [jsonb]: /sql/types/jsonb/
-
-
 
 
 ---
@@ -1840,7 +1897,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "string-agg.svg" >}}
+[See diagram: string-agg.svg]
 
 ## Signatures
 
@@ -1871,21 +1928,23 @@ statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT string_agg(foo_view.bar, ',');
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT string_agg(column1, column2)
 FROM (
     VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
 );
-```
+```text
 ```nofmt
  string_agg
 ------------
  a #m !z
-```
+```text
 
 Note that in the following example, the `ORDER BY` of the subquery feeding into `string_agg` gets ignored.
 
@@ -1894,14 +1953,14 @@ SELECT column1, column2
 FROM (
     VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
 ) ORDER BY column1 DESC;
-```
+```text
 ```nofmt
  column1 | column2
 ---------+---------
  z       |  !
  m       |  #
  a       |  @
-```
+```text
 
 ```mzsql
 SELECT string_agg(column1, column2)
@@ -1911,18 +1970,16 @@ FROM (
         VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
     ) f ORDER BY column1 DESC
 ) g;
-```
+```text
 ```nofmt
  string_agg
 ------------
  a #m !z
-```
+```text
 
 ```mzsql
 SELECT string_agg(b, ',' ORDER BY a DESC) FROM table;
-```
-
-
+```text
 
 
 ---
@@ -1934,13 +1991,15 @@ SELECT string_agg(b, ',' ORDER BY a DESC) FROM table;
 
 ## Signatures
 
+This section covers signatures.
+
 ```mzsql
 substring(str, start_pos)
 substring(str, start_pos, len)
 substring(str FROM start_pos)
 substring(str FOR len)
 substring(str FROM start_pos FOR len)
-```
+```text
 
 Parameter | Type | Description
 ----------|------|------------
@@ -1954,33 +2013,35 @@ _len_ | [`int`](../../types/int) | The length of the substring you want to retur
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT substring('abcdefg', 3) AS substr;
-```
+```text
 ```nofmt
  substr
 --------
  cdefg
-```
+```text
 
  <hr/>
 
 ```mzsql
 SELECT substring('abcdefg', 3, 3) AS substr;
-```
+```text
 ```nofmt
  substr
 --------
  cde
-```
-
-
+```text
 
 
 ---
 
 ## Table functions
 
+
+This section covers table functions.
 
 ## Overview
 
@@ -1994,24 +2055,24 @@ integers:
 ```mzsql
 CREATE TABLE quizzes(scores int list);
 INSERT INTO quizzes VALUES (LIST[5, 7, 8]), (LIST[3, 3]);
-```
+```text
 
 Query the `scores` column from the table:
 
 ```mzsql
 SELECT scores
 FROM quizzes;
-```
+```text
 
 The query returns two rows, where each row is a list:
 
-```
+```text
  scores
 ---------
  {3,3}
  {5,7,8}
 (2 rows)
-```
+```text
 
 Now, apply the [`unnest`](/sql/functions/#unnest) table function to expand the
 `scores` list into a collection of rows, where each row contains one list item:
@@ -2021,11 +2082,11 @@ SELECT scores, score
 FROM
   quizzes,
   unnest(scores) AS score; -- In Materialize, shorthand for AS t(score)
-```
+```text
 
 The query returns 5 rows, one row for each list item:
 
-```
+```text
  scores  | score
 ---------+-------
  {3,3}   |     3
@@ -2034,15 +2095,14 @@ The query returns 5 rows, one row for each list item:
  {5,7,8} |     7
  {5,7,8} |     8
 (5 rows)
-```
+```text
 
-{{< tip >}}
+> **Tip:** 
 
 For illustrative purposes, the original `scores` column is included in the
 results (i.e., query projection). In practice, you generally would omit
 including the original list to minimize the return data size.
 
-{{</ tip >}}
 
 ## `WITH ORDINALITY`
 
@@ -2057,10 +2117,10 @@ SELECT scores, score, ordinality
 FROM
   quizzes,
   unnest(scores) WITH ORDINALITY AS t(score,ordinality);
-```
+```text
 
 The results includes the `ordinality` column:
-```
+```text
  scores  | score | ordinality
 ---------+-------+------------
  {3,3}   |     3 |          1
@@ -2069,7 +2129,7 @@ The results includes the `ordinality` column:
  {5,7,8} |     7 |          2
  {5,7,8} |     8 |          3
 (5 rows)
-```
+```bash
 
 ## Table- and column aliases
 
@@ -2079,7 +2139,7 @@ SELECT scores, t.score, t.listidx
 FROM
   quizzes,
   unnest(scores) WITH ORDINALITY AS t(score,listidx);
-```
+```text
 
 You can also name fewer columns in the column alias list than the number of
 columns in the output of the table function (plus `WITH ORDINALITY`, if
@@ -2100,11 +2160,11 @@ SELECT *
 FROM
   generate_series(1, 2) AS g1,
   generate_series(6, 7) AS g2;
-```
+```text
 
 The query returns every combination of rows from both:
 
-```
+```text
 
  g1 | g2
 ----+----
@@ -2113,7 +2173,7 @@ The query returns every combination of rows from both:
   2 |  6
   2 |  7
 (4 rows)
-```
+```text
 
 Using `ROWS FROM` clause with the multiple table functions, you can zip the
 outputs of the table functions (i.e., combine the n-th output row from each
@@ -2131,17 +2191,17 @@ FROM
     generate_series(1, 2),
     generate_series(6, 7)
   ) AS t(g1, g2);
-```
+```text
 
 Instead of the cross product, the results are the "zipped" rows:
 
-```
+```text
  g1 | g2
 ----+----
   1 |  6
   2 |  7
 (2 rows)
-```
+```text
 
 If the table functions in a `ROWS FROM` clause produce a different number of
 rows, nulls are used for padding:
@@ -2152,19 +2212,19 @@ FROM
     generate_series(1, 3),  -- 3 rows
     generate_series(6, 7)   -- 2 rows
   ) AS t(g1, g2);
-```
+```text
 
 The row with the `g1` value of 3 has a null `g2` value (note that if using psql,
 psql prints null as an empty string):
 
-```
+```text
 | g1 | g2   |
 | -- | ---- |
 | 3  | null |
 | 1  | 6    |
 | 2  | 7    |
 (3 rows)
-```
+```text
 
 For `ROWS FROM` clauses:
 - you can use `WITH ORDINALITY` on the entire `ROWS FROM` clause, not on the
@@ -2181,18 +2241,18 @@ FROM
     generate_series(5, 6),
     generate_series(8, 9)
   ) WITH ORDINALITY AS t(g1, g2, o);
-```
+```text
 
 The results contain the ordinality value in the `o` column:
 
-```
+```text
 
  g1 | g2 | o
 ----+----+---
   5 |  8 | 1
   6 |  9 | 2
 (2 rows)
-```
+```bash
 
 
 ## Table functions in the `SELECT` clause
@@ -2214,8 +2274,6 @@ You can also call ordinary scalar functions in the `FROM` clause as if they were
 See a list of table functions in the [function reference](/sql/functions/#table-functions).
 
 
-
-
 ---
 
 ## TIMEZONE and AT TIME ZONE functions
@@ -2227,9 +2285,9 @@ See a list of table functions in the [function reference](/sql/functions/#table-
 
 ## Signatures
 
-{{< diagram "func-timezone.svg" >}}
+[See diagram: func-timezone.svg]
 
-{{< diagram "func-at-time-zone.svg" >}}
+[See diagram: func-at-time-zone.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -2246,54 +2304,54 @@ _timestamptz_ | [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-
 
 ## Examples
 
+This section covers examples.
+
 ### Convert timestamp to another time zone, returned as UTC with offset
 
 ```mzsql
 SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'::text;
-```
-```
+```text
+```text
         timezone
 ------------------------
 2020-12-21 23:53:49+00
 (1 row)
-```
+```text
 
 ```mzsql
 SELECT TIMEZONE('America/New_York'::text,'2020-12-21 18:53:49');
-```
-```
+```text
+```text
         timezone
 ------------------------
 2020-12-21 23:53:49+00
 (1 row)
-```
+```bash
 
 ### Convert timestamp to another time zone, returned as specified local time
 
 ```mzsql
 SELECT TIMESTAMPTZ '2020-12-21 18:53:49+08' AT TIME ZONE 'America/New_York'::text;
-```
-```
+```text
+```text
         timezone
 ------------------------
 2020-12-21 05:53:49
 (1 row)
-```
+```text
 
 ```mzsql
 SELECT TIMEZONE ('America/New_York'::text,'2020-12-21 18:53:49+08');
-```
-```
+```text
+```text
         timezone
 ------------------------
 2020-12-21 05:53:49
 (1 row)
-```
+```bash
 
 ## Related topics
 * [`timestamp` and `timestamp with time zone` data types](../../types/timestamp)
-
-
 
 
 ---
@@ -2309,16 +2367,18 @@ specifier token inside of double-quotes to emit it literally.
 
 ## Examples
 
+This section covers examples.
+
 #### RFC 2822 format
 
 ```mzsql
 SELECT to_char(TIMESTAMPTZ '2019-11-26 15:56:46 +00:00', 'Dy, Mon DD YYYY HH24:MI:SS +0000') AS formatted
-```
+```text
 ```nofmt
              formatted
  ---------------------------------
   Tue, Nov 26 2019 15:56:46 +0000
-```
+```bash
 
 #### Additional non-interpreted text
 
@@ -2327,18 +2387,18 @@ The "to" doesn't match any format specifiers, so quotes are optional.
 
 ```mzsql
 SELECT to_char(TIMESTAMPTZ '2019-11-26 15:56:46 +00:00', '"Welcome" to Mon, YYYY') AS formatted
-```
+```text
 ```nofmt
        formatted
  ----------------------
   Welcome to Nov, 2019
-```
+```bash
 
 #### Ordinal modifiers
 
 ```mzsql
 SELECT to_char(TIMESTAMPTZ '2019-11-1 15:56:46 +00:00', 'Dth of Mon') AS formatted
-```
+```text
 ```nofmt
   formatted
  ------------
@@ -2347,61 +2407,59 @@ SELECT to_char(TIMESTAMPTZ '2019-11-1 15:56:46 +00:00', 'Dth of Mon') AS formatt
 
 ## Format specifiers
 
-| Specifier     | Description                                                                                      |
-|---------------|--------------------------------------------------------------------------------------------------|
-| `HH`          | hour of day (01-12)                                                                              |
-| `HH12`        | hour of day (01-12)                                                                              |
-| `HH24`        | hour of day (00-23)                                                                              |
-| `MI`          | minute (00-59)                                                                                   |
-| `SS`          | second (00-59)                                                                                   |
-| `MS`          | millisecond (000-999)                                                                            |
-| `US`          | microsecond (000000-999999)                                                                      |
-| `SSSS`        | seconds past midnight (0-86399)                                                                  |
-| `AM`/`PM`     | uppercase meridiem indicator (without periods)                                                   |
-| `am`/`pm`     | lowercase meridiem indicator (without periods)                                                   |
-| `A.M.`/`P.M.` | uppercase meridiem indicator (with periods)                                                      |
-| `a.m.`/`p.m.` | lowercase meridiem indicator (with periods)                                                      |
-| `Y,YYY`       | Y,YYY year (4 or more digits) with comma                                                         |
-| `YYYY`        | year (4 or more digits)                                                                          |
-| `YYY`         | last 3 digits of year                                                                            |
-| `YY`          | last 2 digits of year                                                                            |
-| `Y`           | last digit of year                                                                               |
-| `IYYY`        | ISO 8601 week-numbering year (4 or more digits)                                                  |
-| `IYY`         | last 3 digits of ISO 8601 week-numbering year                                                    |
-| `IY`          | last 2 digits of ISO 8601 week-numbering year                                                    |
-| `I`           | last digit of ISO 8601 week-numbering year                                                       |
-| `BC`/`AD`     | uppercase era indicator (without periods)                                                        |
-| `bc`/`ad`     | lowercase era indicator (without periods)                                                        |
-| `B.C.`/`A.D.` | uppercase era indicator (with periods)                                                           |
-| `b.c.`/`a.d.` | lowercase era indicator (with periods)                                                           |
-| `MONTH`       | full upper case month name (blank-padded to 9 chars)                                             |
-| `Month`       | full capitalized month name (blank-padded to 9 chars)                                            |
-| `month`       | full lower case month name (blank-padded to 9 chars)                                             |
-| `MON`         | abbreviated upper case month name (3 chars in English, localized lengths vary)                   |
-| `Mon`         | abbreviated capitalized month name (3 chars in English, localized lengths vary)                  |
-| `mon`         | abbreviated lower case month name (3 chars in English, localized lengths vary)                   |
-| `MM`          | month number (01-12)                                                                             |
-| `DAY`         | full upper case day name (blank-padded to 9 chars)                                               |
-| `Day`         | full capitalized day name (blank-padded to 9 chars)                                              |
-| `day`         | full lower case day name (blank-padded to 9 chars)                                               |
-| `DY`          | abbreviated upper case day name (3 chars in English, localized lengths vary)                     |
-| `Dy`          | abbreviated capitalized day name (3 chars in English, localized lengths vary)                    |
-| `dy`          | abbreviated lower case day name (3 chars in English, localized lengths vary)                     |
-| `DDD`         | day of year (001-366)                                                                            |
-| `IDDD`        | day of ISO 8601 week-numbering year (001-371; day 1 of the year is Monday of the first ISO week) |
-| `DD`          | day of month (01-31)                                                                             |
-| `D`           | day of the week, Sunday (1) to Saturday (7)                                                      |
-| `ID`          | ISO 8601 day of the week, Monday (1) to Sunday (7)                                               |
-| `W`           | week of month (1-5) (the first week starts on the first day of the month)                        |
-| `WW`          | week number of year (1-53) (the first week starts on the first day of the year)                  |
-| `IW`          | week number of ISO 8601 week-numbering year (01-53; the first Thursday of the year is in week 1) |
-| `CC`          | century (2 digits) (the twenty-first century starts on 2001-01-01)                               |
-| `J`           | Julian Day (days since November 24, 4714 BC at midnight)                                         |
-| `Q`           | quarter (ignored by to_date and to_timestamp)                                                    |
-| `RM`          | month in upper case Roman numerals (I-XII; I=January)                                            |
-| `rm`          | month in lower case Roman numerals (i-xii; i=January)                                            |
-| `TZ`          | upper case time-zone name                                                                        |
-| `tz`          | lower case time-zone name                                                                        |
+- **`HH`**: hour of day (01-12)
+- **`HH12`**: hour of day (01-12)
+- **`HH24`**: hour of day (00-23)
+- **`MI`**: minute (00-59)
+- **`SS`**: second (00-59)
+- **`MS`**: millisecond (000-999)
+- **`US`**: microsecond (000000-999999)
+- **`SSSS`**: seconds past midnight (0-86399)
+- **`AM`/`PM`**: uppercase meridiem indicator (without periods)
+- **`am`/`pm`**: lowercase meridiem indicator (without periods)
+- **`A.M.`/`P.M.`**: uppercase meridiem indicator (with periods)
+- **`a.m.`/`p.m.`**: lowercase meridiem indicator (with periods)
+- **`Y,YYY`**: Y,YYY year (4 or more digits) with comma
+- **`YYYY`**: year (4 or more digits)
+- **`YYY`**: last 3 digits of year
+- **`YY`**: last 2 digits of year
+- **`Y`**: last digit of year
+- **`IYYY`**: ISO 8601 week-numbering year (4 or more digits)
+- **`IYY`**: last 3 digits of ISO 8601 week-numbering year
+- **`IY`**: last 2 digits of ISO 8601 week-numbering year
+- **`I`**: last digit of ISO 8601 week-numbering year
+- **`BC`/`AD`**: uppercase era indicator (without periods)
+- **`bc`/`ad`**: lowercase era indicator (without periods)
+- **`B.C.`/`A.D.`**: uppercase era indicator (with periods)
+- **`b.c.`/`a.d.`**: lowercase era indicator (with periods)
+- **`MONTH`**: full upper case month name (blank-padded to 9 chars)
+- **`Month`**: full capitalized month name (blank-padded to 9 chars)
+- **`month`**: full lower case month name (blank-padded to 9 chars)
+- **`MON`**: abbreviated upper case month name (3 chars in English, localized lengths vary)
+- **`Mon`**: abbreviated capitalized month name (3 chars in English, localized lengths vary)
+- **`mon`**: abbreviated lower case month name (3 chars in English, localized lengths vary)
+- **`MM`**: month number (01-12)
+- **`DAY`**: full upper case day name (blank-padded to 9 chars)
+- **`Day`**: full capitalized day name (blank-padded to 9 chars)
+- **`day`**: full lower case day name (blank-padded to 9 chars)
+- **`DY`**: abbreviated upper case day name (3 chars in English, localized lengths vary)
+- **`Dy`**: abbreviated capitalized day name (3 chars in English, localized lengths vary)
+- **`dy`**: abbreviated lower case day name (3 chars in English, localized lengths vary)
+- **`DDD`**: day of year (001-366)
+- **`IDDD`**: day of ISO 8601 week-numbering year (001-371; day 1 of the year is Monday of the first ISO week)
+- **`DD`**: day of month (01-31)
+- **`D`**: day of the week, Sunday (1) to Saturday (7)
+- **`ID`**: ISO 8601 day of the week, Monday (1) to Sunday (7)
+- **`W`**: week of month (1-5) (the first week starts on the first day of the month)
+- **`WW`**: week number of year (1-53) (the first week starts on the first day of the year)
+- **`IW`**: week number of ISO 8601 week-numbering year (01-53; the first Thursday of the year is in week 1)
+- **`CC`**: century (2 digits) (the twenty-first century starts on 2001-01-01)
+- **`J`**: Julian Day (days since November 24, 4714 BC at midnight)
+- **`Q`**: quarter (ignored by to_date and to_timestamp)
+- **`RM`**: month in upper case Roman numerals (I-XII; I=January)
+- **`rm`**: month in lower case Roman numerals (i-xii; i=January)
+- **`TZ`**: upper case time-zone name
+- **`tz`**: lower case time-zone name
 
 ### Specifier modifiers
 
@@ -2409,6 +2467,3 @@ SELECT to_char(TIMESTAMPTZ '2019-11-1 15:56:46 +00:00', 'Dth of Mon') AS formatt
 |------------------|--------------------------------------------------------|---------|----------------------|-------------------|
 | `FM` prefix      | fill mode (suppress leading zeroes and padding blanks) | FMMonth | `July    `           | `July`            |
 | `TH`/`th` suffix | upper/lower case ordinal number suffix                 | Dth     | `1`                  | `1st`             |
-
-
-

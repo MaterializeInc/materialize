@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-subsources/
+complexity: intermediate
+description: '`SHOW SUBSOURCES` returns the subsources in the current schema.'
+doc_type: reference
+keywords:
+- 'ON'
+- FROM
+- SHOW SUBSOURCES
+- name
+- type
+product_area: Sources
+status: stable
+title: SHOW SUBSOURCES
+---
+
 # SHOW SUBSOURCES
+
+## Purpose
+`SHOW SUBSOURCES` returns the subsources in the current schema.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW SUBSOURCES` returns the subsources in the current schema.
 
@@ -8,9 +31,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW SUBSOURCES [ FROM <schema_name> | ON <source_name> ];
-```
+```text
 
 Syntax element         | Description
 -----------------------|------------
@@ -39,7 +64,7 @@ subsources:
  name  | type
 -------+-----
  ...   | ...
-```
+```text
 
 Field    | Meaning
 ---------|--------
@@ -48,28 +73,30 @@ Field    | Meaning
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SOURCES;
-```
+```text
 ```nofmt
     name
 ----------
  postgres
  kafka
-```
+```text
 ```mzsql
 SHOW SUBSOURCES ON pg;
-```
+```text
 ```nofmt
         name        | type
 --------------------+-----------
  postgres_progress  | progress
  table1_in_postgres | subsource
  table2_in_postgres | subsource
-```
+```text
 ```mzsql
 SHOW SUBSOURCES ON kafka;
-```
+```text
 ```nofmt
             name    | typef
 --------------------+----------

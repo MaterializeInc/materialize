@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/s3_compatible/
+complexity: intermediate
+description: How to export results from Materialize to S3 compatible object storage
+doc_type: reference
+keywords:
+- CREATE CONNECTION
+- 'Warning:'
+- CREATE AN
+- CREATE A
+- S3 Compatible Object Storage
+- CREATE SECRET
+product_area: Sinks
+status: stable
+title: S3 Compatible Object Storage
+---
+
 # S3 Compatible Object Storage
+
+## Purpose
+How to export results from Materialize to S3 compatible object storage
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to export results from Materialize to S3 compatible object storage
 
@@ -31,11 +55,11 @@ Cloud Storage, or Cloudflare R2.
         ENDPOINT = 'https://storage.googleapis.com',
         REGION = 'us'
     );
-    ```
+    ```text
 
-{{< warning >}}
+> **Warning:** 
   `VALIDATE CONNECTION` only works for AWS S3 connections. Using `VALIDATE CONNECTION` to test a connection to S3 compatible object storage service will result in an error. However, you can still use the connection to copy data.
-{{< /warning >}}
+
 
 ## Step 2. Run a bulk export
 
@@ -43,8 +67,7 @@ To export data to your target bucket, use the [`COPY TO`](/sql/copy-to/#copy-to-
 command and the AWS connection you created in the previous step. Replace the `<S3_BUCKET_URI>`
 with the S3 compatible URI for your target bucket.
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 ```mzsql
 COPY some_object TO '<S3_BUCKET_URI>'
@@ -52,14 +75,12 @@ WITH (
     AWS CONNECTION = bucket_connection,
     FORMAT = 'parquet'
   );
-```
+```text
 
 For details on the Parquet writer settings Materialize uses, as well as data
 type support and conversion, check the [reference documentation](/sql/copy-to/#copy-to-s3-parquet).
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 ```mzsql
 COPY some_object TO '<S3_BUCKET_URI>'
@@ -68,10 +89,6 @@ WITH (
     FORMAT = 'csv'
   );
 ```
-
-{{< /tab >}}
-
-{{< /tabs >}}
 
 ## Step 3. (Optional) Add scheduling
 

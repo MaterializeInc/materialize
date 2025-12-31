@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/cloud/users-service-accounts/sso/
+complexity: intermediate
+description: Configure single sign-on (SSO) using SAML or Open ID Connect as an additional
+  layer of account security.
+doc_type: reference
+keywords:
+- Account Settings
+- Account
+- Configure single sign-on (SSO)
+- SSO
+- administrator
+- 'Note:'
+- SELECT THE
+product_area: Security
+status: stable
+title: Configure single sign-on (SSO)
+---
+
 # Configure single sign-on (SSO)
+
+## Purpose
+Configure single sign-on (SSO) using SAML or Open ID Connect as an additional layer of account security.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Configure single sign-on (SSO) using SAML or Open ID Connect as an additional layer of account security.
 
@@ -12,11 +38,11 @@ identity provider. This ensures that all users can securely log in to the
 Materialize console using the same authentication scheme and credentials across
 all systems in your organization.
 
-{{< note >}}
+> **Note:** 
 Single sign-on in Materialize only supports authentication into the Materialize
 console. Permissions within the database are handled separately using
 [role-based access control](/security/cloud/access-control/).
-{{</ note >}}
+
 
 ## Before you begin
 
@@ -31,31 +57,48 @@ To make Materialize metadata available to Datadog, you must configure and run th
 
 * Navigate to **Account** > **Account Settings** > **SSO**.
 
-{{< tabs >}}
-{{< tab "OpenID Connect" >}}
+#### OpenID Connect
 
 * Click **Add New** and choose the `OpenID Connect` connection type.
 
 * Add the issuer URL, client ID, and secret key provided by your identity provider.
 
-{{< /tab >}}
-{{< tab "SAML" >}}
+#### SAML
 
 * Click **Add New** and choose the `SAML` connection type.
 
 * Add the SSO endpoint and public certificate provided by your identity provider.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 * Optionally, add the SSO domain provided by your identity provider. Click **Proceed**.
 
 * Select the organization role for the user:
 
-  {{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+  <!-- Dynamic table: rbac/organization_roles - see original docs -->
+
+> **Note:** 
+- The first user for an organization is automatically assigned the
+  **Organization Admin** role.
+
+- An [Organization
+Admin](/security/cloud/users-service-accounts/#organization-roles) has
+<red>**superuser**</red> privileges in the database. Following the principle of
+least privilege, only assign **Organization Admin** role to those users who
+require superuser privileges.
+
+
+- Users/service accounts can be granted additional database roles and privileges
+  as needed.
+
+
+
 
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
+The organization role for a user/service account determines the default level of
+database access. Once the account creation is complete, you can use [role-based
+access control
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
+control access for that account.
+
 

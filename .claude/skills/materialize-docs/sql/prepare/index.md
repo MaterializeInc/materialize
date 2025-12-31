@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/prepare/
+complexity: intermediate
+description: '`PREPARE` creates a prepared statement.'
+doc_type: reference
+keywords:
+- SELECT 1
+- DELETE THEM
+- PREPARE
+- CREATE A
+product_area: Indexes
+status: stable
+title: PREPARE
+---
+
 # PREPARE
+
+## Purpose
+`PREPARE` creates a prepared statement.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `PREPARE` creates a prepared statement.
 
@@ -8,9 +30,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 PREPARE <name> AS <statement>;
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -25,17 +49,19 @@ Prepared statements only last for the duration of the current database session. 
 
 ## Examples
 
+This section covers examples.
+
 ### Create a prepared statement
 
 ```mzsql
 PREPARE a AS SELECT 1 + $1;
-```
+```bash
 
 ### Execute a prepared statement
 
 ```mzsql
 EXECUTE a(2);
-```
+```bash
 
 ### Deallocate a prepared statement
 

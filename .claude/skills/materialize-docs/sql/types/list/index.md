@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/list/
+complexity: intermediate
+description: Lists are ordered sequences of homogenously typed elements
+doc_type: reference
+keywords:
+- Accessing single element
+- CREATE LAYERED
+- List types
+- SELECT LIST
+- Catalog name
+- Size
+- Nested structure
+- Quick Syntax
+product_area: Indexes
+status: stable
+title: List types
+---
+
 # List types
 
+## Purpose
 Lists are ordered sequences of homogenously typed elements
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Lists are ordered sequences of homogenously typed elements
 
 
 Lists are ordered sequences of homogenously typed elements. Lists' elements can
@@ -15,13 +40,15 @@ be other lists, known as "layered lists."
 
 ## Syntax
 
-{{< diagram "type-list.svg" >}}
+[See diagram: type-list.svg]
 
 | Field     | Use                                                                                                       |
 | --------- | --------------------------------------------------------------------------------------------------------- |
 | _element_ | An element of any [data type](../) to place in the list. Note that all elements must be of the same type. |
 
 ## List functions + operators
+
+This section covers list functions + operators.
 
 #### Polymorphism
 
@@ -41,13 +68,14 @@ constraints to their arguments:
 
 ### Operators
 
-{{% list-operators %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: list-operators --> --> -->
 
 ### Functions
 
-{{< fnlist "List" >}}
 
 ## Details
+
+This section covers details.
 
 ### Type name
 
@@ -61,34 +89,34 @@ You can construct lists using the `LIST` expression:
 
 ```mzsql
 SELECT LIST[1, 2, 3];
-```
+```text
 ```nofmt
   list
 ---------
  {1,2,3}
-```
+```text
 
 You can nest `LIST` constructors to create layered lists:
 
 ```mzsql
 SELECT LIST[LIST['a', 'b'], LIST['c']];
-```
+```text
 ```nofmt
     list
 -------------
  {{a,b},{c}}
-```
+```text
 
 You can also elide the `LIST` keyword from the interior list expressions:
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']];
-```
+```text
 ```nofmt
     list
 -------------
  {{a,b},{c}}
-```
+```text
 
 Alternatively, you can construct a list from the results of a subquery. The
 subquery must return a single column. Note that, in this form of the `LIST`
@@ -96,12 +124,12 @@ expression, parentheses are used rather than square brackets.
 
 ```mzsql
 SELECT LIST(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
-```
+```text
 ```nofmt
     x
 ---------
  {4,3,2}
-```
+```text
 
 Layered lists can be “ragged”, i.e. the length of lists in each layer can differ
 from one another. This differs from `array`, which requires that each dimension
@@ -124,35 +152,35 @@ To access an individual element of list, you can “index” into it using brack
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1];
-```
+```text
 ```nofmt
  ?column?
 ----------
  {a,b}
-```
+```text
 
 Indexing operations can be chained together to descend the list’s layers:
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][2];
-```
+```text
 ```nofmt
  ?column?
 ----------
  b
-```
+```text
 
 If the index is invalid (either less than 1 or greater than the maximum index),
 lists return _NULL_.
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][5] AS exceed_index;
-```
+```text
 ```nofmt
  exceed_index
 --------------
 
-```
+```text
 
 Lists have types based on their layers (unlike arrays' dimension), and error if
 you attempt to index a non-list element (i.e. indexing past the list’s last
@@ -160,10 +188,10 @@ layer):
 
 ```mzsql
 SELECT LIST[['a', 'b'], ['c']][1][2][3];
-```
+```text
 ```nofmt
 ERROR:  cannot subscript type string
-```
+```bash
 
 #### Slicing ranges
 
@@ -172,57 +200,57 @@ last index]`, using 1-indexed positions:
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][2:4] AS two_to_four;
-```
+```text
 ```nofmt
   slice
 ---------
  {2,3,4}
-```
+```text
 
 You can omit the first index to use the first value in the list, and omit the
 last index to use all elements remaining in the list.
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][:3] AS one_to_three;
-```
+```text
 ```nofmt
  one_to_three
 --------------
  {1,2,3}
-```
+```text
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][3:] AS three_to_five;
-```
+```text
 ```nofmt
  three_to_five
 ---------------
  {3,4,5}
-```
+```text
 
 If the first index exceeds the list's maximum index, the operation returns an
 empty list:
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][10:] AS exceed_index;
-```
+```text
 ```nofmt
  exceed_index
 --------------
  {}
-```
+```text
 
 If the last index exceeds the list’s maximum index, the operation returns all
 remaining elements up to its final element.
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][2:10] AS two_to_end;
-```
+```text
 ```nofmt
  two_to_end
 ------------
  {2,3,4,5}
-```
+```text
 
 Performing successive slices behaves more like a traditional programming
 language taking slices of an array, rather than PostgreSQL's slicing, which
@@ -230,12 +258,12 @@ descends into each layer.
 
 ```mzsql
 SELECT LIST[1,2,3,4,5][2:][2:3] AS successive;
-```
+```text
 ```nofmt
  successive
 ------------
  {3,4}
-```
+```bash
 
 ### Output format
 
@@ -258,12 +286,12 @@ aforementioned special cases.
 
 ```mzsql
 SELECT LIST[['a', 'white space'], [NULL, ''], ['escape"m\e', 'nUlL']];
-```
+```text
 ```nofmt
                         list
 -----------------------------------------------------
  {{a,"white space"},{NULL,""},{"escape\"m\\e",nUlL}}
-```
+```bash
 
 ### `text` to `list` casts
 
@@ -283,13 +311,13 @@ The text you cast must:
 
     ```mzsql
     SELECT '{2001-02-03, 2004-05-06}'::date list as date_list;
-    ```
+    ```text
 
     ```nofmt
             date_list
     -------------------------
      {2001-02-03,2004-05-06}
-    ```
+    ```text
 
     You cannot include the `DATE` keyword.
 - Escape any special representations (`{`, `}`, `"`, `\`, whitespace, or the
@@ -312,13 +340,13 @@ The text you cast must:
         trailing space\ ,
         \NULL
     }'::text list as escape_examples;
-    ```
+    ```text
 
     ```nofmt
                                        escape_examples
     -------------------------------------------------------------------------------------
      {"{brackets}","\"quotes\"","\\slashes\\"," leading space","trailing space ","NULL"}
-    ```
+    ```text
 
     Note that all unescaped whitespace is trimmed.
 
@@ -365,12 +393,12 @@ different length:
 
 ```mzsql
 SELECT LIST[[1,2], [3]] AS ragged_list;
-```
-```
+```text
+```text
 ragged_list
 -------------
 {{1,2},{3}}
-```
+```text
 
 This is known as a "ragged list."
 
@@ -380,10 +408,10 @@ members must also have a length of 2.
 
 ```mzsql
 SELECT ARRAY[[1,2], [3]] AS ragged_array;
-```
-```
+```text
+```text
 ERROR:  number of array elements (3) does not match declared cardinality (4)
-```
+```bash
 #### Accessing single elements
 
 **Lists** support accessing single elements via [indexing](#indexing-elements).
@@ -392,22 +420,22 @@ For example, indexing a two-layer list returns a one-layer list.
 
 ```mzsql
 SELECT LIST[['foo'],['bar']][1] AS indexing;
-```
-```
+```text
+```text
  indexing
 --------------
  {foo}
-```
+```text
 
 Attempting to index twice into a `text list` (i.e. a one-layer list), fails
 because you cannot index `text`.
 
 ```mzsql
 SELECT LIST['foo'][1][2];
-```
-```
+```text
+```text
 ERROR:  cannot subscript type text
-```
+```bash
 
 ##### Accessing ranges of elements
 
@@ -456,105 +484,104 @@ You can [cast](../../functions/cast) the following types to `list`:
 
 ## Examples
 
+This section covers examples.
+
 ### Literals
 
 ```mzsql
 SELECT LIST[[1.5, NULL],[2.25]];
-```
+```text
 ```nofmt
          list
 ----------------------
  {{1.50,NULL},{2.25}}
-```
+```bash
 
 ### Casting between lists
 
 ```mzsql
 SELECT LIST[[1.5, NULL],[2.25]]::int list list;
-```
+```text
 ```nofmt
       list
 ----------------
  {{2,NULL},{2}}
-```
+```bash
 
 ### Casting to text
 
 ```mzsql
 SELECT LIST[[1.5, NULL],[2.25]]::text;
-```
+```text
 ```nofmt
       list
 ------------------
  {{1,NULL},{2}}
-```
+```text
 
 Despite the fact that the output looks the same as the above examples, it is, in
 fact, `text`.
 
 ```mzsql
 SELECT length(LIST[[1.5, NULL],[2.25]]::text);
-```
+```text
 ```nofmt
  length
 --------
      20
-```
+```bash
 
 ### Casting from text
 
 ```mzsql
 SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
-```
+```text
 ```nofmt
      text_to_list
 ----------------------
  {{1.50,NULL},{2.25}}
-```
+```bash
 
 ### List containment
 
-{{< note >}}
+> **Note:** 
 Like [array containment operators in PostgreSQL](https://www.postgresql.org/docs/current/functions-array.html#FUNCTIONS-ARRAY),
 list containment operators in Materialize **do not** account for duplicates.
-{{< /note >}}
 
-{{< warn-if-unreleased "v0.107" >}}
 
 ```mzsql
 SELECT LIST[1,4,3] @> LIST[3,1] AS contains;
-```
+```text
 ```nofmt
  contains
 ----------
  t
-```
+```text
 
 ```mzsql
 SELECT LIST[2,7] <@ LIST[1,7,4,2,6] AS is_contained_by;
-```
+```text
 ```nofmt
  is_contained_by
 -----------------
  t
-```
+```text
 
 
 ```mzsql
 SELECT LIST[7,3,1] @> LIST[1,3,3,3,3,7] AS contains;
-```
+```text
 ```nofmt
  contains
 ----------
  t
-```
+```text
 
 ```mzsql
 SELECT LIST[1,3,7,NULL] @> LIST[1,3,7,NULL] AS contains;
-```
+```text
 ```nofmt
  contains
 ----------
  f
 ```
-

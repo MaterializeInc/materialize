@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/execute/
+complexity: intermediate
+description: '`EXECUTE`'
+doc_type: reference
+keywords:
+- SELECT 1
+- name
+- EXECUTE
+- parameter
+product_area: Indexes
+status: stable
+title: EXECUTE
+---
+
 # EXECUTE
+
+## Purpose
+`EXECUTE`
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `EXECUTE`
 
@@ -11,7 +33,7 @@ If the `PREPARE` statement specified some parameters, you must pass values compa
 
 ## Syntax
 
-{{< diagram "execute.svg" >}}
+[See diagram: execute.svg]
 
 Field | Use
 ------|-----

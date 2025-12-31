@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-index/
+complexity: intermediate
+description: DROP INDEX removes an index
+doc_type: reference
+keywords:
+- IF EXISTS
+- CASCADE
+- DROP INDEX
+- RESTRICT
+- 'Note:'
+- 'Tip:'
+product_area: Indexes
+status: stable
+title: DROP INDEX
+---
+
 # DROP INDEX
+
+## Purpose
+DROP INDEX removes an index
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 DROP INDEX removes an index
 
@@ -8,9 +32,11 @@ DROP INDEX removes an index
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP INDEX [IF EXISTS] <index_name> [CASCADE|RESTRICT];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -19,36 +45,40 @@ Syntax element | Description
 **CASCADE** | Optional. If specified, remove the index and its dependent objects.
 **RESTRICT** | Optional. Remove the index. _(Default.)_
 
-{{< note >}}
+> **Note:** 
 
 Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX
 RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
 
-{{< /note >}}
+
 
 ## Privileges
 
 To execute the `DROP INDEX` statement, you need:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-index.md" >}}
+- Ownership of the dropped index.
+- `USAGE` privileges on the containing schema.
+
 
 ## Examples
 
+This section covers examples.
+
 ### Remove an index
 
-{{< tip >}}
+> **Tip:** 
 
 In the **Materialize Console**, you can view existing indexes in the [**Database
 object explorer**](/console/data/). Alternatively, you can use the
 [`SHOW INDEXES`](/sql/show-indexes) command.
 
-{{< /tip >}}
+
 
 Using the  `DROP INDEX` commands, the following example drops an index named `q01_geo_idx`.
 
 ```mzsql
 DROP INDEX q01_geo_idx;
-```
+```text
 
 If the index `q01_geo_idx` does not exist, the above operation returns an error.
 

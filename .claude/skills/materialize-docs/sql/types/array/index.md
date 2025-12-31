@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/array/
+complexity: intermediate
+description: Express sequences of other types
+doc_type: reference
+keywords:
+- SELECT ARRAY
+- 'Warning:'
+- Array types
+- CREATE MULTIDIMENSIONAL
+- SELECT X
+product_area: Indexes
+status: stable
+title: Array types
+---
+
 # Array types
+
+## Purpose
+Express sequences of other types
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Express sequences of other types
 
@@ -6,7 +29,7 @@ Express sequences of other types
 
 Arrays are a multidimensional sequence of any non-array type.
 
-{{< warning >}}
+> **Warning:** 
 We do not recommend using arrays, which exist in Materialize primarily to
 facilitate compatibility with PostgreSQL. Specifically, many of the PostgreSQL
 compatibility views in the [system catalog](/sql/system-catalog/) must expose
@@ -14,9 +37,11 @@ array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 interoperate well with modern data formats like JSON and Avro.
 
 Use the [`list` type](/sql/types/list) instead.
-{{< /warning >}}
+
 
 ## Details
+
+This section covers details.
 
 ### Type name
 
@@ -39,35 +64,35 @@ You can construct arrays using the special `ARRAY` expression:
 
 ```mzsql
 SELECT ARRAY[1, 2, 3]
-```
+```text
 ```nofmt
   array
 ---------
  {1,2,3}
-```
+```text
 
 You can nest `ARRAY` constructors to create multidimensional arrays:
 
 ```mzsql
 SELECT ARRAY[ARRAY['a', 'b'], ARRAY['c', 'd']]
-```
+```text
 ```nofmt
      array
 ---------------
  {{a,b},{c,d}}
-```
+```text
 
 Alternatively, you can construct an array from the results subquery.  These subqueries must return a single column. Note
 that, in this form of the `ARRAY` expression, parentheses are used rather than square brackets.
 
 ```mzsql
 SELECT ARRAY(SELECT x FROM test0 WHERE x > 0 ORDER BY x DESC LIMIT 3);
-```
+```text
 ```nofmt
     x
 ---------
  {4,3,2}
-```
+```text
 
 Arrays cannot be "ragged." The length of each array expression must equal the
 length of all other array constructors in the same dimension. For example, the
@@ -75,10 +100,10 @@ following ragged array is rejected:
 
 ```mzsql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[3]]
-```
+```text
 ```nofmt
 ERROR:  number of array elements (3) does not match declared cardinality (4)
-```
+```bash
 
 ### Textual format
 
@@ -102,12 +127,12 @@ aforementioned special cases.
 
 ```mzsql
 SELECT ARRAY[ARRAY['a', 'white space'], ARRAY[NULL, ''], ARRAY['escape"m\e', 'nUlL']]
-```
+```text
 ```nofmt
                          array
 -------------------------------------------------------
  {{a,"white space"},{NULL,""},{"escape\"m\\e","nUlL"}}
-```
+```bash
 
 ### Catalog names
 
@@ -152,25 +177,27 @@ list`, as long as the array is empty or does not contain any arrays itself.
 
 ```mzsql
 SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
-```
+```text
 ```
 integer list
-```
+```bash
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT '{1,2,3}'::int[]
-```
+```text
 ```nofmt
   int4
 ---------
  {1,2,3}
-```
+```text
 
 ```mzsql
 SELECT ARRAY[ARRAY[1, 2], ARRAY[NULL, 4]]::text
-```
+```text
 ```nofmt
       array
 ------------------

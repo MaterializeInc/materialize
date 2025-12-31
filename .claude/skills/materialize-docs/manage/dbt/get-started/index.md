@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/dbt/get-started/
+complexity: advanced
+description: How to use dbt and Materialize to transform streaming data in real time.
+doc_type: reference
+keywords:
+- external
+- CREATE THE
+- CREATE A
+- Get started with dbt and Materialize
+- CREATE AND
+- 'Note:'
+- CREATE IT
+- dbt Core
+product_area: Operations
+status: experimental
+title: Get started with dbt and Materialize
+---
+
 # Get started with dbt and Materialize
 
+## Purpose
 How to use dbt and Materialize to transform streaming data in real time.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to use dbt and Materialize to transform streaming data in real time.
 
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for
@@ -21,24 +46,24 @@ need to:
 1. Install the [`dbt-materialize` plugin](https://pypi.org/project/dbt-materialize/)
    (optionally using a virtual environment):
 
-   {{< note >}}
+   > **Note:** 
     The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
     adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
     require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
-  {{</ note >}}
+  
 
     ```bash
     python3 -m venv dbt-venv                  # create the virtual environment
     source dbt-venv/bin/activate              # activate the virtual environment
     pip install dbt-core dbt-materialize      # install dbt-core and the adapter
-    ```
+    ```text
 
     The installation will include the `dbt-postgres` dependency. To check that
     the plugin was successfully installed, run:
 
     ```bash
     dbt --version
-    ```
+    ```text
 
     `materialize` should be listed under "Plugins". If this is not the case,
     double-check that the virtual environment is activated!
@@ -57,7 +82,7 @@ To create a new project, run:
 
 ```bash
 dbt init <project_name>
-```
+```text
 
 This command will bootstrap a starter project with default configurations and
 create a `profiles.yml` file, if it doesn't exist. To help you get started, the
@@ -65,13 +90,12 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 
 ### Connect to Materialize
 
-{{< note >}}
+> **Note:** 
 
 As a best practice, we strongly recommend using [service
 accounts](/security/cloud/users-service-accounts/create-service-accounts) to
 connect external applications, like dbt, to Materialize.
 
-{{</ note >}}
 
 dbt manages all your connection configurations (or, profiles) in a file called
 [`profiles.yml`](https://docs.getdbt.com/dbt-cli/configure-your-profile). By
@@ -81,7 +105,7 @@ default, this file is located under `~/.dbt/`.
 
     ```bash
     dbt debug --config-dir
-    ```
+    ```text
 
     **Note:** If you started from an existing project but it's your first time
       setting up dbt, it's possible that this file doesn't exist yet. You can
@@ -127,7 +151,7 @@ default, this file is located under `~/.dbt/`.
           sslmode: require
 
       target: dev
-    ```
+    ```text
 
     The `target` parameter allows you to configure the [target environment](https://docs.getdbt.com/docs/guides/managing-environments#how-do-i-maintain-different-environments-with-dbt)
     that dbt will use to run your models.
@@ -136,7 +160,7 @@ default, this file is located under `~/.dbt/`.
 
     ```bash
     dbt debug
-    ```
+    ```text
 
     If the output reads `All checks passed!`, you're good to go! The
     [dbt documentation](https://docs.getdbt.com/docs/guides/debugging-errors#types-of-errors)
@@ -150,7 +174,7 @@ strategy. Because Materialize is optimized for real-time transformations of
 streaming data and the core of dbt is built around batch, the `dbt-materialize`
 adapter implements a few custom materialization types:
 
-{{% dbt-materializations %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: dbt-materializations --> --> -->
 
 Create a materialization for each SQL statement you're planning to deploy. Each
 individual materialization should be stored as a `.sql` file under the
@@ -165,14 +189,14 @@ interpret that data. You can instruct dbt to create a source using the custom
 from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
 or [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) functions.
 
-{{< note >}}
+> **Note:** 
 To create a source, you first need to [create a connection](/sql/create-connection)
 that specifies access and authentication parameters. Connections are **not
 exposed** in dbt, and need to exist before you run any `source` models.
-{{</ note >}}
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka">}}
+
+#### Kafka
+
 Create a [Kafka source](/sql/create-source/kafka/).
 
 **Filename:** sources/kafka_topic_a.sql
@@ -181,16 +205,17 @@ Create a [Kafka source](/sql/create-source/kafka/).
 
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-```
+```text
 
 The source above would be compiled to:
 
-```
+```text
 database.schema.kafka_topic_a
-```
+```json
 
-{{< /tab >}}
-{{< tab "PostgreSQL">}}
+
+#### PostgreSQL
+
 Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/pg.sql
@@ -199,7 +224,7 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
 FOR ALL TABLES
-```
+```text
 
 Materialize will automatically create a **subsource** for each table in the
 `mz_source` publication. Pulling subsources into the dbt context automatically
@@ -217,7 +242,7 @@ sources:
     tables:
       - name: table_a
       - name: table_b
-```
+```text
 
 Once a subsource has been defined this way, it can be referenced from another
 model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source)
@@ -237,18 +262,19 @@ FROM {{ source('pg','table_a') }}
 INNER JOIN
      {{ source('pg','table_b') }}
     ON table_a.id = table_b.foo_id
-```
+```text
 
 The source and subsources above would be compiled to:
 
-```
+```text
 database.schema.pg
 database.schema.table_a
 database.schema.table_b
-```
+```json
 
-{{< /tab >}}
-{{< tab "MySQL">}}
+
+#### MySQL
+
 Create a [MySQL source](/sql/create-source/mysql/).
 
 **Filename:** sources/mysql.sql
@@ -257,7 +283,7 @@ Create a [MySQL source](/sql/create-source/mysql/).
 
 FROM MYSQL CONNECTION mysql_connection
 FOR ALL TABLES;
-```
+```text
 
 Materialize will automatically create a **subsource** for each table in the
 upstream database. Pulling subsources into the dbt context automatically
@@ -275,7 +301,7 @@ sources:
     tables:
       - name: table_a
       - name: table_b
-```
+```text
 
 Once a subsource has been defined this way, it can be referenced from another
 model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source)
@@ -295,18 +321,19 @@ FROM {{ source('mysql','table_a') }}
 INNER JOIN
      {{ source('mysql','table_b') }}
     ON table_a.id = table_b.foo_id
-```
+```text
 
 The source and subsources above would be compiled to:
 
-```
+```text
 database.schema.mysql
 database.schema.table_a
 database.schema.table_b
-```
+```json
 
-{{< /tab >}}
-{{< tab "Webhooks">}}
+
+#### Webhooks
+
 Create a [webhook source](/sql/create-source/webhook/).
 
 **Filename:** sources/webhook.sql
@@ -325,15 +352,14 @@ FROM WEBHOOK
       )
       constant_time_eq(headers->'authorization', basic_hook_auth)
     );
-```
+```text
 
 The source above would be compiled to:
 
-```
+```text
 database.schema.webhook
-```
-{{< /tab >}}
-{{< /tabs >}}
+```json
+
 
 ### Views and materialized views
 
@@ -364,7 +390,7 @@ SELECT
     col_a, ...
 -- Reference model dependencies using the dbt ref() function
 FROM {{ ref('kafka_topic_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -373,7 +399,7 @@ CREATE VIEW database.schema.view_a AS
 SELECT
     col_a, ...
 FROM database.schema.kafka_topic_a;
-```
+```text
 
 The resulting view **will not** keep results incrementally updated without an
 index (see [Creating an index on a view](#creating-an-index-on-a-view)). Once a
@@ -383,10 +409,10 @@ function.
 
 ##### Creating an index on a view
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use indexes in Materialize, see
 [Indexes on views](/concepts/indexes/#indexes-on-views).
-{{</ tip >}}
+
 
 To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
 on view models using the [`index` configuration](#indexes). This
@@ -401,7 +427,7 @@ re-running dbt to refresh your models.
 SELECT
     col_a, ...
 FROM {{ ref('kafka_topic_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statements:
 
@@ -412,7 +438,7 @@ SELECT
 FROM database.schema.kafka_topic_a;
 
 CREATE INDEX database.schema.view_a_idx IN CLUSTER cluster_a ON view_a (col_a);
-```
+```text
 
 As new data arrives, indexes keep view results **incrementally updated** in
 memory within a [cluster](/concepts/clusters/). Indexes help optimize query
@@ -431,7 +457,7 @@ SELECT
     col_a, ...
 -- Reference model dependencies using the dbt ref() function
 FROM {{ ref('view_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -440,7 +466,7 @@ CREATE MATERIALIZED VIEW database.schema.materialized_view_a AS
 SELECT
     col_a, ...
 FROM database.schema.view_a;
-```
+```text
 
 The resulting materialized view will keep results **incrementally updated** in
 durable storage as new data arrives. Once a `materialized_view` model has been
@@ -449,10 +475,10 @@ function.
 
 ##### Creating an index on a materialized view
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use indexes in Materialize, see
 [Indexes on materialized views](/concepts/views/#indexes-on-materialized-views).
-{{</ tip >}}
+
 
 With a materialized view, your models are kept **up-to-date** in Materialize as
 new data arrives. This allows you to bypass the need for maintaining complex
@@ -472,7 +498,7 @@ can create [indexes](/concepts/indexes/) on materialized view models using the
 SELECT
     col_a, ...
 FROM {{ ref('view_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statements:
 
@@ -483,7 +509,7 @@ SELECT
 FROM database.schema.view_a;
 
 CREATE INDEX database.schema.materialized_view_a_idx IN CLUSTER cluster_b ON materialized_view_a (col_a);
-```
+```text
 
 As new data arrives, results are **incrementally updated** in durable storage
 and also accessible in memory within the [cluster](/concepts/clusters/) the
@@ -492,12 +518,12 @@ against materialized views faster.
 
 ##### Using refresh strategies
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use refresh strategies in Materialize,
 see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
-{{</ tip >}}
 
-{{< private-preview />}}
+
+> **Private Preview:** This feature is in private preview.
 
 For data that doesn't require up-to-the-second freshness, or that can be
 accessed using different patterns to optimize for performance and cost
@@ -518,7 +544,7 @@ significant — so you must also specify a valid scheduled `cluster` using the
 SELECT
     col_a, ...
 FROM {{ ref('view_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -533,17 +559,17 @@ WITH (
   REFRESH EVERY '1 day' ALIGNED TO '2024-10-22T10:40:33+00:00'
 ) AS
 SELECT ...;
-```
+```text
 
 Materialized views configured with a refresh strategy are **not incrementally
 maintained** and must recompute their results from scratch on every refresh.
 
 ##### Using retain history
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use retain history in Materialize,
 see [Retain history](/transform-data/patterns/durable-subscriptions/#set-history-retention-period).
-{{</ tip >}}
+
 
 To configure how long historical data is retained in a materialized view, use the
 `retain_history` configuration. This is useful for maintaining a window of
@@ -561,7 +587,7 @@ SELECT
     count(*) as count
 FROM {{ ref('view_a') }}
 GROUP BY col_a
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -574,7 +600,7 @@ SELECT
     count(*) as count
 FROM database.schema.view_a
 GROUP BY col_a;
-```
+```text
 
 You can specify the retention period using common time units like:
 - `'1hr'` for one hour
@@ -587,8 +613,9 @@ In Materialize, a [sink](/sql/create-sink) describes an **external** system you
 want to write data to, and provides details about how to encode that data. You
 can instruct dbt to create a sink using the custom `sink` materialization.
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka">}}
+
+#### Kafka
+
 Create a [Kafka sink](/sql/create-sink).
 
 **Filename:** sinks/kafka_topic_c.sql
@@ -599,15 +626,13 @@ FROM {{ ref('materialized_view_a') }}
 INTO KAFKA CONNECTION kafka_connection (TOPIC 'topic_c')
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
 ENVELOPE DEBEZIUM
-```
+```text
 
 The sink above would be compiled to:
-```
+```text
 database.schema.kafka_topic_c
-```
+```json
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Configuration: clusters, databases and indexes {#configuration}
 
@@ -620,7 +645,7 @@ created. If unspecified, the default cluster for the connection is used.
 
 ```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
-```
+```text
 
 To dynamically generate the name of a cluster (e.g., based on the target
 environment), you can override the `generate_cluster_name` macro with your
@@ -636,7 +661,7 @@ in `dbt_project.yml`.
         {{ target.name }}_{{ custom_cluster_name }}
     {%- endif -%}
 {%- endmacro %}
-```
+```bash
 
 #### Databases
 
@@ -646,7 +671,7 @@ unspecified, the default database for the connection is used.
 
 ```mzsql
 {{ config(materialized='materialized_view', database='database_a') }}
-```
+```bash
 
 #### Indexes
 
@@ -671,18 +696,18 @@ Component                            | Value     | Description
 ```mzsql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
-```
+```bash
 
 ##### Creating a default index
 
 ```mzsql
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
-```
+```bash
 
 ### Configuration: refresh strategies {#configuration-refresh-strategies}
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 **Minimum requirements:** `dbt-materialize` v1.7.3+
 
@@ -720,7 +745,7 @@ changes.
         data_type: string
       - name: col_without_constraints
         data_type: int
-```
+```text
 
 Setting the `contract` configuration to `enforced: true` requires you to specify
 a `name` and `data_type` for every column in your models. If there is a
@@ -748,7 +773,7 @@ types are supported.
           - type: not_null
       - name: col_without_constraints
         data_type: int
-```
+```text
 
 A `not_null` constraint will be compiled to an [`ASSERT NOT NULL`](/sql/create-materialized-view/#non-null-assertions)
 option for the specified columns of the materialize view.
@@ -761,15 +786,15 @@ WITH (
 AS
 SELECT NULL AS col_with_constraints,
        2 AS col_without_constraints;
-```
+```bash
 
 ## Build and run dbt
 
 1. [Run](https://docs.getdbt.com/reference/commands/run) the dbt models:
 
-    ```
+    ```text
     dbt run
-    ```
+    ```text
 
     This command generates **executable SQL code** from any model files under
     the specified directory and runs it in the target environment. You can find
@@ -782,7 +807,7 @@ SELECT NULL AS col_with_constraints,
 
     ```mzsql
     SHOW SOURCES [FROM database.schema];
-    ```
+    ```text
 
     <p></p>
 
@@ -794,13 +819,13 @@ SELECT NULL AS col_with_constraints,
      postgres_table_a
      postgres_table_b
      kafka_topic_a
-    ```
+    ```text
 
     <p></p>
 
     ```mzsql
     SHOW VIEWS;
-    ```
+    ```text
 
     <p></p>
 
@@ -808,13 +833,13 @@ SELECT NULL AS col_with_constraints,
            name
     -------------------
      view_a
-    ```
+    ```text
 
     <p></p>
 
     ```mzsql
     SHOW MATERIALIZED VIEWS;
-    ```
+    ```text
 
     <p></p>
 
@@ -822,7 +847,7 @@ SELECT NULL AS col_with_constraints,
            name
     -------------------
      materialized_view_a
-    ```
+    ```text
 
 That's it! From here on, Materialize makes sure that your models
 are **incrementally updated** as new data streams in, and that you get **fresh
@@ -849,7 +874,7 @@ trigger **real-time alerts** downstream.
         models:
           +store_failures: true
           +schema: 'etl_failure'
-    ```
+    ```text
 
     This will instruct dbt to create a materialized view for each configured
     test that can keep track of failures over time. By default, test views are
@@ -872,7 +897,7 @@ trigger **real-time alerts** downstream.
             data_tests:
               - not_null
               - unique
-    ```
+    ```text
 
     The type of test and the columns being tested are used as a base for naming
     the test materialized views. For example, the configuration above would
@@ -882,7 +907,7 @@ trigger **real-time alerts** downstream.
 
     ```bash
     dbt test # use --select test_type:data to only run data tests!
-    ```
+    ```text
 
     When configured to `store_failures`, this command will create a materialized
     view for each test using the respective `SELECT` statements, instead of
@@ -897,7 +922,7 @@ trigger **real-time alerts** downstream.
 
     ```mzsql
     SHOW SCHEMAS;
-    ```
+    ```text
 
     <p></p>
 
@@ -906,13 +931,13 @@ trigger **real-time alerts** downstream.
     -------------------
      public
      public_etl_failure
-    ```
+    ```text
 
     <p></p>
 
     ```mzsql
     SHOW MATERIALIZED VIEWS FROM public_etl_failure;
-    ```
+    ```text
 
     <p></p>
 
@@ -921,7 +946,7 @@ trigger **real-time alerts** downstream.
     -------------------
      not_null_col_a
      unique_col_a
-    ```
+    ```text
 
 With continuous testing in place, you can then build alerts off of the test
 materialized views using any common PostgreSQL-compatible [client library](/integrations/client-libraries/)
@@ -946,7 +971,7 @@ are all set.
 
     ```bash
     dbt docs generate
-    ```
+    ```text
 
     dbt will grab any additional project information and Materialize catalog
     metadata, then compile it into `.json` files (`manifest.json` and
@@ -959,7 +984,7 @@ are all set.
 
     ```bash
     dbt docs serve #--port <port>
-    ```
+    ```text
 
 1. In a browser, navigate to `localhost:8000`. There, you can find an overview
    of your dbt project, browse existing models and metadata, and in general keep
@@ -978,10 +1003,10 @@ To persist model- and column-level descriptions as [comments](/sql/comment-on/)
 in Materialize, use the [`persist_docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
 configuration.
 
-{{< note >}}
+> **Note:** 
 Documentation persistence is tightly coupled with `dbt run` command invocations.
 For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.com/dbt-labs/dbt-core/issues/4226). 👻
-{{</ note >}}
+
 
 1. To enable docs persistence, add a `models` property to `dbt_project.yml` with
    the `persist-docs` configuration:
@@ -991,7 +1016,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
       +persist_docs:
         relation: true
         columns: true
-    ```
+    ```text
 
     As an alternative, you can configure `persist-docs` in the config block of your models:
 
@@ -1000,7 +1025,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
         materialized=materialized_view,
         persist_docs={"relation": true, "columns": true}
     ) }}
-    ```
+    ```text
 
 1. Once `persist-docs` is configured, any `description` defined in your `.yml`
   files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
@@ -1008,7 +1033,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
 
     ```mzsql
       SELECT * FROM mz_internal.mz_comments;
-    ```
+    ```text
     <p></p>
 
     ```nofmt
@@ -1019,4 +1044,3 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
        u626 | materialized-view |             1 | column a description
        u626 | materialized-view |             2 | column b description
     ```
-

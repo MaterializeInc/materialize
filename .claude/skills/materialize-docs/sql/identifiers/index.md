@@ -1,7 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/identifiers/
+complexity: intermediate
+description: SQL identifiers are names of columns and database objects such as sources
+  and views.
+doc_type: reference
+keywords:
+- fully qualifies all such references
+- It is not uniquely qualified across all dependent references.
+- CREATE VIEW
+- 'Note:'
+- SELECT OFFSET
+- Identifiers
+- First character
+- Remaining
+product_area: Indexes
+status: stable
+title: Identifiers
+---
+
 # Identifiers
 
+## Purpose
 SQL identifiers are names of columns and database objects such as sources and views.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+SQL identifiers are names of columns and database objects such as sources and views.
 
 
 In Materialize, identifiers are used to refer to columns and database objects
@@ -19,9 +45,9 @@ Materialize has the following naming restrictions for identifiers:
 To override these restrictions, you can enclose the identifier in double quotes;
 e.g., `"123_source"` or `"fun_source_@"`. Inside double quotes, characters are interpreted literally, except for the double-quote character itself. To include a double quote within a double-quoted identifier, escape it by writing two adjacent double quotes, as in "includes""quote".
 
-{{< note >}}
+> **Note:** 
 The identifiers `"."` and `".."` are not allowed.
-{{</ note >}}
+
 
 ## Case sensitivity
 
@@ -48,7 +74,7 @@ You cannot rename an item if any of the following are true:
   FROM d1.s1.v1
   JOIN d2.s1.v1
   ON d1.s1.v1.a = d2.s1.v1.a;
-  ```
+  ```text
 
   If the two views were instead in schemas with distinct names, qualifying by schema alone would be sufficient (you would not need to include the database name).
 
@@ -70,7 +96,7 @@ You cannot rename an item if any of the following are true:
         FROM v1
         JOIN v2
         ON v1.a = v2.v1
-        ```
+        ```text
 
         ```mzsql
         CREATE VIEW v4 AS
@@ -78,7 +104,7 @@ You cannot rename an item if any of the following are true:
         FROM v1
         JOIN v1.v2
         ON v1.a = v2.a
-        ```
+        ```text
 
   - A proposed-name collision: the new name matches any identifier referenced in
     a dependent query, whether that identifier is referenced explicitly or
@@ -119,6 +145,4 @@ We recommend that you avoid using keywords as identifiers whenever possible, as
 the syntax errors that result are not always obvious.
 
 The current keywords are listed below.
-
-{{< kwlist >}}
 

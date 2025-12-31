@@ -1,4 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/striim/
+complexity: advanced
+description: How to ingest Striim Change Data Capture (CDC) data into Materialize
+  using the Kafka source
+doc_type: reference
+keywords:
+- CREATE CONNECTION
+- Advanced settings > Kafka Config
+- CREATE A
+- Input stream
+- Schema Registry Subject Name
+- 'Schema Registry Subject Name
+
+  Mapping'
+- Striim Cloud
+- Formatter
+- SELECT THE
+product_area: Sources
+status: stable
+title: Striim Cloud
+---
+
 # Striim Cloud
+
+## Purpose
+How to ingest Striim Change Data Capture (CDC) data into Materialize using the Kafka source
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to ingest Striim Change Data Capture (CDC) data into Materialize using the Kafka source
 
@@ -22,6 +52,8 @@ Ensure that you have:
   service.
 
 ## Step 1. Configure Striim CDC
+
+This section covers step 1. configure striim cdc.
 
 ### Database configuration
 
@@ -77,12 +109,12 @@ cluster. Next, you'll configure Materialize to consume this data.
 
 ## Step 2. Start ingesting data
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your Kafka source
 (e.g. `quickstart`), you don't need to create a new cluster. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
+
 
 1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, use the [`CREATE CONNECTION`](/sql/create-connection/)
@@ -107,7 +139,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
         USERNAME = '<your-username>',
         PASSWORD = SECRET csr_password
     );
-    ```
+    ```text
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/kafka/) command to connect
    Materialize to your Kafka broker and schema registry using the connections you
@@ -120,7 +152,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
      VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
      VALUE STRATEGY ID <id>
    ENVELOPE UPSERT;
-   ```
+   ```text
 
    **Fetching the `VALUE STRATEGY ID`**
 

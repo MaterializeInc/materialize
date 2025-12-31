@@ -1,17 +1,42 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/mysql/mysql-debezium/
+complexity: advanced
+description: How to propagate Change Data Capture (CDC) data from a MySQL database
+  to Materialize using Kafka and Debezium
+doc_type: reference
+keywords:
+- strongly recommend
+- SHOW VARIABLES
+- 'Warning:'
+- CREATE AND
+- 'Minimum requirements:'
+- MySQL CDC using Kafka and Debezium
+- CREATE A
+- 'Note:'
+- SHOW DATABASES
+product_area: Sources
+status: stable
+title: MySQL CDC using Kafka and Debezium
+---
+
 # MySQL CDC using Kafka and Debezium
+
+## Purpose
+How to propagate Change Data Capture (CDC) data from a MySQL database to Materialize using Kafka and Debezium
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to propagate Change Data Capture (CDC) data from a MySQL database to Materialize using Kafka and Debezium
 
 
-
-{{< warning >}}
+> **Warning:** 
 You can use [Debezium](https://debezium.io/) to propagate Change
 Data Capture(CDC) data to Materialize from a MySQL database, but
 we **strongly recommend** using the native [MySQL](/sql/create-source/mysql/)
 source instead.
-{{</ warning >}}
 
-{{< guided-tour-blurb-for-ingest-data >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a MySQL
 database to downstream consumers based on its binary log (`binlog`). In this
@@ -38,7 +63,7 @@ As _root_:
     ```mysql
     SHOW VARIABLES
     WHERE variable_name IN ('log_bin', 'binlog_format');
-    ```
+    ```text
 
     For CDC, binary logging must be enabled and use the `row` format. If your
     settings differ, you can adjust the database configuration file
@@ -56,7 +81,7 @@ As _root_:
     GRANT SELECT, RELOAD, SHOW DATABASES, REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO "user";
 
     FLUSH PRIVILEGES;
-    ```
+    ```bash
 
 ### B. Deploy Debezium
 
@@ -66,14 +91,13 @@ Debezium is deployed as a set of Kafka Connect-compatible connectors, so you
 first need to define a MySQL connector configuration and then start the
 connector by adding it to Kafka Connect.
 
-{{< warning >}}
+> **Warning:** 
 
 If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html),
 you **must** override the default value of `After-state only` to `false`.
-{{</ warning >}}
 
-{{< tabs >}}
-{{< tab "Debezium 1.5+">}}
+
+#### Debezium 1.5+
 
 1. Create a connector configuration file and save it as `register-mysql.json`:
 
@@ -96,13 +120,12 @@ you **must** override the default value of `After-state only` to `false`.
           "include.schema.changes": false
         }
     }
-    ```
+    ```text
 
     You can read more about each configuration property in the
     [Debezium documentation](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-connector-properties).
 
-{{< /tab >}}
-{{< tab "Debezium 2.0+">}}
+#### Debezium 2.0+
 
 1. From Debezium 2.0, Confluent Schema Registry (CSR) support is not bundled in
    Debezium containers. To enable CSR, you must install the following Confluent
@@ -146,15 +169,12 @@ you **must** override the default value of `After-state only` to `false`.
           "include.schema.changes": false
         }
     }
-    ```
+    ```text
 
     You can read more about each configuration property in the
     [Debezium documentation](https://debezium.io/documentation/reference/2.4/connectors/mysql.html).
     By default, the connector writes events for each table to a Kafka topic
     named `serverName.databaseName.tableName`.
-
-{{< /tab >}}
-{{< /tabs >}}
 
 1. Start the Debezium MySQL connector using the configuration file:
 
@@ -162,13 +182,13 @@ you **must** override the default value of `After-state only` to `false`.
     export CURRENT_HOST='<your-host>'
     curl -i -X POST -H "Accept:application/json" -H "Content-Type:application/json" \
     http://$CURRENT_HOST:8083/connectors/ -d @register-mysql.json
-    ```
+    ```text
 
 1. Check that the connector is running:
 
     ```bash
     curl http://$CURRENT_HOST:8083/connectors/your-connector/status
-    ```
+    ```text
 
     The first time it connects to a MySQL server, Debezium takes a
     [consistent snapshot](https://debezium.io/documentation/reference/connectors/mysql.html#mysql-snapshots)
@@ -181,11 +201,10 @@ you **must** override the default value of `After-state only` to `false`.
       --bootstrap-server kafka:9092 \
       --from-beginning \
       --topic dbserver1.db1.table1
-    ```
+    ```bash
 
 ### C. Create a source
 
-{{< debezium-json >}}
 
 Debezium emits change events using an envelope that contains detailed
 information about upstream database operations, like the `before` and `after`
@@ -204,9 +223,8 @@ cluster, use the `IN CLUSTER` clause.
 
 ### D. Create a view on the source
 
-{{% ingest-data/ingest-data-kafka-debezium-view %}}
+<!-- Unresolved shortcode: {{% ingest-data/ingest-data-kafka-debezium-view %}... -->
 
 ### E. Create an index on the view
 
-{{% ingest-data/ingest-data-kafka-debezium-index %}}
-
+<!-- Unresolved shortcode: {{% ingest-data/ingest-data-kafka-debezium-index %... -->

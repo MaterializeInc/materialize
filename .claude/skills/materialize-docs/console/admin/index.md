@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/admin/
+complexity: intermediate
+description: Administration component of the Materialize console
+doc_type: reference
+keywords:
+- Admin
+- App Passwords
+- CREATE A
+- CREATE NEW
+- Admin (Cloud-only)
+- Available for administrators only.
+- DELETE CLIENT
+- Billing
+product_area: General
+status: stable
+title: Admin (Cloud-only)
+---
+
 # Admin (Cloud-only)
+
+## Purpose
+Administration component of the Materialize console
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Administration component of the Materialize console
 

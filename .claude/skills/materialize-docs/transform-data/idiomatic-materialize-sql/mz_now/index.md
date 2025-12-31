@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/mz_now/
+complexity: beginner
+description: '`mz_now()` expressions can only take comparison operators. `mz_now()`
+  expressions cannot be used with disjunctions `OR` in view definitions.'
+doc_type: overview
+keywords:
+- Idiomatic Materialize SQL
+- CREATE THE
+- CREATE AN
+- mz_now() expressions
+product_area: SQL
+status: stable
+title: mz_now() expressions
+---
+
 # mz_now() expressions
+
+## Purpose
+`mz_now()` expressions can only take comparison operators. `mz_now()` expressions cannot be used with disjunctions `OR` in view definitions.
+
+This page provides detailed documentation for this topic.
+
 
  `mz_now()` expressions can only take comparison operators. `mz_now()` expressions cannot be used with disjunctions `OR` in view definitions.
 
@@ -20,23 +43,38 @@ mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
 
 ## Idiomatic Materialize SQL
 
+This section covers idiomatic materialize sql.
+
 ### `mz_now()` expressions to calculate past or future timestamp
 
-**Idiomatic Materialize SQL**: {{< include-md
-file="shared-content/mz_now_operators.md" >}}
+**Idiomatic Materialize SQL**: `mz_now()` must be used with one of the following comparison operators: `=`,
+`<`, `<=`, `>`, `>=`, or an operator that desugars to them or to a conjunction
+(`AND`) of them (for example, `BETWEEN...AND...`). That is, you cannot use
+date/time operations directly on  `mz_now()` to calculate a timestamp in the
+past or future. Instead, rewrite the query expression to move the operation to
+the other side of the comparison.
+
 
 #### Examples
 
-{{< yaml-table data="mz_now/mz_now_operators" noHeader="true" >}}
+<!-- Dynamic table: mz_now/mz_now_operators - see original docs -->
 
 ### Disjunctions (`OR`)
 
-{{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md"
->}}
+When used in a materialized view definition, a view definition that is being
+indexed (i.e., although you can create the view and perform ad-hoc query on
+the view, you cannot create an index on that view), or a `SUBSCRIBE`
+statement:
+
+- `mz_now()` clauses can only be combined using an `AND`, and
+
+- All top-level `WHERE` or `HAVING` conditions must be combined using an `AND`,
+  even if the `mz_now()` clause is nested.
+
 
 For example:
 
-{{< yaml-table data="mz_now/mz_now_combination" >}}
+<!-- Dynamic table: mz_now/mz_now_combination - see original docs -->
 
 
 **Idiomatic Materialize SQL**: When `mz_now()` is included in a materialized
@@ -53,5 +91,5 @@ the query to use `UNION ALL` or `UNION` instead, deduplicating as necessary:
 
 #### Examples
 
-{{< yaml-table data="mz_now/mz_now_disjunction_alternatives" noHeader="true" >}}
+<!-- Dynamic table: mz_now/mz_now_disjunction_alternatives - see original docs -->
 

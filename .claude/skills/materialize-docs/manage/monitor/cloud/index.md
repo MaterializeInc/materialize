@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/cloud/
+complexity: advanced
+description: Monitoring and alerting for Materialize Cloud
+doc_type: reference
+keywords:
+- CREATE AND
+- CREATE A
+- Cloud
+- 'Filename:'
+- SELECT NAME
+- 'Note:'
+- 'Tip:'
+product_area: Operations
+status: stable
+title: Cloud
+---
+
 # Cloud
+
+## Purpose
+Monitoring and alerting for Materialize Cloud
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Monitoring and alerting for Materialize Cloud
 
@@ -47,14 +72,14 @@ For each threshold level, use the following table as a guide to set up your own 
 
 Metric | Warning | Alert | Description
 -- | -- | -- | --
-Memory utilization | 80% | 90% | Average [memory utilization](https://materialize.com/docs/sql/system-catalog/mz_internal/#mz_cluster_replica_utilization), (defined using heap_percent) for a cluster in the last *15 minutes*.
+Memory utilization | 80% | 90% | Average [memory utilization](../sql/system-catalog/mz_internal/#mz_cluster_replica_utilization), (defined using heap_percent) for a cluster in the last *15 minutes*.
 Source status | - | On Change | Source status change in the last *1 minute*.
 Cluster status | - | On Change | Cluster replica status change in the last *1 minute*.
 Freshness | > 5s | > 1m | Average [lag behind an input](/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
 
-{{<note>}}
+> **Note:** 
 Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](/support/) for questions.
-{{</note>}}
+
 
 ### Custom Thresholds
 
@@ -99,10 +124,10 @@ the following additional services:
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
-{{< note >}}
+> **Note:** 
 As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts)
 to connect external applications, like Datadog, to Materialize.
-{{</ note >}}
+
 
 To export metrics from Materialize and expose them in a format that Datadog can
 consume, you need to configure and run a Prometheus SQL Exporter. This service
@@ -115,21 +140,21 @@ which has been tried and tested in production environments.
 1. In the host that will run the Prometheus SQL Exporter, create a configuration
    file (`config.yml`) to hold the Exporter configuration.
 
-   {{< tip >}}
+   > **Tip:** 
    You can use [this sample
    `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
-   {{</ tip >}}
+   
 
 
 1. In the configuration file, define the connection to your Materialize region
    under `connections` using the credentials provided in the [Materialize Console](/console/).
 
-   {{< note >}}
+   > **Note:** 
    You must escape the special `@` character in `USER` for a successful
    connection. Example: instead of `name@email.com`, use `name%40email.com`.
-   {{</ note >}}
+   
 
    **Filename:** config.yml
    ```yaml
@@ -142,7 +167,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
      ...
-   ```
+   ```text
 
    To specify different configurations for different sets of metrics, like a
    different `interval`, use additional jobs with a dedicated connection.
@@ -154,7 +179,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
      ...
-   ```
+   ```text
 
 1. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
 
@@ -183,7 +208,7 @@ which has been tried and tested in production environments.
                    memory_percent::float AS memory_percent
                 FROM mz_cluster_replicas r
                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
-   ```
+   ```text
 
 1. Once you are done with the Prometheus SQL Exporter configuration,
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
@@ -211,7 +236,7 @@ configured to scrape the OpenMetrics format.
        # The namespace to prepend to all metrics.
        namespace: "materialize"
        metrics: [.*]
-   ```
+   ```text
 
   **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/datadog/datadog/conf.d/openmetrics.yaml)
   for all available configuration options.
@@ -272,10 +297,10 @@ the following additional services:
 
 ## Step 1. Set up a Prometheus SQL Exporter
 
-{{< note >}}
+> **Note:** 
 As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts)
 to connect external applications, like Grafana, to Materialize.
-{{</ note >}}
+
 
 To export metrics from Materialize and expose them in a format that Grafana can
 consume, you need to configure and run a Prometheus SQL Exporter. This service
@@ -288,20 +313,20 @@ which has been tried and tested in production environments.
 1. In the host that will run the Prometheus SQL Exporter, create a configuration
    file (`config.yml`) to hold the Exporter configuration.
 
-   {{< tip >}}
+   > **Tip:** 
    You can use [this sample
    `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
-   {{</ tip >}}
+   
 
 2. In the configuration file, define the connection to your Materialize region
    under `connections` using the credentials provided in the [Materialize Console](/console/).
 
-   {{< note >}}
+   > **Note:** 
    You must escape the special `@` character in `USER` for a successful
    connection. Example: instead of `name@email.com`, use `name%40email.com`.
-   {{</ note >}}
+   
 
    **Filename:** config.yml
    ```yaml
@@ -314,7 +339,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_Grafana_integration&sslmode=require"
      ...
-   ```
+   ```text
 
    To specify different configurations for different sets of metrics, like a
    different `interval`, use additional jobs with a dedicated connection.
@@ -326,7 +351,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_Grafana_integration&sslmode=require"
      ...
-   ```
+   ```text
 
 3. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
 
@@ -355,7 +380,7 @@ which has been tried and tested in production environments.
                    memory_percent::float AS memory_percent
                 FROM mz_cluster_replicas r
                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
-   ```
+   ```text
 
 4. Once you are done with the Prometheus SQL Exporter configuration,
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
@@ -366,8 +391,7 @@ which has been tried and tested in production environments.
 To scrape the metrics available in the Prometheus SQL Exporter endpoint, you
 must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss-agent) for Grafana cloud, or [Prometheus](https://prometheus.io/download/) for the self-hosted version:
 
-{{< tabs >}}
-{{< tab "Grafana Cloud">}}
+#### Grafana Cloud
 
 1. Follow the [instructions to install and run a Grafana Agent](https://grafana.com/docs/agent/latest/static/set-up/install/)
    in your host.
@@ -387,7 +411,7 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
          basic_auth:
             username: <USERNAME>
             password: <PASSWORD>
-   ```
+   ```text
 
    **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/grafana/cloud/agent.yaml)
    for all available configuration options.
@@ -401,8 +425,8 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
 
    </details>
 
-{{< /tab >}}
-{{< tab "Self-hosted Grafana">}}
+#### Self-hosted Grafana
+
 1. Follow the [instructions to install and run Prometheus](https://prometheus.io/docs/prometheus/latest/installation/)
    in your host.
 
@@ -428,8 +452,6 @@ must then set up a [Grafana Agent](https://grafana.com/docs/agent/latest/?pg=oss
 
 
 For more details on how to configure, run and troubleshoot Prometheus, see the [Prometheus documentation](https://prometheus.io/docs/introduction/overview/).
-{{< /tab >}}
-{{< /tabs >}}
 
 ## Step 3. Build a monitoring dashboard
 

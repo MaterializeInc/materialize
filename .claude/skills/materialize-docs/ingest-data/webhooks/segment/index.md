@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/webhooks/segment/
+complexity: advanced
+description: How to stream data from Segment to Materialize using webhooks
+doc_type: reference
+keywords:
+- 'Warning:'
+- CREATE CLUSTER
+- CREATE A
+- you can skip this step
+- Segment
+- does not support
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: Segment
+---
+
 # Segment
+
+## Purpose
+How to stream data from Segment to Materialize using webhooks
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to stream data from Segment to Materialize using webhooks
 
@@ -7,9 +33,9 @@ How to stream data from Segment to Materialize using webhooks
 This guide walks through the steps to ingest data from [Segment](https://segment.com/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 ### Before you begin
 
@@ -19,12 +45,12 @@ Ensure that you have:
 
 ## Step 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your webhook
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
+
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
@@ -32,7 +58,7 @@ To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/crea
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
-```
+```bash
 
 ## Step 2. Create a secret
 
@@ -40,7 +66,7 @@ To validate requests between Segment and Materialize, you must create a [secret]
 
 ```mzsql
 CREATE SECRET segment_webhook_secret AS '<secret_value>';
-```
+```text
 
 Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
 
@@ -63,7 +89,7 @@ CREATE SOURCE segment_source IN CLUSTER webhooks_cluster FROM WEBHOOK
     -- for ease of use.
     constant_time_eq(decode(headers->'x-signature', 'hex'), hmac(body, validation_secret, 'sha1'))
   );
-```
+```text
 
 After a successful run, the command returns a `NOTICE` message containing the
 unique [webhook URL](/sql/create-source/webhook/#webhook-url)
@@ -74,7 +100,7 @@ The URL will have the following format:
 
 ```
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
-```
+```text
 
 If you missed the notice, you can find the URLs for all webhook sources in the
 [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
@@ -82,11 +108,11 @@ system table.
 
 ### Access and authentication
 
-{{< warning >}}
+> **Warning:** 
 Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
-{{< /warning >}}
+
 
 The `CHECK` clause defines how to validate each request. At the time of writing,
 Segment validates requests by signing them with an HMAC in the `X-Signature`
@@ -136,13 +162,13 @@ mapping:
 
 5. After a succesful test, click **Save**.
 
-  {{< note >}}
+  > **Note:** 
   If **Test Mapping** fails in and throws a *"failed to validate the request"* error, it means the shared secret is not right. To fix this, follow this steps:
  1. In **Segment**, go to your webhook destination created in the **Step 4**.
  2. Click **Settings**.
  3. In **Shared Secret**, enter the secret created in the **Step 2**.
  4. Click **Save Changes**.
-  {{< /note >}}
+  
 
 ## Step 6. Validate incoming data
 
@@ -156,9 +182,11 @@ Segment, you can now query the incoming data:
 
     ```mzsql
     SELECT * FROM segment_source LIMIT 10;
-    ```
+    ```bash
 
 ## Step 7. Transform incoming data
+
+This section covers step 7. transform incoming data.
 
 ### JSON parsing
 
@@ -166,9 +194,8 @@ Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that uses [`jsonb` operators](/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types.
 
-{{< tabs >}}
+#### Page
 
-{{< tab "Page">}}
 ```mzsql
 CREATE VIEW parse_segment AS SELECT
     body->>'anonymousId' AS anonymousId,
@@ -189,10 +216,9 @@ CREATE VIEW parse_segment AS SELECT
     body->>'userId' AS user_id,
     body->>'version' AS version
 FROM segment_source;
-```
-{{< /tab >}}
+```bash
 
-{{< tab "Track">}}
+#### Track
 
 ```mzsql
 CREATE VIEW parse_segment AS SELECT
@@ -216,11 +242,10 @@ CREATE VIEW parse_segment AS SELECT
     body->>'userId' AS user_id,
     try_parse_monotonic_iso8601_timestamp(body->>'originalTimestamp') AS original_timestamp
 FROM segment_source;
-```
+```bash
 
-{{< /tab >}}
+#### Identity
 
-{{< tab "Identity">}}
 ```mzsql
 CREATE VIEW parse_segment AS SELECT
     body->>'anonymousId' AS anonymous_id,
@@ -248,10 +273,8 @@ CREATE VIEW parse_segment AS SELECT
     body->>'version' AS version
 FROM segment_source;
 ```
-{{< /tab >}}
-{{< /tabs >}}
 
-{{< json-parser >}}
+<!-- JSON Parser Widget - see original docs -->
 
 ### Timestamp handling
 

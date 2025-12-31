@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/dbt/
+complexity: advanced
+description: How to use dbt and Materialize to transform streaming data in real time.
+doc_type: reference
+keywords:
+- Use dbt to manage Materialize
+- SELECT A
+- CREATE A
+- SELECT 1
+- Deployment
+- SELECT MY_MODEL
+- SELECT 2
+- To get started
+- 'Note:'
+- Development guidelines
+product_area: Operations
+status: experimental
+title: Use dbt to manage Materialize
+---
+
 # Use dbt to manage Materialize
 
+## Purpose
 How to use dbt and Materialize to transform streaming data in real time.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to use dbt and Materialize to transform streaming data in real time.
 
 
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for
@@ -12,29 +39,23 @@ data pipelines, but also document, test and version-control them.
 Setting up a dbt project with Materialize is similar to setting it up with any
 other database that requires a non-native adapter.
 
-{{< note >}}
+> **Note:** 
 The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
 adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
 require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
-{{</ note >}}
 
 
 ## Available guides
 
-{{< multilinkbox >}}
-{{< linkbox title="To get started" >}}
+
+**To get started**
 [Get started with dbt and Materialize](./get-started/)
-{{</ linkbox >}}
-{{< linkbox title="Development guidelines" >}}
+**Development guidelines**
 [Development guidelines](./development-workflows)
-{{</ linkbox >}}
-{{< linkbox title="Deployment" >}}
+**Deployment**
 - [Blue-green deployment guide](/manage/dbt/blue-green-deployments/)
 
 - [Slim deployment guide](/manage/dbt/slim-deployments/)
-
-{{</ linkbox >}}
-{{</ multilinkbox >}}
 
 
 ## See also
@@ -48,19 +69,17 @@ in your team, and you want to manage objects like
 Terraform provider](/manage/terraform/) as a complementary deployment tool.
 
 
-
-
 ---
 
 ## Blue-green deployment
 
 
-{{< tip >}}
+> **Tip:** 
 Once your dbt project is ready to move out of development, or as soon as you
 start managing multiple users and deployment environments, we recommend
 checking the code in to **version control** and setting up an **automated
 workflow** to control the deployment of changes.
-{{</ tip >}}
+
 
 The `dbt-materialize` adapter ships with helper macros to automate blue/green
 deployments. We recommend using the blue/green pattern any time you need to
@@ -82,13 +101,13 @@ These permissions are required because the blue/green deployment process needs t
 
 ## Configuration and initialization
 
-{{< warning >}}
+> **Warning:** 
 If your dbt project includes [sinks](/manage/dbt/get-started/#sinks), you
 **must** ensure that these are created in a **dedicated schema and cluster**.
 Unlike other objects, sinks must not be recreated in the process of a blue/green
 deployment, and must instead cut over to the new definition of their upstream
 dependencies after the environment swap.
-{{</ warning >}}
+
 
 In a blue/green deployment, you first deploy your code changes to a deployment
 environment ("green") that is a clone of your production environment
@@ -110,7 +129,7 @@ These environments are later swapped transparently.
           schemas:
             # to specify multiple schemas, use [<schema1_name>, <schema2_name>].
             - <schema_name>
-    ```
+    ```text
 
 1. Use the [`run-operation`](https://docs.getdbt.com/reference/commands/run-operation)
    command to invoke the [`deploy_init`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_init.sql)
@@ -118,7 +137,7 @@ These environments are later swapped transparently.
 
     ```bash
     dbt run-operation deploy_init
-    ```
+    ```text
 
     This macro spins up a new cluster named `<cluster_name>_dbt_deploy` and a new
     schema named `<schema_name>_dbt_deploy` using the same configuration
@@ -129,7 +148,7 @@ These environments are later swapped transparently.
 
     ```bash
     dbt run --vars 'deploy: True'
-    ```
+    ```text
 
     The `deploy: True` variable instructs the adapter to append `_dbt_deploy` to
     the original schema or cluster specified for each model scoped for
@@ -138,18 +157,18 @@ These environments are later swapped transparently.
 
     You must [exclude sources and sinks](/manage/dbt/development-workflows/#exclude-sources-and-sinks) when running the dbt project.
 
-    {{< callout >}}
+    
   If you encounter an error like `String 'deploy:' is not valid YAML`, you
   might need to use an alternative syntax depending on your terminal environment.
   Different terminals handle quotes differently, so try:
 
   ```bash
   dbt run --vars "{\"deploy\": true}"
-  ```
+  ```text
 
   This alternative syntax is compatible with Windows terminals, PowerShell, or
   PyCharm Terminal.
-    {{</ callout >}}
+    
 
 ## Validation
 
@@ -169,7 +188,7 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 
     ```bash
     dbt run-operation deploy_await #--args '{poll_interval: 30, lag_threshold: "5s"}'
-    ```
+    ```text
 
     By default, `deploy_await` polls for cluster readiness every **15 seconds**,
     and waits for all objects in the deployment environment to have a lag
@@ -186,11 +205,11 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 
 ## Cutover and cleanup
 
-{{< warning >}}
+> **Warning:** 
 To avoid breakages in your production environment, we recommend **carefully
 [validating](#validation)** the results of the deployed changes in the deployment
 environment before cutting over.
-{{</ warning >}}
+
 
 1. Once `deploy_await` returns successfully and you have [validated the results](#validation)
    of the deployed changes on the deployment environment, it is safe to push the
@@ -204,12 +223,12 @@ environment before cutting over.
     ```bash
     # Do a dry run to validate the sequence of commands to execute
     dbt run-operation deploy_promote --args '{dry_run: true}'
-    ```
+    ```text
 
     ```bash
     # Promote the deployment environment to production
     dbt run-operation deploy_promote #--args '{wait: true, poll_interval: 30, lag_threshold: "5s"}'
-    ```
+    ```text
 
     By default, `deploy_promote` **does not** wait for all objects to be
     hydrated — we recommend carefully [validating](#validation) the results of
@@ -224,9 +243,9 @@ environment before cutting over.
     `poll_interval`                      | `15s`     | When `wait` is set to `true`, the time (in seconds) between each cluster readiness check.
     `lag_threshold`                      | `1s`      | When `wait` is set to `true`, the maximum lag threshold, which determines when all objects in the environment are considered hydrated and it's safe to perform the cutover step.
 
-    {{< note >}}The `deploy_promote` operation might fail if objects are
+    > **Note:** The `deploy_promote` operation might fail if objects are
     concurrently modified by a different session. If this occurs, re-run the
-    operation.{{</ note >}}
+    operation.
 
     This macro ensures all deployment targets, including schemas and clusters,
     are deployed together as a **single atomic operation**, and that any sinks
@@ -240,15 +259,13 @@ environment before cutting over.
 
     ```bash
     dbt run-operation deploy_cleanup
-    ```
+    ```text
 
-   {{< note >}}
+   > **Note:** 
    Any **active `SUBSCRIBE` commands** attached to the swapped
    cluster(s) **will break**. On retry, the client will automatically connect
    to the newly deployed cluster
-   {{</ note >}}
-
-
+   
 
 
 ---
@@ -273,10 +290,10 @@ types from each run using [node selection](https://docs.getdbt.com/reference/nod
 
 ### Exclude sources and sinks
 
-{{< note >}}
+> **Note:** 
 As you move towards productionizing your data model, we recommend managing
 sources and sinks [using Terraform](/manage/terraform/) instead.
-{{</ note >}}
+
 
 You can manually exclude specific materialization types using the
 [`exclude` flag](https://docs.getdbt.com/reference/node-selection/exclude) in
@@ -284,7 +301,7 @@ your dbt run invocations. To exclude sources and sinks, use:
 
 ```bash
 dbt run --exclude config.materialized:source config.materialized:sink
-```
+```bash
 
 #### YAML selectors
 
@@ -309,7 +326,7 @@ selectors:
         - exclude:
             - 'config.materialized:source'
             - 'config.materialized:sink'
-```
+```text
 
 Because `default: true` is specified, dbt will use the selector's criteria
 whenever you run an unqualified command (e.g. `dbt build`, `dbt run`). You can
@@ -332,17 +349,17 @@ dbt run --select "my_package.some_model" # runs a specific model in a specific p
 dbt run --select "tag:nightly"           # runs models with the "nightly" tag
 dbt run --select "path/to/models"        # runs models contained in path/to/models
 dbt run --select "path/to/my_model.sql"  # runs a specific model by its path
-```
+```text
 
 For a full rundown of selection logic options, check the [dbt documentation](https://docs.getdbt.com/reference/node-selection/syntax).
 
 ## Model results preview
 
-{{< note >}}
+> **Note:** 
 The `dbt show` command uses a `LIMIT` clause under the hood, which has
 [known performance limitations](/transform-data/troubleshooting/#result-filtering)
 in Materialize.
-{{</ note >}}
+
 
 To debug and preview the results of your models **without** materializing the
 results, you can use the [`dbt show`](https://docs.getdbt.com/reference/commands/show)
@@ -363,7 +380,7 @@ dbt show --select "model_name.sql"
 | value3               |
 | value4               |
 | value5               |
-```
+```text
 
 By default, the `dbt show` command will return the first 5 rows from the query
 result (i.e. `LIMIT 5`). You can adjust the number of rows returned using the
@@ -377,11 +394,11 @@ database relation (see [`dbt-core` #7391](https://github.com/dbt-labs/dbt-core/i
 
 **Minimum requirements:** `dbt-materialize` v1.8.0+
 
-{{< note >}}
+> **Note:** 
 Complex types like [`map`](/sql/types/map/) and [`list`](/sql/types/list/) are
 not supported in unit tests yet (see [`dbt-adapters` #113](https://github.com/dbt-labs/dbt-adapters/issues/113)).
 For an overview of other known limitations, check the [dbt documentation](https://docs.getdbt.com/docs/build/unit-tests#before-you-begin).
-{{</ note >}}
+
 
 To validate your SQL logic without fully materializing a model, as well as
 future-proof it against edge cases, you can use [unit tests](https://docs.getdbt.com/docs/build/unit-tests).
@@ -399,7 +416,7 @@ to hydrate before you can validate that it produces the expected results.
      2 AS not_testing,
      'a' AS string_a,
      DATE '2020-01-02' AS date_a
-   ```
+   ```text
 
    **Filename:** _models/my_model_b.sql_
    ```mzsql
@@ -408,7 +425,7 @@ to hydrate before you can validate that it produces the expected results.
      1 as id,
      2 as c,
      'b' as string_b
-   ```
+   ```text
 
    **Filename:** models/my_model.sql
    ```mzsql
@@ -420,7 +437,7 @@ to hydrate before you can validate that it produces the expected results.
    FROM {{ ref('my_model_a')}} my_model_a
    JOIN {{ ref('my_model_b' )}} my_model_b
    ON my_model_a.id = my_model_b.id
-   ```
+   ```text
 
 1. To add a unit test to `my_model`, create a `.yml` file under the `/models`
    directory, and use the [`unit_tests`](https://docs.getdbt.com/reference/resource-properties/unit-tests)
@@ -442,7 +459,7 @@ to hydrate before you can validate that it produces the expected results.
        expect:
          rows:
            - {c: 2}
-   ```
+   ```text
 
    For simplicity, this example provides mock data using inline dictionary
    values, but other formats are supported. Check the [dbt documentation](https://docs.getdbt.com/reference/resource-properties/data-formats)
@@ -474,7 +491,7 @@ to hydrate before you can validate that it produces the expected results.
     @@ ,c
     +++,3
     ---,2
-    ```
+    ```text
 
     It's important to note that the **direct upstream dependencies** of the
     model that you're unit testing **must exist** in Materialize before you can
@@ -483,7 +500,7 @@ to hydrate before you can validate that it produces the expected results.
 
     ```bash
     dbt run --select "my_model_a.sql" "my_model_b.sql" --empty
-    ```
+    ```text
 
     Alternatively, you can execute unit tests as part of the `dbt build`
     command, which will ensure the upstream depdendencies are created before
@@ -510,9 +527,7 @@ to hydrate before you can validate that it produces the expected results.
     @@ ,c
     +++,3
     ---,2
-    ```
-
-
+    ```text
 
 
 ---
@@ -537,24 +552,24 @@ need to:
 1. Install the [`dbt-materialize` plugin](https://pypi.org/project/dbt-materialize/)
    (optionally using a virtual environment):
 
-   {{< note >}}
+   > **Note:** 
     The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
     adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
     require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
-  {{</ note >}}
+  
 
     ```bash
     python3 -m venv dbt-venv                  # create the virtual environment
     source dbt-venv/bin/activate              # activate the virtual environment
     pip install dbt-core dbt-materialize      # install dbt-core and the adapter
-    ```
+    ```text
 
     The installation will include the `dbt-postgres` dependency. To check that
     the plugin was successfully installed, run:
 
     ```bash
     dbt --version
-    ```
+    ```text
 
     `materialize` should be listed under "Plugins". If this is not the case,
     double-check that the virtual environment is activated!
@@ -573,7 +588,7 @@ To create a new project, run:
 
 ```bash
 dbt init <project_name>
-```
+```text
 
 This command will bootstrap a starter project with default configurations and
 create a `profiles.yml` file, if it doesn't exist. To help you get started, the
@@ -581,13 +596,12 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 
 ### Connect to Materialize
 
-{{< note >}}
+> **Note:** 
 
 As a best practice, we strongly recommend using [service
 accounts](/security/cloud/users-service-accounts/create-service-accounts) to
 connect external applications, like dbt, to Materialize.
 
-{{</ note >}}
 
 dbt manages all your connection configurations (or, profiles) in a file called
 [`profiles.yml`](https://docs.getdbt.com/dbt-cli/configure-your-profile). By
@@ -597,7 +611,7 @@ default, this file is located under `~/.dbt/`.
 
     ```bash
     dbt debug --config-dir
-    ```
+    ```text
 
     **Note:** If you started from an existing project but it's your first time
       setting up dbt, it's possible that this file doesn't exist yet. You can
@@ -643,7 +657,7 @@ default, this file is located under `~/.dbt/`.
           sslmode: require
 
       target: dev
-    ```
+    ```text
 
     The `target` parameter allows you to configure the [target environment](https://docs.getdbt.com/docs/guides/managing-environments#how-do-i-maintain-different-environments-with-dbt)
     that dbt will use to run your models.
@@ -652,7 +666,7 @@ default, this file is located under `~/.dbt/`.
 
     ```bash
     dbt debug
-    ```
+    ```text
 
     If the output reads `All checks passed!`, you're good to go! The
     [dbt documentation](https://docs.getdbt.com/docs/guides/debugging-errors#types-of-errors)
@@ -666,7 +680,7 @@ strategy. Because Materialize is optimized for real-time transformations of
 streaming data and the core of dbt is built around batch, the `dbt-materialize`
 adapter implements a few custom materialization types:
 
-{{% dbt-materializations %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: dbt-materializations --> --> -->
 
 Create a materialization for each SQL statement you're planning to deploy. Each
 individual materialization should be stored as a `.sql` file under the
@@ -681,14 +695,14 @@ interpret that data. You can instruct dbt to create a source using the custom
 from another model using the dbt [`ref()`](https://docs.getdbt.com/reference/dbt-jinja-functions/ref)
 or [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) functions.
 
-{{< note >}}
+> **Note:** 
 To create a source, you first need to [create a connection](/sql/create-connection)
 that specifies access and authentication parameters. Connections are **not
 exposed** in dbt, and need to exist before you run any `source` models.
-{{</ note >}}
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka">}}
+
+#### Kafka
+
 Create a [Kafka source](/sql/create-source/kafka/).
 
 **Filename:** sources/kafka_topic_a.sql
@@ -697,16 +711,17 @@ Create a [Kafka source](/sql/create-source/kafka/).
 
 FROM KAFKA CONNECTION kafka_connection (TOPIC 'topic_a')
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
-```
+```text
 
 The source above would be compiled to:
 
-```
+```text
 database.schema.kafka_topic_a
-```
+```json
 
-{{< /tab >}}
-{{< tab "PostgreSQL">}}
+
+#### PostgreSQL
+
 Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 **Filename:** sources/pg.sql
@@ -715,7 +730,7 @@ Create a [PostgreSQL source](/sql/create-source/postgres/).
 
 FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
 FOR ALL TABLES
-```
+```text
 
 Materialize will automatically create a **subsource** for each table in the
 `mz_source` publication. Pulling subsources into the dbt context automatically
@@ -733,7 +748,7 @@ sources:
     tables:
       - name: table_a
       - name: table_b
-```
+```text
 
 Once a subsource has been defined this way, it can be referenced from another
 model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source)
@@ -753,18 +768,19 @@ FROM {{ source('pg','table_a') }}
 INNER JOIN
      {{ source('pg','table_b') }}
     ON table_a.id = table_b.foo_id
-```
+```text
 
 The source and subsources above would be compiled to:
 
-```
+```text
 database.schema.pg
 database.schema.table_a
 database.schema.table_b
-```
+```json
 
-{{< /tab >}}
-{{< tab "MySQL">}}
+
+#### MySQL
+
 Create a [MySQL source](/sql/create-source/mysql/).
 
 **Filename:** sources/mysql.sql
@@ -773,7 +789,7 @@ Create a [MySQL source](/sql/create-source/mysql/).
 
 FROM MYSQL CONNECTION mysql_connection
 FOR ALL TABLES;
-```
+```text
 
 Materialize will automatically create a **subsource** for each table in the
 upstream database. Pulling subsources into the dbt context automatically
@@ -791,7 +807,7 @@ sources:
     tables:
       - name: table_a
       - name: table_b
-```
+```text
 
 Once a subsource has been defined this way, it can be referenced from another
 model using the dbt [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source)
@@ -811,18 +827,19 @@ FROM {{ source('mysql','table_a') }}
 INNER JOIN
      {{ source('mysql','table_b') }}
     ON table_a.id = table_b.foo_id
-```
+```text
 
 The source and subsources above would be compiled to:
 
-```
+```text
 database.schema.mysql
 database.schema.table_a
 database.schema.table_b
-```
+```json
 
-{{< /tab >}}
-{{< tab "Webhooks">}}
+
+#### Webhooks
+
 Create a [webhook source](/sql/create-source/webhook/).
 
 **Filename:** sources/webhook.sql
@@ -841,15 +858,14 @@ FROM WEBHOOK
       )
       constant_time_eq(headers->'authorization', basic_hook_auth)
     );
-```
+```text
 
 The source above would be compiled to:
 
-```
+```text
 database.schema.webhook
-```
-{{< /tab >}}
-{{< /tabs >}}
+```json
+
 
 ### Views and materialized views
 
@@ -880,7 +896,7 @@ SELECT
     col_a, ...
 -- Reference model dependencies using the dbt ref() function
 FROM {{ ref('kafka_topic_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -889,7 +905,7 @@ CREATE VIEW database.schema.view_a AS
 SELECT
     col_a, ...
 FROM database.schema.kafka_topic_a;
-```
+```text
 
 The resulting view **will not** keep results incrementally updated without an
 index (see [Creating an index on a view](#creating-an-index-on-a-view)). Once a
@@ -899,10 +915,10 @@ function.
 
 ##### Creating an index on a view
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use indexes in Materialize, see
 [Indexes on views](/concepts/indexes/#indexes-on-views).
-{{</ tip >}}
+
 
 To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
 on view models using the [`index` configuration](#indexes). This
@@ -917,7 +933,7 @@ re-running dbt to refresh your models.
 SELECT
     col_a, ...
 FROM {{ ref('kafka_topic_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statements:
 
@@ -928,7 +944,7 @@ SELECT
 FROM database.schema.kafka_topic_a;
 
 CREATE INDEX database.schema.view_a_idx IN CLUSTER cluster_a ON view_a (col_a);
-```
+```text
 
 As new data arrives, indexes keep view results **incrementally updated** in
 memory within a [cluster](/concepts/clusters/). Indexes help optimize query
@@ -947,7 +963,7 @@ SELECT
     col_a, ...
 -- Reference model dependencies using the dbt ref() function
 FROM {{ ref('view_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -956,7 +972,7 @@ CREATE MATERIALIZED VIEW database.schema.materialized_view_a AS
 SELECT
     col_a, ...
 FROM database.schema.view_a;
-```
+```text
 
 The resulting materialized view will keep results **incrementally updated** in
 durable storage as new data arrives. Once a `materialized_view` model has been
@@ -965,10 +981,10 @@ function.
 
 ##### Creating an index on a materialized view
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use indexes in Materialize, see
 [Indexes on materialized views](/concepts/views/#indexes-on-materialized-views).
-{{</ tip >}}
+
 
 With a materialized view, your models are kept **up-to-date** in Materialize as
 new data arrives. This allows you to bypass the need for maintaining complex
@@ -988,7 +1004,7 @@ can create [indexes](/concepts/indexes/) on materialized view models using the
 SELECT
     col_a, ...
 FROM {{ ref('view_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statements:
 
@@ -999,7 +1015,7 @@ SELECT
 FROM database.schema.view_a;
 
 CREATE INDEX database.schema.materialized_view_a_idx IN CLUSTER cluster_b ON materialized_view_a (col_a);
-```
+```text
 
 As new data arrives, results are **incrementally updated** in durable storage
 and also accessible in memory within the [cluster](/concepts/clusters/) the
@@ -1008,12 +1024,12 @@ against materialized views faster.
 
 ##### Using refresh strategies
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use refresh strategies in Materialize,
 see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
-{{</ tip >}}
 
-{{< private-preview />}}
+
+> **Private Preview:** This feature is in private preview.
 
 For data that doesn't require up-to-the-second freshness, or that can be
 accessed using different patterns to optimize for performance and cost
@@ -1034,7 +1050,7 @@ significant — so you must also specify a valid scheduled `cluster` using the
 SELECT
     col_a, ...
 FROM {{ ref('view_a') }}
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -1049,17 +1065,17 @@ WITH (
   REFRESH EVERY '1 day' ALIGNED TO '2024-10-22T10:40:33+00:00'
 ) AS
 SELECT ...;
-```
+```text
 
 Materialized views configured with a refresh strategy are **not incrementally
 maintained** and must recompute their results from scratch on every refresh.
 
 ##### Using retain history
 
-{{< tip >}}
+> **Tip:** 
 For guidance and best practices on how to use retain history in Materialize,
 see [Retain history](/transform-data/patterns/durable-subscriptions/#set-history-retention-period).
-{{</ tip >}}
+
 
 To configure how long historical data is retained in a materialized view, use the
 `retain_history` configuration. This is useful for maintaining a window of
@@ -1077,7 +1093,7 @@ SELECT
     count(*) as count
 FROM {{ ref('view_a') }}
 GROUP BY col_a
-```
+```text
 
 The model above will be compiled to the following SQL statement:
 
@@ -1090,7 +1106,7 @@ SELECT
     count(*) as count
 FROM database.schema.view_a
 GROUP BY col_a;
-```
+```text
 
 You can specify the retention period using common time units like:
 - `'1hr'` for one hour
@@ -1103,8 +1119,9 @@ In Materialize, a [sink](/sql/create-sink) describes an **external** system you
 want to write data to, and provides details about how to encode that data. You
 can instruct dbt to create a sink using the custom `sink` materialization.
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka">}}
+
+#### Kafka
+
 Create a [Kafka sink](/sql/create-sink).
 
 **Filename:** sinks/kafka_topic_c.sql
@@ -1115,15 +1132,13 @@ FROM {{ ref('materialized_view_a') }}
 INTO KAFKA CONNECTION kafka_connection (TOPIC 'topic_c')
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
 ENVELOPE DEBEZIUM
-```
+```text
 
 The sink above would be compiled to:
-```
+```text
 database.schema.kafka_topic_c
-```
+```json
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Configuration: clusters, databases and indexes {#configuration}
 
@@ -1136,7 +1151,7 @@ created. If unspecified, the default cluster for the connection is used.
 
 ```mzsql
 {{ config(materialized='materialized_view', cluster='cluster_a') }}
-```
+```text
 
 To dynamically generate the name of a cluster (e.g., based on the target
 environment), you can override the `generate_cluster_name` macro with your
@@ -1152,7 +1167,7 @@ in `dbt_project.yml`.
         {{ target.name }}_{{ custom_cluster_name }}
     {%- endif -%}
 {%- endmacro %}
-```
+```bash
 
 #### Databases
 
@@ -1162,7 +1177,7 @@ unspecified, the default database for the connection is used.
 
 ```mzsql
 {{ config(materialized='materialized_view', database='database_a') }}
-```
+```bash
 
 #### Indexes
 
@@ -1187,18 +1202,18 @@ Component                            | Value     | Description
 ```mzsql
 {{ config(materialized='view',
           indexes=[{'columns': ['col_a','col_b'], 'cluster': 'cluster_a'}]) }}
-```
+```bash
 
 ##### Creating a default index
 
 ```mzsql
 {{ config(materialized='view',
     indexes=[{'default': True}]) }}
-```
+```bash
 
 ### Configuration: refresh strategies {#configuration-refresh-strategies}
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 **Minimum requirements:** `dbt-materialize` v1.7.3+
 
@@ -1236,7 +1251,7 @@ changes.
         data_type: string
       - name: col_without_constraints
         data_type: int
-```
+```text
 
 Setting the `contract` configuration to `enforced: true` requires you to specify
 a `name` and `data_type` for every column in your models. If there is a
@@ -1264,7 +1279,7 @@ types are supported.
           - type: not_null
       - name: col_without_constraints
         data_type: int
-```
+```text
 
 A `not_null` constraint will be compiled to an [`ASSERT NOT NULL`](/sql/create-materialized-view/#non-null-assertions)
 option for the specified columns of the materialize view.
@@ -1277,15 +1292,15 @@ WITH (
 AS
 SELECT NULL AS col_with_constraints,
        2 AS col_without_constraints;
-```
+```bash
 
 ## Build and run dbt
 
 1. [Run](https://docs.getdbt.com/reference/commands/run) the dbt models:
 
-    ```
+    ```text
     dbt run
-    ```
+    ```text
 
     This command generates **executable SQL code** from any model files under
     the specified directory and runs it in the target environment. You can find
@@ -1298,7 +1313,7 @@ SELECT NULL AS col_with_constraints,
 
     ```mzsql
     SHOW SOURCES [FROM database.schema];
-    ```
+    ```text
 
     <p></p>
 
@@ -1310,13 +1325,13 @@ SELECT NULL AS col_with_constraints,
      postgres_table_a
      postgres_table_b
      kafka_topic_a
-    ```
+    ```text
 
     <p></p>
 
     ```mzsql
     SHOW VIEWS;
-    ```
+    ```text
 
     <p></p>
 
@@ -1324,13 +1339,13 @@ SELECT NULL AS col_with_constraints,
            name
     -------------------
      view_a
-    ```
+    ```text
 
     <p></p>
 
     ```mzsql
     SHOW MATERIALIZED VIEWS;
-    ```
+    ```text
 
     <p></p>
 
@@ -1338,7 +1353,7 @@ SELECT NULL AS col_with_constraints,
            name
     -------------------
      materialized_view_a
-    ```
+    ```text
 
 That's it! From here on, Materialize makes sure that your models
 are **incrementally updated** as new data streams in, and that you get **fresh
@@ -1365,7 +1380,7 @@ trigger **real-time alerts** downstream.
         models:
           +store_failures: true
           +schema: 'etl_failure'
-    ```
+    ```text
 
     This will instruct dbt to create a materialized view for each configured
     test that can keep track of failures over time. By default, test views are
@@ -1388,7 +1403,7 @@ trigger **real-time alerts** downstream.
             data_tests:
               - not_null
               - unique
-    ```
+    ```text
 
     The type of test and the columns being tested are used as a base for naming
     the test materialized views. For example, the configuration above would
@@ -1398,7 +1413,7 @@ trigger **real-time alerts** downstream.
 
     ```bash
     dbt test # use --select test_type:data to only run data tests!
-    ```
+    ```text
 
     When configured to `store_failures`, this command will create a materialized
     view for each test using the respective `SELECT` statements, instead of
@@ -1413,7 +1428,7 @@ trigger **real-time alerts** downstream.
 
     ```mzsql
     SHOW SCHEMAS;
-    ```
+    ```text
 
     <p></p>
 
@@ -1422,13 +1437,13 @@ trigger **real-time alerts** downstream.
     -------------------
      public
      public_etl_failure
-    ```
+    ```text
 
     <p></p>
 
     ```mzsql
     SHOW MATERIALIZED VIEWS FROM public_etl_failure;
-    ```
+    ```text
 
     <p></p>
 
@@ -1437,7 +1452,7 @@ trigger **real-time alerts** downstream.
     -------------------
      not_null_col_a
      unique_col_a
-    ```
+    ```text
 
 With continuous testing in place, you can then build alerts off of the test
 materialized views using any common PostgreSQL-compatible [client library](/integrations/client-libraries/)
@@ -1462,7 +1477,7 @@ are all set.
 
     ```bash
     dbt docs generate
-    ```
+    ```text
 
     dbt will grab any additional project information and Materialize catalog
     metadata, then compile it into `.json` files (`manifest.json` and
@@ -1475,7 +1490,7 @@ are all set.
 
     ```bash
     dbt docs serve #--port <port>
-    ```
+    ```text
 
 1. In a browser, navigate to `localhost:8000`. There, you can find an overview
    of your dbt project, browse existing models and metadata, and in general keep
@@ -1494,10 +1509,10 @@ To persist model- and column-level descriptions as [comments](/sql/comment-on/)
 in Materialize, use the [`persist_docs`](https://docs.getdbt.com/reference/resource-configs/persist_docs)
 configuration.
 
-{{< note >}}
+> **Note:** 
 Documentation persistence is tightly coupled with `dbt run` command invocations.
 For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.com/dbt-labs/dbt-core/issues/4226). 👻
-{{</ note >}}
+
 
 1. To enable docs persistence, add a `models` property to `dbt_project.yml` with
    the `persist-docs` configuration:
@@ -1507,7 +1522,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
       +persist_docs:
         relation: true
         columns: true
-    ```
+    ```text
 
     As an alternative, you can configure `persist-docs` in the config block of your models:
 
@@ -1516,7 +1531,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
         materialized=materialized_view,
         persist_docs={"relation": true, "columns": true}
     ) }}
-    ```
+    ```text
 
 1. Once `persist-docs` is configured, any `description` defined in your `.yml`
   files is persisted to Materialize in the [mz_internal.mz_comments](/sql/system-catalog/mz_internal/#mz_comments)
@@ -1524,7 +1539,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
 
     ```mzsql
       SELECT * FROM mz_internal.mz_comments;
-    ```
+    ```text
     <p></p>
 
     ```nofmt
@@ -1534,9 +1549,7 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
        u622 | materialize-view  |               | materialized view a description
        u626 | materialized-view |             1 | column a description
        u626 | materialized-view |             2 | column b description
-    ```
-
-
+    ```text
 
 
 ---
@@ -1544,12 +1557,12 @@ For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.co
 ## Slim deployments
 
 
-{{< tip >}}
+> **Tip:** 
 Once your dbt project is ready to move out of development, or as soon as you
 start managing multiple users and deployment environments, we recommend
 checking the code in to **version control** and setting up an **automated
 workflow** to control the deployment of changes.
-{{</ tip >}}
+
 
 [//]: # "TODO(morsapaes) Consider moving demos to template repo."
 
@@ -1564,10 +1577,10 @@ development idle time and CI costs in development environments. For
 production deployments, you should prefer the [blue/green deployment pattern](/manage/dbt/blue-green-deployments/).
 
 
-{{< note >}}
+> **Note:** 
 Check [this demo](https://github.com/morsapaes/dbt-ci-templates) for a sample
 end-to-end workflow using GitHub and GitHub Actions.
-{{</ note >}}
+
 
 1. Fetch the production `manifest.json` file into the CI environment:
 
@@ -1580,7 +1593,7 @@ end-to-end workflow using GitHub and GitHub Actions.
               AWS_REGION: us-east-1
             run: |
               aws s3 cp s3://mz-test-dbt/manifest.json ./manifest.json
-    ```
+    ```text
 
 1. Then, instruct dbt to run and test changed models and dependencies only:
 
@@ -1595,7 +1608,7 @@ end-to-end workflow using GitHub and GitHub Actions.
               source .venv/bin/activate
               dbt run-operation drop_environment
               dbt build --profiles-dir ./ --select state:modified+ --state ./ --target production
-    ```
+    ```text
 
     In the example above, `--select state:modified+` instructs dbt to run all
     models that were modified (`state:modified`) and their downstream
@@ -1620,6 +1633,3 @@ end-to-end workflow using GitHub and GitHub Actions.
             run: |
               aws s3 cp ./target/manifest.json s3://mz-test-dbt
     ```
-
-
-

@@ -1,12 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/operational-guidelines/
+complexity: intermediate
+description: General guidelines for production
+doc_type: howto
+keywords:
+- Operational guidelines
+product_area: Operations
+status: stable
+title: Operational guidelines
+---
+
 # Operational guidelines
 
+## Purpose
 General guidelines for production
 
+Follow the steps below to complete this task.
+
+
+General guidelines for production
 
 
 The following provides some general guidelines for production.
 
 ## Clusters
+
+This section covers clusters.
 
 ### Production clusters for production workloads only
 
@@ -15,7 +35,7 @@ production cluster(s) to run development workloads or non-production tasks.
 
 ### Three-tier architecture
 
-{{% best-practices/architecture/three-tier %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 #### Alternatives
 
@@ -28,9 +48,11 @@ architectures](/manage/appendix-alternative-cluster-architectures/) for details.
 
 ## Sources
 
+This section covers sources.
+
 ### Scheduling
 
-{{% best-practices/ingest-data/scheduling %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 ### Separate cluster(s) for sources
 
@@ -38,11 +60,13 @@ In production, if possible, use a dedicated cluster for
 [sources](/concepts/sources/); i.e., avoid putting sources on the same cluster
 that hosts compute objects, sinks, and/or serves queries.
 
-{{% best-practices/architecture/upsert-source %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 See also [Production cluster architecture](#three-tier-architecture).
 
 ## Sinks
+
+This section covers sinks.
 
 ### Separate sinks from sources
 
@@ -66,24 +90,17 @@ See also [Cluster architecture](#three-tier-architecture).
 
 ## Role-based access control (RBAC)
 
-{{< tabs >}}
+This section covers role-based access control (rbac).
 
-{{< tab "Cloud" >}}
+#### Cloud
 
 ### Cloud
 
-{{% yaml-sections data="rbac/recommendations-cloud"
-heading-field="recommendation" heading-level=5 %}}
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-cloud... -->
 
-{{< /tab >}}
-
-{{< tab "Self-Managed" >}}
+#### Self-Managed
 
 ### Self-Managed
 
-{{% yaml-sections data="rbac/recommendations-sm"
-heading-field="recommendation" heading-level=5 %}}
-{{< /tab >}}
-
-{{< /tabs >}}
-
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-sm"
+h... -->

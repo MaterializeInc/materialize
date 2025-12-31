@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/patterns/durable-subscriptions/
+complexity: advanced
+description: How to enable lossless, durable subscriptions to your changing results
+  in Materialize
+doc_type: reference
+keywords:
+- retain history
+- 'For sources, tables and materialized views:'
+- 'Important:'
+- SELECT AUCTION_ID
+- ALTER MATERIALIZED
+- CREATE MATERIALIZED
+- 'Private Preview:'
+- SELECT D
+- Durable subscriptions
+product_area: SQL
+status: experimental
+title: Durable subscriptions
+---
+
 # Durable subscriptions
+
+## Purpose
+How to enable lossless, durable subscriptions to your changing results in Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to enable lossless, durable subscriptions to your changing results in Materialize
 
@@ -24,7 +52,7 @@ application following a connection disruption, you can:
 
 ## History retention period
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 By default, all user-defined sources, tables, materialized views, and indexes
 keep track of the most recent version of their underlying data. To gracefully
@@ -32,13 +60,13 @@ recover from connection disruptions and enable lossless, _durable
 subscriptions_, you can configure the sources, tables, and materialized views
 that the subscription depends on to **retain history**.
 
-{{< important >}}
+> **Important:** 
 
 Configuring indexes to retain history is not recommended. Instead, consider
 creating a materialized view for your subscription query and configuring the
 history retention period on that view.
 
-{{</ important >}}
+
 
 To configure the history retention period for sources, tables and materialized
 views, use the `RETAIN HISTORY` option in its `CREATE` statement. This value can
@@ -77,7 +105,7 @@ See also [Considerations](#considerations).
 
 ### Set history retention period
 
-{{< important >}}
+> **Important:** 
 
 Setting the history retention period for an object will lead to increased
 resource utilization. Moreover, for indexes, setting history retention period is
@@ -85,7 +113,7 @@ not recommended. Instead, consider creating a materialized view for your
 subscription query and configuring the history retention period on that view.
 See [Considerations](#considerations).
 
-{{</ important >}}
+
 
 To set the history retention period for [sources](/sql/create-source/),
 [tables](/sql/create-table/), and [materialized
@@ -104,7 +132,7 @@ views](/sql/create-materialized-view/), you can either:
          amount
    FROM highest_bid_per_auction
    WHERE end_time < mz_now();
-   ```
+   ```text
 
 - Specify the `RETAIN HISTORY` option in the `ALTER` statement. The `RETAIN
   HISTORY` option accepts positive [interval](/sql/types/interval/) values
@@ -112,7 +140,7 @@ views](/sql/create-materialized-view/), you can either:
 
   ```mzsql
   ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
-  ```
+  ```bash
 
 ### View history retention period for an object
 
@@ -134,7 +162,7 @@ FROM
         LEFT JOIN mz_databases AS d ON s.database_id = d.id
         LEFT JOIN mz_internal.mz_history_retention_strategies AS hrs ON mv.id = hrs.id
 WHERE mv.name = 'winning_bids';
-```
+```text
 
 If set, the returning result includes the value (in milliseconds) of the history
 retention period:
@@ -144,7 +172,7 @@ retention period:
  database_name | schema_name |     name     | strategy |  value
 ---------------+-------------+--------------+----------+---------
  materialize   | public      | winning_bids | FOR      | 7200000
-```
+```bash
 
 ### Unset/reset history retention period
 
@@ -153,7 +181,7 @@ the `RESET (RETAIN HISTORY)` option in the `ALTER` statement. For example:
 
 ```mzsql
 ALTER MATERIALIZED VIEW winning_bids RESET (RETAIN HISTORY);
-```
+```bash
 
 ### Considerations
 
@@ -207,7 +235,7 @@ continuous query against Materialize in your application code:
 
    ```mzsql
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT true);
-   ```
+   ```text
 
    If you do not need a full snapshot to bootstrap your application,  change
    this to `SNAPSHOT false`.

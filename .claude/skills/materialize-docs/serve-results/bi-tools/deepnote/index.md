@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/deepnote/
+complexity: intermediate
+description: How to create collaborative data notebooks with Deepnote
+doc_type: reference
+keywords:
+- SELECT AN
+- '[Deepnote](https://deepnote.com/)'
+- CREATE COLLABORATIVE
+- CREATE AN
+- Menu
+- CREATE INTEGRATION
+- Workspace integrations
+- Integrations
+- Deepnote
+- 'Note:'
+product_area: Sinks
+status: stable
+title: Deepnote
+---
+
 # Deepnote
 
+## Purpose
 How to create collaborative data notebooks with Deepnote
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to create collaborative data notebooks with Deepnote
 
 
 This guide walks you through the steps required to use the collaborative data notebook [Deepnote](https://deepnote.com/) with Materialize.
@@ -10,9 +37,9 @@ This guide walks you through the steps required to use the collaborative data no
 
 1. Sign in to **[Deepnote](https://deepnote.com/)**.
 2. Go to the **Workspace integrations** page.
-  {{< note >}}
-  If you are inside a workspace, in the {{% icons/burger_menu %}} **Menu**, click **Integrations**
-  {{</ note >}}
+  > **Note:** 
+  If you are inside a workspace, in the <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/burger_menu --> --> --> **Menu**, click **Integrations**
+  
 1. Click in the **+ Add Integration** button.
 2. Search and click the **Materialize** option.
 3. Enter the connection fields as follows:
@@ -30,7 +57,7 @@ This guide walks you through the steps required to use the collaborative data no
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Execute and visualize a query
 
@@ -57,7 +84,7 @@ This guide walks you through the steps required to use the collaborative data no
     This query generates a series of 1000 numbers squared and assigns row numbers to each.
 3. Click the **Run Notebook** button.
 
-4. Inside the block, click the {{% icons/chart %}} **Visualize** button and configure as follows:
+4. Inside the block, click the <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: icons/chart --> --> --> **Visualize** button and configure as follows:
    1. In the **Y Axis** options, select the **number** column and set the aggregation to **None**.
    2. In the **X Axis** options, select the **row_num** column and set the aggregation to **None**.
 
@@ -67,4 +94,3 @@ This guide walks you through the steps required to use the collaborative data no
 ### Related pages
 
 For more information about Deepnote and the integration, visit [their documentation.](https://deepnote.com/docs/materialize)
-

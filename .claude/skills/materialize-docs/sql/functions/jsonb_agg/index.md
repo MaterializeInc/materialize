@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/jsonb_agg/
+complexity: advanced
+description: Aggregates values (including nulls) as a jsonb array.
+doc_type: reference
+keywords:
+- CREATE A
+- SELECT JSONB_AGG
+- CREATE VIEW
+- jsonb_agg function
+- CREATE MATERIALIZED
+product_area: Indexes
+status: stable
+title: jsonb_agg function
+---
+
 # jsonb_agg function
+
+## Purpose
+Aggregates values (including nulls) as a jsonb array.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Aggregates values (including nulls) as a jsonb array.
 
@@ -10,7 +33,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "jsonb-agg.svg" >}}
+[See diagram: jsonb-agg.svg]
 
 ## Signatures
 
@@ -27,6 +50,8 @@ ignored. If you need to perform aggregation in a specific order, you must specif
 
 ## Details
 
+This section covers details.
+
 ### Usage in dataflows
 
 While `jsonb_agg` is available in Materialize, materializing `jsonb_agg(expression)`
@@ -41,9 +66,11 @@ on top of that. That pattern is illustrated in the following statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT jsonb_agg(foo_view.bar) FROM foo_view;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT
@@ -56,7 +83,7 @@ FROM (
   (3, 'hi'),
   (4, 'salutations')
   ) AS t(id, content);
-```
+```text
 ```nofmt
                        my_agg
 ----------------------------------------------------

@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/system-catalog/pg_catalog/
+complexity: intermediate
+description: pg_catalog is a system catalog that presents metadata in the format used
+  by PostgreSQL.
+doc_type: reference
+keywords:
+- pg_catalog
+product_area: Indexes
+status: stable
+title: pg_catalog
+---
+
 # pg_catalog
+
+## Purpose
+pg_catalog is a system catalog that presents metadata in the format used by PostgreSQL.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 pg_catalog is a system catalog that presents metadata in the format used by PostgreSQL.
 

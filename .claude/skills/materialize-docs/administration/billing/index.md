@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/administration/billing/
+complexity: beginner
+description: Understand the billing model of Materialize Cloud, and learn best practices
+  for cost control.
+doc_type: reference
+keywords:
+- free
+- Usage & billing (Cloud)
+- administrator
+- CREATE THE
+- 'Note:'
+- SELECT THE
+product_area: General
+status: stable
+title: Usage & billing (Cloud)
+---
+
 # Usage & billing (Cloud)
+
+## Purpose
+Understand the billing model of Materialize Cloud, and learn best practices for cost control.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Understand the billing model of Materialize Cloud, and learn best practices for cost control.
 
@@ -18,14 +43,14 @@ maintaining up-to-date results while also providing strong [consistency
 guarantees](/get-started/isolation-level/). The credit usage for a cluster is
 measured at a one second granularity.
 
-{{< note >}}
+> **Note:** 
 
 When you enable a Materialize region, various [system
 clusters](/sql/system-clusters/) are pre-installed to improve the user
 experience as well as support system administration tasks. Except for the
 default `quickstart` cluster, you are <red>not billed</red> for these system clusters.
 
-{{</ note >}}
+
 
 You must provision at least one cluster to power your workloads. You can then
 use the cluster to create the objects ([indexes](/concepts/indexes/) and
@@ -43,12 +68,12 @@ example, the `25cc` cluster size is equivalent to 0.25 compute credits/hour; the
 `200cc` cluster size is equivalent to 2 compute credits/hour. Larger clusters
 can process data faster and handle larger data volumes.
 
-{{< note >}}
+> **Note:** 
 
 You can resize a cluster to respond to changes in your workload. See [Sizing
 your clusters](/sql/alter-cluster/#resizing).
 
-{{</ note >}}
+
 
 Clusters are always "on", and you can adjust the [replication factor](/sql/create-cluster/#replication-factor)
 for fault tolerance. See [Compute cost factors](#compute-cost-factors) for more
@@ -83,10 +108,10 @@ to OLTP databases than cloud data warehouses.
 
 ## Invoices
 
-{{< note >}}
+> **Note:** 
 Accessing usage and billing information in Materialize
 requires **administrator** privileges.
-{{</ note >}}
+
 
 From the [Materialize console](/console/) (`Admin` >
 `Usage & Billing`), administrators can access their invoice. The invoice
@@ -100,7 +125,7 @@ of the [Materialize console](/console/). Pricing is
 usage-based and is billed on a monthly basis. Invoices will be sent to the
 account email and paid via the card on file on the first of the month. If you
 have questions about billing or are interested in converting to an annual
-enterprise contract, please [contact us](https://materialize.com/docs/support/)
+enterprise contract, please [contact us](../support/)
 to discuss further.
 
 If you'd like to cancel your On Demand account with Materialize, please email

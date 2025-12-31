@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-owned/
+complexity: intermediate
+description: '`DROP OWNED` drops all the objects that are owned by one of the specified
+  roles.'
+doc_type: reference
+keywords:
+- DROP OWNED
+- DROP ANYTHING
+- RESTRICT
+- 'Note:'
+- CASCADE
+product_area: Indexes
+status: stable
+title: DROP OWNED
+---
+
 # DROP OWNED
+
+## Purpose
+`DROP OWNED` drops all the objects that are owned by one of the specified roles.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP OWNED` drops all the objects that are owned by one of the specified roles.
 
@@ -7,16 +31,18 @@
 `DROP OWNED` drops all the objects that are owned by one of the specified roles.
 Any privileges granted to the given roles on objects will also be revoked.
 
-{{< note >}}
+> **Note:** 
 Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize drops
 all objects across all databases, including the database itself.
-{{< /note >}}
+
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP OWNED BY <role_name> [, ...] [RESTRICT|CASCADE];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -26,9 +52,11 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 DROP OWNED BY joe;
-```
+```text
 
 ```mzsql
 DROP OWNED BY joe, george CASCADE;
@@ -38,7 +66,8 @@ DROP OWNED BY joe, george CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-owned.md" >}}
+- Role membership in `role_name`.
+
 
 ## Related pages
 

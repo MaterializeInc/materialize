@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/timezone-and-at-time-zone/
+complexity: intermediate
+description: Converts timestamp to a different time zone.
+doc_type: reference
+keywords:
+- SELECT TIMESTAMPTZ
+- TIMEZONE and AT TIME ZONE functions
+- SELECT TIMEZONE
+- 'Known limitation:'
+- SELECT TIMESTAMP
+- 'Note:'
+product_area: Indexes
+status: stable
+title: TIMEZONE and AT TIME ZONE functions
+---
+
 # TIMEZONE and AT TIME ZONE functions
+
+## Purpose
+Converts timestamp to a different time zone.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Converts timestamp to a different time zone.
 
@@ -10,9 +34,9 @@ Converts timestamp to a different time zone.
 
 ## Signatures
 
-{{< diagram "func-timezone.svg" >}}
+[See diagram: func-timezone.svg]
 
-{{< diagram "func-at-time-zone.svg" >}}
+[See diagram: func-at-time-zone.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -29,43 +53,45 @@ _timestamptz_ | [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-
 
 ## Examples
 
+This section covers examples.
+
 ### Convert timestamp to another time zone, returned as UTC with offset
 
 ```mzsql
 SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'::text;
-```
+```text
 ```
         timezone
 ------------------------
 2020-12-21 23:53:49+00
 (1 row)
-```
+```text
 
 ```mzsql
 SELECT TIMEZONE('America/New_York'::text,'2020-12-21 18:53:49');
-```
+```text
 ```
         timezone
 ------------------------
 2020-12-21 23:53:49+00
 (1 row)
-```
+```bash
 
 ### Convert timestamp to another time zone, returned as specified local time
 
 ```mzsql
 SELECT TIMESTAMPTZ '2020-12-21 18:53:49+08' AT TIME ZONE 'America/New_York'::text;
-```
+```text
 ```
         timezone
 ------------------------
 2020-12-21 05:53:49
 (1 row)
-```
+```text
 
 ```mzsql
 SELECT TIMEZONE ('America/New_York'::text,'2020-12-21 18:53:49+08');
-```
+```text
 ```
         timezone
 ------------------------

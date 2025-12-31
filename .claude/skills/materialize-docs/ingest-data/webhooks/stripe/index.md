@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/webhooks/stripe/
+complexity: advanced
+description: How to stream data from Stripe to Materialize using webhooks
+doc_type: reference
+keywords:
+- 'Warning:'
+- CREATE CLUSTER
+- CREATE A
+- you can skip this step
+- does not support
+- Stripe
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: Stripe
+---
+
 # Stripe
+
+## Purpose
+How to stream data from Stripe to Materialize using webhooks
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to stream data from Stripe to Materialize using webhooks
 
@@ -7,9 +33,9 @@ How to stream data from Stripe to Materialize using webhooks
 This guide walks through the steps to ingest data from [Stripe](https://stripe.com/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 ### Before you begin
 
@@ -17,12 +43,12 @@ Ensure that you have a Stripe account.
 
 ## Step 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your webhook
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
+
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
@@ -30,7 +56,7 @@ To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/crea
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
-```
+```bash
 
 ## Step 2. Create a secret
 
@@ -38,7 +64,7 @@ To validate requests between Stripe and Materialize, you must create a [secret](
 
 ```mzsql
 CREATE SECRET stripe_webhook_secret AS '<secret_value>';
-```
+```text
 
 Change the `<secret_value>` to a unique value that only you know and store it in a secure location.
 
@@ -82,7 +108,7 @@ FROM WEBHOOK
             )
         )
     );
-```
+```text
 
 After a successful run, the command returns a `NOTICE` message containing the
 unique [webhook URL](/sql/create-source/webhook/#webhook-url)
@@ -93,7 +119,7 @@ The URL will have the following format:
 
 ```
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
-```
+```text
 
 If you missed the notice, you can find the URLs for all webhook sources in the
 [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
@@ -101,11 +127,11 @@ system table.
 
 ### Access and authentication
 
-{{< warning >}}
+> **Warning:** 
 Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
-{{< /warning >}}
+
 
 The `CHECK` clause defines how to validate each request. For details on the
 Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/docs/webhooks#verify-manually).
@@ -133,11 +159,13 @@ Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/d
 
     ```mzsql
     SELECT * FROM stripe_source LIMIT 10;
-    ```
+    ```text
 
     You may need to wait for webhook-generating events in Stripe to occur.
 
 ## Step 6. Transform incoming data
+
+This section covers step 6. transform incoming data.
 
 ### JSON parsing
 
@@ -159,7 +187,7 @@ CREATE VIEW parse_stripe AS SELECT
 FROM stripe_source;
 ```
 
-{{< json-parser >}}
+<!-- JSON Parser Widget - see original docs -->
 
 ### Timestamp handling
 

@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/jsonb_object_agg/
+complexity: advanced
+description: Aggregate keys and values (including nulls) into a jsonb object
+doc_type: reference
+keywords:
+- CREATE A
+- CREATE VIEW
+- SELECT KEY_COL
+- CREATE MATERIALIZED
+- SELECT JSONB_OBJECT_AGG
+- jsonb_object_agg function
+product_area: Indexes
+status: stable
+title: jsonb_object_agg function
+---
+
 # jsonb_object_agg function
+
+## Purpose
+Aggregate keys and values (including nulls) into a jsonb object
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Aggregate keys and values (including nulls) into a jsonb object
 
@@ -10,7 +34,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "jsonb-object-agg.svg" >}}
+[See diagram: jsonb-object-agg.svg]
 
 ## Signatures
 
@@ -48,7 +72,7 @@ statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT key_col, val_col FROM foo;
 CREATE VIEW bar AS SELECT jsonb_object_agg(key_col, val_col) FROM foo_view;
-```
+```bash
 
 ## Examples
 
@@ -67,7 +91,7 @@ FROM (
   ('k2', -1, now()),
   ('k2', NULL, now() + INTERVAL '1s')
   ) AS t(col1, col2, ts);
-```
+```text
 ```nofmt
       my_agg
 ------------------

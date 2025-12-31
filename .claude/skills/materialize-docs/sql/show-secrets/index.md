@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-secrets/
+complexity: intermediate
+description: '`SHOW SECRETS` lists the names of the secrets securely stored in Materialize''s
+  secret management system.'
+doc_type: reference
+keywords:
+- FROM
+- WHERE
+- ALTER SECRET
+- SHOW SECRETS
+- SHOW THE
+- LIKE
+product_area: Indexes
+status: stable
+title: SHOW SECRETS
+---
+
 # SHOW SECRETS
+
+## Purpose
+`SHOW SECRETS` lists the names of the secrets securely stored in Materialize's secret management system.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW SECRETS` lists the names of the secrets securely stored in Materialize's secret management system.
 
@@ -11,9 +36,11 @@ statement.
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW SECRETS [ FROM <schema_name> ] [ LIKE <pattern>  | WHERE <condition(s)> ];
-```
+```text
 
 Syntax element                | Description
 ------------------------------|------------
@@ -23,9 +50,11 @@ Syntax element                | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SECRETS;
-```
+```text
 
 ```nofmt
          name
@@ -33,11 +62,11 @@ SHOW SECRETS;
  kafka_ca_cert
  kafka_sasl_password
  kafka_sasl_username
-```
+```text
 
 ```mzsql
 SHOW SECRETS FROM public LIKE '%cert%';
-```
+```text
 
 ```nofmt
          name

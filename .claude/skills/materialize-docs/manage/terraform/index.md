@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/terraform/
+complexity: beginner
+description: Create and manage Materialize resources with Terraform
+doc_type: reference
+keywords:
+- CREATE AND
+- Use Terraform to manage Materialize
+- 'Note:'
+- Manage resources
+- CREATE A
+- Additional modules
+- To get started
+- 'Minimum requirements:'
+product_area: Operations
+status: stable
+title: Use Terraform to manage Materialize
+---
+
 # Use Terraform to manage Materialize
 
+## Purpose
 Create and manage Materialize resources with Terraform
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Create and manage Materialize resources with Terraform
 
 
 [Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that
@@ -18,31 +43,21 @@ infrastructure with a single `terraform apply` command.
 
 ## Available guides
 
-{{< multilinkbox >}}
-{{< linkbox title="To get started" >}}
+
+**To get started**
 [Get started with Terraform and Materialize](./get-started/)
-{{</ linkbox >}}
 
-{{< linkbox title="Manage resources" >}}
-
+**Manage resources**
 [Manage Materialize resources](./manage-resources)
 
 [Manage cloud resources](./manage-cloud-modules/)
-
-{{</ linkbox >}}
-{{< linkbox title="Additional modules" >}}
-
+**Additional modules**
 - [Appendix: Secret stores](./appendix-secret-stores/)
-
-{{</ linkbox >}}
-{{</ multilinkbox >}}
 
 
 ## Contributing
 
 If you want to help develop the Materialize provider, check out the [contribution guidelines](https://github.com/MaterializeInc/terraform-provider-materialize/blob/main/CONTRIBUTING.md).
-
-
 
 
 ---
@@ -70,7 +85,7 @@ provider "vault" {
   address = "https://vault.example.com"
   token   = "your-vault-token"
 }
-```
+```text
 
 Next, fetch a secret from Vault and use it to create a new Materialize secret:
 
@@ -83,15 +98,13 @@ resource "materialize_secret" "example_secret" {
   name  = "pgpass"
   value = data.vault_generic_secret.materialize_password.data["pgpass"]
 }
-```
+```text
 
 In this example, the `vault_generic_secret` data source retrieves a secret from Vault, which is then used as the value for a new `materialize_secret` resource.
 
 You can find examples of using other popular secret stores providers in the
 [secret stores
 demo](https://github.com/MaterializeInc/demos/tree/main/integrations/terraform/secret-stores).
-
-
 
 
 ---
@@ -117,7 +130,7 @@ terraform {
     }
   }
 }
-```
+```bash
 
 ## Authentication
 
@@ -132,7 +145,7 @@ with the `TF_VAR_<name>` format.
 
 ```shell
 export TF_VAR_MZ_PASSWORD=<app_password>
-```
+```text
 
 In the `main.tf` file, add the provider configuration and any variable
 references:
@@ -145,7 +158,7 @@ provider "materialize" {
   default_region = <region>
   database       = <database>
 }
-```
+```bash
 
 ## Creating service accounts
 
@@ -188,9 +201,7 @@ output "production_dashboard_user" {
 output "production_dashboard_password" {
   value = materialize_app_password.production_dashboard.password
 }
-```
-
-
+```text
 
 
 ---
@@ -207,10 +218,10 @@ You can use the modules to establish the underlying cloud
 resources and then use the Materialize provider to build Materialize-specific
 objects. A few use cases are captured in the sections below.
 
-{{< note >}}
+> **Note:** 
 While Materialize offers support for its Terraform provider, Materialize does
 not offer support for these cloud resources modules.
-{{</ note >}}
+
 
 ### AWS PrivateLink
 
@@ -249,7 +260,7 @@ resource "materialize_connection_kafka" "example_kafka_connection_multiple_broke
     }
   }
 }
-```
+```text
 
 For a complete example of the Amazon MSK module with the Materialize provider,
 check out this [demo](https://github.com/MaterializeInc/demos/tree/main/integrations/terraform/msk-privatelink). The demo adds the Materialize provider configuration to the modules and bundles the entire deployment into one Terraform configuration file.
@@ -329,9 +340,7 @@ resource "materialize_source_postgres" "example_source_postgres" {
     "schema2_table_1" = "s2_table_1"
   }
 }
-```
-
-
+```text
 
 
 ---
@@ -352,7 +361,7 @@ resource:
 resource "materialize_cluster" "example_cluster" {
   name = "cluster"
 }
-```
+```text
 
 You can find reference documentation for all the resources available in the
 Materialize provider in the [Terraform registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
@@ -369,7 +378,7 @@ For example, to return information about your current clusters, you would use th
 
 ```hcl
 data "materialize_cluster" "all" {}
-```
+```text
 
 This data source returns all cluster names and IDs which you can use as
 variables for new resources.
@@ -391,19 +400,17 @@ you want to import in your Terraform configuration:
 resource "materialize_cluster.<cluster_name> {
     name = <cluster_name>
 }
-```
+```text
 
 Next, you would use the `terraform import` command with the cluster name and ID
 to associate the object with the resource block:
 
 ```shell
 terraform import materialize_cluster.<cluster_name> <CLUSTER_ID>
-```
+```text
 
 Terraform will then manage the cluster and you can use Terraform as the source of
 truth for your Materialize object.
-
-
 
 
 ---
@@ -437,23 +444,23 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
     resource "materialize_role" "dev_role" {
       name = "dev_role"
     }
-    ```
+    ```text
 
 2. We will run Terraform to create this role.
 
     ```shell
     terraform apply
-    ```
+    ```text
 
-    {{< note >}}
+    > **Note:** 
   All of the resources in this tutorial can be run with a single terraform apply but we will add and apply resources incrementally to better illustrate grants.
-    {{</ note >}}
+    
 
 3. Each role you create has default role attributes that determine how they can interact with Materialize objects. Let’s look at the role attributes of the role you created:
 
     ```mzsql
     SELECT * FROM mz_roles WHERE name = 'dev_role';
-    ```
+    ```text
 
     <p></p>
 
@@ -466,7 +473,7 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
     create_role    | f
     create_db      | f
     create_cluster | f
-    ```
+    ```text
     Your `id` and `oid` values will look different.
 
 ## Step 2. Create example objects
@@ -510,19 +517,19 @@ Your `dev_role` has the default system-level permissions and needs object-level 
         nullable = true
       }
     }
-    ```
+    ```text
 
 2. We will apply our Terraform project again to create the object resources.
 
     ```shell
     terraform apply
-    ```
+    ```text
 
 3. Now that our resources exist, we can query their privileges before they have been associated with our role created in step 1.
 
     ```mzsql
     SELECT name, privileges FROM mz_tables WHERE name = 'dev_table';
-    ```
+    ```text
 
     <p></p>
 
@@ -530,7 +537,7 @@ Your `dev_role` has the default system-level permissions and needs object-level 
     name|privileges
     dev_table|{u1=arwd/u1,u8=arw/u1}
     (1 row)
-    ```
+    ```text
 
 Currently, the `dev_role` has no permissions on the table `dev_table`.
 
@@ -555,23 +562,23 @@ In this example, let's say your `dev_role` needs the following permissions:
       schema_name   = materialize_table.table.schema_name
       table_name    = materialize_table.table.name
     }
-    ```
+    ```text
 
-    {{< note >}}
+    > **Note:** 
   All of the grant resources are a 1:1 between a specific role, object and privilege. So adding three privileges to the `dev_role` will require three Terraform resources which can can be accomplished with the `for_each` meta-argument.
-    {{</ note >}}
+    
 
 2. We will run Terraform to grant these privileges on the `dev_table` table.
 
     ```shell
     terraform apply
-    ```
+    ```text
 
 3. We can now check the privileges on our table again
 
     ```mzsql
     SELECT name, privileges FROM mz_tables WHERE name = 'dev_table';
-    ```
+    ```text
 
     <p></p>
 
@@ -579,7 +586,7 @@ In this example, let's say your `dev_role` needs the following permissions:
     name|privileges
     dev_table|{u1=arwd/u1,u8=arw/u1}
     (1 row)
-    ```
+    ```text
 
 4. Now we will include the additional grants for the schema, database and cluster.
 
@@ -606,13 +613,13 @@ In this example, let's say your `dev_role` needs the following permissions:
       privilege    = each.value
       cluster_name = materialize_cluster.cluster.name
     }
-    ```
+    ```text
 
 5. Run Terraform again to grant these additional privileges on the database, schema and cluster.
 
     ```shell
     terraform apply
-    ```
+    ```bash
 
 ## Step 4. Assign the role to a user
 
@@ -625,19 +632,19 @@ The dev_role now has the acceptable privileges it needs. Let’s apply this role
       role_name   = materialize_role.dev_role.name
       member_name = "<user>"
     }
-    ```
+    ```text
 
 2. Apply our Terraform change.
 
     ```shell
     terraform apply
-    ```
+    ```text
 
 3. To review the permissions a roles, you can view the object data:
 
     ```mzsql
     SELECT name, privileges FROM mz_tables WHERE name = 'dev_table';
-    ```
+    ```text
 
     The output should return the object ID, the level of permission, and the assigning role ID.
 
@@ -646,7 +653,7 @@ The dev_role now has the acceptable privileges it needs. Let’s apply this role
     name|privileges
     dev_table|{u1=arwd/u1,u8=arw/u1}
     (1 row)
-    ```
+    ```text
     In this example, role ID `u1` has append, read, write, and delete privileges on the table. Object ID `u8` is the `dev_role` and has append, read, and write privileges, which were assigned by the `u1` user.
 
 ## Step 5. Create a second role
@@ -659,7 +666,7 @@ Next, you will create a new role with different privileges to other objects. The
     resource "materialize_role" "qa_role" {
       name = "qa_role"
     }
-    ```
+    ```text
 
 2. Apply `CREATEDB` privileges to the `qa_role`:
 
@@ -668,7 +675,7 @@ Next, you will create a new role with different privileges to other objects. The
       role_name = materialize_role.qa_role.name
       privilege = "CREATEDB"
     }
-    ```
+    ```text
 
 3. Create a new `qa_db` database:
 
@@ -676,7 +683,7 @@ Next, you will create a new role with different privileges to other objects. The
     resource "materialize_database" "database" {
       name = "dev_db"
     }
-    ```
+    ```text
 
 4. Apply `USAGE` and `CREATE` privileges to the `qa_role` role for the new database:
 
@@ -688,7 +695,7 @@ Next, you will create a new role with different privileges to other objects. The
       privilege     = each.value
       database_name = materialize_database.database.name
     }
-    ```
+    ```bash
 
 ## Step 6. Add inherited privileges
 
@@ -701,19 +708,19 @@ Your `dev_role` also needs access to `qa_db`. You can apply these privileges ind
       role_name   = materialize_role.qa_role.name
       member_name = materialize_role.dev_role.name
     }
-    ```
+    ```text
 
 2. We will run Terraform to grant these the inherited privileges.
 
     ```shell
     terraform apply
-    ```
+    ```text
 
 3. Review the privileges of `qa_role` and `dev_role`:
 
    ```mzsql
    SELECT name, privileges FROM mz_databases WHERE name='qa_db';
-   ```
+   ```text
 
    Your output will be similar to the example below:
 
@@ -721,7 +728,7 @@ Your `dev_role` also needs access to `qa_db`. You can apply these privileges ind
    name|privileges
    qa_db|{u1=UC/u1,u9=UC/u1}
    (1 row)
-   ```
+   ```text
 
    Both `dev_role` and `qa_role` have usage and create access to the `qa_db`. In the next section, you will edit role attributes for these roles and drop privileges.
 
@@ -736,7 +743,7 @@ You can revoke certain privileges for each role, even if they are inherited from
 
     ```shell
     terraform apply
-    ```
+    ```text
 
     Because Terraform is responsible for maintaining the state of our project, removing this grant resource and running an `apply` is the equivalent of running a revoke statement:
 
@@ -758,6 +765,3 @@ For more information on RBAC in Materialize, review the reference documentation:
 * [`ALTER ROLE`](/sql/alter-role/)
 * [`REVOKE PRIVILEGE`](/sql/revoke-privilege/)
 * [`DROP ROLE`](/sql/drop-role/)
-
-
-

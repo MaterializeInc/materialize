@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/power-bi/
+complexity: intermediate
+description: How to create dashboards with Power BI
+doc_type: reference
+keywords:
+- Power BI
+- CREATE A
+- DELETE ANY
+- materialize
+- PostgreSQL database
+- File
+- CREATE DASHBOARDS
+- DirectQuery
+product_area: Sinks
+status: stable
+title: Power BI
+---
+
 # Power BI
 
+## Purpose
 How to create dashboards with Power BI
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to create dashboards with Power BI
 
 
 You can use [Power BI](https://powerbi.microsoft.com/) to create dashboards
@@ -26,7 +51,7 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Troubleshooting
 
@@ -63,7 +88,7 @@ To work around this Power BI limitation, you can use one of the following option
 
     ```mzsql
     CREATE VIEW my_view_bi AS SELECT * FROM my_view;
-    ```
+    ```text
 
     Then, in Power BI, you can use the `my_view_bi` view.
 
@@ -71,7 +96,6 @@ To work around this Power BI limitation, you can use one of the following option
 
 3. Use the [Power BI Native query folding](https://learn.microsoft.com/en-us/power-query/connectors/postgresql#native-query-folding) to write your own query rather than using the Power BI UI. For example:
 
-    ```
+    ```text
     = Value.NativeQuery(Source, "select * from my_view;")
     ```
-

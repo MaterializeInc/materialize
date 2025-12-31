@@ -1,4 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/llm/
+complexity: intermediate
+description: Learn how to integrate Materialize with Large Language Models (LLMs)
+  using MCP
+doc_type: reference
+keywords:
+- '`--transport`'
+- UPDATE TIME
+- '`--pool-min-size`'
+- MCP Server
+- CREATE AT
+- '`--mz-dsn`'
+- '`--port`'
+- '`--host`'
+- CREATE INDEX
+- SELECT ON
+product_area: General
+status: stable
+title: MCP Server
+---
+
 # MCP Server
+
+## Purpose
+Learn how to integrate Materialize with Large Language Models (LLMs) using MCP
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Learn how to integrate Materialize with Large Language Models (LLMs) using MCP
 
@@ -19,7 +48,7 @@ If you don't have uv installed, you can install it first:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+```text
 
 To install and launch the MCP Server for Materialize:
 
@@ -27,19 +56,17 @@ To install and launch the MCP Server for Materialize:
 uv venv
 uv pip install mcp-materialize-agents
 uv run mcp_materialize_agents
-```
+```text
 
 You can configure it using CLI flags or environment variables:
 
-| Flag              | Env Var             | Default                                               | Description                                   |
-| ----------------- | ------------------- | ----------------------------------------------------- | --------------------------------------------- |
-| `--mz-dsn`        | `MZ_DSN`            | `postgres://materialize@localhost:6875/materialize`   | Materialize connection string                 |
-| `--transport`     | `MCP_TRANSPORT`     | `stdio`                                               | Communication mode (`stdio`, `sse`, or `http`) |
-| `--host`          | `MCP_HOST`          | `0.0.0.0`                                             | Host for `sse` and `http` modes               |
-| `--port`          | `MCP_PORT`          | `3001` (sse), `8001` (http)                           | Port for `sse` and `http` modes               |
-| `--pool-min-size` | `MCP_POOL_MIN_SIZE` | `1`                                                   | Minimum DB pool size                          |
-| `--pool-max-size` | `MCP_POOL_MAX_SIZE` | `10`                                                  | Maximum DB pool size                          |
-| `--log-level`     | `MCP_LOG_LEVEL`     | `INFO`                                                | Logging verbosity                             |
+- **`--mz-dsn`**: `MZ_DSN` | `postgres://materialize@localhost:6875/materialize` | Materialize connection string
+- **`--transport`**: `MCP_TRANSPORT` | `stdio` | Communication mode (`stdio`, `sse`, or `http`)
+- **`--host`**: `MCP_HOST` | `0.0.0.0` | Host for `sse` and `http` modes
+- **`--port`**: `MCP_PORT` | `3001` (sse), `8001` (http) | Port for `sse` and `http` modes
+- **`--pool-min-size`**: `MCP_POOL_MIN_SIZE` | `1` | Minimum DB pool size
+- **`--pool-max-size`**: `MCP_POOL_MAX_SIZE` | `10` | Maximum DB pool size
+- **`--log-level`**: `MCP_LOG_LEVEL` | `INFO` | Logging verbosity
 
 
 ## Define Tools
@@ -58,13 +85,13 @@ You can index a single column:
 
 ```mzsql
 CREATE INDEX ON payment_status_summary (order_id);
-```
+```text
 
 Or multiple columns:
 
 ```mzsql
 CREATE INDEX ON payment_status_summary (user_id, order_id);
-```
+```text
 
 Every indexed column becomes part of the tool's input schema.
 
@@ -84,7 +111,7 @@ COMMENT ON COLUMN payment_status_summary.user_id IS
 
 COMMENT ON COLUMN payment_status_summary.order_id IS
   'The unique identifier for the order';
-```
+```bash
 
 ### 3. Set RBAC Permissions
 

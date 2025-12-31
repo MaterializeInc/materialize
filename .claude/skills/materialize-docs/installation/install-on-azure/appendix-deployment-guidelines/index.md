@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-azure/appendix-deployment-guidelines/
+complexity: beginner
+description: Azure environment setup/deployment guidelines
+doc_type: howto
+keywords:
+- 'Important:'
+- ephemeral
+- Premium block blob
+- block
+- 'Appendix: Azure deployment guidelines'
+product_area: Deployment
+status: stable
+title: 'Appendix: Azure deployment guidelines'
+---
+
 # Appendix: Azure deployment guidelines
+
+## Purpose
+Azure environment setup/deployment guidelines
+
+Follow the steps below to complete this task.
+
 
 Azure environment setup/deployment guidelines
 
@@ -26,12 +49,12 @@ Azure VM Types with Local NVMe Disk:
 | Standard_E16pds_v6 | 16    | 128 GiB | 600 GiB        | ~4.7:1           |
 | Standard_E32pds_v6 | 32    | 256 GiB | 1,200 GiB      | ~4.7:1           |
 
-{{< important >}}
+> **Important:** 
 
 These VM types provide **ephemeral** local NVMe SSD disks. Data is lost
 when the VM is stopped or deleted.
 
-{{</ important >}}
+
 
 See also [Locally attached NVMe storage](#locally-attached-nvme-storage).
 

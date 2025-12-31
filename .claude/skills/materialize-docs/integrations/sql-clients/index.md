@@ -1,4 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/sql-clients/
+complexity: advanced
+description: How to connect to Materialize using common SQL clients
+doc_type: reference
+keywords:
+- 'Connect
+
+  externally'
+- CREATE A
+- SQL clients
+- '6875'
+- ALTER ROLE
+- materialize
+- SHOW SYSTEM
+- Require
+- wire-compatible
+product_area: General
+status: stable
+title: SQL clients
+---
+
 # SQL clients
+
+## Purpose
+How to connect to Materialize using common SQL clients
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to connect to Materialize using common SQL clients
 
@@ -28,12 +57,12 @@ user. This password is auto-generated, and prefixed with `mzp_`.
 
 ### Runtime connection parameters
 
-{{< warning >}}
+> **Warning:** 
 Parameters set in the connection string work for the **lifetime of the
 session**, but do not affect other sessions. To permanently change the default
 value of a configuration parameter for a specific user (i.e. role), use the
 [`ALTER ROLE...SET`](/sql/alter-role) command.
-{{< /warning >}}
+
 
 You can pass runtime connection parameters (like `cluster`, `isolation_level`,
 or `search_path`) to Materialize using the [`options` connection string
@@ -46,7 +75,7 @@ user and set the transactional isolation to serializable on connection using
 ```bash
 # Using the options connection string parameter
 psql "postgres://<MZ_USER>@<MZ_HOST>:6875/materialize?sslmode=require&options=--cluster%3Dprod%20--transaction_isolation%3Dserializable"
-```
+```text
 
 ```bash
 # Using the PGOPTIONS environment variable
@@ -56,13 +85,15 @@ psql \
     --host=<MZ_HOST> \
     --port=6875 \
     --dbname=materialize
-```
+```bash
 
 ## Tools
 
+This section covers tools.
+
 ### DataGrip
 
-{{< tip >}}
+> **Tip:** 
 
 Integration with DataGrip/WebStorm is currently limited. Certain features --
 such as the schema explorer, database introspection, and various metadata panels
@@ -77,7 +108,7 @@ To use the JDBC metadata instrospector, from your data source properties, in the
 options** list. For more information, see the [DataGrip
 documentation](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
 
-{{< /tip >}}
+
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
 follow the documentation to [create a connection](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html)
@@ -121,7 +152,7 @@ sets the active cluster for the connection:
 
     ```mzsql
     SET cluster = other_cluster;
-    ```
+    ```text
 
 Alternatively, you can change the default value of the `cluster` configuration
 parameter for a specific user (i.e. role) using the [`ALTER
@@ -144,10 +175,10 @@ To show system objects in the database explorer:
 
 ### TablePlus
 
-{{< note >}}
+> **Note:** 
 As we work on extending the coverage of `pg_catalog` in Materialize,
 some TablePlus features might not work as expected.
-{{< /note >}}
+
 
 To connect to Materialize using [TablePlus](https://tableplus.com/),
 follow the documentation to [create a connection](https://docs.tableplus.com/gui-tools/manage-connections#create-a-connection)
@@ -158,53 +189,48 @@ Materialize console.
 
 ### `psql`
 
-{{< warning >}}
+> **Warning:** 
 Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands.
-{{< /warning >}}
 
-{{< tabs >}}
-{{< tab "macOS">}}
+
+#### macOS
 
 Start by double-checking whether you already have `psql` installed:
 
 ```shell
 psql --version
-```
+```text
 
 Assuming you’ve installed [Homebrew](https://brew.sh/):
 
 ```shell
 brew install libpq
-```
+```text
 
 Then symlink the `psql` binary to your `/usr/local/bin` directory:
 
 ```shell
 brew link --force libpq
-```
+```bash
 
-{{< /tab >}}
-
-{{< tab "Linux">}}
+#### Linux
 
 Start by double-checking whether you already have `psql` installed:
 
 ```shell
 psql --version
-```
+```text
 
 ```bash
 sudo apt-get update
 sudo apt-get install postgresql-client
-```
+```text
 
 The `postgresql-client` package includes only the client binaries, not the PostgreSQL server.
 
 For other Linux distributions, check out the [PostgreSQL documentation](https://www.postgresql.org/download/linux/).
 
-{{< /tab >}}
-
-{{< tab "Windows">}}
+#### Windows
 
 Start by double-checking whether you already have `psql` installed:
 
@@ -213,6 +239,4 @@ psql --version
 ```
 
 Download and install the [PostgreSQL installer](https://www.postgresql.org/download/windows/) certified by EDB.
-{{< /tab >}}
-{{< /tabs >}}
 

@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/dbt/development-workflows/
+complexity: beginner
+description: How to use dbt to develop and test changes to your SQL code against Materialize.
+doc_type: reference
+keywords:
+- SELECT 2
+- CREATE A
+- all
+- SELECT A
+- SELECT MY_MODEL
+- without
+- SELECT 1
+- Development guidelines
+- 'Note:'
+- iteration speed
+product_area: Operations
+status: stable
+title: Development guidelines
+---
+
 # Development guidelines
+
+## Purpose
+How to use dbt to develop and test changes to your SQL code against Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use dbt to develop and test changes to your SQL code against Materialize.
 
@@ -21,10 +49,10 @@ types from each run using [node selection](https://docs.getdbt.com/reference/nod
 
 ### Exclude sources and sinks
 
-{{< note >}}
+> **Note:** 
 As you move towards productionizing your data model, we recommend managing
 sources and sinks [using Terraform](/manage/terraform/) instead.
-{{</ note >}}
+
 
 You can manually exclude specific materialization types using the
 [`exclude` flag](https://docs.getdbt.com/reference/node-selection/exclude) in
@@ -32,7 +60,7 @@ your dbt run invocations. To exclude sources and sinks, use:
 
 ```bash
 dbt run --exclude config.materialized:source config.materialized:sink
-```
+```bash
 
 #### YAML selectors
 
@@ -57,7 +85,7 @@ selectors:
         - exclude:
             - 'config.materialized:source'
             - 'config.materialized:sink'
-```
+```text
 
 Because `default: true` is specified, dbt will use the selector's criteria
 whenever you run an unqualified command (e.g. `dbt build`, `dbt run`). You can
@@ -80,17 +108,17 @@ dbt run --select "my_package.some_model" # runs a specific model in a specific p
 dbt run --select "tag:nightly"           # runs models with the "nightly" tag
 dbt run --select "path/to/models"        # runs models contained in path/to/models
 dbt run --select "path/to/my_model.sql"  # runs a specific model by its path
-```
+```text
 
 For a full rundown of selection logic options, check the [dbt documentation](https://docs.getdbt.com/reference/node-selection/syntax).
 
 ## Model results preview
 
-{{< note >}}
+> **Note:** 
 The `dbt show` command uses a `LIMIT` clause under the hood, which has
 [known performance limitations](/transform-data/troubleshooting/#result-filtering)
 in Materialize.
-{{</ note >}}
+
 
 To debug and preview the results of your models **without** materializing the
 results, you can use the [`dbt show`](https://docs.getdbt.com/reference/commands/show)
@@ -111,7 +139,7 @@ dbt show --select "model_name.sql"
 | value3               |
 | value4               |
 | value5               |
-```
+```text
 
 By default, the `dbt show` command will return the first 5 rows from the query
 result (i.e. `LIMIT 5`). You can adjust the number of rows returned using the
@@ -125,11 +153,11 @@ database relation (see [`dbt-core` #7391](https://github.com/dbt-labs/dbt-core/i
 
 **Minimum requirements:** `dbt-materialize` v1.8.0+
 
-{{< note >}}
+> **Note:** 
 Complex types like [`map`](/sql/types/map/) and [`list`](/sql/types/list/) are
 not supported in unit tests yet (see [`dbt-adapters` #113](https://github.com/dbt-labs/dbt-adapters/issues/113)).
 For an overview of other known limitations, check the [dbt documentation](https://docs.getdbt.com/docs/build/unit-tests#before-you-begin).
-{{</ note >}}
+
 
 To validate your SQL logic without fully materializing a model, as well as
 future-proof it against edge cases, you can use [unit tests](https://docs.getdbt.com/docs/build/unit-tests).
@@ -147,7 +175,7 @@ to hydrate before you can validate that it produces the expected results.
      2 AS not_testing,
      'a' AS string_a,
      DATE '2020-01-02' AS date_a
-   ```
+   ```text
 
    **Filename:** _models/my_model_b.sql_
    ```mzsql
@@ -156,7 +184,7 @@ to hydrate before you can validate that it produces the expected results.
      1 as id,
      2 as c,
      'b' as string_b
-   ```
+   ```text
 
    **Filename:** models/my_model.sql
    ```mzsql
@@ -168,7 +196,7 @@ to hydrate before you can validate that it produces the expected results.
    FROM {{ ref('my_model_a')}} my_model_a
    JOIN {{ ref('my_model_b' )}} my_model_b
    ON my_model_a.id = my_model_b.id
-   ```
+   ```text
 
 1. To add a unit test to `my_model`, create a `.yml` file under the `/models`
    directory, and use the [`unit_tests`](https://docs.getdbt.com/reference/resource-properties/unit-tests)
@@ -190,7 +218,7 @@ to hydrate before you can validate that it produces the expected results.
        expect:
          rows:
            - {c: 2}
-   ```
+   ```text
 
    For simplicity, this example provides mock data using inline dictionary
    values, but other formats are supported. Check the [dbt documentation](https://docs.getdbt.com/reference/resource-properties/data-formats)
@@ -222,7 +250,7 @@ to hydrate before you can validate that it produces the expected results.
     @@ ,c
     +++,3
     ---,2
-    ```
+    ```text
 
     It's important to note that the **direct upstream dependencies** of the
     model that you're unit testing **must exist** in Materialize before you can
@@ -231,7 +259,7 @@ to hydrate before you can validate that it produces the expected results.
 
     ```bash
     dbt run --select "my_model_a.sql" "my_model_b.sql" --empty
-    ```
+    ```text
 
     Alternatively, you can execute unit tests as part of the `dbt build`
     command, which will ensure the upstream depdendencies are created before

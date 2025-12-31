@@ -1,10 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/appendix/
+complexity: intermediate
+description: Idiomatic Materialize appendix, containing example data and cheatsheets
+doc_type: reference
+keywords:
+- INSERT INTO
+- Last value within groups.
+- Appendix
+- Top-K queries.
+- First value within groups.
+- Lag over whose order by field advances in a regular pattern.
+- CREATE TABLE
+- CREATE VIEW
+- Lead over whose order by field advances in a regular pattern.
+product_area: SQL
+status: stable
+title: Appendix
+---
+
 # Appendix
 
+## Purpose
 Idiomatic Materialize appendix, containing example data and cheatsheets
 
+If you need to understand the syntax and options for this command, you're in the right place.
 
 
-
+Idiomatic Materialize appendix, containing example data and cheatsheets
 
 
 ---
@@ -109,9 +132,7 @@ CREATE TABLE sales_items (
 INSERT INTO sales_items VALUES
 (date_trunc('week', current_timestamp),ARRAY['brownie','chocolate chip cookie','chocolate cake']),
 (date_trunc('week', current_timestamp + (1* interval '7 day')),ARRAY['chocolate chip cookie','donut','cupcake']);
-```
-
-
+```text
 
 
 ---
@@ -126,30 +147,31 @@ performance.
 
 ## General
 
+This section covers general.
+
 ### Query Patterns
 
-{{% idiomatic-sql/general-syntax-table %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: idiomatic-sql/general-syntax-table --> --> -->
 
 ### Examples
 
-{{% idiomatic-sql/general-example-table %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: idiomatic-sql/general-example-table --> --> -->
 
 ## Window Functions
-{{< callout >}}
+
+
+This section covers window functions.
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ### Query Patterns
 
-{{% idiomatic-sql/window-functions-syntax-table %}}
+<!-- Unresolved shortcode: {{% idiomatic-sql/window-functions-syntax-table %}... -->
 
 ### Examples
 
-{{% idiomatic-sql/window-functions-example-table %}}
+<!-- Unresolved shortcode: {{% idiomatic-sql/window-functions-example-table %... -->
 
 ## See also
 
@@ -158,8 +180,6 @@ performance.
 - [SELECT](/sql/select/)
 - [DISTINCT](/sql/select/#select-distinct)
 - [DISTINCT ON](/sql/select/#select-distinct-on)
-
-
 
 
 ---
@@ -176,13 +196,9 @@ functions](/sql/functions/#window-functions). However, for some
 own idiomatic query patterns that do <red>not</red> use the window functions and
 can provide better performance.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 <table>
 <thead>
@@ -216,7 +232,7 @@ SELECT fieldA, fieldB,
    OVER (PARTITION BY fieldA ORDER BY ...)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -231,7 +247,7 @@ FROM tableA,
       GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -255,7 +271,7 @@ SELECT fieldA, ...
   LAG(fieldZ)
     OVER (ORDER BY fieldA) as previous_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -267,7 +283,7 @@ SELECT t1.fieldA, t2.fieldB as previous_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA + ...
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -295,7 +311,7 @@ SELECT fieldA, fieldB,
             UNBOUNDED FOLLOWING)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -310,7 +326,7 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
        GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -334,7 +350,7 @@ SELECT fieldA, ...
     LEAD(fieldZ)
       OVER (ORDER BY fieldA) as next_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -346,7 +362,7 @@ SELECT t1.fieldA, t2.fieldB as next_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA - ...
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -373,7 +389,7 @@ FROM (
   FROM tableA)
 WHERE rn <= K
 ORDER BY fieldA, fieldZ ...;
-```
+```text
 
 </div>
 </td>
@@ -392,6 +408,3 @@ ORDER BY fieldA, fieldZ ... ;
 </tr>
 </tbody>
 </table>
-
-
-

@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/explain-timestamp/
+complexity: advanced
+description: '`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement.'
+doc_type: reference
+keywords:
+- oracle read
+- 'Warning:'
+- EXPLAIN TIMESTAMP
+- query timestamp
+- SELECT BETWEEN
+- TEXT
+- JSON
+product_area: Indexes
+status: stable
+title: EXPLAIN TIMESTAMP
+---
+
 # EXPLAIN TIMESTAMP
+
+## Purpose
+`EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement.
 
@@ -6,15 +31,15 @@
 
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement -- valuable information to investigate query delays.
 
-{{< warning >}}
+> **Warning:** 
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 change arbitrarily in future versions of Materialize.
-{{< /warning >}}
+
 
 ## Syntax
 
-{{< diagram "explain-timestamp.svg" >}}
+[See diagram: explain-timestamp.svg]
 
 ### Output format
 
@@ -75,9 +100,11 @@ Field | Meaning | Example
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 EXPLAIN TIMESTAMP FOR SELECT * FROM users;
-```
+```text
 ```
                                  Timestamp
 ---------------------------------------------------------------------------
@@ -176,6 +203,7 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-timestamp.md"
->}}
+- `USAGE` privileges on the schemas that all relations in the query are
+  contained in.
+
 

@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-default-privileges/
+complexity: advanced
+description: '`ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied
+  to objects created in the future.'
+doc_type: reference
+keywords:
+- 'Note:'
+- ALTER DEFAULT
+- ALTER DEFAULT PRIVILEGES
+- ALL ROLES
+product_area: Indexes
+status: stable
+title: ALTER DEFAULT PRIVILEGES
+---
+
 # ALTER DEFAULT PRIVILEGES
 
+## Purpose
 `ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to objects created in the future.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to objects created in the future.
 
 
 Use `ALTER DEFAULT PRIVILEGES` to:
@@ -17,8 +39,10 @@ default privilege.
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "GRANT" >}}
+This section covers syntax.
+
+#### GRANT
+
 ### GRANT
 
 `ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to
@@ -31,18 +55,18 @@ of databases, or all objects of that type created within a specific set of
 schemas. Default privileges are also specified for objects created by a certain
 set of roles or by all roles.
 
-{{% include-syntax file="examples/alter_default_privileges" example="syntax-grant" %}}
+<!-- Syntax example: examples/alter_default_privileges / syntax-grant -->
 
-{{< /tab >}}
-{{< tab "REVOKE" >}}
+#### REVOKE
+
 ### REVOKE
 
-{{< note >}}
+> **Note:** 
 `ALTER DEFAULT PRIVILEGES` cannot be used to revoke the default owner privileges
 on objects. Those privileges must be revoked manually after the object is
 created. Though owners can always re-grant themselves any privilege on an object
 that they own.
-{{< /note >}}
+
 
 The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously
 created default privileges on objects created in the future. It will not revoke
@@ -53,23 +77,22 @@ an existing default privilege. The existing default privileges can easily be
 viewed by the following query: `SELECT * FROM
 mz_internal.mz_show_default_privileges`.
 
-{{% include-syntax file="examples/alter_default_privileges" example="syntax-revoke" %}}
-
-{{< /tab >}}
-{{< /tabs >}}
+<!-- Syntax example: examples/alter_default_privileges / syntax-revoke -->
 
 ## Details
 
+This section covers details.
+
 ### Available privileges
 
-{{< tabs >}}
-{{< tab "By Privilege" >}}
-{{< yaml-table data="rbac/privileges_objects" >}}
-{{</ tab >}}
-{{< tab "By Object" >}}
-{{< yaml-table data="rbac/object_privileges" >}}
-{{</ tab >}}
-{{</ tabs >}}
+
+#### By Privilege
+
+<!-- Dynamic table: rbac/privileges_objects - see original docs -->
+
+#### By Object
+
+<!-- Dynamic table: rbac/object_privileges - see original docs -->
 
 
 ### Compatibility
@@ -79,17 +102,19 @@ type for sources, views, and materialized views.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE mike GRANT SELECT ON TABLES TO joe;
-```
+```text
 
 ```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE interns IN DATABASE dev GRANT ALL PRIVILEGES ON TABLES TO intern_managers;
-```
+```text
 
 ```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE developers REVOKE USAGE ON SECRETS FROM project_managers;
-```
+```text
 
 ```mzsql
 ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
@@ -99,7 +124,12 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-default-privileges.md" >}}
+- Role membership in `role_name`.
+- `USAGE` privileges on the containing database if `database_name` is specified.
+- `USAGE` privileges on the containing schema if `schema_name` is specified.
+- _superuser_ status if the _target_role_ is `PUBLIC` or **ALL ROLES** is
+  specified.
+
 
 ## Useful views
 
@@ -117,4 +147,3 @@ The privileges required to execute this statement are:
 - [`REVOKE ROLE`](../revoke-role)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
-

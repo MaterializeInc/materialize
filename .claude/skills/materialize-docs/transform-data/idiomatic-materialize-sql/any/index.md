@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/any/
+complexity: beginner
+description: Use idiomatic Materialize SQL for equi-join whose `ON` expression includes
+  the `ANY()` operator.
+doc_type: overview
+keywords:
+- '`ANY()` equi-join condition'
+- If no duplicates in the unnested field
+- SELECT DISTINCT
+- 'Idiomatic Materialize SQL:'
+- 'Duplicates may exist in the unnested field:'
+- SELECT A
+- 'If no duplicates exist in the unnested field:'
+- 'Note:'
+- SELECT UNNEST
+product_area: SQL
+status: stable
+title: '`ANY()` equi-join condition'
+---
+
 # `ANY()` equi-join condition
 
+## Purpose
 Use idiomatic Materialize SQL for equi-join whose `ON` expression includes the `ANY()` operator.
 
+This page provides detailed documentation for this topic.
+
+
+Use idiomatic Materialize SQL for equi-join whose `ON` expression includes the `ANY()` operator.
 
 
 ## Overview
@@ -14,7 +41,6 @@ expression](/sql/functions/#expression-bool_op-any),
 Materialize provides an idiomatic SQL as an alternative to the `ANY()`
 expression.
 
-{{< callout >}}
 
 ### Materialize and equi-join `ON fieldX = ANY(<array|list|map>)`
 
@@ -24,7 +50,6 @@ expression](/sql/functions/#expression-bool_op-any)
 which can lead to a significant increase in memory usage. If possible, rewrite
 the query to perform an equi-join on the unnested values.
 
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -63,7 +88,7 @@ SELECT a.fieldA, ...
 FROM tableA a
 JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 ;
-```
+```text
 
 </td>
 </tr>
@@ -89,7 +114,7 @@ SELECT a.fieldA, ...
 FROM tableA a
 JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 ;
-```
+```text
 
 </td>
 </tr>
@@ -110,7 +135,7 @@ FROM tableA a, tableB b
 WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
 ;
 
-```
+```text
 
 </div>
 </td>
@@ -122,12 +147,11 @@ WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Find orders with any sales items
 
@@ -164,7 +188,7 @@ JOIN individual_sales_items s ON o.item = s.item
 WHERE date_trunc('week', o.order_date) = s.week_of
 ORDER BY s.week_of, o.order_id, o.item, o.quantity
 ;
-```
+```text
 
 ***To omit duplicates that may exist in the unnested field***
 
@@ -179,7 +203,7 @@ JOIN individual_sales_items s ON o.item = s.item
 WHERE date_trunc('week', o.order_date) = s.week_of
 ORDER BY s.week_of, o.order_id, o.item, o.quantity
 ;
-```
+```text
 
 </td>
 </tr>
@@ -221,4 +245,3 @@ ORDER BY s.week_of, o.order_id, o.item, o.quantity
   Chart](/transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/)
 
 - [`UNNEST()`](/sql/functions/#unnest)
-

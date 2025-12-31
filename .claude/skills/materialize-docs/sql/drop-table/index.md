@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-table/
+complexity: intermediate
+description: '`DROP TABLE` removes a table from Materialize.'
+doc_type: reference
+keywords:
+- CREATE A
+- DROP TABLE
+- IF EXISTS
+- RESTRICT
+- CASCADE
+product_area: Indexes
+status: stable
+title: DROP TABLE
+---
+
 # DROP TABLE
+
+## Purpose
+`DROP TABLE` removes a table from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP TABLE` removes a table from Materialize.
 
@@ -8,9 +31,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP TABLE [IF EXISTS] <table_name> [RESTRICT|CASCADE];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -21,24 +46,26 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ### Remove a table with no dependent objects
 Create a table *t* and verify that it was created:
 
 ```mzsql
 CREATE TABLE t (a int, b text NOT NULL);
 SHOW TABLES;
-```
+```text
 ```
 TABLES
 ------
 t
-```
+```text
 
 Remove the table:
 
 ```mzsql
 DROP TABLE t;
-```
+```bash
 ### Remove a table with dependent objects
 
 Create a table *t*:
@@ -47,7 +74,7 @@ Create a table *t*:
 CREATE TABLE t (a int, b text NOT NULL);
 INSERT INTO t VALUES (1, 'yes'), (2, 'no'), (3, 'maybe');
 SELECT * FROM t;
-```
+```text
 ```
 a |   b
 ---+-------
@@ -55,26 +82,26 @@ a |   b
 1 | yes
 3 | maybe
 (3 rows)
-```
+```text
 
 Create a materialized view from *t*:
 
 ```mzsql
 CREATE MATERIALIZED VIEW t_view AS SELECT sum(a) AS sum FROM t;
 SHOW MATERIALIZED VIEWS;
-```
+```text
 ```
 name    | cluster
 --------+---------
 t_view  | default
 (1 row)
-```
+```text
 
 Remove table *t*:
 
 ```mzsql
 DROP TABLE t CASCADE;
-```
+```bash
 
 ### Remove a table only if it has no dependent objects
 
@@ -82,10 +109,10 @@ You can use either of the following commands:
 
 - ```mzsql
   DROP TABLE t;
-  ```
+  ```text
 - ```mzsql
   DROP TABLE t RESTRICT;
-  ```
+  ```bash
 
 ### Do not issue an error if attempting to remove a nonexistent table
 
@@ -97,7 +124,9 @@ DROP TABLE IF EXISTS t;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-table.md" >}}
+- Ownership of the dropped table.
+- `USAGE` privileges on the containing schema.
+
 
 ## Related pages
 

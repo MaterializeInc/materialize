@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/faqs/
+complexity: beginner
+description: Answers to frequently asked questions about Materialize in general
+doc_type: troubleshooting
+keywords:
+- DROP AN
+- DELETE YOUR
+- SELECT SUM
+- General FAQs
+- 'Tip:'
+product_area: General
+status: stable
+title: General FAQs
+---
+
 # General FAQs
+
+## Purpose
+Answers to frequently asked questions about Materialize in general
+
+This page provides detailed documentation for this topic.
+
 
 Answers to frequently asked questions about Materialize in general
 
@@ -10,9 +33,9 @@ When you [sign up for Materialize Cloud](https://materialize.com/register/), you
 get a free trial account so you can explore the product and start building! This
 page answers some frequently asked questions about free trials.
 
-{{< tip >}}
+> **Tip:** 
 For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
-{{< /tip >}}
+
 
 ### What are the limits of a free trial?
 
@@ -53,7 +76,7 @@ the following query against Materialize:
 SELECT sum(s.credits_per_hour) AS credit_consumption_rate
   FROM mz_cluster_replicas r
   JOIN mz_cluster_replica_sizes s ON r.size = s.size;
-```
+```text
 
 For example, if you start your free trial by following the [getting started guide](/get-started/quickstart),
 or if you otherwise only use the pre-installed `quickstart` cluster
@@ -64,7 +87,7 @@ or if you otherwise only use the pre-installed `quickstart` cluster
 -------------------------
                      .25
 (1 row)
-```
+```bash
 
 ### Can I go over the credit rate limit?
 
@@ -86,8 +109,10 @@ If you have questions about Materialize or need support, reach out to us in our
 
 ## FedRam/FIPS
 
+This section covers fedram/fips.
+
 ### Does Materialize support FedRAMP or FIPS 140 requirements?
 
 If your organization has FedRAMP or FIPS 140 requirements, please [contact
-us](https://materialize.com/docs/support/).
+us](../support/).
 

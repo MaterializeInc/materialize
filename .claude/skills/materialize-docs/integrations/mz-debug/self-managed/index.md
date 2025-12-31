@@ -1,7 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/mz-debug/self-managed/
+complexity: intermediate
+description: Use mz-debug to debug Self-Managed Materialize Kubernetes environments.
+doc_type: reference
+keywords:
+- mz-debug self-managed
+product_area: General
+status: stable
+title: mz-debug self-managed
+---
+
 # mz-debug self-managed
 
+## Purpose
 Use mz-debug to debug Self-Managed Materialize Kubernetes environments.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Use mz-debug to debug Self-Managed Materialize Kubernetes environments.
 
 
 `mz-debug self-managed` debugs Kubernetes-based Materialize deployments. It
@@ -22,19 +40,23 @@ not have it installed.
 
 ## Syntax
 
+This section covers syntax.
+
 ```console
 mz-debug self-managed [OPTIONS]
-```
+```bash
 
 ## Options
 
+This section covers options.
+
 ## `mz-debug self-managed` options
 
-{{< yaml-table data="mz-debug/self_managed_options" >}}
+<!-- Dynamic table: mz-debug/self_managed_options - see original docs -->
 
 ## `mz-debug` global options
 
-{{< yaml-table data="mz-debug/mz_debug_option" >}}
+<!-- Dynamic table: mz-debug/mz_debug_option - see original docs -->
 
 ## Output
 
@@ -51,31 +73,32 @@ files](#system-catalog-files).
 Under `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/`, the following Kubernetes resource debug
 files are generated:
 
-{{< yaml-table data="mz-debug/kubernetes_resource_files" >}}
+<!-- Dynamic table: mz-debug/kubernetes_resource_files - see original docs -->
 
 Each resource type directory also contains a `describe.txt` file with the output of `kubectl describe` for that resource type.
 
-{{% integrations/mz-debug/system-catalog-files %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: integrations/mz-debug/system-catalog-fil --> --> -->
 
-{{% integrations/mz-debug/prometheus-files %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: integrations/mz-debug/prometheus-files --> --> -->
 
-{{% integrations/mz-debug/memory-profiles %}}
-
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: integrations/mz-debug/memory-profiles --> --> -->
 
 
 ## Prerequisite: Get the Materialize instance name
 
 To use `mz-debug`, you need to specify the <a href="#k8s-namespace">Kubernetes namespace (`--k8s-namespace`)</a> and the <a href="#mz-instance-name">Materialize instance name (`--mz-instance-name`)</a>. To retrieve the Materialize instance name, you can use kubectl. For example, the following retrieves the name of the Materialize instance(s) running in the Kubernetes namespace `materialize-environment`:
-```
+```text
 kubectl --namespace materialize-environment get materializes.materialize.cloud
-```
+```text
 The command should return the NAME of the Materialize instance(s) in the namespace:
-```
+```text
 NAME
 12345678-1234-1234-1234-123456789012
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ### Debug a Materialize instance running in a namespace
 
@@ -84,7 +107,7 @@ The following example uses `mz-debug` to collect debug information for the Mater
 ```shell
 mz-debug self-managed --k8s-namespace materialize-environment \
 --mz-instance-name 12345678-1234-1234-1234-123456789012
-```
+```bash
 
 ### Include information from additional kubernetes namespaces
 
@@ -95,4 +118,3 @@ mz-debug self-managed --k8s-namespace materialize-environment \
 --mz-instance-name 12345678-1234-1234-1234-123456789012 \
 --additional-k8s-namespace materialize
 ```
-

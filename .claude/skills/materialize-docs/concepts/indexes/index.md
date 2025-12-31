@@ -1,7 +1,35 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/indexes/
+complexity: advanced
+description: Learn about indexes in Materialize.
+doc_type: concept
+keywords:
+- As new data arrives
+- 'within a
+
+  [cluster](/concepts/clusters/)'
+- CREATE THE
+- up-to-date view results in memory
+- incrementally updates
+- CREATE INDEX
+- CREATE INDEXES
+- 'Note:'
+- Indexes
+product_area: Concepts
+status: stable
+title: Indexes
+---
+
 # Indexes
 
+## Purpose
 Learn about indexes in Materialize.
 
+Read this to understand how this concept works in Materialize.
+
+
+Learn about indexes in Materialize.
 
 
 ## Overview
@@ -13,10 +41,10 @@ views](/concepts/views/#materialized-views).
 
 ## Indexes on sources
 
-{{< note >}}
+> **Note:** 
 In practice, you may find that you rarely need to index a source
 without performing some transformation using a view, etc.
-{{</ note >}}
+
 
 In Materialize, you can create indexes on a [source](/concepts/sources/) to
 maintain in-memory up-to-date source data within the cluster you create the
@@ -28,7 +56,7 @@ directly.
 
 ```mzsql
 CREATE INDEX idx_on_my_source ON my_source (...);
-```
+```bash
 
 ## Indexes on views
 
@@ -38,7 +66,7 @@ the [cluster](/concepts/clusters/) you create the index.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 During the index creation on a [view](/concepts/views/#views "query saved under
 a name"), the view is executed and the view results are stored in memory within
@@ -62,7 +90,7 @@ makes the already up-to-date view results available **in memory** within the
 [cluster](/concepts/clusters/) you create the index. That is, indexes on
 materialized views require no additional computation to keep results up-to-date.
 
-{{< note >}}
+> **Note:** 
 
 A materialized view can be queried from any cluster whereas its indexed results
 are available only within the cluster you create the index. Querying a
@@ -71,14 +99,13 @@ free. However, querying an indexed materialized view within the cluster where
 the index is created is faster since the results are served from memory rather
 than from storage.
 
-{{</ note >}}
 
 For best practices on using indexes, and understanding when to use indexed views
 vs. materialized views, see [Usage patterns](#usage-patterns).
 
 ```mzsql
 CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
-```
+```bash
 
 ## Indexes and clusters
 
@@ -89,21 +116,23 @@ For example, to create an index in the current cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 You can also explicitly specify the cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
-```
+```bash
 
 ## Usage patterns
 
+This section covers usage patterns.
+
 ### Index usage
 
-{{% important %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: > **Important:**  --> -->
 Indexes are local to a cluster. Queries in one cluster cannot use the indexes in another, different cluster.
-{{% /important %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
 Unlike some other databases, Materialize can use an index to serve query results
 even if the query does not specify a `WHERE` condition on the index key. Serving
@@ -114,7 +143,7 @@ For example, consider the following index:
 
 ```mzsql
 CREATE INDEX idx_orders_view_qty ON orders_view (quantity);
-```
+```text
 
 Materialize will maintain the `orders_view` in memory in `idx_orders_view_qty`,
 and it will be able to use the index to serve a various queries on the
@@ -128,7 +157,7 @@ cluster as the index) on `orders_view`:
 SELECT * FROM orders_view;  -- scans the index
 SELECT * FROM orders_view WHERE status = 'shipped';  -- scans the index
 SELECT * FROM orders_view WHERE quantity = 10;  -- point lookup on the index
-```
+```text
 
 For the queries that do not specify a condition on the indexed field,
 Materialize scans the index. For the query that specifies an equality condition
@@ -185,12 +214,11 @@ Consider again the following index on a view:
 
 ```mzsql
 CREATE INDEX idx_orders_view_qty on orders_view (quantity);
-```
+```text
 
 The following table shows various queries and whether Materialize performs a
 point lookup or an index scan.
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity" >}}
 
 Consider that the view has an index on the `quantity` and `price` fields
 instead of an index on the `quantity` field:
@@ -200,17 +228,16 @@ DROP INDEX idx_orders_view_qty;
 CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 ```
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity_price" >}}
 
 #### Limitations
 
-{{% index_usage/index-ordering %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See index usage documentation --> --> -->
 
 ### Indexes on views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
-{{% include-md file="shared-content/mat-view-use-cases.md" %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
+<!-- Unresolved shortcode: {{% include-md file="shared-content/mat-view-use-c... -->
 
 ### Indexes and query optimizations
 
@@ -222,11 +249,11 @@ query performance](/transform-data/optimization/), such as:
 - Provide fast random access for lookup queries (i.e., selecting individual
   keys).
 
-{{% views-indexes/index-query-optimization-specific-instances %}}
+<!-- Unresolved shortcode: {{% views-indexes/index-query-optimization-specifi... -->
 
 ### Best practices
 
-{{% views-indexes/index-best-practices %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
 ## Related pages
 
@@ -237,4 +264,3 @@ query performance](/transform-data/optimization/), such as:
 <style>
 red { color: Red; font-weight: 500; }
 </style>
-

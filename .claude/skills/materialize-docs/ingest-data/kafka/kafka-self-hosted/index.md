@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/kafka/kafka-self-hosted/
+complexity: intermediate
+description: How to connect a self-hosted Kafka cluster as a source to Materialize.
+doc_type: reference
+keywords:
+- Use AWS PrivateLink
+- CREATE THE
+- 'Tip:'
+- Allow Materialize IPs
+- CREATE A
+- SELECT THE
+- Use an SSH tunnel
+- Ingest data from Self-hosted Kafka
+- 'Note:'
+- CREATE CONNECTION
+product_area: Sources
+status: stable
+title: Ingest data from Self-hosted Kafka
+---
+
 # Ingest data from Self-hosted Kafka
 
+## Purpose
 How to connect a self-hosted Kafka cluster as a source to Materialize.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to connect a self-hosted Kafka cluster as a source to Materialize.
 
 
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
@@ -10,9 +37,8 @@ with the Postgres ones. We should include spill to disk in the guidance then."
 This guide goes through the required steps to connect Materialize to a
 self-hosted Kafka cluster.
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
 
 ## Before you begin
 
@@ -38,29 +64,24 @@ connect:
 
 Select the option that works best for you.
 
-{{< tabs >}}
+#### Cloud
 
-{{< tab "Cloud" >}}
-{{< tabs tabID="1" >}}
 
-{{< tab "Privatelink">}}
+#### Privatelink
 
-{{< note >}}
+> **Note:** 
 Materialize provides Terraform modules for both [Amazon MSK clusters](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
 and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink)
 which can be used to create the target groups for each Kafka broker (step 1),
 the network load balancer (step 2), the TCP listeners (step 3) and the VPC
 endpoint service (step 5).
 
-{{< /note >}}
 
-{{% network-security/privatelink-kafka %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: network-security/privatelink-kafka --> --> -->
 
-{{< /tab >}}
+#### SSH Tunnel
 
-{{< tab "SSH Tunnel">}}
-
-{{% network-security/ssh-tunnel %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: network-security/ssh-tunnel --> --> -->
 
 1. In Materialize, create a source connection that uses the SSH tunnel
 connection you configured in the previous section:
@@ -70,11 +91,9 @@ connection you configured in the previous section:
     BROKER 'broker1:9092',
     SSH TUNNEL ssh_connection
   );
-```
+```bash
 
-{{< /tab >}}
-
-{{< tab "Allow Materialize IPs">}}
+#### Allow Materialize IPs
 
 1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
@@ -82,7 +101,7 @@ connection you configured in the previous section:
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
-    ```
+    ```text
 
 1. Update your Kafka cluster firewall rules to allow traffic from each IP
    address from the previous step.
@@ -99,13 +118,10 @@ connection you configured in the previous section:
         SASL USERNAME = '<your-username>',
         SASL PASSWORD = SECRET kafka_password
     );
-    ```
+    ```json
 
-{{< /tab >}}
+#### Self-Managed
 
-{{< /tabs >}}
-{{< /tab >}}
-{{< tab "Self-Managed" >}}
 
 There are various ways to configure your Kafka network to allow Materialize to
 connect:
@@ -119,11 +135,9 @@ connect:
 
 Select the option that works best for you.
 
-{{< tabs >}}
+#### SSH Tunnel
 
-{{< tab "SSH Tunnel">}}
-
-{{% network-security/ssh-tunnel-sm %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: network-security/ssh-tunnel-sm --> --> -->
 
 
 1. In Materialize, create a source connection that uses the SSH tunnel
@@ -134,11 +148,9 @@ CREATE CONNECTION kafka_connection TO KAFKA (
   BROKER 'broker1:9092',
   SSH TUNNEL ssh_connection
 );
-```
+```bash
 
-{{< /tab >}}
-
-{{< tab "Allow Materialize IPs">}}
+#### Allow Materialize IPs
 
 1. Update your Kafka cluster firewall rules to allow traffic from Materialize.
 
@@ -154,13 +166,8 @@ CREATE CONNECTION kafka_connection TO KAFKA (
         SASL USERNAME = '<your-username>',
         SASL PASSWORD = SECRET kafka_password
     );
-    ```
+    ```json
 
-{{< /tab >}}
-
-{{< /tabs >}}
-{{< /tab >}}
-{{< /tabs >}}
 
 ## Creating a source
 
@@ -181,4 +188,3 @@ cluster, use the `IN CLUSTER` clause.
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
-

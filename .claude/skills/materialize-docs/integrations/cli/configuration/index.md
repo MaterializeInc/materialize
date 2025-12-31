@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/cli/configuration/
+complexity: advanced
+description: An authentication profile...
+doc_type: reference
+keywords:
+- Materialize CLI Configuration
+- authentication profiles
+product_area: General
+status: stable
+title: Materialize CLI Configuration
+---
+
 # Materialize CLI Configuration
+
+## Purpose
+An authentication profile...
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 An authentication profile...
 
@@ -41,7 +61,7 @@ the `hooli` profile with the `mz sql` command:
 
 ```shell
 mz sql --profile=hooli
-```
+```text
 
 When the profile is not explicitly specified, `mz` uses the default profile
 specified in the configuration file. You can change the default profile using
@@ -49,7 +69,7 @@ specified in the configuration file. You can change the default profile using
 
 ```shell
 mz config set profile hooli
-```
+```bash
 
 ### Profile parameters
 

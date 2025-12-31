@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/terraform/manage-resources/
+complexity: intermediate
+description: The Materialize provider allows you to create several resource types
+  in your
+doc_type: reference
+keywords:
+- Manage Materialize resources with the Materialize provider
+- CREATE A
+- CREATE MATERIALIZE
+- CREATE RESOURCE
+- CREATE SEVERAL
+product_area: Operations
+status: stable
+title: Manage Materialize resources with the Materialize provider
+---
+
 # Manage Materialize resources with the Materialize provider
+
+## Purpose
+The Materialize provider allows you to create several resource types in your
+region. Resources correspond to Materialize objects and are configured
+with the `resource` block in your Terraform configuration file.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 
 
@@ -15,7 +41,7 @@ resource:
 resource "materialize_cluster" "example_cluster" {
   name = "cluster"
 }
-```
+```text
 
 You can find reference documentation for all the resources available in the
 Materialize provider in the [Terraform registry](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs).
@@ -32,7 +58,7 @@ For example, to return information about your current clusters, you would use th
 
 ```hcl
 data "materialize_cluster" "all" {}
-```
+```text
 
 This data source returns all cluster names and IDs which you can use as
 variables for new resources.
@@ -54,7 +80,7 @@ you want to import in your Terraform configuration:
 resource "materialize_cluster.<cluster_name> {
     name = <cluster_name>
 }
-```
+```text
 
 Next, you would use the `terraform import` command with the cluster name and ID
 to associate the object with the resource block:

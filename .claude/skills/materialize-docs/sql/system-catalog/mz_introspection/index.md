@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/system-catalog/mz_introspection/
+complexity: advanced
+description: mz_introspection is a system catalog schema which contains replica introspection
+  relations. This schema is not part of Materialize's stable interface.
+doc_type: reference
+keywords:
+- 'Warning:'
+- '`batches`'
+- mz_introspection
+- '`records`'
+- '`operator_id`'
+- SHOW HERE
+product_area: Indexes
+status: stable
+title: mz_introspection
+---
+
 # mz_introspection
+
+## Purpose
+mz_introspection is a system catalog schema which contains replica introspection relations. This schema is not part of Materialize's stable interface.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 mz_introspection is a system catalog schema which contains replica introspection relations. This schema is not part of Materialize's stable interface.
 
@@ -7,15 +32,15 @@ mz_introspection is a system catalog schema which contains replica introspection
 The following sections describe the available objects in the `mz_introspection`
 schema.
 
-{{< warning >}}
+> **Warning:** 
 The objects in the `mz_introspection` schema are not part of Materialize's stable interface.
 Backwards-incompatible changes to these objects may be made at any time.
-{{< /warning >}}
 
-{{< warning >}}
+
+> **Warning:** 
 `SELECT` statements may reference these objects, but creating views that
 reference these objects is not allowed.
-{{< /warning >}}
+
 
 Introspection relations are maintained by independently collecting internal logging information within each of the replicas of a cluster.
 Thus, in a multi-replica cluster, queries to these relations need to be directed to a specific replica by issuing the command `SET cluster_replica = <replica_name>`.
@@ -60,14 +85,12 @@ The size, capacity, and allocations are an approximation, which may underestimat
 Specifically, reductions can use more memory than we show here.
 
 <!-- RELATION_SPEC mz_introspection.mz_arrangement_sizes -->
-| Field         | Type       | Meaning                                                                                                                   |
-|---------------|------------| --------                                                                                                                  |
-| `operator_id` | [`uint8`]  | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `records`     | [`bigint`] | The number of records in the arrangement.                                                                                 |
-| `batches`     | [`bigint`] | The number of batches in the arrangement.                                                                                 |
-| `size`        | [`bigint`] | The utilized size in bytes of the arrangement.                                                                            |
-| `capacity`    | [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.                                                    |
-| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangement.                                                        |
+- **`operator_id`**: [`uint8`] | The ID of the operator that created the arrangement. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+- **`records`**: [`bigint`] | The number of records in the arrangement.
+- **`batches`**: [`bigint`] | The number of batches in the arrangement.
+- **`size`**: [`bigint`] | The utilized size in bytes of the arrangement.
+- **`capacity`**: [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.
+- **`allocations`**: [`bigint`] | The number of separate memory allocations backing the arrangement.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_sizes_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_arrangement_records_raw -->
@@ -178,15 +201,13 @@ The `mz_dataflow_arrangement_sizes` view describes the size of arrangements per
 operators under each dataflow.
 
 <!-- RELATION_SPEC mz_introspection.mz_dataflow_arrangement_sizes -->
-| Field         | Type       | Meaning                                                                      |
-|---------------|------------|------------------------------------------------------------------------------|
-| `id`          | [`uint8`]  | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]   | The name of the [dataflow].                                                  |
-| `records`     | [`bigint`] | The number of records in all arrangements in the dataflow.                   |
-| `batches`     | [`bigint`] | The number of batches in all arrangements in the dataflow.                   |
-| `size`        | [`bigint`] | The utilized size in bytes of the arrangements.                              |
-| `capacity`    | [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.      |
-| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangements.          |
+- **`id`**: [`uint8`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+- **`name`**: [`text`] | The name of the [dataflow].
+- **`records`**: [`bigint`] | The number of records in all arrangements in the dataflow.
+- **`batches`**: [`bigint`] | The number of batches in all arrangements in the dataflow.
+- **`size`**: [`bigint`] | The utilized size in bytes of the arrangements.
+- **`capacity`**: [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.
+- **`allocations`**: [`bigint`] | The number of separate memory allocations backing the arrangements.
 
 ## `mz_dataflow_channels`
 
@@ -194,14 +215,12 @@ The `mz_dataflow_channels` view describes the communication channels between [da
 A communication channel connects one of the outputs of a source operator to one of the inputs of a target operator.
 
 <!-- RELATION_SPEC mz_introspection.mz_dataflow_channels -->
-| Field            | Type      | Meaning                                                                                                                 |
-| ---------------- |-----------| --------                                                                                                                |
-| `id`             | [`uint8`] | The ID of the channel.                                                                                                  |
-| `from_index`     | [`uint8`] | The scope-local index of the source operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `from_port`      | [`uint8`] | The source operator's output port.                                                                                      |
-| `to_index`       | [`uint8`] | The scope-local index of the target operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `to_port`        | [`uint8`] | The target operator's input port.                                                                                       |
-| `type`           | [`text`]  | The container type of the channel.                                                                                      |
+- **`id`**: [`uint8`] | The ID of the channel.
+- **`from_index`**: [`uint8`] | The scope-local index of the source operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+- **`from_port`**: [`uint8`] | The source operator's output port.
+- **`to_index`**: [`uint8`] | The scope-local index of the target operator. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+- **`to_port`**: [`uint8`] | The target operator's input port.
+- **`type`**: [`text`] | The container type of the channel.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_channels_per_worker -->
 
@@ -210,14 +229,12 @@ A communication channel connects one of the outputs of a source operator to one 
 The `mz_dataflow_channel_operators` view associates [dataflow] channels with the operators that are their endpoints.
 
 <!-- RELATION_SPEC mz_introspection.mz_dataflow_channel_operators -->
-| Field                   | Type           | Meaning                                                                                                             |
-|-------------------------|----------------|---------------------------------------------------------------------------------------------------------------------|
-| `id`                    | [`uint8`]      | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).                           |
-| `from_operator_id`      | [`uint8`]      | The ID of the source of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
-| `from_operator_address` | [`uint8 list`] | The address of the source of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `to_operator_id`        | [`uint8`]      | The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).           |
-| `to_operator_address`   | [`uint8 list`] | The address of the target of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses). |
-| `type`                  | [`text`]  | The container type of the channel.                                                                                       |
+- **`id`**: [`uint8`] | The ID of the channel. Corresponds to [`mz_dataflow_channels.id`](#mz_dataflow_channels).
+- **`from_operator_id`**: [`uint8`] | The ID of the source of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+- **`from_operator_address`**: [`uint8 list`] | The address of the source of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+- **`to_operator_id`**: [`uint8`] | The ID of the target of the channel. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+- **`to_operator_address`**: [`uint8 list`] | The address of the target of the channel. Corresponds to [`mz_dataflow_addresses.address`](#mz_dataflow_addresses).
+- **`type`**: [`text`] | The container type of the channel.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_channel_operators_per_worker -->
 
@@ -293,16 +310,14 @@ The maintainance of these query patterns is implemented inside an operator scope
 through a hierarchical scheme for either aggregation or Top K computations.
 
 <!-- RELATION_SPEC mz_introspection.mz_expected_group_size_advice -->
-| Field           | Type                 | Meaning                                                                                                   |
-|-----------------|----------------------|-----------------------------------------------------------------------------------------------------------|
-| `dataflow_id`   | [`uint8`]            | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                              |
-| `dataflow_name` | [`text`]             | The internal name of the dataflow hosting the min/max aggregation or Top K.                               |
-| `region_id`     | [`uint8`]            | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).   |
-| `region_name`   | [`text`]             | The internal name of the root operator scope for the min/max aggregation or Top K.                        |
-| `levels`        | [`bigint`]           | The number of levels in the hierarchical scheme implemented by the region.                                |
-| `to_cut`        | [`bigint`]           | The number of levels that can be eliminated (cut) from the region's hierarchy.                            |
-| `savings`       | [`numeric`]          | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.                |
-| `hint`          | [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.                           |
+- **`dataflow_id`**: [`uint8`] | The ID of the [dataflow]. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+- **`dataflow_name`**: [`text`] | The internal name of the dataflow hosting the min/max aggregation or Top K.
+- **`region_id`**: [`uint8`] | The ID of the root operator scope. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+- **`region_name`**: [`text`] | The internal name of the root operator scope for the min/max aggregation or Top K.
+- **`levels`**: [`bigint`] | The number of levels in the hierarchical scheme implemented by the region.
+- **`to_cut`**: [`bigint`] | The number of levels that can be eliminated (cut) from the region's hierarchy.
+- **`savings`**: [`numeric`] | A conservative estimate of the amount of memory in bytes to be saved by applying the hint.
+- **`hint`**: [`double precision`] | The hint value that will eliminate `to_cut` levels from the region's hierarchy.
 
 ## `mz_mappable_objects`
 
@@ -379,15 +394,13 @@ The `mz_peek_durations_histogram` view describes a histogram of the duration in 
 The `mz_records_per_dataflow` view describes the number of records in each [dataflow].
 
 <!-- RELATION_SPEC mz_introspection.mz_records_per_dataflow -->
-| Field         | Type       | Meaning                                                                    |
-| ------------  |------------| --------                                                                   |
-| `id`          | [`uint8`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows). |
-| `name`        | [`text`]   | The internal name of the dataflow.                                         |
-| `records`     | [`bigint`] | The number of records in the dataflow.                                     |
-| `batches`     | [`bigint`] | The number of batches in the dataflow.                                     |
-| `size`        | [`bigint`] | The utilized size in bytes of the arrangements.                            |
-| `capacity`    | [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.    |
-| `allocations` | [`bigint`] | The number of separate memory allocations backing the arrangements.        |
+- **`id`**: [`uint8`] | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+- **`name`**: [`text`] | The internal name of the dataflow.
+- **`records`**: [`bigint`] | The number of records in the dataflow.
+- **`batches`**: [`bigint`] | The number of batches in the dataflow.
+- **`size`**: [`bigint`] | The utilized size in bytes of the arrangements.
+- **`capacity`**: [`bigint`] | The capacity in bytes of the arrangements. Can be larger than the size.
+- **`allocations`**: [`bigint`] | The number of separate memory allocations backing the arrangements.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_records_per_dataflow_per_worker -->
 
@@ -396,16 +409,14 @@ The `mz_records_per_dataflow` view describes the number of records in each [data
 The `mz_records_per_dataflow_operator` view describes the number of records in each [dataflow] operator in the system.
 
 <!-- RELATION_SPEC mz_introspection.mz_records_per_dataflow_operator -->
-| Field          | Type       | Meaning                                                                                      |
-| -------------- |------------| --------                                                                                     |
-| `id`           | [`uint8`]  | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators). |
-| `name`         | [`text`]   | The internal name of the operator.                                                           |
-| `dataflow_id`  | [`uint8`]  | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).                   |
-| `records`      | [`bigint`] | The number of records in the operator.                                                       |
-| `batches`      | [`bigint`] | The number of batches in the dataflow.                                                       |
-| `size`         | [`bigint`] | The utilized size in bytes of the arrangement.                                               |
-| `capacity`     | [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.                       |
-| `allocations`  | [`bigint`] | The number of separate memory allocations backing the arrangement.                           |
+- **`id`**: [`uint8`] | The ID of the operator. Corresponds to [`mz_dataflow_operators.id`](#mz_dataflow_operators).
+- **`name`**: [`text`] | The internal name of the operator.
+- **`dataflow_id`**: [`uint8`] | The ID of the dataflow. Corresponds to [`mz_dataflows.id`](#mz_dataflows).
+- **`records`**: [`bigint`] | The number of records in the operator.
+- **`batches`**: [`bigint`] | The number of batches in the dataflow.
+- **`size`**: [`bigint`] | The utilized size in bytes of the arrangement.
+- **`capacity`**: [`bigint`] | The capacity in bytes of the arrangement. Can be larger than the size.
+- **`allocations`**: [`bigint`] | The number of separate memory allocations backing the arrangement.
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_records_per_dataflow_operator_per_worker -->
 

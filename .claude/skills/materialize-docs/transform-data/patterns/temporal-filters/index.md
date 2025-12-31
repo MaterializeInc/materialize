@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/patterns/temporal-filters/
+complexity: advanced
+description: Perform time-windowed computation over temporal data.
+doc_type: reference
+keywords:
+- CREATE REAL
+- CREATE AN
+- CREATE A
+- DROP THESE
+- Temporal filters (time windows)
+- temporal filter
+- CREATE THE
+- sliding window
+- 'Note:'
+- 'Tip:'
+product_area: SQL
+status: experimental
+title: Temporal filters (time windows)
+---
+
 # Temporal filters (time windows)
+
+## Purpose
+Perform time-windowed computation over temporal data.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Perform time-windowed computation over temporal data.
 
@@ -26,13 +54,13 @@ records whose event timestamp column (`event_ts`) is no more than 5 minutes ago:
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
-```
+```text
 
-{{< note >}}
+> **Note:** 
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
 However, there are currently no valid operators for the [`mz_timestamp`
 type](/sql/types/mz_timestamp) that would allow this.  See [`mz_now()` requirements and restrictions](#mz_now-requirements-and-restrictions).
-{{< /note >}}
+
 
 The following diagram shows record `B` falling out of the result set as time
 moves forward:
@@ -47,27 +75,53 @@ moves forward:
 
 ## `mz_now()` requirements and restrictions
 
+This section covers `mz_now()` requirements and restrictions.
+
 ### `mz_now()` requirements
 
-{{< tip >}}
+> **Tip:** 
 
 When possible, prefer materialized views when using temporal filter to take
 advantage of custom consolidation.
 
-{{</ tip >}}
+
 
 When creating a temporal filter using
 [`mz_now()`](/sql/functions/now_and_mz_now) in a `WHERE` or `HAVING` clause, the
 clause has the following shape:
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+```mzsql
+mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
+```text
+
+- `mz_now()` must be used with one of the following comparison operators: `=`,
+`<`, `<=`, `>`, `>=`, or an operator that desugars to them or to a conjunction
+(`AND`) of them (for example, `BETWEEN...AND...`). That is, you cannot use
+date/time operations directly on  `mz_now()` to calculate a timestamp in the
+past or future. Instead, rewrite the query expression to move the operation to
+the other side of the comparison.
+
+
+- `mz_now()` can only be compared to either a
+  [`numeric`](/sql/types/numeric) expression or a
+  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
+
 
 ### `mz_now()` restrictions
 
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- When used in a materialized view definition, a view definition that is being
+indexed (i.e., although you can create the view and perform ad-hoc query on
+the view, you cannot create an index on that view), or a `SUBSCRIBE`
+statement:
+
+- `mz_now()` clauses can only be combined using an `AND`, and
+
+- All top-level `WHERE` or `HAVING` conditions must be combined using an `AND`,
+  even if the `mz_now()` clause is nested.
+
 
   To rewrite the query, see [Disjunction (OR)
   alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
@@ -80,12 +134,12 @@ restrictions:
 These examples create real objects.
 After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
 
-{{< tip >}}
+> **Tip:** 
 
 When possible, prefer materialized views when using temporal filter to take
 advantage of custom consolidation.
 
-{{</ tip >}}
+
 
 ### Sliding window
 
@@ -109,23 +163,23 @@ In this case, we will filter a table to only include only records from the last 
     SELECT event_ts, content
     FROM events
     WHERE mz_now() <= event_ts + INTERVAL '30s';
-    ```
+    ```text
 
 1. Next, subscribe to the results of the view.
     ```mzsql
     COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
-    ```
+    ```text
 
 1. In a separate session, insert a record.
     ```mzsql
     INSERT INTO events VALUES ('hello', now());
-    ```
+    ```text
 
 1. Back in the first session, watch the record expire after 30 seconds.
     ```nofmt
     1686868190714   1       2023-06-15 22:29:50.711 hello
     1686868220712   -1      2023-06-15 22:29:50.711 hello
-    ```
+    ```text
     Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 You can materialize the `last_30_sec` view by [recreating it as a `MATERIALIZED
@@ -144,14 +198,14 @@ Materialize then helps perform actions according to each task's expiration time.
 1. First, create a table:
     ```mzsql
     CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
-    ```
+    ```text
 
 1. Add some tasks to track:
     ```mzsql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
     INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
     INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
-    ```
+    ```text
 
 1. Create a view using a temporal filter **over the expiration time**. For our example, the expiration time represents the sum between the task's `created_ts` and its `ttl`.
     ```mzsql
@@ -161,7 +215,7 @@ Materialize then helps perform actions according to each task's expiration time.
       created_ts + ttl as expiration_time
     FROM tasks
     WHERE mz_now() < created_ts + ttl;
-    ```
+    ```text
     The moment `mz_now()` crosses the expiration time of a record, that record is retracted (removed) from the result set.
 
 You can now:
@@ -171,26 +225,26 @@ You can now:
     SELECT expiration_time - now() AS remaining_ttl
     FROM tracking_tasks
     WHERE name = 'time_to_eat';
-  ```
+  ```text
 
 - Check if a particular row is still available:
   ```mzsql
   SELECT true
   FROM tracking_tasks
   WHERE name = 'security_block';
-  ```
+  ```text
 
 - Trigger an external process when a row expires:
   ```mzsql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 seconds');
     COPY( SUBSCRIBE tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
 
-  ```
+  ```text
   ```nofmt
   mz_timestamp | mz_diff | name       | expiration_time |
   -------------|---------|------------|-----------------|
   ...          | -1      | send_email | ...             | <-- Time to send the email!
-  ```
+  ```bash
 
 ### Periodically emit results
 
@@ -203,7 +257,7 @@ The strategy for this example is to put an initial temporal filter on the input 
 1. First, create a table for the input records.
     ```mzsql
     CREATE TABLE input (id INT, event_ts TIMESTAMP);
-    ```
+    ```text
 1. Create a view that filters the input for the most recent 30 days and buckets records into 1 minute windows.
     ```mzsql
     CREATE VIEW
@@ -220,7 +274,7 @@ The strategy for this example is to put an initial temporal filter on the input 
                     AS window_end
             FROM input
             WHERE mz_now() <= event_ts + INTERVAL '30 days';
-    ```
+    ```text
 1. Create the final output view that does the aggregation and maintains 7 days worth of results.
     ```mzsql
     CREATE MATERIALIZED VIEW output
@@ -235,12 +289,12 @@ The strategy for this example is to put an initial temporal filter on the input 
                     AND
                 mz_now() < window_end + INTERVAL '7 days'
             GROUP BY window_end, id;
-    ```
+    ```text
     This `WHERE` clause means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without the latter constraint, records in the result set would receive strange updates as records expire from the initial 30 day filter on the input.
 1. Subscribe to the `output`.
     ```mzsql
     COPY (SUBSCRIBE (SELECT * FROM output)) TO STDOUT;
-    ```
+    ```text
 1. In a different session, insert some records.
     ```mzsql
     INSERT INTO input VALUES (1, now());
@@ -250,14 +304,14 @@ The strategy for this example is to put an initial temporal filter on the input 
     INSERT INTO input VALUES (1, now());
     -- wait a moment
     INSERT INTO input VALUES (2, now());
-    ```
+    ```text
 1. Back at the `SUBSCRIBE`, wait about a minute for your final aggregation result to show up the moment the 1 minute window ends.
     ```nofmt
      mz_timestamp | mz_diff |  id   | count |      window_end
     --------------|---------|-------|-------|----------------------
     1686889140000       1       1       3       2023-06-16 04:19:00
     1686889140000       1       2       1       2023-06-16 04:19:00
-    ```
+    ```text
     If you are very patient, you will see these results retracted in 7 days.
     Press `Ctrl+C` to exit the `SUBSCRIBE` when you are finished playing.
 
@@ -273,7 +327,7 @@ Consider the temporal filter for the most recent hour's worth of records.
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
-```
+```text
 
 Suppose a record with a timestamp `11:00:00` arrives "late" with a virtual timestamp of `11:59:59` and you query this collection at a virtual timestamp of `12:00:00`.
 According to the temporal filter, the record is included for results as of virtual time `11:59:59` and retracted just after `12:00:00`.
@@ -316,7 +370,7 @@ The filter in our query appears in the `pushdown=` list at the bottom of the out
 
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
-{{< note >}}
+> **Note:** 
 See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
-{{< /note >}}
+
 

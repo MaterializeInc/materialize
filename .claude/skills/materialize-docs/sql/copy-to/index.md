@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/copy-to/
+complexity: intermediate
+description: '`COPY TO` outputs results from Materialize to standard output or object
+  storage.'
+doc_type: reference
+keywords:
+- CREATE CONNECTION
+- 'Syntax:'
+- COPY TO
+- FORMAT
+- AWS CONNECTION
+product_area: Indexes
+status: stable
+title: COPY TO
+---
+
 # COPY TO
+
+## Purpose
+`COPY TO` outputs results from Materialize to standard output or object storage.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `COPY TO` outputs results from Materialize to standard output or object storage.
 
@@ -15,7 +39,7 @@ Copying results to `stdout` is useful to output the stream of updates from a
 
 ### Syntax {#copy-to-stdout-syntax}
 
-{{< diagram "copy-to-stdout.svg" >}}
+[See diagram: copy-to-stdout.svg]
 
 Field         | Use
 --------------|-----
@@ -35,7 +59,7 @@ Name     | Values                 | Default value | Description
 
 ```mzsql
 COPY (SUBSCRIBE some_view) TO STDOUT WITH (FORMAT binary);
-```
+```bash
 
 ## Copy to Amazon S3 and S3 compatible services {#copy-to-s3}
 
@@ -51,7 +75,7 @@ orchestration platform like Airflow or Dagster.
 
 ### Syntax {#copy-to-s3-syntax}
 
-{{< diagram "copy-to-s3.svg" >}}
+[See diagram: copy-to-s3.svg]
 
 Field         | Use
 --------------|-----
@@ -149,8 +173,7 @@ Materialize type | Arrow extension name | [Arrow type](https://github.com/apache
 
 ### Examples {#copy-to-s3-examples}
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 ```mzsql
 COPY some_view TO 's3://mz-to-snow/parquet/'
@@ -158,11 +181,9 @@ WITH (
     AWS CONNECTION = aws_role_assumption,
     FORMAT = 'parquet'
   );
-```
+```bash
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 ```mzsql
 COPY some_view TO 's3://mz-to-snow/csv/'
@@ -172,14 +193,18 @@ WITH (
   );
 ```
 
-{{< /tab >}}
-{{< /tabs >}}
-
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/copy-to.md" >}}
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+    - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+      execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+      granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
+
 
 ## Related pages
 

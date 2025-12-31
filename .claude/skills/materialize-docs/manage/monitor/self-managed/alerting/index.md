@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/self-managed/alerting/
+complexity: advanced
+description: Alerting thresholds to use for monitoring.
+doc_type: reference
+keywords:
+- 'Warning:'
+- 'Alert:'
+- Alerting
+product_area: Operations
+status: stable
+title: Alerting
+---
+
 # Alerting
+
+## Purpose
+Alerting thresholds to use for monitoring.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Alerting thresholds to use for monitoring.
 

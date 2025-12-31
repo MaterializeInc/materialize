@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-role-membership/
+complexity: intermediate
+description: SHOW ROLE MEMBERSHIP lists the members of each role granted via role-based
+  access control (RBAC).
+doc_type: reference
+keywords:
+- SHOW MEMBERSHIP
+- FOR
+- SHOW ROLE MEMBERSHIP
+- SHOW ROLE
+product_area: Indexes
+status: stable
+title: SHOW ROLE MEMBERSHIP
+---
+
 # SHOW ROLE MEMBERSHIP
+
+## Purpose
+SHOW ROLE MEMBERSHIP lists the members of each role granted via role-based access control (RBAC).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 SHOW ROLE MEMBERSHIP lists the members of each role granted via role-based access control (RBAC).
 
@@ -10,9 +33,11 @@ control](/security/) (RBAC).
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW ROLE MEMBERSHIP [ FOR <role_name> ];
-```
+```text
 
 Syntax element             | Description
 ---------------------------|------------
@@ -22,9 +47,11 @@ Syntax element             | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW ROLE MEMBERSHIP;
-```
+```text
 
 ```nofmt
  role | member |  grantor
@@ -33,11 +60,11 @@ SHOW ROLE MEMBERSHIP;
  r3   | r2     | mz_system
  r4   | r3     | mz_system
  r6   | r5     | mz_system
-```
+```text
 
 ```mzsql
 SHOW ROLE MEMBERSHIP FOR r2;
-```
+```text
 
 ```nofmt
  role | member |  grantor

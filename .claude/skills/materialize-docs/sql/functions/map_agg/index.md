@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/map_agg/
+complexity: advanced
+description: Aggregate keys and values (excluding null keys) into a map
+doc_type: reference
+keywords:
+- CREATE A
+- CREATE VIEW
+- SELECT KEY_COL
+- SELECT MAP_AGG
+- CREATE MATERIALIZED
+- map_agg function
+product_area: Indexes
+status: stable
+title: map_agg function
+---
+
 # map_agg function
+
+## Purpose
+Aggregate keys and values (excluding null keys) into a map
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Aggregate keys and values (excluding null keys) into a map
 
@@ -11,9 +35,11 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "func-map-agg.svg" >}}
+[See diagram: func-map-agg.svg]
 
 ## Signatures
+
+This section covers signatures.
 
 | Parameter | Type                       | Description              |
 | --------- | -------------------------- | ------------------------ |
@@ -48,7 +74,7 @@ statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT key_col, val_col FROM foo;
 CREATE VIEW bar AS SELECT map_agg(key_col, val_col) FROM foo_view;
-```
+```bash
 
 ## Examples
 
@@ -75,7 +101,7 @@ FROM (
     (NULL, 99, now()),
     (NULL, 100, now())
   ) AS t(k, v, ts);
-```
+```text
 
 ```nofmt
       my_agg

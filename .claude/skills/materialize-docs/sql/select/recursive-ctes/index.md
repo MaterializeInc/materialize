@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/select/recursive-ctes/
+complexity: advanced
+description: Recursive CTEs are used to define recursive queries.
+doc_type: reference
+keywords:
+- Recursive CTEs
+- 'Warning:'
+- RETURN AT RECURSION LIMIT $n
+- ERROR AT RECURSION LIMIT $n
+- UPDATE TO
+- CREATE TABLE
+- recursive_cte_binding
+- DELETE FROM
+- Stop streaming
+product_area: Indexes
+status: stable
+title: Recursive CTEs
+---
+
 # Recursive CTEs
+
+## Purpose
+Recursive CTEs are used to define recursive queries.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Recursive CTEs are used to define recursive queries.
 
@@ -8,13 +35,15 @@ Recursive CTEs operate on the recursively-defined structures like trees or graph
 
 ## Syntax
 
+This section covers syntax.
+
 ### with_recursive_cte
 
-{{< diagram "with-recursive-ctes.svg" >}}
+[See diagram: with-recursive-ctes.svg]
 
 ### recursive_cte_binding
 
-{{< diagram "recursive-cte-binding.svg" >}}
+[See diagram: recursive-cte-binding.svg]
 
 Field | Use
 ------|-----
@@ -36,7 +65,7 @@ WITH MUTUALLY RECURSIVE
   $R_n(...) AS ( $sql_cte_n )
   -- Compute the result from the final values of all bindings.
   $sql_body
-```
+```text
 
 is evaluated as if it was performing the following steps:
 
@@ -54,7 +83,7 @@ Note that Materialize's ability to [efficiently handle incremental changes to yo
 For each iteration, Materialize performs work resulting only from the input changes for this iteration and feeds back the resulting output changes to the next iteration.
 When the set of changes for all bindings becomes empty, the recursive computation stops and the final `select_stmt` is evaluated.
 
-{{< warning >}}
+> **Warning:** 
 In the absence of recursive CTEs, every `SELECT` query is guaranteed to compute its result or fail with an error within a finite amount of time.
 However, introducing recursive CTEs complicates the situation as follows:
 
@@ -63,7 +92,7 @@ However, introducing recursive CTEs complicates the situation as follows:
 2. A small update to a few (or even one) data points in your input might cascade in big updates in your recursive computation.
    This most likely will manifest in spikes of the cluster resources allocated to your recursive dataflows.
    See [an example](#queries-with-update-locality) below.
-{{</ warning >}}
+
 
 ## Examples
 
@@ -82,7 +111,7 @@ CREATE TABLE areas(id int not null, parent int, name text);
 CREATE TABLE users(id char(1) not null, area_id int not null, name text);
 -- A collection of transfers between these users.
 CREATE TABLE transfers(src_id char(1), tgt_id char(1), amount numeric, ts timestamp);
-```
+```bash
 
 ### Example data
 
@@ -110,7 +139,7 @@ INSERT INTO transfers VALUES
   ('C', 'D', 25.0 , now() + '10 seconds'),
   ('A', 'B', 10.0 , now() + '15 seconds'),
   ('C', 'A', 35.0 , now() + '20 seconds');
-```
+```bash
 
 ### Transitive closure
 
@@ -127,7 +156,7 @@ WITH MUTUALLY RECURSIVE
     SELECT c1.src_id, c2.dst_id FROM connected c1 JOIN connected c2 ON c1.dst_id = c2.src_id
   )
 SELECT src_id, dst_id FROM connected;
-```
+```text
 
 To see results change over time, you can [`SUBSCRIBE`](/sql/subscribe/) to the
 materialized view and then use a different SQL Shell session to insert
@@ -135,14 +164,14 @@ some sample data into the base tables used in the view:
 
 ```mzsql
 SUBSCRIBE(SELECT * FROM connected) WITH (SNAPSHOT = FALSE);
-```
+```text
 
 You'll see results change as new data is inserted. When you’re done, cancel out
 of the `SUBSCRIBE` using **Stop streaming**.
 
-{{< note >}}
+> **Note:** 
 Depending on your base data, the number of records in the `connected` result might get close to the square of the number of `users`.
-{{</ note >}}
+
 
 ### Strongly connected components
 
@@ -168,21 +197,21 @@ CREATE MATERIALIZED VIEW strongly_connected_components AS
   FROM users u
   LEFT JOIN symmetric c ON(u.id = c.src_id)
   GROUP BY u.id;
-```
+```text
 
 Again, you can insert some sample data into the base tables and observe how the
 materialized view contents change over time using `SUBSCRIBE`:
 
 ```mzsql
 SUBSCRIBE(SELECT * FROM strongly_connected_components) WITH (SNAPSHOT = FALSE);
-```
+```text
 
 When you’re done, cancel out of the `SUBSCRIBE` using **Stop streaming**.
 
-{{< note >}}
+> **Note:** 
 The `strongly_connected_components` definition given above is not recursive, but relies on the recursive CTEs from the `connected` definition.
 If you don't need to keep track of the `connected` contents for other reasons, you can use [this alternative SCC definition](https://twitter.com/frankmcsherry/status/1628519795971727366) which computes SCCs directly using repeated forward and backward label propagation.
-{{</ note >}}
+
 
 ### Aggregations over a hierarchy
 
@@ -247,14 +276,14 @@ CREATE MATERIALIZED VIEW area_balances AS
     id, balance
   FROM
     indirect_balances;
-```
+```text
 
 As before, you can insert [the example data](#example-data) and observe how the materialized view contents change over time from the `psql` with the `\watch` command:
 
 ```mzsql
 SELECT id, name, balance FROM area_balances JOIN areas USING(id) ORDER BY id;
 \watch 1
-```
+```bash
 
 ### Non-terminating queries
 
@@ -275,48 +304,50 @@ WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 100)
     SELECT c1.src_id, c2.dst_id FROM connected c1 JOIN connected c2 ON c1.dst_id = c2.src_id
   )
 SELECT src_id, dst_id FROM connected ORDER BY src_id, dst_id;
-```
+```text
 
 After inserting [the example data](#example-data) you can observe that executing the above statement returns the following error:
 
 ```text
 ERROR:  Evaluation error: Recursive query exceeded the recursion limit 100. (Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit.)
-```
+```text
 
 The recursive CTE `connected` has not converged to a fixpoint within the first 100 iterations!
 To see why, you can run variants of the same query where the
 
 ```mzsql
 ERROR AT RECURSION LIMIT 100
-```
+```text
 
 clause is replaced by
 
 ```mzsql
 RETURN AT RECURSION LIMIT $n -- where $n = 1, 2, 3, ...
-```
+```text
 
 and observe how the result changes after `$n` iterations.
 
-{{< tabs >}}
-{{< tab "After 1 iteration">}}
+#### After 1 iteration
+
 ```text
  src_id | dst_id
 --------+--------
  A      | B
  ...
-```
-{{< /tab >}}
-{{< tab "After 2 iterations">}}
+```bash
+
+#### After 2 iterations
+
 ```text
  src_id | dst_id
 --------+--------
  A      | B
  A      | B
  ...
-```
-{{< /tab >}}
-{{< tab "After 3 iterations">}}
+```bash
+
+#### After 3 iterations
+
 ```text
  src_id | dst_id
 --------+--------
@@ -325,8 +356,6 @@ and observe how the result changes after `$n` iterations.
  A      | B
  ...
 ```
-{{< /tab >}}
-{{< /tabs >}}
 
 Changing the `UNION` to `UNION ALL` in the `connected` definition caused a full copy of `transfer` to be added to the current value of `connected` in each iteration!
 Consequently, `connected` never stops growing and the recursive CTE computation never reaches a fixpoint.
@@ -335,9 +364,9 @@ Consequently, `connected` never stops growing and the recursive CTE computation 
 
 The examples presented so far have the following "update locality" property:
 
-{{< note >}}
+> **Note:** 
 A change in a source collection will usually cause a _bounded amount_ of changes to the contents of the recursive CTE bindings derived after each iteration.
-{{</ note >}}
+
 
 For example:
 

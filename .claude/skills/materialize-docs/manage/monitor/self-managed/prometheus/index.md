@@ -1,12 +1,37 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/self-managed/prometheus/
+complexity: beginner
+description: How to monitor the performance and overall health of your Materialize
+  instance using Prometheus and Grafana.
+doc_type: reference
+keywords:
+- Connection > Data sources
+- 'Warning:'
+- UPDATE HELM
+- CREATE NAMESPACE
+- 'Note:'
+- Grafana using Prometheus
+- 'Important:'
+product_area: Operations
+status: stable
+title: Grafana using Prometheus
+---
+
 # Grafana using Prometheus
+
+## Purpose
+How to monitor the performance and overall health of your Materialize instance using Prometheus and Grafana.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to monitor the performance and overall health of your Materialize instance using Prometheus and Grafana.
 
 
-
-{{< warning >}}
+> **Warning:** 
 The metrics scraped are unstable and may change across releases.
-{{< /warning >}}
+
 
 This guide walks you through the steps required to monitor the performance and
 overall health of your Materialize instance using Prometheus and Grafana.
@@ -19,27 +44,26 @@ Ensure you have:
 - [Helm](https://helm.sh/docs/intro/install/) version 3.2.0+ installed
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) installed and configured
 
-{{< important >}}
+> **Important:** 
 This guide assumes you have administrative access to your Kubernetes cluster and the necessary permissions to install Prometheus.
-{{< /important >}}
+
 
 ## 1. Download our Prometheus scrape configurations (`prometheus.yml`)
   Download the Prometheus scrape configurations that we'll use to configure Prometheus to collect metrics from Materialize:
-  {{% self-managed/step-download-prometheus-scrape-configs %}}
-
+  <!-- Unresolved shortcode: {{% self-managed/step-download-prometheus-scrape-c... -->
 
 
 ## 2. Install Prometheus to your Kubernetes cluster
 
-  {{< note >}}
+  > **Note:** 
   This guide uses the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
-  {{< /note >}}
+  
 
 
 1. Download the prometheus-community default chart values (`values.yaml`):
    ```bash
    curl -O https://raw.githubusercontent.com/prometheus-community/helm-charts/refs/heads/main/charts/prometheus/values.yaml
-   ```
+   ```text
 
 2. Within `values.yaml`, replace `serverFiles > prometheus.yml > scrape_configs` with our scrape configurations (`prometheus_scrape_configs.yml`).
 
@@ -50,7 +74,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
    helm repo update
    helm install --namespace prometheus prometheus prometheus-community/prometheus \
    --values values.yaml
-   ```
+   ```bash
 
 ## 3. Optional. Visualize through Grafana
 
@@ -61,11 +85,11 @@ This guide assumes you have administrative access to your Kubernetes cluster and
     ```bash
     MZ_POD_GRAFANA=$(kubectl get pods -n monitoring -l app.kubernetes.io/name=grafana -o custom-columns="NAME:.metadata.name" --no-headers)
     kubectl port-forward pod/$MZ_POD_GRAFANA 3000:3000 -n monitoring
-    ```
+    ```text
 
-    {{< warning >}}
+    > **Warning:** 
   The port forwarding method is for testing purposes only. For production environments, configure an ingress controller to securely expose the Grafana UI.
-    {{< /warning >}}
+    
 
 3. Open the Grafana UI on [http://localhost:3000](http://localhost:3000) in a browser.
 
@@ -82,7 +106,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
     ```bash
     # environment_overview_dashboard.json
     curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/grafana_dashboards/environment_overview_dashboard.json
-    ```
+    ```bash
     ### Freshness overview dashboard
     An overview of how out of date objects in your environment are.
      ```bash
@@ -93,4 +117,3 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 5. [Import the dashboards using the Prometheus data source](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/import-dashboards/#importing-a-dashboard)
 
     ![Image of Materialize Console login screen with mz_system user](/images/self-managed/grafana-monitoring-success.png)
-

@@ -1,4 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/java-jdbc/
+complexity: advanced
+description: Use the PostgreSQL JDBC Driver to connect, insert, manage, query and
+  stream from Materialize.
+doc_type: reference
+keywords:
+- wire-compatible
+- CREATE A
+- CREATE TABLES
+- Java cheatsheet
+- 'Basic Example:'
+- INSERT DATA
+- CREATE TABLE
+- Hibernate
+- updated,
+- INSERT A
+product_area: General
+status: stable
+title: Java cheatsheet
+---
+
 # Java cheatsheet
+
+## Purpose
+Use the PostgreSQL JDBC Driver to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use the PostgreSQL JDBC Driver to connect, insert, manage, query and stream from Materialize.
 
@@ -51,7 +80,7 @@ public class App {
         app.connect();
     }
 }
-```
+```text
 
 To establish the connection to Materialize, call the `getConnection()` method on the `DriverManager` class.
 
@@ -111,7 +140,7 @@ public class App {
     }
 
 }
-```
+```bash
 
 ## Insert data into tables
 
@@ -168,7 +197,7 @@ public class App {
         app.insert();
     }
 }
-```
+```bash
 
 ## Query
 
@@ -227,7 +256,7 @@ public class App {
         app.query();
     }
 }
-```
+```text
 
 For more details, see the [JDBC](https://jdbc.postgresql.org/documentation/head/query.html) documentation.
 
@@ -286,7 +315,7 @@ public class App {
         app.source();
     }
 }
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -308,7 +337,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
             System.out.println(ex.getMessage());
         }
     }
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -369,7 +398,7 @@ public class App {
         app.subscribe();
     }
 }
-```
+```text
 
 The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `rs` is a `ResultSet` of view updates. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
@@ -379,7 +408,7 @@ The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `rs` is a `ResultSet`
     1648567761801 1 value_4
     1648567785802 -1 value_4
     ...
-```
+```text
 
 A `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 

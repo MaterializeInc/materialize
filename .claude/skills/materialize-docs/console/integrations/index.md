@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/integrations/
+complexity: intermediate
+description: Displays the various technologies supported by Materialize.
+doc_type: reference
+keywords:
+- Integrations
+product_area: General
+status: stable
+title: Integrations
+---
+
 # Integrations
+
+## Purpose
+Displays the various technologies supported by Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Displays the various technologies supported by Materialize.
 

@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-create-view/
+complexity: intermediate
+description: '`SHOW CREATE VIEW` returns the `SELECT` statement used to create the
+  view.'
+doc_type: reference
+keywords:
+- CREATE THE
+- SHOW CREATE VIEW
+- SHOW CREATE
+product_area: Views
+status: stable
+title: SHOW CREATE VIEW
+---
+
 # SHOW CREATE VIEW
+
+## Purpose
+`SHOW CREATE VIEW` returns the `SELECT` statement used to create the view.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW CREATE VIEW` returns the `SELECT` statement used to create the view.
 
@@ -8,19 +30,23 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```sql
 SHOW [REDACTED] CREATE VIEW <view_name>;
-```
+```text
 
-{{< yaml-table data="show_create_redacted_option" >}}
+<!-- Dynamic table: show_create_redacted_option - see original docs -->
 
 For available view names, see [`SHOW VIEWS`](/sql/show-views).
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW CREATE VIEW my_view;
-```
+```text
 ```nofmt
             name            |                                            create_sql
 ----------------------------+--------------------------------------------------------------------------------------------------
@@ -31,8 +57,8 @@ SHOW CREATE VIEW my_view;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-create-view.md"
->}}
+- `USAGE` privileges on the schema containing the view.
+
 
 ## Related pages
 

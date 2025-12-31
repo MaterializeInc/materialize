@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/looker/
+complexity: advanced
+description: How to create dashboards with Looker
+doc_type: reference
+keywords:
+- SELECT PG_CANCEL_BACKEND
+- PostgreSQL 9.5+
+- Connection Test Error
+- public
+- materialize
+- CREATE DASHBOARDS
+- Looker
+- '6875'
+product_area: Sinks
+status: stable
+title: Looker
+---
+
 # Looker
 
+## Purpose
 How to create dashboards with Looker
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to create dashboards with Looker
 
 
 You can use [Looker](https://cloud.google.com/looker-bi) to create dashboards
@@ -27,7 +52,7 @@ Database password      | App-specific password.
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Known limitations
 
@@ -35,9 +60,9 @@ When using Looker with Materialize, be aware of the following limitations:
 
 1. **Connection Test Error**: You might encounter this error when testing the connection to Materialize from Looker:
 
-   ```
+   ```text
    Test kill: Cannot cancel queries: Query could not be found in database.
-   ```
+   ```text
 
    This error occurs because Looker attempts to run a test query cancellation, which checks for `pg_stat_activity` (not currently supported in Materialize).
 
@@ -72,4 +97,3 @@ When using Looker with Materialize, be aware of the following limitations:
    b. If you encounter performance issues, disable symmetric aggregates in your Looker setup using the link provided above.
 
    c. For use cases requiring symmetric aggregates, contact Materialize support for optimization guidance.
-

@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/date/
+complexity: intermediate
+description: Expresses a date without a specified time
+doc_type: reference
+keywords:
+- Quick Syntax
+- Catalog name
+- OID
+- Size
+- date type
+- Min value
+- SELECT DATE
+product_area: Indexes
+status: stable
+title: date type
+---
+
 # date type
+
+## Purpose
+Expresses a date without a specified time
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses a date without a specified time
 
@@ -18,7 +43,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-date.svg" >}}
+[See diagram: type-date.svg]
 
 Field | Use
 ------|----
@@ -27,6 +52,8 @@ _time&lowbar;str_ | _(NOP)_ A string representing a time of day in `H:M:S.NS` fo
 _tz&lowbar;offset_ | _(NOP)_ The timezone's distance, in hours, from UTC.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -59,9 +86,11 @@ Operation | Computes
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT DATE '2007-02-01' AS date_v;
-```
+```text
 ```nofmt
    date_v
 ------------

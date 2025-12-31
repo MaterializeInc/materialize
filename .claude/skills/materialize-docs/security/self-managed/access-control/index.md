@@ -1,13 +1,40 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/self-managed/access-control/
+complexity: beginner
+description: How to configure and manage role-based database access control (RBAC)
+  in Materialize.
+doc_type: reference
+keywords:
+- CREATE ROLE
+- 'Warning:'
+- superuser
+- SHOW ENABLE_RBAC_CHECKS
+- ALTER SYSTEM
+- CREATE ADDITIONAL
+- Access control (Role-based)
+- 'Note:'
+- 'Important:'
+product_area: Security
+status: stable
+title: Access control (Role-based)
+---
+
 # Access control (Role-based)
+
+## Purpose
+How to configure and manage role-based database access control (RBAC) in Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to configure and manage role-based database access control (RBAC) in Materialize.
 
 
-
-{{< note >}}
+> **Note:** 
 Initially, only the `mz_system` user (which has superuser/administrator
 privileges) is available to manage roles.
-{{</ note >}}
+
 
 <a name="role-based-access-control-rbac" ></a>
 
@@ -19,28 +46,86 @@ roles](/security/self-managed/access-control/manage-roles/).
 
 ## Enabling RBAC
 
-{{< include-md file="shared-content/rbac-sm/enable-rbac.md" >}}
+> **Warning:** 
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+
+
+By default, role-based access control (RBAC) checks are not enabled (i.e.,
+enforced) when using [authentication](/security/self-managed/authentication/#configuring-authentication-type). To
+enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
+You can enable the parameter in one of the following ways:
+
+- For [local installations using
+  Kind/Minikube](/installation/#installation-guides), set `spec.enableRbac:
+  true` option when instantiating the Materialize object.
+
+- For [Cloud deployments using Materialize's
+  Terraforms](/installation/#installation-guides), set `enable_rbac_checks` in
+  the environment CR via the `environmentdExtraArgs` flag option.
+
+- After the Materialize instance is running, run the following command as
+  `mz_system` user:
+
+  ```mzsql
+  ALTER SYSTEM SET enable_rbac_checks = 'on';
+  ```text
+
+If more than one method is used, the `ALTER SYSTEM` command will take precedence
+over the Kubernetes configuration.
+
+To view the current value for `enable_rbac_checks`, run the following `SHOW`
+command:
+
+```mzsql
+SHOW enable_rbac_checks;
+```text
+
+> **Important:** 
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+
 
 ## Roles and privileges
 
-{{% include-md file="shared-content/rbac-sm/db-roles.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
 
-- {{< include-md file="shared-content/rbac-sm/create-users.md" >}}
+- To create additional users or service accounts, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE
+... WITH LOGIN PASSWORD ...`](/sql/create-role):
 
-- {{< include-md file="shared-content/rbac-sm/create-functional-roles.md" >}}
+```mzsql
+CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
+```text
+
+
+- To create functional roles, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE`](/sql/create-role):
+
+```mzsql
+CREATE ROLE <role>;
+```bash
+
 
 ### Managing privileges
 
-{{% include-md file="shared-content/rbac-sm/db-roles-managing-privileges.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
 
-{{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-sm/grant-vs-alter-default-privilege.md"
-%}}
-{{</ annotation >}}
+> **Disambiguation:** <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/grant-... -->
 
 ### Initial privileges
 
-{{< include-md file="shared-content/rbac-sm/db-roles-initial-privileges.md" >}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
+
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/public... -->
+
+In addition, all roles have:
+- `USAGE` on all built-in types and [all system catalog
+schemas](/sql/system-catalog/).
+- `SELECT` on [system catalog objects](/sql/system-catalog/).
+- All [applicable privileges](/security/appendix/appendix-privileges/) for
+  an object they create; for example, the creator of a schema gets `CREATE` and
+  `USAGE`; the creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and
+  `DELETE`.
+
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the modify default privileges for `PUBLIC`.
@@ -61,13 +146,11 @@ combining existing roles, enabling modular access control. However:
 
 - Inheritance only applies to role privileges; role attributes and parameters
   are not inherited.
-- {{% include-md file="shared-content/rbac-sm/revoke-roles-consideration.md" %}}
+- <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/revoke... -->
 
 ## Best practices
 
-{{% yaml-sections data="rbac/recommendations-sm" heading-field="recommendation" heading-level=3 %}}
-
-
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-sm" h... -->
 
 
 ---
@@ -80,41 +163,101 @@ through privileges granted to database roles.
 
 ## Enabling RBAC
 
-{{< include-md file="shared-content/rbac-sm/enable-rbac.md" >}}
+> **Warning:** 
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+
+
+By default, role-based access control (RBAC) checks are not enabled (i.e.,
+enforced) when using [authentication](/security/self-managed/authentication/#configuring-authentication-type). To
+enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
+You can enable the parameter in one of the following ways:
+
+- For [local installations using
+  Kind/Minikube](/installation/#installation-guides), set `spec.enableRbac:
+  true` option when instantiating the Materialize object.
+
+- For [Cloud deployments using Materialize's
+  Terraforms](/installation/#installation-guides), set `enable_rbac_checks` in
+  the environment CR via the `environmentdExtraArgs` flag option.
+
+- After the Materialize instance is running, run the following command as
+  `mz_system` user:
+
+  ```mzsql
+  ALTER SYSTEM SET enable_rbac_checks = 'on';
+  ```text
+
+If more than one method is used, the `ALTER SYSTEM` command will take precedence
+over the Kubernetes configuration.
+
+To view the current value for `enable_rbac_checks`, run the following `SHOW`
+command:
+
+```mzsql
+SHOW enable_rbac_checks;
+```text
+
+> **Important:** 
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+
 
 ## Required privileges for managing roles
 
-{{< note >}}
+> **Note:** 
 Initially, only the `mz_system` user (which has superuser/administrator
 privileges) is available to manage roles.
-{{</ note >}}
+
 
 | Role management operations          | Required privileges      |
 | ----------------------------------- | ------------------------ |
-| To create/revoke/grant roles        | {{< include-md
-file="shared-content/sql-command-privileges/create-role.md" >}} {{< warning >}}
-{{< include-md file="shared-content/rbac-sm/createrole-consideration.md" >}}
-{{</ warning >}} |
+| To create/revoke/grant roles        | - `CREATEROLE` privileges on the system.
+ > **Warning:** 
+Roles with the `CREATEROLE` privilege can obtain the privileges of any other
+role in the system by granting themselves that role. Avoid granting
+`CREATEROLE` unnecessarily.
+
+ |
 | To view privileges for a role       | None                      |
-| To grant/revoke role privileges     | {{< include-md
-file="shared-content/sql-command-privileges/grant-privilege.md" >}}|
-| To alter default privileges         | {{< include-md
-file="shared-content/sql-command-privileges/alter-default-privileges.md" >}} |
+| To grant/revoke role privileges     | - Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
+|
+| To alter default privileges         | - Role membership in `role_name`.
+- `USAGE` privileges on the containing database if `database_name` is specified.
+- `USAGE` privileges on the containing schema if `schema_name` is specified.
+- _superuser_ status if the _target_role_ is `PUBLIC` or **ALL ROLES** is
+  specified.
+ |
 
 See also [Appendix: Privileges by
 command](/security/appendix/appendix-command-privileges/)
 
 ## Create a role
 
-{{< include-md file="shared-content/rbac-sm/db-roles.md" >}}
+
+In Materialize, you can create both:
+- Individual user or service account roles; i.e., roles associated with a
+  specific user or service account.
+- Functional roles, not associated with any single user or service
+  account, but typically used to define a set of shared
+  privileges that can be granted to other user/service/functional roles.
+
+Initially, only the `mz_system` user is available.
+
 
 ### Create individual user/service account roles
 
-{{< include-md file="shared-content/rbac-sm/create-users.md" >}}
+To create additional users or service accounts, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE
+... WITH LOGIN PASSWORD ...`](/sql/create-role):
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-{{< include-md file="shared-content/sql-command-privileges/create-role.md" >}}
-{{</ annotation>}}
+```mzsql
+CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
+```text
+
+
+> **Privilege(s) required to run the command:** - `CREATEROLE` privileges on the system.
 
 For example, the following creates:
 
@@ -122,28 +265,27 @@ For example, the following creates:
 - A new service account `sales_report_app` (or more specifically, a new service
   account role).
 
-{{< tabs >}}
-{{< tab "A new user role" >}}
-{{< include-example file="examples/rbac-sm/create_roles"
-example="create-role-user" >}}
-{{</ tab >}}
-{{< tab "A new service account role" >}}
-{{< include-example file="examples/rbac-sm/create_roles"
-example="create-role-service-account" >}}
-{{</ tab >}}
-{{</ tabs >}}
+
+#### A new user role
+
+<!-- Example: examples/rbac-sm/create_roles / create-role-user -->
+
+#### A new service account role
+
+<!-- Example: examples/rbac-sm/create_roles / create-role-service-account -->
+
 
 In Materialize, a role is created with inheritance support. With inheritance,
 when a role is granted to another role (i.e., the target role), the target role
 inherits privileges (not role attributes and parameters) through the other role.
-{{< include-md file="shared-content/rbac-sm/db-roles-public-membership.md" >}}
+All roles in Materialize are automatically members of
+[`PUBLIC`](/security/appendix/appendix-built-in-roles/#public-role). As
+such, every role includes inherited privileges from `PUBLIC`.
 
-{{% include-md file="shared-content/rbac-sm/db-roles-managing-privileges.md" %}}
 
-{{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-sm/grant-vs-alter-default-privilege.md"
-%}}
-{{</ annotation >}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
+
+> **Disambiguation:** <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/grant-... -->
 
 See also:
 
@@ -152,11 +294,18 @@ Privileges by command](/security/appendix/appendix-command-privileges/).
 
 ### Create functional roles
 
-{{< include-md file="shared-content/rbac-sm/create-functional-roles.md" >}}
+To create functional roles, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE`](/sql/create-role):
 
-{{< tip >}}
-{{< include-md file="shared-content/rbac-sm/role-name-restrictions.md" >}}
-{{</ tip >}}
+```mzsql
+CREATE ROLE <role>;
+```text
+
+
+> **Tip:** 
+Role names cannot start with `mz_` and `pg_` as they are reserved for system
+roles.
+
 
 For example, the following creates:
 - A role for users who need to perform compute/transform operations in the
@@ -164,31 +313,31 @@ For example, the following creates:
 - A role for users who need to manage indexes on the serving cluster(s).
 - A role for users who need to read results from the serving cluster.
 
-{{< tabs >}}
-{{< tab "View manager role" >}}
-{{< include-example file="examples/rbac-sm/create_roles"
-example="create-role-view-manager" >}}
-{{</ tab >}}
-{{< tab "Serving index manager role" >}}
-{{< include-example file="examples/rbac-sm/create_roles"
-example="create-role-serving-index-manager" >}}
-{{</ tab >}}
-{{< tab "Data reader role" >}}
-{{< include-example file="examples/rbac-sm/create_roles" example="create-role-data-reader">}}
-{{</ tab >}}
-{{</ tabs >}}
+
+#### View manager role
+
+<!-- Example: examples/rbac-sm/create_roles / create-role-view-manager -->
+
+#### Serving index manager role
+
+<!-- Example: examples/rbac-sm/create_roles / create-role-serving-index-manager -->
+
+#### Data reader role
+
+<!-- Example: examples/rbac-sm/create_roles / create-role-data-reader -->
+
 
 In Materialize, a role is created with inheritance support. With inheritance,
 when a role is granted to another role (i.e., the target role), the target role
 inherits privileges (not role attributes and parameters) through the other role.
-{{< include-md file="shared-content/rbac-sm/db-roles-public-membership.md" >}}
+All roles in Materialize are automatically members of
+[`PUBLIC`](/security/appendix/appendix-built-in-roles/#public-role). As
+such, every role includes inherited privileges from `PUBLIC`.
 
-{{% include-md file="shared-content/rbac-sm/db-roles-managing-privileges.md" %}}
 
-{{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-sm/grant-vs-alter-default-privilege.md"
-%}}
-{{</ annotation >}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
+
+> **Disambiguation:** <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/grant-... -->
 
 See also:
 
@@ -197,7 +346,7 @@ Privileges by command](/security/appendix/appendix-command-privileges/).
 
 ## Manage current privileges for a role
 
-{{< note >}}
+> **Note:** 
 
 - The examples below assume the existence of a `mydb` database and a `sales`
 schema within the `mydb` database.
@@ -205,15 +354,10 @@ schema within the `mydb` database.
 - The examples below assume the roles only need privileges to objects in the
   `mydb.sales` schema.
 
-{{</ note >}}
 
 ### View privileges for a role
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-No specific privilege is required to run the `SHOW PRIVILEGES`
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** No specific privilege is required to run the `SHOW PRIVILEGES`
 
 To view privileges granted to a role, you can use the [`SHOW
 PRIVILEGES`](/sql/show-privileges) command, substituting `<role>` with the role
@@ -222,63 +366,56 @@ syntax):
 
 ```mzsql
 SHOW PRIVILEGES FOR <role>;
-```
+```text
 
-{{< note >}}
-{{< include-md file="shared-content/rbac-sm/db-roles-public-membership.md" >}}
-{{</ note >}}
+> **Note:** 
+All roles in Materialize are automatically members of
+[`PUBLIC`](/security/appendix/appendix-built-in-roles/#public-role). As
+such, every role includes inherited privileges from `PUBLIC`.
+
 
 For example:
 
-{{< tabs >}}
-{{< tab "User">}}
 
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="for-user">}}
+#### User
 
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="example-results">}}
 
-{{</ tab >}}
-{{< tab "Service account role">}}
+<!-- Example: examples/rbac-sm/show_privileges / for-user -->
 
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="for-service-account">}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="example-results">}}
-{{</ tab >}}
-{{< tab "Functional roles">}}
-{{< tabs >}}
-{{< tab "View manager role" >}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="for-view-manager" >}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="example-results">}}
-{{</ tab >}}
-{{< tab "Serving index manager role" >}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="for-serving-index-manager" >}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="example-results">}}
-{{</ tab >}}
-{{< tab "Data reader role" >}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="for-data-reader">}}
-{{< include-example file="examples/rbac-sm/show_privileges"
-example="example-results">}}
-{{</ tab >}}
-{{</ tabs >}}
+<!-- Example: examples/rbac-sm/show_privileges / example-results -->
 
-{{</ tab >}}
-{{</ tabs >}}
 
-{{< tip >}}
+#### Service account role
+
+
+<!-- Example: examples/rbac-sm/show_privileges / for-service-account -->
+<!-- Example: examples/rbac-sm/show_privileges / example-results -->
+
+#### Functional roles
+
+
+#### View manager role
+
+<!-- Example: examples/rbac-sm/show_privileges / for-view-manager -->
+<!-- Example: examples/rbac-sm/show_privileges / example-results -->
+
+#### Serving index manager role
+
+<!-- Example: examples/rbac-sm/show_privileges / for-serving-index-manager -->
+<!-- Example: examples/rbac-sm/show_privileges / example-results -->
+
+#### Data reader role
+
+<!-- Example: examples/rbac-sm/show_privileges / for-data-reader -->
+<!-- Example: examples/rbac-sm/show_privileges / example-results -->
+
+
+> **Tip:** 
 
 For the `SHOW PRIVILEGES` command, you can add a `WHERE` clause to filter by the
 return fields; e.g., `SHOW PRIVILEGES FOR view_manager WHERE
 name='quickstart';`.
 
-{{</ tip >}}
 
 ### Grant privileges to a role
 
@@ -286,50 +423,59 @@ To grant [privileges](/security/appendix/appendix-command-privileges/) to
 a role, use the [`GRANT PRIVILEGE`](/sql/grant-privilege/) statement (see
 [`GRANT PRIVILEGE`](/sql/grant-privilege/) for the full syntax)
 
-{{< annotation type="Privilege(s) required to run the command" >}}
+> **Privilege(s) required to run the command:** - Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
 
-{{< include-md file="shared-content/sql-command-privileges/grant-privilege.md"
->}}
 
 To override the **object ownership** requirements to grant privileges, run as a
 user with superuser privileges; e.g. `mz_system` user.
 
-{{</ annotation>}}
-
 ```mzsql
 GRANT <PRIVILEGE> ON <OBJECT_TYPE> <object_name> TO <role>;
-```
+```text
 
-{{< include-md file="shared-content/rbac-sm/use-resusable-roles.md" >}}
+When possible, avoid granting privileges directly to individual user or service
+account roles. Instead, create reusable, functional roles (e.g., `data_reader`,
+`view_manager`) with well-defined privileges, and grant these roles to the
+individual user or service account roles. You can also grant functional roles to
+other functional roles to compose more complex functional roles.
+
 
 For example, the following grants privileges to the functional roles.
 
-{{< note >}}
-{{< include-md file="shared-content/rbac-sm/privileges-related-objects.md" >}}
-{{</ note >}}
+> **Note:** 
+Various SQL operations require additional privileges on related objects, such
+as:
 
-{{< tabs >}}
-{{< tab "View manager role" >}}
-{{< include-example file="examples/rbac-sm/grant_privileges"
-example="to-view-manager" >}}
+- For objects that use compute resources (e.g., indexes, materialized views,
+  replicas, sources, sinks), access is also required for the associated cluster.
 
-{{< include-example file="examples/rbac-sm/grant_privileges"
-example="to-view-manager-results" >}}
-{{</ tab >}}
-{{< tab "Serving index manager role" >}}
-{{< include-example file="examples/rbac-sm/grant_privileges"
-example="to-serving-index-manager" >}}
+- For objects in a schema, access is also required for the schema.
 
-{{< include-example file="examples/rbac-sm/grant_privileges"
-example="to-serving-index-manager-results" >}}
-{{</ tab >}}
-{{< tab "Data reader role" >}}
-{{< include-example file="examples/rbac-sm/grant_privileges"
-example="to-data-reader">}}
+For details on SQL operations and needed privileges, see [Appendix: Privileges
+by command](/security/appendix/appendix-command-privileges/).
 
-{{< include-example file="examples/rbac-sm/grant_privileges" example="to-data-reader-results">}}
-{{</ tab >}}
-{{</ tabs >}}
+
+#### View manager role
+
+<!-- Example: examples/rbac-sm/grant_privileges / to-view-manager -->
+
+<!-- Example: examples/rbac-sm/grant_privileges / to-view-manager-results -->
+
+#### Serving index manager role
+
+<!-- Example: examples/rbac-sm/grant_privileges / to-serving-index-manager -->
+
+<!-- Example: examples/rbac-sm/grant_privileges / to-serving-index-manager-results -->
+
+#### Data reader role
+
+<!-- Example: examples/rbac-sm/grant_privileges / to-data-reader -->
+
+<!-- Example: examples/rbac-sm/grant_privileges / to-data-reader-results -->
+
 
 ### Grant a role to another role
 
@@ -340,27 +486,27 @@ Once a role is created, you can modify its privileges either:
 - Indirectly (through inheritance) by granting other roles to the role or
   [revoking roles from the role](#revoke-a-role-from-another-role).
 
-{{< tip >}}
+> **Tip:** 
 
-{{< include-md file="shared-content/rbac-sm/use-resusable-roles.md" >}}
+When possible, avoid granting privileges directly to individual user or service
+account roles. Instead, create reusable, functional roles (e.g., `data_reader`,
+`view_manager`) with well-defined privileges, and grant these roles to the
+individual user or service account roles. You can also grant functional roles to
+other functional roles to compose more complex functional roles.
 
-{{</ tip >}}
 
 To grant a role to another role (where the role can be a user role/service
 account role/functional role), use the [`GRANT ROLE`](/sql/grant-role/)
 statement (see [`GRANT ROLE`](/sql/grant-role/) for full syntax):
 
-{{< annotation type="Privilege(s) required to run the command" >}}
+> **Privilege(s) required to run the command:** - `CREATEROLE` privileges on the system.
 
-{{< include-md file="shared-content/sql-command-privileges/grant-role.md"
->}}
 
 `mz_system` user has the required privileges on the system.
-{{</ annotation>}}
 
 ```mzsql
 GRANT <role> [, <role>...] to <target_role> [, <target_role> ...];
-```
+```text
 
 When a role is granted to another role, the target role becomes a member of the
 other role and inherits the privileges through the other role.
@@ -374,104 +520,86 @@ In the following examples,
 - The functional role `data_reader` is granted to the service account role
   `sales_report_app`.
 
-{{< tabs >}}
-{{< tab "Grant view_manager role" >}}
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="view_manager" >}}
+#### Grant view_manager role
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="view_manager-results-show-privileges" >}}
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="view_manager-results-create-objects" >}}
+<!-- Example: examples/rbac-sm/grant_roles / view_manager -->
 
-{{</ tab >}}
+<!-- Example: examples/rbac-sm/grant_roles / view_manager-results-show-privileges -->
 
-{{< tab "Grant serving_index_manager role" >}}
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="serving_index_manager" >}}
+<!-- Example: examples/rbac-sm/grant_roles / view_manager-results-create-objects -->
+
+
+#### Grant serving_index_manager role
+
+<!-- Example: examples/rbac-sm/grant_roles / serving_index_manager -->
 
 Review the privileges of `view_manager` as well as `"blue.berry@example.com"`
 (a member of  `view_manager`) after the grant.
 
-{{< tabs >}}
-{{< tab "Privileges for view_manager">}}
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="serving_index_manager-results-show-privileges-view_manager"
->}}
 
-{{</ tab >}}
-{{< tab "Privileges for blue.berry@example.com">}}
+#### Privileges for view_manager
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="serving_index_manager-results-show-privileges-view_manager-member"
->}}
+<!-- Example: examples/rbac-sm/grant_roles / serving_index_manager-results-show-privileges-view_manager -->
 
-{{</ tab >}}
-{{</ tabs >}}
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="serving_index_manager-results-show-privileges-results"
->}}
+#### Privileges for blue.berry@example.com
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="serving_index_manager-results-create-index" >}}
 
-{{</ tab >}}
+<!-- Example: examples/rbac-sm/grant_roles / serving_index_manager-results-show-privileges-view_manager-member -->
 
-{{< tab "Grant data_reader role" >}}
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="data_reader" >}}
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="data_reader-results-show-privileges" >}}
+<!-- Example: examples/rbac-sm/grant_roles / serving_index_manager-results-show-privileges-results -->
 
-{{< include-example file="examples/rbac-sm/grant_roles"
-example="data_reader-results-select" >}}
+<!-- Example: examples/rbac-sm/grant_roles / serving_index_manager-results-create-index -->
 
-{{</ tab >}}
-{{</ tabs >}}
+
+#### Grant data_reader role
+
+<!-- Example: examples/rbac-sm/grant_roles / data_reader -->
+
+<!-- Example: examples/rbac-sm/grant_roles / data_reader-results-show-privileges -->
+
+<!-- Example: examples/rbac-sm/grant_roles / data_reader-results-select -->
+
 
 ### Revoke privileges from a role
 
 To remove privileges from a role, use the [`REVOKE <privilege>`](/sql/revoke-privilege/) statement:
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
->}}
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** - Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
 
 ```mzsql
 REVOKE <PRIVILEGE> ON <OBJECT_TYPE> <object_name> FROM <role>;
-```
+```bash
 
 ### Revoke a role from another role
 
 To revoke a role from another role, use the [`REVOKE <role>`](/sql/revoke-role/) statement:
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-{{< include-md file="shared-content/sql-command-privileges/revoke-role.md"
->}}
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** - `CREATEROLE` privileges on the systems.
 
 ```mzsql
 REVOKE <role> FROM <target_role>;
-```
+```text
 
 For example:
 
 ```mzsql
 REVOKE data_reader FROM sales_report_app;
-```
+```text
 
-{{< important >}}
-{{< include-md file="shared-content/rbac-sm/revoke-roles-consideration.md" >}}
-{{</ important >}}
+> **Important:** 
+When you revoke a role from another role (user role/service account
+role/independent role), the target role is no longer a member of the revoked
+role nor inherits the revoked role's privileges. **However**, privileges are
+cumulative: if the target role inherits the same privilege(s) from another role,
+the target role still has the privilege(s) through the other role.
+
 
 ## Manage future privileges for a role
 
@@ -490,13 +618,12 @@ Default privileges can be specified for a given object type and scoped to:
 - all future objects of that type created by specific roles (or by all roles
   `PUBLIC`).
 
-{{< include-md file="shared-content/rbac-sm/default-privilege-clarification.md" >}}
+Default privileges apply only to objects created after these privileges are
+defined. They do not affect objects that were created before the default
+privileges were set.
 
-{{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-sm/grant-vs-alter-default-privilege.md"
-%}}
 
-{{</ annotation >}}
+> **Disambiguation:** <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/grant-... -->
 
 ### View default privileges
 
@@ -505,48 +632,42 @@ PRIVILEGES`](/sql/show-default-privileges) command, substituting `<role>` with
 the role name (see [`SHOW DEFAULT PRIVILEGES`](/sql/show-default-privileges) for
 the full syntax):
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-No specific privilege is required to run the `SHOW DEFAULT PRIVILEGES`.
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** No specific privilege is required to run the `SHOW DEFAULT PRIVILEGES`.
 
 ```mzsql
 SHOW DEFAULT PRIVILEGES FOR <role>;
-```
+```text
 
 For example:
 
-{{< tabs >}}
-{{< tab "User">}}
 
-{{< include-example file="examples/rbac-sm/show_default_privileges"
-example="for-user">}}
+#### User
 
-{{</ tab >}}
-{{< tab "Service account role">}}
 
-{{< include-example file="examples/rbac-sm/show_default_privileges"
-example="for-service-account">}}
+<!-- Example: examples/rbac-sm/show_default_privileges / for-user -->
 
-{{</ tab >}}
-{{< tab "Functional roles">}}
-{{< tabs >}}
-{{< tab "View manager role" >}}
-{{< include-example file="examples/rbac-sm/show_default_privileges"
-example="for-view-manager" >}}
-{{</ tab >}}
-{{< tab "Serving index manager role" >}}
-{{< include-example file="examples/rbac-sm/show_default_privileges"
-example="for-serving-index-manager" >}}
-{{</ tab >}}
-{{< tab "Data reader role" >}}
-{{< include-example file="examples/rbac-sm/show_default_privileges" example="for-data-reader">}}
-{{</ tab >}}
-{{</ tabs >}}
 
-{{</ tab >}}
-{{</ tabs >}}
+#### Service account role
+
+
+<!-- Example: examples/rbac-sm/show_default_privileges / for-service-account -->
+
+
+#### Functional roles
+
+
+#### View manager role
+
+<!-- Example: examples/rbac-sm/show_default_privileges / for-view-manager -->
+
+#### Serving index manager role
+
+<!-- Example: examples/rbac-sm/show_default_privileges / for-serving-index-manager -->
+
+#### Data reader role
+
+<!-- Example: examples/rbac-sm/show_default_privileges / for-data-reader -->
+
 
 ### Alter default privileges
 
@@ -554,21 +675,19 @@ To define default privilege for objects created by a role, use the [`ALTER
 DEFAULT PRIVILEGES`](/sql/alter-default-privileges) command (see  [`ALTER
 DEFAULT PRIVILEGES`](/sql/alter-default-privileges) for the full syntax):
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-{{< include-md
-file="shared-content/sql-command-privileges/alter-default-privileges.md"
->}}
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** - Role membership in `role_name`.
+- `USAGE` privileges on the containing database if `database_name` is specified.
+- `USAGE` privileges on the containing schema if `schema_name` is specified.
+- _superuser_ status if the _target_role_ is `PUBLIC` or **ALL ROLES** is
+  specified.
 
 ```mzsql
 ALTER DEFAULT PRIVILEGES FOR ROLE <object_creator>
    IN SCHEMA <schema>    -- Optional. If specified, need USAGE on database and schema.
    GRANT <privilege> ON <object_type> TO <target_role>;
-```
+```text
 
-{{< note >}}
+> **Note:** 
 - With the exception of the `PUBLIC` role, the `<object_creator>` role is
   **not** transitive. That is, default privileges that specify a functional role
   like `view_manager` as the `<object_creator>` do **not** apply to objects
@@ -582,101 +701,82 @@ ALTER DEFAULT PRIVILEGES FOR ROLE <object_creator>
 - As with any other grants, the privileges granted to the `<target_role>` are
   inherited by the members of the `<target_role>`.
 
-{{</ note >}}
 
-{{< tabs >}}
-{{< tab "Specify blue.berry as the object creator" >}}
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-blueberry" %}}
+#### Specify blue.berry as the object creator
 
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-blueberry-verification-setup" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
 
 To verify that the default privileges have been automatically granted, you can
 run `SHOW PRIVILEGES`:
 
-{{< tabs >}}
 
-{{< tab "view_manager">}}
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-blueberry-verification-view_manager" %}}
-{{</ tab >}}
-{{< tab "data_reader" >}}
+#### view_manager
 
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-blueberry-verification-data_reader" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
 
-{{</ tab >}}
-{{< tab "sales_report_app (a member of data_reader)" >}}
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-blueberry-verification-sales_report_app" %}}
-{{</ tab >}}
-{{</ tabs >}}
+#### data_reader
 
 
-{{</ tab >}}
-{{< tab "Specify PUBLIC as the object creator" >}}
-
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-view-manager" %}}
-
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-view-manager-member" %}}
-
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-public" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
 
 
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-public-member" %}}
+#### sales_report_app (a member of data_reader)
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+
+#### Specify PUBLIC as the object creator
+
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
 
 To verify that the default privileges have been automatically granted to others,
 you can run `SHOW PRIVILEGES`:
 
-{{< tabs >}}
-{{< tab "view_manager">}}
 
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-public-member-verification-view_manager" %}}
-{{</ tab >}}
-{{< tab "blue.berry@example.com" >}}
-{{% include-example file="examples/rbac-sm/alter_default_privileges"
-example="for-tables-created-by-public-member-verification-blueberry" %}}
+#### view_manager
 
-{{</ tab >}}
-{{</ tabs >}}
-{{</ tab >}}
-{{</ tabs >}}
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+#### blue.berry@example.com
+
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_d... -->
+
+
 ## Show roles in system
 
 To view the roles in the system, use the [`SHOW ROLES`](/sql/show-roles/) command:
 
 ```mzsql
 SHOW ROLES [ LIKE <pattern>  | WHERE <condition(s)> ];
-```
+```text
 
-{{% include-example file="examples/rbac-sm/show_roles" example="all-roles" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/show_ro... -->
 
 ## Drop a role
 
 To remove a role from the system, use the [`DROP ROLE`](/sql/drop-role/)
 command:
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-{{< include-md file="shared-content/sql-command-privileges/drop-role.md"
->}}
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** - `CREATEROLE` privileges on the system.
 
 ```mzsql
 DROP ROLE <role>;
-```
+```text
 
-{{< note >}}
+> **Note:** 
 You cannot drop a role if it contains any members. Before dropping a role,
 revoke the role from all its members. See [Revoke a role](#revoke-a-role-from-another-role).
-{{</ note >}}
 
 
 ## Alter role
@@ -689,12 +789,10 @@ configuration parameters, including cluster, database, and schema.
 
 ```mzsql
 ALTER ROLE <role> SET <config> =|TO <value>;
-```
-{{% include-example file="examples/rbac-sm/alter_roles"
-example="alter-roles-configurations" %}}
+```text
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_r... -->
 
-{{% include-example file="examples/rbac-sm/alter_roles"
-example="alter-roles-configs-not-inherited" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_r... -->
 
 ## Change ownership of objects
 
@@ -710,12 +808,12 @@ transfer ownership (and privileges) to another role (another user role/service
 account role/functional role), you can use the [ALTER ... OWNER
 TO](/sql/#rbac) command:
 
-{{< annotation type="Privilege(s) required to run the command" >}}
-
-{{< include-md file="shared-content/sql-command-privileges/alter-owner.md"
->}}
-
-{{</ annotation>}}
+> **Privilege(s) required to run the command:** - Ownership of the object being altered.
+- Role membership in `new_owner`.
+- `CREATE` privileges on the containing cluster if the object is a cluster replica.
+- `CREATE` privileges on the containing database if the object is a schema.
+- `CREATE` privileges on the containing schema if the object is namespaced by a
+  schema.
 
 ```mzsql
 ALTER <object_type> <object_name> OWNER TO <role>;
@@ -724,25 +822,17 @@ ALTER <object_type> <object_name> OWNER TO <role>;
 Before changing the ownership, review the privileges of the current owner
 (`lemon@example.com`) and the future owner (`view_manage`):
 
-{{% include-example file="examples/rbac-sm/alter_owner"
-example="view-privileges-for-current-owner" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_o... -->
 
-{{% include-example file="examples/rbac-sm/alter_owner"
-example="view-privileges-for-future-owner" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_o... -->
 
-{{% include-example file="examples/rbac-sm/alter_owner"
-example="table-shared_lemon" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_o... -->
 
-{{% include-example file="examples/rbac-sm/alter_owner"
-example="view-privileges-for-new-owner" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_o... -->
 
-{{% include-example file="examples/rbac-sm/alter_owner"
-example="view-privileges-for-previous-owner" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_o... -->
 
 ## See also
 
 - [Access control best practices](/security/self-managed/access-control/#best-practices)
 - [Manage privileges with Terraform](/manage/terraform/manage-rbac/)
-
-
-

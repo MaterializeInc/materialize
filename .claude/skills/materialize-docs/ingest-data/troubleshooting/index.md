@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/troubleshooting/
+complexity: advanced
+description: How to troubleshoot common data ingestion scenarios where Materialize
+  is not working as expected.
+doc_type: troubleshooting
+keywords:
+- SELECT SNAPSHOT_COMMITTED
+- 'Tip:'
+- Troubleshooting
+- CREATE A
+- ALTER CLUSTER
+- Sources
+- 'Note:'
+product_area: Sources
+status: stable
+title: Troubleshooting
+---
+
 # Troubleshooting
 
+## Purpose
 How to troubleshoot common data ingestion scenarios where Materialize is not working as expected.
 
+This page provides detailed documentation for this topic.
+
+
+How to troubleshoot common data ingestion scenarios where Materialize is not working as expected.
 
 
 As you wire up data ingestion in Materialize, you might run into some snags or
@@ -13,9 +38,8 @@ If you're looking for troubleshooting guidance for slow or unresponsive queries,
 check out the [`Transform data`
 troubleshooting](/transform-data/troubleshooting) guide instead.
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
 
 ## Why isn't my source ingesting data?
 
@@ -30,7 +54,7 @@ table:
 ```mzsql
 SELECT * FROM mz_internal.mz_source_statuses
 WHERE name = <SOURCE_NAME>;
-```
+```text
 
 
 | Status        | Description/recommendation                                                                                                                                             |
@@ -55,7 +79,16 @@ cannot serve queries. That is, queries issued to the snapshotting source (and
 its subsources) will return after the snapshotting completes (unless the user
 breaks out of the query).
 
-{{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
+Snapshotting can take anywhere from a few minutes to several hours, depending on the size of your dataset,
+the upstream database, the number of tables (more tables can be parallelized in Postgres), and the [size of your ingestion cluster](/sql/create-cluster/#size).
+
+We've observed the following approximate snapshot rates from PostgreSQL:
+| Cluster Size | Snapshot Rate |
+|--------------|---------------|
+| 25 cc | ~20 MB/s |
+| 100 cc | ~50 MB/s |
+| 800 cc | ~200 MB/s |
+
 
 To determine whether your source has completed ingesting the initial snapshot,
 you can query the [`mz_source_statistics`](/sql/system-catalog/mz_internal/#mz_source_statistics)
@@ -65,7 +98,7 @@ system catalog table:
 SELECT snapshot_committed
 FROM mz_internal.mz_source_statistics
 WHERE id = <SOURCE_ID>;
-```
+```text
 
 You generally want to aggregate the `snapshot_committed` field across all worker
 threads, as done in the above query. The snapshot is only considered committed
@@ -77,13 +110,41 @@ monitor its progress. See [Monitoring data ingestion](/ingest-data/monitoring-da
 
 ## How do I speed up the snapshotting process?
 
-{{< include-md file="shared-content/snapshotting-cluster-size-postgres.md" >}}
+Snapshotting can take anywhere from a few minutes to several hours, depending on the size of your dataset,
+the upstream database, the number of tables (more tables can be parallelized in Postgres), and the [size of your ingestion cluster](/sql/create-cluster/#size).
+
+We've observed the following approximate snapshot rates from PostgreSQL:
+| Cluster Size | Snapshot Rate |
+|--------------|---------------|
+| 25 cc | ~20 MB/s |
+| 100 cc | ~50 MB/s |
+| 800 cc | ~200 MB/s |
+
 
 To speed up the snapshotting process, you can scale up the [size of the cluster
 ](/sql/alter-cluster/#alter-cluster-size) used for snapshotting, then scale it
 back down once the snapshot completes.
 
-{{< include-md file="shared-content/resize-cluster-for-snapshotting.md" >}}
+```sql
+ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
+```
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- Unresolved shortcode: > **Note:**  --> --> -->
+
+Resizing a cluster with sources requires the cluster to restart. This operation
+incurs downtime for the duration it takes for all objects in the cluster to
+[hydrate](/ingest-data/#hydration).
+
+You might want to let the new-sized replica hydrate before shutting down the
+current replica. See [zero-downtime cluster
+resizing](/sql/alter-cluster/#zero-downtime-cluster-resizing) about automating
+this process.
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> --> -->
+
+Once the initial snapshot has completed, you can resize the cluster for steady
+state.
+
 
 For upsert sources, a larger cluster can not only speed up snapshotting, but may
 also be necessary to support increased memory usage during the process. For more
@@ -105,4 +166,3 @@ the cluster for steady-state.
 ## See also
 
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/)
-

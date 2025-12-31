@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/declare/
+complexity: intermediate
+description: '`DECLARE` creates a cursor.'
+doc_type: reference
+keywords:
+- DECLARE
+product_area: Indexes
+status: stable
+title: DECLARE
+---
+
 # DECLARE
+
+## Purpose
+`DECLARE` creates a cursor.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DECLARE` creates a cursor.
 
@@ -13,6 +32,8 @@ application. Using `DECLARE` and [`FETCH`](/sql/fetch) allows you to
 fetch only some of the rows at a time.
 
 ## Syntax
+
+This section covers syntax.
 
 ```mzsql
 DECLARE <cursor_name> CURSOR FOR <query>;

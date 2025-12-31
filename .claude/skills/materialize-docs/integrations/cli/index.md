@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/cli/
+complexity: advanced
+description: The Materialize command-line interface (CLI).
+doc_type: reference
+keywords:
+- authentication profiles
+- UPDATE SUDO
+- CREATE APP
+- mz - Materialize CLI
+- SHOW ENABLED
+product_area: General
+status: stable
+title: mz - Materialize CLI
+---
+
 # mz - Materialize CLI
 
+## Purpose
 The Materialize command-line interface (CLI).
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+The Materialize command-line interface (CLI).
 
 
 The Materialize command-line interface (CLI), lets you interact with
@@ -26,7 +48,7 @@ You can use `mz` to:
    curl -fsSL https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/apt/sources.list.d/materialize.sources
    sudo apt update
    sudo apt install materialize-cli
-   ```
+   ```text
 
    See [Installation](installation) for additional installation options.
 
@@ -34,7 +56,7 @@ You can use `mz` to:
 
    ```shell
    mz profile init
-   ```
+   ```text
 
    `mz` will attempt to launch your web browser and ask you to log in.
 
@@ -44,26 +66,26 @@ You can use `mz` to:
 
    ```shell
    $ mz region list
-   ```
-   ```
+   ```text
+   ```text
    aws/us-east-1  enabled
    aws/eu-west-1  disabled
-   ```
+   ```text
 
 4. Launch a SQL shell connected to one of the enabled regions in your
    organization:
 
    ```shell
    $ mz sql
-   ```
-   ```
+   ```text
+   ```text
    Authenticated using profile 'default'.
    Connected to the quickstart cluster.
    psql (14.2)
    Type "help" for help.
 
    materialize=>
-   ```
+   ```text
 
    You can use the `--region=aws/us-east-1` flag with the name of an enabled region
    in your organization. If you don't yet have an enabled region, use
@@ -86,7 +108,7 @@ Command          | Description
 These flags can be used with any command and may be intermixed with any
 command-specific flags.
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [Homebrew]: https://brew.sh
 [homebrew-tap]: https://github.com/MaterializeInc/homebrew-materialize
@@ -97,8 +119,6 @@ command-specific flags.
 [`secret`]: reference/secret
 [`sql`]: reference/sql
 [`user`]: reference/user
-
-
 
 
 ---
@@ -143,7 +163,7 @@ the `hooli` profile with the `mz sql` command:
 
 ```shell
 mz sql --profile=hooli
-```
+```text
 
 When the profile is not explicitly specified, `mz` uses the default profile
 specified in the configuration file. You can change the default profile using
@@ -151,7 +171,7 @@ specified in the configuration file. You can change the default profile using
 
 ```shell
 mz config set profile hooli
-```
+```bash
 
 ### Profile parameters
 
@@ -187,9 +207,7 @@ region = "aws/us-east-1"
 [profiles.hooli]
 app-password = "mzp_a48df1039ecb2d94c..."
 region = "aws/eu-west-1"
-```
-
-
+```text
 
 
 ---
@@ -210,14 +228,14 @@ You'll need [Homebrew] installed on your system. Then install `mz` from
 
 ```shell
 brew install materializeinc/materialize/mz
-```
+```bash
 
 ### Binary download
 
 ```shell
 curl -L https://binaries.materialize.com/mz-latest-$(uname -m)-apple-darwin.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
-```
+```bash
 
 ## Linux
 
@@ -229,14 +247,14 @@ On Linux, we recommend using APT, if supported by your distribution.
 curl -fsSL https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/apt/sources.list.d/materialize.sources
 sudo apt update
 sudo apt install materialize-cli
-```
+```bash
 
 ### Binary download
 
 ```shell
 curl -L https://binaries.materialize.com/mz-latest-$(uname -m)-unknown-linux-gnu.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
-```
+```bash
 
 ## Docker
 
@@ -245,7 +263,7 @@ is supported by Docker. You'll need to mount your local `~/.mz` directory in the
 container to ensure that configuration settings and authentiation tokens outlive
 the container.
 
-```
+```text
 docker run -v $HOME/.mz:/root/.mz materialize/mz [args...]
 ```
 
@@ -253,12 +271,6 @@ docker run -v $HOME/.mz:/root/.mz materialize/mz [args...]
 [homebrew-tap]: https://github.com/MaterializeInc/homebrew-materialize
 
 
-
-
 ---
 
 ## mz Reference
-
-
-
-

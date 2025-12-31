@@ -1,32 +1,60 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-source/mysql/
+complexity: intermediate
+description: Connecting Materialize to a MySQL database for Change Data Capture (CDC).
+doc_type: reference
+keywords:
+- standardize on `schema`
+- CREATE CONNECTION
+- IN CLUSTER
+- CREATE SUBSOURCES
+- 'CREATE SOURCE: MySQL'
+- CREATE A
+- IF NOT EXISTS
+- 'Note:'
+- CREATE SOURCE
+product_area: Sources
+status: experimental
+title: 'CREATE SOURCE: MySQL'
+---
+
 # CREATE SOURCE: MySQL
+
+## Purpose
+Connecting Materialize to a MySQL database for Change Data Capture (CDC).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Connecting Materialize to a MySQL database for Change Data Capture (CDC).
 
 
-
-{{% create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: create-source/intro --> --> -->
 Materialize supports MySQL (5.7+) as a real-time data source. To connect to a
 MySQL database, you first need to tweak its configuration to enable
 [GTID-based binary log (binlog) replication](#change-data-capture), and then
 [create a connection](#creating-a-connection) in Materialize that specifies
 access and authentication parameters.
-{{% /create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+> **Note:** 
+Connections using AWS PrivateLink is for Materialize Cloud only.
+
 
 ## Syntax
 
-{{< note >}}
+> **Note:** 
 Although `schema` and `database` are [synonyms in MySQL](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema),
 the MySQL source documentation and syntax **standardize on `schema`** as the
 preferred keyword.
-{{< /note >}}
 
-{{< diagram "create-source-mysql.svg" >}}
+
+[See diagram: create-source-mysql.svg]
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+[See diagram: with-options-retain-history.svg]
 
 Field | Use
 ------|-----
@@ -49,9 +77,11 @@ Field             | Value                           | Description
 
 ## Features
 
+This section covers features.
+
 ### Change data capture
 
-{{< note >}}
+> **Note:** 
 For step-by-step instructions on enabling GTID-based binlog replication for your
 MySQL service, see the integration guides:
 [Amazon RDS](/ingest-data/mysql/amazon-rds/),
@@ -59,7 +89,7 @@ MySQL service, see the integration guides:
 [Azure DB](/ingest-data/mysql/azure-db/),
 [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 [Self-hosted](/ingest-data/mysql/self-hosted/).
-{{< /note >}}
+
 
 The source uses MySQL's binlog replication protocol to **continually ingest
 changes** resulting from `INSERT`, `UPDATE` and `DELETE` operations in the
@@ -75,7 +105,7 @@ Before creating a source in Materialize, you **must** configure the upstream
 MySQL database for GTID-based binlog replication. Ensure the upstream MySQL
 database has been configured for GTID-based binlog replication:
 
-{{% mysql-direct/ingesting-data/mysql-configs %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: mysql-direct/ingesting-data/mysql-config --> --> -->
 
 If you're running MySQL using a managed service, additional configuration
 changes might be required. For step-by-step instructions on enabling GTID-based
@@ -83,11 +113,11 @@ binlog replication for your MySQL service, see the integration guides.
 
 #### Binlog retention
 
-{{< warning >}}
+> **Warning:** 
 If Materialize tries to resume replication and finds GTID gaps due to missing
 binlog files, the source enters an errored state and you have to drop and
 recreate it.
-{{< /warning >}}
+
 
 By default, MySQL retains binlog files for **30 days** (i.e., 2592000 seconds)
 before automatically removing them. This is configurable via the
@@ -114,7 +144,7 @@ of) tables in your upstream MySQL database.
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR ALL TABLES;
-```
+```text
 
 When you define a source, Materialize will automatically:
 
@@ -124,7 +154,7 @@ When you define a source, Materialize will automatically:
 
     ```mzsql
     SHOW SOURCES;
-    ```
+    ```text
 
     ```nofmt
              name         |   type    |  cluster  |
@@ -133,7 +163,7 @@ When you define a source, Materialize will automatically:
      mz_source_progress   | progress  |
      table_1              | subsource |
      table_2              | subsource |
-    ```
+    ```text
 
 1. Incrementally update any materialized or indexed views that depend on the
    source as change events stream in, as a result of `INSERT`, `UPDATE` and
@@ -151,7 +181,7 @@ an alternative destination schema in Materialize.
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2.table_1 AS s2_table_1);
-```
+```bash
 
 ### Monitoring source progress
 
@@ -177,7 +207,7 @@ And can be queried using:
 ```mzsql
 SELECT transaction_id
 FROM <src_name>_progress;
-```
+```text
 
 Progress metadata is represented as a [GTID set](https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html)
 of future possible GTIDs, which is similar to the [`gtid_executed`](https://dev.mysql.com/doc/refman/8.0/en/replication-options-gtids.html#sysvar_gtid_executed)
@@ -188,12 +218,12 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-{{% include-from-yaml data="mysql_source_details"
-name="mysql-considerations" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="mysql_source_details"
+... -->
 
 ## Examples
 
-{{< important >}}
+> **Important:** 
 Before creating a MySQL source, you must enable GTID-based binlog replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
@@ -201,7 +231,7 @@ your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
 [Azure DB](/ingest-data/mysql/azure-db/),
 [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 [Self-hosted](/ingest-data/mysql/self-hosted/).
-{{< /important >}}
+
 
 ### Creating a connection
 
@@ -221,16 +251,19 @@ CREATE CONNECTION mysql_connection TO MYSQL (
     USER 'materialize',
     PASSWORD SECRET mysqlpass
 );
-```
+```text
 
 If your MySQL server is not exposed to the public internet, you can [tunnel the
 connection](/sql/create-connection/#network-security-connections) through an AWS
 PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 
-{{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink (Materialize Cloud)">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+#### AWS PrivateLink (Materialize Cloud)
+
+
+> **Note:** 
+Connections using AWS PrivateLink is for Materialize Cloud only.
+
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -245,35 +278,34 @@ CREATE CONNECTION mysql_connection TO MYSQL (
     PASSWORD SECRET mysqlpass,
     AWS PRIVATELINK privatelink_svc
 );
-```
+```text
 
 For step-by-step instructions on creating AWS PrivateLink connections and
 configuring an AWS PrivateLink service to accept connections from Materialize,
 check [this guide](/ops/network-security/privatelink/).
 
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
+
+#### SSH tunnel
+
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
     USER 'materialize'
 );
-```
+```text
 
 ```mzsql
 CREATE CONNECTION mysql_connection TO MYSQL (
     HOST 'instance.foo000.us-west-1.rds.amazonaws.com',
     SSH TUNNEL ssh_connection
 );
-```
+```text
 
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check
 [this guide](/ops/network-security/ssh-tunnel/).
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Creating a source {#create-source-example}
 
@@ -283,7 +315,7 @@ _Create subsources for all tables in MySQL_
 CREATE SOURCE mz_source
     FROM MYSQL CONNECTION mysql_connection
     FOR ALL TABLES;
-```
+```text
 
 _Create subsources for all tables from specific schemas in MySQL_
 
@@ -291,7 +323,7 @@ _Create subsources for all tables from specific schemas in MySQL_
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR SCHEMAS (mydb, project);
-```
+```text
 
 _Create subsources for specific tables in MySQL_
 
@@ -299,7 +331,7 @@ _Create subsources for specific tables in MySQL_
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
   FOR TABLES (mydb.table_1, mydb.table_2 AS alias_table_2);
-```
+```bash
 
 #### Handling unsupported types
 
@@ -314,7 +346,7 @@ CREATE SOURCE mz_source
     TEXT COLUMNS (mydb.table_1.column_of_unsupported_type)
   )
   FOR ALL TABLES;
-```
+```bash
 
 #### Excluding columns
 
@@ -328,11 +360,16 @@ CREATE SOURCE mz_source
     EXCLUDE COLUMNS (mydb.table_1.column_to_ignore)
   )
   FOR ALL TABLES;
-```
+```bash
 
 ### Handling errors and schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+> **Note:** 
+
+Work to more smoothly support ddl changes to upstream tables is currently in
+progress. The work introduces the ability to re-ingest the same upstream table
+under a new schema and switch over without downtime.
+
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
@@ -361,4 +398,3 @@ ALTER SOURCE mz_source ADD SUBSOURCE table_1;
   - [Azure DB](/ingest-data/mysql/azure-db/)
   - [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/)
   - [Self-hosted](/ingest-data/mysql/self-hosted/)
-

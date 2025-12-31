@@ -1,7 +1,35 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/self-managed/
+complexity: advanced
+description: Monitor the performance of your Self-Managed Materialize region with
+  Datadog and Grafana.
+doc_type: reference
+keywords:
+- Self-Managed
+- 'Warning:'
+- UPDATE HELM
+- 'Alert:'
+- 'Filename:'
+- SELECT NAME
+- CREATE A
+- CREATE NAMESPACE
+- 'Note:'
+- 'Tip:'
+product_area: Operations
+status: stable
+title: Self-Managed
+---
+
 # Self-Managed
 
+## Purpose
 Monitor the performance of your Self-Managed Materialize region with Datadog and Grafana.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Monitor the performance of your Self-Managed Materialize region with Datadog and Grafana.
 
 
 This section covers monitoring and alerting for Self-Managed Materialize.
@@ -24,8 +52,6 @@ After setting up a monitoring tool, you can configure alert rules. Alert rules
 send a notification when a metric surpasses a threshold. This will help you
 prevent operational incidents. For alert rules guidelines, see
 [Alerting](/manage/monitor/self-managed/alerting/).
-
-
 
 
 ---
@@ -66,8 +92,6 @@ Latency | Avg > X | Avg > Y | Average latency in the last *15 minutes*. Where X 
 Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Average credit consumption in the last *60 minutes*.
 
 
-
-
 ---
 
 ## Datadog using Prometheus SQL Exporter
@@ -99,21 +123,21 @@ which has been tried and tested in production environments.
 1. In the host that will run the Prometheus SQL Exporter, create a configuration
    file (`config.yml`) to hold the Exporter configuration.
 
-   {{< tip >}}
+   > **Tip:** 
    You can use [this sample
    `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
    as guidance to bootstrap your monitoring with some key Materialize metrics
    and indicators.
-   {{</ tip >}}
+   
 
 
 1. In the configuration file, define the connection to your Materialize region
    under `connections` using the credentials provided in the [Materialize Console](/console/).
 
-   {{< note >}}
+   > **Note:** 
    You must escape the special `@` character in `USER` for a successful
    connection. Example: instead of `name@email.com`, use `name%40email.com`.
-   {{</ note >}}
+   
 
    **Filename:** config.yml
    ```yaml
@@ -126,7 +150,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
      ...
-   ```
+   ```text
 
    To specify different configurations for different sets of metrics, like a
    different `interval`, use additional jobs with a dedicated connection.
@@ -138,7 +162,7 @@ which has been tried and tested in production environments.
      connections:
      - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
      ...
-   ```
+   ```text
 
 1. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
 
@@ -167,7 +191,7 @@ which has been tried and tested in production environments.
                    memory_percent::float AS memory_percent
                 FROM mz_cluster_replicas r
                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
-   ```
+   ```text
 
 1. Once you are done with the Prometheus SQL Exporter configuration,
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
@@ -195,7 +219,7 @@ configured to scrape the OpenMetrics format.
        # The namespace to prepend to all metrics.
        namespace: "materialize"
        metrics: [.*]
-   ```
+   ```text
 
   **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/datadog/datadog/conf.d/openmetrics.yaml)
   for all available configuration options.
@@ -236,16 +260,14 @@ Before adding a custom query, make sure to consider the following:
 5. Queries can impact cluster performance.
 
 
-
-
 ---
 
 ## Grafana using Prometheus
 
 
-{{< warning >}}
+> **Warning:** 
 The metrics scraped are unstable and may change across releases.
-{{< /warning >}}
+
 
 This guide walks you through the steps required to monitor the performance and
 overall health of your Materialize instance using Prometheus and Grafana.
@@ -258,27 +280,26 @@ Ensure you have:
 - [Helm](https://helm.sh/docs/intro/install/) version 3.2.0+ installed
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) installed and configured
 
-{{< important >}}
+> **Important:** 
 This guide assumes you have administrative access to your Kubernetes cluster and the necessary permissions to install Prometheus.
-{{< /important >}}
+
 
 ## 1. Download our Prometheus scrape configurations (`prometheus.yml`)
   Download the Prometheus scrape configurations that we'll use to configure Prometheus to collect metrics from Materialize:
-  {{% self-managed/step-download-prometheus-scrape-configs %}}
-
+  <!-- Unresolved shortcode: {{% self-managed/step-download-prometheus-scrape-c... -->
 
 
 ## 2. Install Prometheus to your Kubernetes cluster
 
-  {{< note >}}
+  > **Note:** 
   This guide uses the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
-  {{< /note >}}
+  
 
 
 1. Download the prometheus-community default chart values (`values.yaml`):
    ```bash
    curl -O https://raw.githubusercontent.com/prometheus-community/helm-charts/refs/heads/main/charts/prometheus/values.yaml
-   ```
+   ```text
 
 2. Within `values.yaml`, replace `serverFiles > prometheus.yml > scrape_configs` with our scrape configurations (`prometheus_scrape_configs.yml`).
 
@@ -289,7 +310,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
    helm repo update
    helm install --namespace prometheus prometheus prometheus-community/prometheus \
    --values values.yaml
-   ```
+   ```bash
 
 ## 3. Optional. Visualize through Grafana
 
@@ -300,11 +321,11 @@ This guide assumes you have administrative access to your Kubernetes cluster and
     ```bash
     MZ_POD_GRAFANA=$(kubectl get pods -n monitoring -l app.kubernetes.io/name=grafana -o custom-columns="NAME:.metadata.name" --no-headers)
     kubectl port-forward pod/$MZ_POD_GRAFANA 3000:3000 -n monitoring
-    ```
+    ```text
 
-    {{< warning >}}
+    > **Warning:** 
   The port forwarding method is for testing purposes only. For production environments, configure an ingress controller to securely expose the Grafana UI.
-    {{< /warning >}}
+    
 
 3. Open the Grafana UI on [http://localhost:3000](http://localhost:3000) in a browser.
 
@@ -321,7 +342,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
     ```bash
     # environment_overview_dashboard.json
     curl -O https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/grafana_dashboards/environment_overview_dashboard.json
-    ```
+    ```bash
     ### Freshness overview dashboard
     An overview of how out of date objects in your environment are.
      ```bash
@@ -332,6 +353,3 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 5. [Import the dashboards using the Prometheus data source](https://grafana.com/docs/grafana/latest/dashboards/build-dashboards/import-dashboards/#importing-a-dashboard)
 
     ![Image of Materialize Console login screen with mz_system user](/images/self-managed/grafana-monitoring-success.png)
-
-
-

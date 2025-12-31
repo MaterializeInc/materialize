@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-create-connection/
+complexity: intermediate
+description: '`SHOW CREATE CONNECTION` returns the statement used to create the connection.'
+doc_type: reference
+keywords:
+- CREATE THE
+- SHOW CREATE CONNECTION
+- SHOW CREATE
+product_area: Indexes
+status: stable
+title: SHOW CREATE CONNECTION
+---
+
 # SHOW CREATE CONNECTION
+
+## Purpose
+`SHOW CREATE CONNECTION` returns the statement used to create the connection.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW CREATE CONNECTION` returns the statement used to create the connection.
 
@@ -8,19 +29,23 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```sql
 SHOW [REDACTED] CREATE CONNECTION <connection_name>;
-```
+```text
 
-{{< yaml-table data="show_create_redacted_option" >}}
+<!-- Dynamic table: show_create_redacted_option - see original docs -->
 
 For available connection names, see [`SHOW CONNECTIONS`](/sql/show-connections).
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW CREATE CONNECTION kafka_connection;
-```
+```text
 
 ```nofmt
     name          |    create_sql
@@ -32,8 +57,8 @@ SHOW CREATE CONNECTION kafka_connection;
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/show-create-connection.md" >}}
+- `USAGE` privileges on the schema containing the connection.
+
 
 ## Related pages
 

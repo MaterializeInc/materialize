@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-sinks/
+complexity: intermediate
+description: '`SHOW SINKS` returns a list of all sinks available in Materialize.'
+doc_type: reference
+keywords:
+- FROM
+- cluster
+- SHOW SINKS
+- name
+- IN CLUSTER
+- type
+product_area: Sinks
+status: stable
+title: SHOW SINKS
+---
+
 # SHOW SINKS
+
+## Purpose
+`SHOW SINKS` returns a list of all sinks available in Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW SINKS` returns a list of all sinks available in Materialize.
 
@@ -8,9 +32,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW SINKS [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ];
-```
+```bash
 
 ## Details
 
@@ -27,7 +53,7 @@ Syntax element                | Description
 name  | type | cluster
 ------+------+--------
 ...   | ...  | ...
-```
+```text
 
 Field       | Meaning
 ------------|--------
@@ -37,19 +63,21 @@ Field       | Meaning
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SINKS;
-```
+```text
 ```nofmt
 name          | type  | cluster
 --------------+-------+--------
 my_sink       | kafka | c1
 my_other_sink | kafka | c2
-```
+```text
 
 ```mzsql
 SHOW SINKS IN CLUSTER c1;
-```
+```text
 ```nofmt
 name    | type  | cluster
 --------+-------+--------

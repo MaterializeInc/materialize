@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-network-policy/
+complexity: intermediate
+description: '`ALTER NETWORK POLICY` alters an existing network policy.'
+doc_type: reference
+keywords:
+- ALTER NETWORK
+- ALTER NETWORK POLICY (Cloud)
+- ALTER SYSTEM
+- DROP THIS
+- will not
+- 'Note:'
+product_area: Indexes
+status: stable
+title: ALTER NETWORK POLICY (Cloud)
+---
+
 # ALTER NETWORK POLICY (Cloud)
+
+## Purpose
+`ALTER NETWORK POLICY` alters an existing network policy.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `ALTER NETWORK POLICY` alters an existing network policy.
 
@@ -14,9 +38,11 @@ and **will not** terminate active connections.
 
 ## Syntax
 
-{{% include-syntax file="examples/alter_network_policy" example="syntax" %}}
+<!-- Syntax example: examples/alter_network_policy / syntax -->
 
 ## Details
+
+This section covers details.
 
 ### Pre-installed network policy
 
@@ -24,12 +50,12 @@ When you enable a Materialize region, a default network policy named `default`
 will be pre-installed. This policy has a wide open ingress rule `allow
 0.0.0.0/0`. You can modify or drop this network policy at any time.
 
-{{< note >}}
+> **Note:** 
 The default value for the `network_policy` session parameter is `default`.
 Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 change the default value.
-{{< /note >}}
+
 
 ### Lockout prevention
 
@@ -41,10 +67,12 @@ that could lock them out of the system.
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-network-policy.md" >}}
+- Ownership of the network policy.
+
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 CREATE NETWORK POLICY office_access_policy (
@@ -53,7 +81,7 @@ CREATE NETWORK POLICY office_access_policy (
     minnesota (action='allow',direction='ingress',address='2.3.4.5/32')
   )
 );
-```
+```text
 
 ```mzsql
 ALTER NETWORK POLICY office_access_policy SET (
@@ -63,7 +91,7 @@ ALTER NETWORK POLICY office_access_policy SET (
     boston (action='allow',direction='ingress',address='4.5.6.7/32')
   )
 );
-```
+```text
 
 ```mzsql
 ALTER SYSTEM SET network_policy = office_access_policy;

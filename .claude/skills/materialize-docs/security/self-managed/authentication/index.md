@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/self-managed/authentication/
+complexity: beginner
+description: Authentication
+doc_type: reference
+keywords:
+- PostgreSQL connections
+- CREATE ROLE
+- 'Warning:'
+- 'Public Preview:'
+- UPDATE THE
+- PostgreSQL wire protocol connections
+- CREATE ADDITIONAL
+- CREATE NEW
+- 'Note:'
+- Authentication
+product_area: Security
+status: beta
+title: Authentication
+---
+
 # Authentication
 
+## Purpose
 Authentication
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Authentication
 
 
 ## Configuring Authentication Type
@@ -13,15 +40,15 @@ for the authentication method.
 The `spec.authenticatorKind` setting determines which authentication method is
 used:
 
-{{% yaml-table data="self_managed/authentication_setting" %}}
+<!-- Unresolved shortcode: {{% yaml-table data="self_managed/authentication_s... -->
 
-{{< include-md file="shared-content/auth-kind-warning.md" >}}
-
+> **Warning:** 
+Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
 
 
 ## Configuring password authentication
 
-{{< public-preview >}}This feature{{</ public-preview >}}
+> **Public Preview:** This feature is in public preview.This feature
 
 Password authentication requires users to log in with a password.
 
@@ -59,7 +86,7 @@ spec:
   environmentdImageRef: materialize/environmentd:v0.147.2
   backendSecretName: materialize-backend
   authenticatorKind: Password
-```
+```bash
 
 #### Logging in and creating users
 
@@ -76,16 +103,16 @@ users:
 
    ```mzsql
    CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
-   ```
+   ```json
 
 [^1]: The `mz_system` user is also used by the Materialize Operator for upgrades
 and maintenance tasks.
 
 ## Configuring SASL/SCRAM authentication
 
-{{< note >}}
+> **Note:** 
 SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
-{{</ note >}}
+
 
 SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechanism
 that provides security for **PostgreSQL wire protocol connections**. It is
@@ -125,7 +152,7 @@ spec:
   environmentdImageRef: materialize/environmentd:v0.147.2
   backendSecretName: materialize-backend
   authenticatorKind: Sasl
-```
+```bash
 
 ### Logging in and creating users
 
@@ -159,11 +186,12 @@ spec:
 
 For more information on rollout configuration, view our [installation overview](/installation/#rollout-configuration).
 
-{{< include-md file="shared-content/auth-kind-warning.md" >}}
+> **Warning:** 
+Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
+
 
 ## Enabling RBAC
 
-{{< include-md file="shared-content/enable-rbac.md" >}}
+<!-- Include not found: shared-content/enable-rbac.md -->
 
 See [Access Control](/security/self-managed/access-control/) for details on role based authorization.
-

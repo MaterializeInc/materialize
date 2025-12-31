@@ -1,4 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/dataflow-troubleshooting/
+complexity: advanced
+description: How to troubleshoot common dataflow-level scenarios where Materialize
+  is not working as expected.
+doc_type: troubleshooting
+keywords:
+- 'Warning:'
+- CREATE A
+- CREATE SOURCE
+- Dataflow troubleshooting
+- Environment Overview
+- SELECT AUCTIONS
+- Overview
+- CREATE MATERIALIZED
+- CREATE INDEX
+- right now
+product_area: SQL
+status: stable
+title: Dataflow troubleshooting
+---
+
 # Dataflow troubleshooting
+
+## Purpose
+How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected.
+
+This page provides detailed documentation for this topic.
+
 
 How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected.
 
@@ -45,7 +74,7 @@ CREATE MATERIALIZED VIEW num_bids AS
   GROUP BY auctions.item;
 
 CREATE INDEX num_bids_idx ON num_bids (item);
-```
+```text
 
 The query of the materialized view joins the relations `bids` and `auctions`,
 groups by `auctions.item` and determines the number of bids per auction. To
@@ -55,7 +84,7 @@ plan used to evaluate the join.
 
 ```mzsql
 EXPLAIN MATERIALIZED VIEW num_bids;
-```
+```text
 ```
                                Optimized Plan
 -----------------------------------------------------------------------------
@@ -77,7 +106,7 @@ EXPLAIN MATERIALIZED VIEW num_bids;
  Target cluster: quickstart                                                 +
 
 (1 row)
-```
+```text
 
 The plan describes the specific operators that are used to evaluate the query.
 Some of these operators resemble relational algebra or map reduce style
@@ -113,13 +142,13 @@ it is important to understand that most of the statistics we need for
 troubleshooting purposes are specific to the cluster that is running the
 queries we want to debug.
 
-{{< warning >}}
+> **Warning:** 
 Indexes and dataflows are local to a cluster, so their introspection information
 will vary across clusters depending on the active cluster and replica. As a
 consequence, you should expect the results of the queries below to vary
 depending on the values set for the `cluster` and `cluster_replica`
 [configuration parameters](/sql/set/#other-configuration-parameters).
-{{< /warning >}}
+
 
 <!--
 [//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot if and how fast a source is consuming."
@@ -152,14 +181,14 @@ FROM mz_introspection.mz_scheduling_elapsed AS mse,
     mz_introspection.mz_dataflow_addresses AS mda
 WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
 ORDER BY elapsed_ns DESC;
-```
+```text
 ```
  id  |                  name                  |  elapsed_time
 -----+----------------------------------------+-----------------
  354 | Dataflow: materialize.qck.num_bids     | 02:05:25.756836
  578 | Dataflow: materialize.qck.num_bids_idx | 00:15:04.838741
  (2 rows)
-```
+```text
 
 These results show that Materialize spends the most time keeping the
 materialized view `num_bids` up to date, followed by the work on the index
@@ -200,7 +229,7 @@ WHERE
         FROM mz_introspection.mz_dataflow_addresses
     )
 ORDER BY elapsed_ns DESC;
-```
+```text
 ```
  id  |                      name                       |             dataflow_name              |  elapsed_time
 -----+-------------------------------------------------+----------------------------------------+-----------------
@@ -211,7 +240,7 @@ ORDER BY elapsed_ns DESC;
  590 | persist_source_backpressure(backpressure(u517)) | Dataflow: materialize.qck.num_bids_idx | 00:03:33.626036
  400 | persist_source_backpressure(backpressure(u510)) | Dataflow: materialize.qck.num_bids     | 00:03:03.575832
 ...
-```
+```text
 
 From the results of this query we can see that most of the elapsed time of the
 dataflow is caused by the time it takes to maintain the updates in one of the
@@ -264,7 +293,7 @@ SELECT *
 FROM histograms
 WHERE duration > '100 millisecond'::interval
 ORDER BY duration DESC;
-```
+```text
 ```
  id  |                 name                 |             dataflow_name              | count |    duration
 -----+--------------------------------------+----------------------------------------+-------+-----------------
@@ -274,7 +303,7 @@ ORDER BY duration DESC;
  408 | persist_source::decode_and_mfp(u510) | Dataflow: materialize.qck.num_bids     |     2 | 00:00:00.268435
  429 | FormArrangementKey                   | Dataflow: materialize.qck.num_bids     |     2 | 00:00:00.134217
  (5 rows)
-```
+```text
 
 Note that this relation contains a lot of information. The query therefore
 filters all durations below `100 millisecond`. In this example, the result of
@@ -314,7 +343,7 @@ COPY(SUBSCRIBE(
     FROM histograms
     WHERE duration > '100 millisecond'::interval
 ) WITH (SNAPSHOT = false, PROGRESS)) TO STDOUT;
-```
+```text
 ```
 1691667343000	t	\N	\N	\N	\N	\N	\N
 1691667344000	t	\N	\N	\N	\N	\N	\N
@@ -322,7 +351,7 @@ COPY(SUBSCRIBE(
 1691667344000	f	1	431	ArrangeBy[[Column(0)]]	Dataflow: materialize.qck.num_bids	7674	00:00:00.104800
 1691667345000	t	\N	\N	\N	\N	\N	\N
 ...
-```
+```text
 
 In this way you can see that currently the only operator that is doing more than
 100 milliseconds worth of work is the `ArrangeBy` operator from the
@@ -346,13 +375,13 @@ SELECT
     pg_size_pretty(s.size) AS size
 FROM mz_introspection.mz_dataflow_arrangement_sizes AS s
 ORDER BY s.size DESC;
-```
+```text
 ```
   id   |                   name                    | records  |    size
 -------+-------------------------------------------+----------+------------
  49030 | Dataflow: materialize.public.num_bids     | 10000135 | 165 MB
  49031 | Dataflow: materialize.public.num_bids_idx |       33 | 1661 bytes
-```
+```text
 
 If you need to drill down into individual operators, you can query
 `mz_arrangement_sizes` instead.
@@ -369,7 +398,7 @@ FROM mz_introspection.mz_arrangement_sizes AS mas,
     mz_introspection.mz_dataflow_operator_dataflows AS mdod
 WHERE mas.operator_id = mdod.id
 ORDER BY mas.size DESC;
-```
+```text
 ```
     id    |              name               |               dataflow_name               | records |    size
 ----------+---------------------------------+-------------------------------------------+---------+------------
@@ -380,7 +409,7 @@ ORDER BY mas.size DESC;
  16318422 | ReduceAccumulable               | Dataflow: materialize.public.num_bids     |       5 | 1073 bytes
  16318426 | AccumulableErrorCheck           | Dataflow: materialize.public.num_bids     |       0 | 256 bytes
  16318559 | ArrangeBy[[Column(0)]]-errors   | Dataflow: materialize.public.num_bids_idx |       0 | 0 bytes
-```
+```text
 
 In the [Materialize Console](https://console.materialize.com),
 
@@ -435,7 +464,7 @@ WHERE
     mse.elapsed_ns > 2 * aebi.avg_ns AND
     mse.id = dod.id
 ORDER BY ratio DESC;
-```
+```bash
 
 ## I found a problematic operator. Where did it come from?
 
@@ -446,12 +475,12 @@ whose `id` is 515 that belongs to "subregion 5 of region 1 of dataflow 21".
 
 ```mzsql
 SELECT * FROM mz_introspection.mz_dataflow_addresses WHERE id=515;
-```
+```text
 ```
  id  | worker_id | address
 -----+-----------+----------
  515 |      0    | {21,1,5}
-```
+```text
 
 Usually, it is only important to know the name of the dataflow a problematic
 operator comes from. Once the name is known, the dataflow can be correlated to
@@ -484,7 +513,7 @@ WHERE
     mda.id = 515
     AND mda.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator;
-```
+```bash
 
 ## I dropped an index, why haven't my plans and dataflows changed?
 
@@ -508,7 +537,7 @@ FROM mz_internal.mz_dataflow_arrangement_sizes s
 JOIN mz_internal.mz_compute_exports ce ON ce.dataflow_id = s.id
 LEFT JOIN mz_catalog.mz_objects o ON o.id = ce.export_id
 WHERE o.id IS NULL;
-```
+```text
 
 You can then use the `dropped_index_id` object identifier to list the downstream
 dependencies of the residual dataflow, using:
@@ -528,10 +557,10 @@ WHERE cd.dependency_id = <dropped_index_id>;
 To force a re-plan of the downstream objects that doesn't consider the dropped
 index, you have to drop and recreate all downstream dependencies.
 
-{{< warning >}}
+> **Warning:** 
 Forcing a re-plan using the approach above **will trigger hydration**,
 which incurs downtime while the objects are recreated and backfilled with
 pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/blue-green-deployments/)
 to handle these changes in production environments.
-{{< /warning >}}
+
 

@@ -1,7 +1,35 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/
+complexity: advanced
+description: Learn about idiomatic Materialize SQL. Materialize offers various idiomatic
+  query patterns, such as for top-k query pattern, first value/last value query paterrns,
+  etc.
+doc_type: reference
+keywords:
+- Idiomatic Materialize SQL
+- If no duplicates in the unnested field
+- SELECT DISTINCT
+- 'Idiomatic Materialize SQL:'
+- 'Duplicates may exist in the unnested field:'
+- SELECT A
+- 'If no duplicates exist in the unnested field:'
+- 'Note:'
+- SELECT UNNEST
+product_area: SQL
+status: stable
+title: Idiomatic Materialize SQL
+---
+
 # Idiomatic Materialize SQL
 
+## Purpose
 Learn about idiomatic Materialize SQL. Materialize offers various idiomatic query patterns, such as for top-k query pattern, first value/last value query paterrns, etc.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Learn about idiomatic Materialize SQL. Materialize offers various idiomatic query patterns, such as for top-k query pattern, first value/last value query paterrns, etc.
 
 
 Materialize follows the SQL standard (SQL-92) implementation and strives for
@@ -11,19 +39,19 @@ performance.
 
 ## Window functions
 
-{{< yaml-table data="idiomatic_mzsql/toc_window_functions" >}}
+<!-- Dynamic table: idiomatic_mzsql/toc_window_functions - see original docs -->
 
 ## General query patterns
 
-{{< yaml-table data="idiomatic_mzsql/toc_query_patterns" >}}
-
-
+<!-- Dynamic table: idiomatic_mzsql/toc_query_patterns - see original docs -->
 
 
 ---
 
 ## `ANY()` equi-join condition
 
+
+This section covers `any()` equi-join condition.
 
 ## Overview
 
@@ -35,7 +63,6 @@ expression](/sql/functions/#expression-bool_op-any),
 Materialize provides an idiomatic SQL as an alternative to the `ANY()`
 expression.
 
-{{< callout >}}
 
 ### Materialize and equi-join `ON fieldX = ANY(<array|list|map>)`
 
@@ -45,7 +72,6 @@ expression](/sql/functions/#expression-bool_op-any)
 which can lead to a significant increase in memory usage. If possible, rewrite
 the query to perform an equi-join on the unnested values.
 
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -84,7 +110,7 @@ SELECT a.fieldA, ...
 FROM tableA a
 JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 ;
-```
+```text
 
 </td>
 </tr>
@@ -110,7 +136,7 @@ SELECT a.fieldA, ...
 FROM tableA a
 JOIN my_expanded_values t ON a.fieldZ = t.fieldZ
 ;
-```
+```text
 
 </td>
 </tr>
@@ -131,7 +157,7 @@ FROM tableA a, tableB b
 WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
 ;
 
-```
+```text
 
 </div>
 </td>
@@ -143,12 +169,11 @@ WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Find orders with any sales items
 
@@ -185,7 +210,7 @@ JOIN individual_sales_items s ON o.item = s.item
 WHERE date_trunc('week', o.order_date) = s.week_of
 ORDER BY s.week_of, o.order_id, o.item, o.quantity
 ;
-```
+```text
 
 ***To omit duplicates that may exist in the unnested field***
 
@@ -200,7 +225,7 @@ JOIN individual_sales_items s ON o.item = s.item
 WHERE date_trunc('week', o.order_date) = s.week_of
 ORDER BY s.week_of, o.order_id, o.item, o.quantity
 ;
-```
+```text
 
 </td>
 </tr>
@@ -222,7 +247,7 @@ JOIN sales_items s ON o.item = ANY(s.items)
 WHERE date_trunc('week', o.order_date) = s.week_of
 ORDER BY s.week_of, o.order_id, o.item, o.quantity
 ;
-```
+```text
 
 </div>
 
@@ -244,14 +269,9 @@ ORDER BY s.week_of, o.order_id, o.item, o.quantity
 - [`UNNEST()`](/sql/functions/#unnest)
 
 
-
-
 ---
 
 ## Appendix
-
-
-
 
 
 ---
@@ -259,18 +279,16 @@ ORDER BY s.week_of, o.order_id, o.item, o.quantity
 ## First value in group
 
 
+This section covers first value in group.
+
 ## Overview
 
 The "first value in each group" query pattern returns the first value, according
 to some ordering, in each group.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -306,7 +324,7 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -329,7 +347,7 @@ SELECT fieldA, fieldB,
  FIRST_VALUE(fieldZ) OVER (PARTITION BY fieldA ORDER BY ... DESC)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -356,19 +374,18 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  ) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 [Optimization](/transform-data/optimization/#query-hints).
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Use MIN() to find the first value
 
@@ -400,7 +417,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -426,7 +443,7 @@ SELECT order_id,
     OVER (PARTITION BY order_id ORDER BY price) AS diff_lowest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -464,7 +481,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -491,7 +508,7 @@ SELECT order_id,
     OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -535,7 +552,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -566,7 +583,7 @@ SELECT order_id,
     OVER (PARTITION BY order_id ORDER BY price DESC) AS diff_highest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 </div>
 </td>
 </tr>
@@ -582,12 +599,12 @@ ORDER BY order_id, item;
 - [Window functions](/sql/functions/#window-functions)
 
 
-
-
 ---
 
 ## Lag over
 
+
+This section covers lag over.
 
 ## Overview
 
@@ -599,22 +616,17 @@ equality condition (such as when ordering by a field that increases at a regular
 interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
-{{< important >}}
+> **Important:** 
 
 Do not use if the "lag over (order by)" ordering cannot be represented by an
 equality match.
 
-{{</ important >}}
 
 ### Exclude the first row in results
 
@@ -644,12 +656,11 @@ t2.fieldA + ...`). The
 query *excludes* the first row in the results since it does not have a previous
 row.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 <br>
 
@@ -659,7 +670,7 @@ SELECT t1.fieldA, t2.fieldB as previous_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA + ... -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -684,7 +695,7 @@ function when the order by field increases in a regular pattern.
 SELECT fieldA, ...
     LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
 FROM tableA;
-```
+```text
 
 </div>
 
@@ -723,12 +734,10 @@ increment in a regular pattern in order to be represented by an equality
 condition (e.g., `ON t1.fieldA = t2.fieldA + ...`). The
 query *includes* the first row, returning `null` as its lag value.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 <br>
@@ -740,7 +749,7 @@ FROM tableA t1
 LEFT JOIN tableA t2
 ON t1.fieldA = t2.fieldA + ... -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -765,7 +774,7 @@ pattern.
 SELECT fieldA, ...
     LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -777,12 +786,11 @@ FROM tableA;
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Find previous row's value (exclude the first row in results)
 
@@ -814,14 +822,13 @@ SELECT o1.order_date, o1.daily_total,
 FROM orders_daily_totals o1, orders_daily_totals o2
 WHERE o1.order_date = o2.order_date + INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 </td>
 </tr>
@@ -842,7 +849,7 @@ field increases in a regular pattern.</red>
 SELECT order_date, daily_total,
     LAG(daily_total) OVER (ORDER BY order_date) as previous_daily_total
 FROM orders_daily_totals;
-```
+```text
 
 </td>
 </tr>
@@ -880,14 +887,13 @@ FROM orders_daily_totals o1
 LEFT JOIN orders_daily_totals o2
 ON o1.order_date = o2.order_date + INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 </td>
 </tr>
@@ -908,7 +914,7 @@ order by field increases in a regular pattern.</red>
 SELECT order_date, daily_total,
     LAG(daily_total) OVER (ORDER BY order_date) as previous_daily_total
 FROM orders_daily_totals;
-```
+```text
 
 </td>
 </tr>
@@ -925,25 +931,21 @@ FROM orders_daily_totals;
 - [Window functions](/sql/functions/#window-functions)
 
 
-
-
 ---
 
 ## Last value in group
 
+
+This section covers last value in group.
 
 ## Overview
 
 The "last value in each group" query pattern returns the last value, according
 to some ordering, in each group.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -979,7 +981,7 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -992,12 +994,11 @@ ORDER BY fieldA ... ;
 ...)` window function](/sql/functions/#last_value) for last value in each group
 queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <br>
 <div style="background-color: var(--code-block)">
@@ -1017,7 +1018,7 @@ SELECT fieldA, fieldB,
             UNBOUNDED FOLLOWING)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -1044,19 +1045,18 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  ) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 [Optimization](/transform-data/optimization/#query-hints).
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Use MAX() to find the last value
 
@@ -1089,7 +1089,7 @@ FROM orders_view o,
      GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -1101,12 +1101,11 @@ ORDER BY o.order_id, o.item;
 <red>Do not use of `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ...)`
 for last value in each group queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <div style="background-color: var(--code-block)">
 
@@ -1127,7 +1126,7 @@ SELECT order_id,
             UNBOUNDED FOLLOWING) AS diff_highest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -1166,7 +1165,7 @@ FROM orders_view o,
      GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -1178,12 +1177,11 @@ ORDER BY o.order_id, o.item;
 <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ... )`
 for last value in each group queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <div style="background-color: var(--code-block)">
 
@@ -1204,7 +1202,7 @@ SELECT order_id,
             UNBOUNDED FOLLOWING) AS diff_lowest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -1246,7 +1244,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -1256,12 +1254,11 @@ ORDER BY o.order_id, o.item;
 <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY
 )` for last value within groups queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <div style="background-color: var(--code-block)">
 
@@ -1292,7 +1289,7 @@ SELECT order_id,
             UNBOUNDED FOLLOWING) AS diff_highest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -1311,12 +1308,12 @@ ORDER BY order_id, item;
 - [Window functions](/sql/functions/#window-functions)
 
 
-
-
 ---
 
 ## Lead over
 
+
+This section covers lead over.
 
 ## Overview
 
@@ -1328,22 +1325,17 @@ equality condition (such as when ordering by a field that increases at a regular
 interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
-{{< important >}}
+> **Important:** 
 
 Do not use if the "lead over (order by)" ordering cannot be represented by an
 equality match.
 
-{{</ important >}}
 
 ### Exclude the last row in results
 
@@ -1372,12 +1364,11 @@ in order to be represented by an equality condition (e.g., `WHERE t1.fieldA =
 t2.fieldA - ...`). The query *excludes* the last row in the results since it
 does not have a next row.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 <br>
 
@@ -1387,7 +1378,7 @@ SELECT t1.fieldA, t2.fieldB as next_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA - ...  -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -1412,7 +1403,7 @@ function`](/sql/functions/#lead) when the order by field increases in a regular 
 SELECT fieldA, ...
     LEAD(fieldZ) OVER (ORDER BY fieldA) as next_row_value
 FROM tableA;
-```
+```text
 
 </div>
 
@@ -1451,12 +1442,10 @@ increment in a regular pattern in order to be represented by an equality
 condition (e.g., `ON t1.fieldA = t2.fieldA - ...`). The query *includes* the
 last row, returning `null` as its lead value.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 ```mzsql
@@ -1466,7 +1455,7 @@ FROM tableA t1
 LEFT JOIN tableA t2
 ON t1.fieldA = t2.fieldA - ... -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -1491,7 +1480,7 @@ intervals.
 SELECT fieldA, ...
     LEAD(fieldZ) OVER (ORDER BY fieldA) as next_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -1502,12 +1491,11 @@ FROM tableA;
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Find next row's value (exclude the last row in results)
 
@@ -1539,14 +1527,12 @@ SELECT o1.order_date, o1.daily_total,
 FROM orders_daily_totals o1, orders_daily_totals o2
 WHERE o1.order_date = o2.order_date - INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 </td>
@@ -1568,7 +1554,7 @@ order by field increases in regular intervals.</red>
 SELECT order_date, daily_total,
     LEAD(daily_total) OVER (ORDER BY order_date) as next_daily_total
 FROM orders_daily_totals;
-```
+```text
 
 </td>
 </tr>
@@ -1607,14 +1593,12 @@ FROM orders_daily_totals o1
 LEFT JOIN orders_daily_totals o2
 ON o1.order_date = o2.order_date - INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 </td>
@@ -1636,7 +1620,7 @@ order by field increases in a regular pattern.</red>
 SELECT order_date, daily_total,
     LEAD(daily_total) OVER (ORDER BY order_date) as next_daily_total
 FROM orders_daily_totals;
-```
+```text
 
 </td>
 </tr>
@@ -1653,12 +1637,12 @@ FROM orders_daily_totals;
 - [Window functions](/sql/functions/#window-functions)
 
 
-
-
 ---
 
 ## mz_now() expressions
 
+
+This section covers mz_now() expressions.
 
 ## Overview
 
@@ -1672,27 +1656,42 @@ working dataset.
 
 ```mzsql
 mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
-```
+```bash
 
 ## Idiomatic Materialize SQL
 
+This section covers idiomatic materialize sql.
+
 ### `mz_now()` expressions to calculate past or future timestamp
 
-**Idiomatic Materialize SQL**: {{< include-md
-file="shared-content/mz_now_operators.md" >}}
+**Idiomatic Materialize SQL**: `mz_now()` must be used with one of the following comparison operators: `=`,
+`<`, `<=`, `>`, `>=`, or an operator that desugars to them or to a conjunction
+(`AND`) of them (for example, `BETWEEN...AND...`). That is, you cannot use
+date/time operations directly on  `mz_now()` to calculate a timestamp in the
+past or future. Instead, rewrite the query expression to move the operation to
+the other side of the comparison.
+
 
 #### Examples
 
-{{< yaml-table data="mz_now/mz_now_operators" noHeader="true" >}}
+<!-- Dynamic table: mz_now/mz_now_operators - see original docs -->
 
 ### Disjunctions (`OR`)
 
-{{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md"
->}}
+When used in a materialized view definition, a view definition that is being
+indexed (i.e., although you can create the view and perform ad-hoc query on
+the view, you cannot create an index on that view), or a `SUBSCRIBE`
+statement:
+
+- `mz_now()` clauses can only be combined using an `AND`, and
+
+- All top-level `WHERE` or `HAVING` conditions must be combined using an `AND`,
+  even if the `mz_now()` clause is nested.
+
 
 For example:
 
-{{< yaml-table data="mz_now/mz_now_combination" >}}
+<!-- Dynamic table: mz_now/mz_now_combination - see original docs -->
 
 
 **Idiomatic Materialize SQL**: When `mz_now()` is included in a materialized
@@ -1709,9 +1708,7 @@ the query to use `UNION ALL` or `UNION` instead, deduplicating as necessary:
 
 #### Examples
 
-{{< yaml-table data="mz_now/mz_now_disjunction_alternatives" noHeader="true" >}}
-
-
+<!-- Dynamic table: mz_now/mz_now_disjunction_alternatives - see original docs -->
 
 
 ---
@@ -1719,20 +1716,20 @@ the query to use `UNION ALL` or `UNION` instead, deduplicating as necessary:
 ## Top-K in group
 
 
+This section covers top-k in group.
+
 ## Overview
 
 The "Top-K in group" query pattern groups by some key and return the first K
 elements within each group according to some ordering.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
+
+This section covers idiomatic materialize sql.
 
 ### For K >= 1
 
@@ -1766,7 +1763,7 @@ FROM (SELECT DISTINCT fieldA FROM tableA) grp,
         WHERE fieldA = grp.fieldA
         ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 </td>
 </tr>
@@ -1789,7 +1786,7 @@ FROM (
    FROM tableA)
 WHERE rn <= K     -- K is a number >= 1
 ORDER BY fieldA, fieldZ ...;
-```
+```text
 
 </div>
 </td>
@@ -1811,7 +1808,7 @@ FROM (SELECT DISTINCT fieldA FROM tableA) grp,
         OPTIONS (LIMIT INPUT GROUP SIZE = ...)
         ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 For more information on setting `LIMIT INPUT GROUP SIZE`, see
 [Optimization](/transform-data/optimization/#query-hints).
@@ -1842,7 +1839,7 @@ pattern, specifying 1 as the limit.
 SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
 FROM tableA
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 </div>
 </td>
@@ -1867,7 +1864,7 @@ FROM (
    FROM tableA)
 WHERE rn = 1
 ORDER BY fieldA, fieldZ ...;
-```
+```text
 
 </div>
 </td>
@@ -1886,19 +1883,18 @@ SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
 FROM tableA
 OPTIONS (DISTINCT ON INPUT GROUP SIZE = ...)
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 For more information on setting `DISTINCT ON INPUT GROUP SIZE`, see
 [`EXPLAIN ANALYZE HINTS`](/sql/explain-analyze/#explain-analyze-hints).
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Select Top-3 items
 
@@ -1928,7 +1924,7 @@ FROM (SELECT DISTINCT order_id FROM orders_view) grp,
         WHERE order_id = grp.order_id
         ORDER BY subtotal DESC LIMIT 3)
 ORDER BY order_id, subtotal DESC;
-```
+```text
 
 </td>
 </tr>
@@ -1951,7 +1947,7 @@ FROM (
    FROM orders_view)
 WHERE rn <= 3
 ORDER BY order_id, subtotal DESC;
-```
+```text
 
 </div>
 </td>
@@ -1984,7 +1980,7 @@ ON`/grouping key, then the descending subtotal). [^1]
 SELECT DISTINCT ON(order_id) order_id, item, subtotal
 FROM orders_view
 ORDER BY order_id, subtotal DESC;
-```
+```text
 
 </td>
 </tr>
@@ -2023,6 +2019,3 @@ ORDER BY order_id, subtotal DESC;
 - [LATERAL subqueries](/sql/select/join/#lateral-subqueries)
 - [Query hints for Top K](/transform-data/optimization/#query-hints)
 - [Window functions](/sql/functions/#window-functions)
-
-
-

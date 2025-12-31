@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/string_agg/
+complexity: advanced
+description: Concatenates the non-null input values into a string. Each value after
+  the first is preceded by the corresponding delimiter (if it's not null).
+doc_type: reference
+keywords:
+- string_agg function
+- CREATE A
+- CREATE VIEW
+- CREATE MATERIALIZED
+- SELECT STRING_AGG
+product_area: Indexes
+status: stable
+title: string_agg function
+---
+
 # string_agg function
+
+## Purpose
+Concatenates the non-null input values into a string. Each value after the first is preceded by the corresponding delimiter (if it's not null).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Concatenates the non-null input values into a string. Each value after the first is preceded by the corresponding delimiter (if it's not null).
 
@@ -12,7 +36,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "string-agg.svg" >}}
+[See diagram: string-agg.svg]
 
 ## Signatures
 
@@ -43,21 +67,23 @@ statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT string_agg(foo_view.bar, ',');
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT string_agg(column1, column2)
 FROM (
     VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
 );
-```
+```text
 ```nofmt
  string_agg
 ------------
  a #m !z
-```
+```text
 
 Note that in the following example, the `ORDER BY` of the subquery feeding into `string_agg` gets ignored.
 
@@ -66,14 +92,14 @@ SELECT column1, column2
 FROM (
     VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
 ) ORDER BY column1 DESC;
-```
+```text
 ```nofmt
  column1 | column2
 ---------+---------
  z       |  !
  m       |  #
  a       |  @
-```
+```text
 
 ```mzsql
 SELECT string_agg(column1, column2)
@@ -83,12 +109,12 @@ FROM (
         VALUES ('z', ' !'), ('a', ' @'), ('m', ' #')
     ) f ORDER BY column1 DESC
 ) g;
-```
+```text
 ```nofmt
  string_agg
 ------------
  a #m !z
-```
+```text
 
 ```mzsql
 SELECT string_agg(b, ',' ORDER BY a DESC) FROM table;

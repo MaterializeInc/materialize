@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/sinks/
+complexity: beginner
+description: Learn about sinks in Materialize.
+doc_type: concept
+keywords:
+- Sinks
+- CREATE SINK
+- materialized
+- CREATE A
+product_area: Concepts
+status: stable
+title: Sinks
+---
+
 # Sinks
+
+## Purpose
+Learn about sinks in Materialize.
+
+Read this to understand how this concept works in Materialize.
+
 
 Learn about sinks in Materialize.
 
@@ -14,7 +36,7 @@ view, a source, or a table.
 
 To create a sink, you can:
 
-{{< yaml-table data="sink_external_systems" >}}
+<!-- Dynamic table: sink_external_systems - see original docs -->
 
 ## Clusters and sinks
 

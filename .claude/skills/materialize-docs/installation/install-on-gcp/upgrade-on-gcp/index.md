@@ -1,21 +1,45 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-gcp/upgrade-on-gcp/
+complexity: intermediate
+description: Procedure to upgrade your Materialize operator and instances running
+  on GCP
+doc_type: reference
+keywords:
+- UPDATE YOUR
+- v27
+- CREATE SERVICE
+- v26
+- 'Disambiguation:'
+- CREATE A
+- not
+- Upgrade on GCP (Terraform)
+- 'Important:'
+product_area: Deployment
+status: stable
+title: Upgrade on GCP (Terraform)
+---
+
 # Upgrade on GCP (Terraform)
+
+## Purpose
+Procedure to upgrade your Materialize operator and instances running on GCP
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Procedure to upgrade your Materialize operator and instances running on GCP
 
 
-
-{{< annotation type="Disambiguation" >}}
-
-- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
-Terraform version to `v0.6.1` or higher, {{< include-md
-file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
+> **Disambiguation:** - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1` or higher, [GCP Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061)
+.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided
 Terraforms, you must prepare your nodes by adding the required labels. For
 detailed instructions, see [Prepare for swap and upgrade to
 v26.0](/installation/upgrade-to-swap/).
-
-{{< /annotation >}}
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on GCP Google Kubernetes Engine (GKE).
@@ -27,27 +51,29 @@ or the root).
 
 ## Version compatibility
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+> **Important:** 
 
-{{< tabs >}}
+When performing major version upgrades, you can upgrade only one major version
+at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
+but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
+not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](../self-managed/v25.2/release-notes/#v25216).
 
-{{< tab "Materialize on GCP Terraform Releases" >}}
 
-{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+#### Materialize on GCP Terraform Releases
 
-{{</ tab >}}
-{{</ tabs >}}
+
+<!-- Dynamic table: self_managed/gcp_terraform_versions - see original docs -->
+
 
 ## Prerequisites
 
-{{< important >}}
+> **Important:** 
 
 The following procedure performs a rolling upgrade, where both the old and new
 Materialize instances are running before the the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
-{{</ important >}}
 
 ### Google cloud project
 
@@ -75,13 +101,12 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 
 ### kubectl and plugins
 
-{{< tip >}}
+> **Tip:** 
 
 Using `gcloud` to install `kubectl` will also install the needed plugins.
 Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 `kubectl`.
 
-{{< /tip >}}
 
 - If you do not have `kubectl`, install `kubectl`.  To install, see [Install
   kubectl and configure cluster
@@ -106,9 +131,13 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+Starting in v26.0, Materialize requires a license key. If your existing
+deployment does not have a license key configured, contact [Materialize support](../support/).
+
 
 ## Procedure
+
+This section covers procedure.
 
 ### A. Setup GCP service account and authenticate
 
@@ -118,10 +147,10 @@ If you want to use `jq` and do not have `jq` installed, install.
    to use. For details, see the [Initializing the gcloud CLI
    documentation](https://cloud.google.com/sdk/docs/initializing#initialize_the).
 
-   {{< tip >}}
+   > **Tip:** 
    You do not need to configure a default Compute Region and Zone as you will
    specify the region.
-   {{</ tip >}}
+   
 
 1. To the service account that will be used to perform the upgrade,
    grant the following IAM roles (if the account does not have them already):
@@ -134,19 +163,19 @@ If you want to use `jq` and do not have `jq` installed, install.
 
       ```bash
       read -s PROJECT_ID
-      ```
+      ```text
 
    1. Find your service account email for your GCP project
 
       ```bash
       gcloud iam service-accounts list --project $PROJECT_ID
-      ```
+      ```text
 
    1. Enter your service account email.
 
       ```bash
       read -s SERVICE_ACCOUNT
-      ```
+      ```text
 
    1. Grant the service account the neccessary IAM roles.
 
@@ -162,7 +191,7 @@ If you want to use `jq` and do not have `jq` installed, install.
       gcloud projects add-iam-policy-binding $PROJECT_ID \
       --member="serviceAccount:$SERVICE_ACCOUNT" \
       --role="roles/storage.admin"
-      ```
+      ```text
 
 1. For the service account, authenticate to allow Terraform to interact with
    your GCP project. For details, see [Terraform: Google Cloud Provider
@@ -175,11 +204,11 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    gcloud auth application-default login
-   ```
+   ```text
 
-   {{< tip >}}
+   > **Tip:** 
    If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
-   {{</ tip >}}
+   
 
 ### B. Upgrade Materialize operator and instances
 
@@ -188,17 +217,17 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    cd terraform-google-materialize/examples/simple
-   ```
+   ```text
 
 1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
-   {{< tip >}}
-   {{% self-managed/gcp-terraform-upgrade-notes %}}
+   > **Tip:** 
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
    See [Materialize on GCP releases](/installation/appendix-terraforms/#materialize-on-gcp-terraform-module) for notable changes.
 
-   {{</ tip >}}
+   
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:
 
@@ -214,7 +243,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    gcloud container clusters get-credentials <cluster-name>  \
     --region <region> \
     --project <project>
-   ```
+   ```text
 
    Alternatively, you can use the following command to get the cluster name and
    region from the Terraform output and the project ID from the environment
@@ -223,7 +252,7 @@ If you want to use `jq` and do not have `jq` installed, install.
    ```bash
    gcloud container clusters get-credentials $(terraform output -json gke_cluster | jq -r .name) \
     --region $(terraform output -json gke_cluster | jq -r .location) --project $PROJECT_ID
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
@@ -234,5 +263,4 @@ If you want to use `jq` and do not have `jq` installed, install.
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
-
+<!-- Unresolved shortcode: {{% self-managed/versions/upgrade/upgrade-steps-cl... -->

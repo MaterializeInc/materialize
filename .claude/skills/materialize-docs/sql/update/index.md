@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/update/
+complexity: intermediate
+description: '`UPDATE` changes values stored in tables.'
+doc_type: reference
+keywords:
+- UPDATE BASED
+- WHERE
+- Low performance.
+- UPDATE EXAMPLE_TABLE
+- CREATE TABLE
+- UPDATE
+- AS
+- UPDATE ROWS
+- INSERT INTO
+product_area: Indexes
+status: stable
+title: UPDATE
+---
+
 # UPDATE
+
+## Purpose
+`UPDATE` changes values stored in tables.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `UPDATE` changes values stored in tables.
 
@@ -8,11 +35,13 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 UPDATE <table_name> [ AS <table_alias> ]
    SET <column_name> = <expression> [, <column2_name> = <expression2>, ...]
 [WHERE <condition(s)> ];
-```
+```text
 
 Syntax element                | Description
 ------------------------------|------------
@@ -20,6 +49,8 @@ Syntax element                | Description
 **WHERE** <condition(s)>      | If specified, only update rows that meet the condition(s).
 
 ## Details
+
+This section covers details.
 
 ### Known limitations
 
@@ -49,13 +80,13 @@ All examples below will use the `example_table` table:
 ```mzsql
 CREATE TABLE example_table (a int, b text);
 INSERT INTO example_table VALUES (1, 'hello'), (2, 'goodbye');
-```
+```text
 
 To verify the initial state of the table, run the following `SELECT` statement:
 
 ```mzsql
 SELECT * FROM example_table;
-```
+```text
 
 The `SELECT` statement above should return two rows:
 
@@ -64,7 +95,7 @@ The `SELECT` statement above should return two rows:
 ---+---------
  1 | hello
  2 | goodbye
-```
+```bash
 
 ### Update based on a condition
 
@@ -75,7 +106,7 @@ to update:
 UPDATE example_table
 SET a = a + 2
 WHERE b = 'hello';
-```
+```text
 
 Only one row should be updated, namely the row with `b = 'hello'`. To verify
 that the operation updated the `a` column only for that row, run the following
@@ -83,7 +114,7 @@ that the operation updated the `a` column only for that row, run the following
 
 ```mzsql
 SELECT * FROM example_table;
-```
+```text
 
 The returned results show that column `a` was updated only for the row with `b
 = 'hello'`:
@@ -93,7 +124,7 @@ The returned results show that column `a` was updated only for the row with `b
 ---+---------
  3 | hello         -- Previous value: 1
  2 | goodbye
-```
+```bash
 
 ### Update all rows
 
@@ -103,13 +134,13 @@ The following `UPDATE` example updates all rows in the table to set `a` to 0 and
 ```mzsql
 UPDATE example_table
 SET a = 0, b = 'aloha';
-```
+```text
 
 To verify the results, run the following `SELECT` statement:
 
 ```mzsql
 SELECT * FROM example_table;
-```
+```text
 
 The returned results show that all rows were updated:
 

@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/disaster-recovery/
+complexity: advanced
+description: Learn about various disaster recovery (DR) strategies for Materialize.
+doc_type: reference
+keywords:
+- Disaster recovery (Cloud)
+- 'same as your compute
+
+  cluster''s rehydration time'
+- up to and including `3200cc`
+- '💡 Recommendation:'
+- as long as
+- 'Note:'
+product_area: Operations
+status: stable
+title: Disaster recovery (Cloud)
+---
+
 # Disaster recovery (Cloud)
+
+## Purpose
+Learn about various disaster recovery (DR) strategies for Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Learn about various disaster recovery (DR) strategies for Materialize.
 
@@ -20,24 +46,27 @@ disaster recovery **as long as**:
 In such cases, your mean time to recovery is the **same as your compute
 cluster's rehydration time**.
 
-{{< annotation type="💡 Recommendation" >}}
-
-When running with the basic configuration, we recommend that you track
+> **💡 Recommendation:** When running with the basic configuration, we recommend that you track
 your rehydration time to ensure that it is within an acceptable range for your
 business' risk tolerance.
-{{</ annotation >}}
 
 ## Level 2:  Multi-replica clusters (High availability across AZs)
 
-{{< note >}}
+> **Note:** 
 The hybrid strategy is available if your deployment uses a [three-tier or a
 two-tier architecture](/manage/operational-guidelines/).
-{{</ note >}}
+
 
 Materialize supports multi-replica clusters, allowing for distribution across
 Availability Zones (AZs):
 
-{{< include-md file="shared-content/multi-replica-az.md" >}}
+- For clusters sized **up to and including `3200cc`**, Materialize guarantees
+  that all provisioned replicas in a cluster are distributed across the
+  underlying cloud provider's availability zones.
+
+- For clusters sized **above `3200cc`**, even distribution of replicas
+  across availability zones **cannot** be guaranteed.
+
 
 Multi-replica **compute clusters** and multi-replica **serving clusters**
 (excluding sink clusters) with replicas distributed across AZs provide DR
@@ -52,21 +81,25 @@ AZ level failures for those clusters:
 As such, your compute and serving clusters will continue to serve up-to-date
 data uninterrupted in the case of a replica failure.
 
-{{< annotation type="💡 Cost and work capacity" >}}
+> **💡 Cost and work capacity:** - Each replica incurs cost, calculated as `cluster size *
+  replication factor` per second. See [Usage &
+  billing](/administration/billing/) for more details.
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
-
-{{</ annotation >}}
+- Increasing the replication factor does **not** increase the cluster's work
+  capacity. Replicas are exact copies of one another: each replica must do
+  exactly the same work as all the other replicas of the cluster(i.e., maintain
+  the same dataflows and process the same queries). To increase the capacity of
+  a cluster, you must increase its size.
 
 If you require resilience beyond a single region, consider the Level 3 strategy.
 
 ## Level 3: A duplicate Materialize environment (Inter-region resilience)
 
-{{< note >}}
+> **Note:** 
 
-{{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
+<!-- Include not found: /shared-content/regional-dr-infrastructure-as-code.md -->
 
-{{</ note >}}
+
 
 For region-level fault tolerance, you can choose to have a second Materialize
 environment in another region. With this strategy:
@@ -79,13 +112,9 @@ environment in another region. With this strategy:
 can also be accessed from the second region, the two Materialize environments
 can guarantee the same results.
 
-{{< annotation type="💡 No strict transactional consistency between environments" >}}
-
-This approach does <red>**not**</red> offer strict transactional consistency
+> **💡 No strict transactional consistency between environments:** This approach does <red>**not**</red> offer strict transactional consistency
 across regions. However, as long as both regions are caught up, the results
 should be within about a second of each other.
-
-{{</ annotation >}}
 
 The duplicate Materialize environment setup can be adapted into a more
 cost-effective setup if your deployment uses a [three-tier or a two-tier
@@ -94,13 +123,13 @@ variation](#hybrid-variation).
 
 ### Hybrid variation
 
-{{< note >}}
+> **Note:** 
 
 - The hybrid strategy is available if your deployment uses a [three-tier or a
 two-tier architecture](/manage/operational-guidelines/).
 
-- {{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
-{{</ note >}}
+- <!-- Include not found: /shared-content/regional-dr-infrastructure-as-code.md -->
+
 
 For a more cost-effective variation to the duplicate Materialize environment in
 another region, you can choose a hybrid strategy where:
@@ -141,16 +170,16 @@ components are deployed with high available configurations or with automated
 recovery mechanisms. However, they can still experience outages due to failures
 in underlying providers.
 
-{{< yaml-table data="disaster_recovery/system_environment" >}}
+<!-- Dynamic table: disaster_recovery/system_environment - see original docs -->
 
-{{< annotation type="Recommendation(s)" >}}
-- Use privatelink when possible and configure to use multiple AZs.
+> **Recommendation(s):** - Use privatelink when possible and configure to use multiple AZs.
 
 - If you are concerned about multi-AZ outages, consider [duplicate Materialize
   environment in second region strategy](/manage/disaster-recovery/#level-3-a-duplicate-materialize-environment-inter-region-resilience)
-{{</ annotation>}}
 
 ## Database environment
+
+This section covers database environment.
 
 ### `environmentd`
 
@@ -159,42 +188,34 @@ has no data; as such, the RPO is `N/A`.
 
 The component has the following failure characteristics:
 
-{{< yaml-table data="disaster_recovery/environmentd" >}}
+<!-- Dynamic table: disaster_recovery/environmentd - see original docs -->
 <span class="caption">
 RPO (Recovery Point Objective) • RTO (Recovery Time Objective) • RF (Replication
 Factor)
 </span>
 
-{{< annotation type="Key point(s)" >}}
-
-- If `environmentd` becomes unavailable, RTO is non-zero.
+> **Key point(s):** - If `environmentd` becomes unavailable, RTO is non-zero.
 
 - If `environmentd` becomes unavailable, its RTO affects the RTO of the clusters
   as you cannot access data while `environmentd` is unavailable.
 
-{{</ annotation >}}
-
 ### Clusters
 
-{{< yaml-table data="disaster_recovery/cluster" >}}
+<!-- Dynamic table: disaster_recovery/cluster - see original docs -->
 <span class="caption">
 RPO (Recovery Point Objective) • RTO (Recovery Time Objective) • RF (Replication
 Factor)
 </span>
 
-{{< annotation type="Key point(s)" >}}
-
-- Cluster RTO can be affected if the environmentd is down (seconds to minutes).
+> **Key point(s):** - Cluster RTO can be affected if the environmentd is down (seconds to minutes).
 
 - For regional failover strategy, you can use a [duplicate Materialize
   environment
   strategy](/manage/disaster-recovery/#level-3-a-duplicate-materialize-environment-inter-region-resilience).
 
-{{</ annotation >}}
-
 ## Materialize data corruption/operations error
 
-{{< yaml-table data="disaster_recovery/mz_operations" >}}
+<!-- Dynamic table: disaster_recovery/mz_operations - see original docs -->
 <span class="caption">
 RPO (Recovery Point Objective) • RTO (Recovery Time Objective) • RF (Replication
 Factor)
@@ -202,18 +223,14 @@ Factor)
 
 ## End-user error
 
-{{< yaml-table data="disaster_recovery/human" >}}
+<!-- Dynamic table: disaster_recovery/human - see original docs -->
 <span class="caption">
 RPO (Recovery Point Objective) • RTO (Recovery Time Objective) • RF (Replication
 Factor)
 </span>
 
-{{< annotation type="Key point(s)" >}}
-
-- You can use [RBAC](/security/access-control/) to reduce the risk of
+> **Key point(s):** - You can use [RBAC](/security/access-control/) to reduce the risk of
   accidentally dropping sources (and other objects) in Materialize.
-
-{{</ annotation >}}
 
 ## See also
 

@@ -1,8 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/appendix/
+complexity: advanced
+description: '---'
+doc_type: reference
+keywords:
+- Appendix
+- 'Note:'
+product_area: Security
+status: stable
+title: Appendix
+---
+
 # Appendix
 
+## Purpose
+---
 
-
-
+If you need to understand the syntax and options for this command, you're in the right place.
 
 
 ---
@@ -10,11 +25,13 @@
 ## Appendix: Built-in roles
 
 
+This section covers appendix: built-in roles.
+
 ## `Public` role
 
-{{% include-md file="shared-content/rbac-cloud/db-roles-public-membership.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/db-... -->
 
-{{% include-md file="shared-content/rbac-cloud/public-role-privileges.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/pub... -->
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the define default privileges for `PUBLIC`.
@@ -32,29 +49,34 @@ belonging to a particular builtin role, which superusers may
 |                       |
 
 
-
-
 ---
 
 ## Appendix: Privileges
 
 
-{{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privileges-related-objects.md" >}}
-{{</ note >}}
+> **Note:** 
+Various SQL operations require additional privileges on related objects, such
+as:
+
+- For objects that use compute resources (e.g., indexes, materialized views,
+  replicas, sources, sinks), access is also required for the associated cluster.
+
+- For objects in a schema, access is also required for the schema.
+
+For details on SQL operations and needed privileges, see [Appendix: Privileges
+by command](/security/appendix/appendix-command-privileges/).
+
 
 The following privileges are available in Materialize:
 
-{{< tabs >}}
-{{< tab "By Privilege" >}}
-{{< yaml-table data="rbac/privileges_objects" >}}
-{{</ tab >}}
-{{< tab "By Object" >}}
-{{< yaml-table data="rbac/object_privileges" >}}
-{{</ tab >}}
-{{</ tabs >}}
 
+#### By Privilege
 
+<!-- Dynamic table: rbac/privileges_objects - see original docs -->
+
+#### By Object
+
+<!-- Dynamic table: rbac/object_privileges - see original docs -->
 
 
 ---
@@ -62,7 +84,4 @@ The following privileges are available in Materialize:
 ## Appendix: Privileges by commands
 
 
-{{< yaml-table data="rbac/command_privileges" >}}
-
-
-
+<!-- Dynamic table: rbac/command_privileges - see original docs -->

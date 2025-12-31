@@ -1,25 +1,54 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/postgres/alloydb/
+complexity: beginner
+description: How to stream data from AlloyDB to Materialize
+doc_type: reference
+keywords:
+- 'Use an SSH tunnel:'
+- UPDATE YOUR
+- 'Allow Materialize IPs:'
+- Ingest data from AlloyDB
+- CREATE A
+- 'Tip:'
+- 'Note:'
+- 'you
+
+  can skip this step'
+- CREATE AN
+product_area: Sources
+status: stable
+title: Ingest data from AlloyDB
+---
+
 # Ingest data from AlloyDB
 
+## Purpose
 How to stream data from AlloyDB to Materialize
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to stream data from AlloyDB to Materialize
 
 
 This page shows you how to stream data from [AlloyDB for PostgreSQL](https://cloud.google.com/alloydb)
 to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
 
 ## Before you begin
 
-{{% postgres-direct/before-you-begin %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/before-you-begin --> --> -->
 
 If you don't already have an AlloyDB instance, creating one involves several
 steps, including configuring your cluster and setting up network connections.
 For detailed instructions, refer to the [AlloyDB documentation](https://cloud.google.com/alloydb/docs).
 
 ## A. Configure AlloyDB
+
+This section covers a. configure alloydb.
 
 ### 1. Enable logical replication
 
@@ -31,19 +60,17 @@ To enable logical replication in AlloyDB, see the
 
 ### 2. Create a publication and a replication user
 
-{{% postgres-direct/create-a-publication-other %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/create-a-publication-oth --> --> -->
 
 ## B. (Optional) Configure network security
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and your AlloyDB instance is publicly accessible, **you
 can skip this step**. For production scenarios, we recommend configuring one of
 the network security options below.
-{{</ note >}}
 
-{{< tabs >}}
 
-{{< tab "Cloud">}}
+#### Cloud
 
 To establish authorized and secure connections to an AlloyDB instance, an
 authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)
@@ -60,65 +87,7 @@ Materialize with AlloyDB:
 - **Use an SSH tunnel:** For private networks, use an SSH tunnel to connect
     Materialize to AlloyDB.
 
-{{< tabs >}}
-
-{{< tab "Allow Materialize IPs">}}
-
-1. In the [Materialize console's SQL Shell](/console/),
-   or your preferred SQL client connected to Materialize, find the static egress
-   IP addresses for the Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
-1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
-   proxy instance from each IP address from the previous step.
-
-{{< /tab >}}
-
-{{< tab "Use an SSH tunnel">}}
-
-To create an SSH tunnel from Materialize to your database, you launch an
-instance to serve as an SSH bastion host, configure the bastion host to allow
-traffic only from Materialize, and then configure your database's private
-network to allow traffic from the bastion host.
-
-1. [Launch a GCE instance](https://cloud.google.com/compute/docs/instances/create-start-instance) to
-    serve as your SSH bastion host.
-
-    - Make sure the instance is publicly accessible and in the same VPC as your
-      database.
-    - Add a key pair and note the username. You'll use this username when
-      connecting Materialize to your bastion host.
-    - Make sure the VM has a [static public IP address](https://cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address).
-      You'll use this IP address when connecting Materialize to your bastion
-      host.
-
-1. Configure the SSH bastion host to allow traffic only from Materialize.
-
-    1. In the [Materialize console's SQL
-       Shell](/console/), or your preferred SQL client
-       connected to Materialize, get the static egress IP addresses for the
-       Materialize region you are running in:
-
-       ```mzsql
-       SELECT * FROM mz_egress_ips;
-       ```
-
-    1. Update your SSH bastion host's firewall rules to allow traffic from each
-       IP address from the previous step.
-
-1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
-   proxy instance from the SSH bastion host.
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-{{< /tab >}}
-
-{{< tab "Self-Managed">}}
+#### Self-Managed
 
 To establish authorized and secure connections to an AlloyDB instance, an
 authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)
@@ -126,19 +95,15 @@ to assist you in setting up this proxy and generating a connection string that
 can be utilized with Materialize. Further down, we will provide you with a
 tailored approach specific to integrating Materialize.
 
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
+<!-- Unresolved shortcode: {{% include-md
+file="shared-content/self-managed/c... -->
 
-{{< tabs >}}
-
-{{< tab "Allow Materialize IPs">}}
+#### Allow Materialize IPs
 
 1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
    proxy instance from Materialize IPs.
 
-{{< /tab >}}
-
-{{< tab "Use an SSH tunnel">}}
+#### Use an SSH tunnel
 
 To create an SSH tunnel from Materialize to your database, you launch an
 instance to serve as an SSH bastion host, configure the bastion host to allow
@@ -161,105 +126,79 @@ network to allow traffic from the bastion host.
 1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
    proxy instance from the SSH bastion host.
 
-{{< /tab >}}
-
-{{< /tabs >}}
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
 ## C. Ingest data in Materialize
+
+This section covers c. ingest data in materialize.
 
 ### 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/create-a-cluster --> --> -->
 
 ### 2. Create a connection
 
 Once you have configured your network, create a connection in Materialize per
 your networking configuration.
 
-{{< tabs >}}
+#### Allow Materialize IPs
 
-{{< tab "Allow Materialize IPs">}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ips_cloud"
-   example="create-secret" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ips_cloud"
-   example="create-connection" indent="true" %}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ips_cloud"
-   example="create-connection-options-general" indent="true" %}}
+#### Use an SSH tunnel
 
-{{< /tab >}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-{{< tab "Use an SSH tunnel">}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-ssh-tunnel-connection" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-ssh-tunnel-connection-options" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="get-public-keys-general" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="login-to-ssh-bastion-host" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="validate-ssh-tunnel-connection" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-secret" indent="true" %}}
-
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-connection" indent="true" %}}
-
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-connection-options-general" indent="true" %}}
-{{< /tab >}}
-
-{{< /tabs >}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
 ### 3. Start ingesting data
 
-{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="ingest-data-step" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/ingest_data/pos... -->
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/check-the-ingestion-stat --> --> -->
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/right-size-the-cluster --> --> -->
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/next-steps --> --> -->
 
 ## Considerations
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-considerations" %}}
-
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->

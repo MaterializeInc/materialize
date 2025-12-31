@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-objects/
+complexity: intermediate
+description: '`SHOW OBJECTS` returns a list of all objects in Materialize for a given
+  schema.'
+doc_type: reference
+keywords:
+- FROM
+- SHOW OBJECTS
+product_area: Indexes
+status: stable
+title: SHOW OBJECTS
+---
+
 # SHOW OBJECTS
+
+## Purpose
+`SHOW OBJECTS` returns a list of all objects in Materialize for a given schema.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW OBJECTS` returns a list of all objects in Materialize for a given schema.
 
@@ -10,9 +31,11 @@ secrets and connections.
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW OBJECTS [ FROM <schema_name> ];
-```
+```text
 
 Syntax element               | Description
 -----------------------------|------------
@@ -20,23 +43,27 @@ Syntax element               | Description
 
 ## Details
 
+This section covers details.
+
 ### Output format
 
 `SHOW OBJECTS` will output a table with two columns, `name`and `type`.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SCHEMAS;
-```
+```text
 ```nofmt
   name
 --------
  public
-```
+```text
 ```mzsql
 SHOW OBJECTS FROM public;
-```
+```text
 ```nofmt
   name          | type
 ----------------+-------
@@ -44,10 +71,10 @@ my_table        | table
 my_source       | source
 my_view         | view
 my_other_source | source
-```
+```text
 ```mzsql
 SHOW OBJECTS;
-```
+```text
 ```nofmt
   name    | type
 ----------+-------

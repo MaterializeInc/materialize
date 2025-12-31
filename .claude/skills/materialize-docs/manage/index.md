@@ -1,10 +1,36 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/
+complexity: advanced
+description: This section contains various resources for managing Materialize.
+doc_type: reference
+keywords:
+- '💡 Recommendation:'
+- Usage & billing
+- as long as
+- 'same as your compute
+
+  cluster''s rehydration time'
+- Manage Materialize
+- non
+product_area: Operations
+status: stable
+title: Manage Materialize
+---
+
 # Manage Materialize
 
+## Purpose
+This section contains various resources for managing Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
 
 
 This section contains various resources for managing Materialize.
 
 ## Operational guides
+
+This section covers operational guides.
 
 | Guide | Description |
 |-------|-------------|
@@ -15,6 +41,8 @@ This section contains various resources for managing Materialize.
 
 ## Manage via dbt/Terraform
 
+This section covers manage via dbt/terraform.
+
 | Guide | Description |
 |-------|-------------|
 | [Using dbt to manage Materialize](/manage/dbt/) | Guides for using dbt to manage Materialize |
@@ -22,11 +50,11 @@ This section contains various resources for managing Materialize.
 
 ## Usage and billing
 
+This section covers usage and billing.
+
 | Guide | Description |
 |-------|-------------|
 | [**Usage & billing**](/administration/billing/) | Understand the billing model of Materialize |
-
-
 
 
 ---
@@ -41,13 +69,11 @@ two-tier or a one-tier architecture may suffice.
 
 ## Two-tier architecture
 
-{{% best-practices/architecture/two-tier %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 ## One-tier architecture
 
-{{% best-practices/architecture/one-tier %}}
-
-
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 
 ---
@@ -71,24 +97,27 @@ disaster recovery **as long as**:
 In such cases, your mean time to recovery is the **same as your compute
 cluster's rehydration time**.
 
-{{< annotation type="💡 Recommendation" >}}
-
-When running with the basic configuration, we recommend that you track
+> **💡 Recommendation:** When running with the basic configuration, we recommend that you track
 your rehydration time to ensure that it is within an acceptable range for your
 business' risk tolerance.
-{{</ annotation >}}
 
 ## Level 2:  Multi-replica clusters (High availability across AZs)
 
-{{< note >}}
+> **Note:** 
 The hybrid strategy is available if your deployment uses a [three-tier or a
 two-tier architecture](/manage/operational-guidelines/).
-{{</ note >}}
+
 
 Materialize supports multi-replica clusters, allowing for distribution across
 Availability Zones (AZs):
 
-{{< include-md file="shared-content/multi-replica-az.md" >}}
+- For clusters sized **up to and including `3200cc`**, Materialize guarantees
+  that all provisioned replicas in a cluster are distributed across the
+  underlying cloud provider's availability zones.
+
+- For clusters sized **above `3200cc`**, even distribution of replicas
+  across availability zones **cannot** be guaranteed.
+
 
 Multi-replica **compute clusters** and multi-replica **serving clusters**
 (excluding sink clusters) with replicas distributed across AZs provide DR
@@ -103,21 +132,24 @@ AZ level failures for those clusters:
 As such, your compute and serving clusters will continue to serve up-to-date
 data uninterrupted in the case of a replica failure.
 
-{{< annotation type="💡 Cost and work capacity" >}}
+> **💡 Cost and work capacity:** - Each replica incurs cost, calculated as `cluster size *
+  replication factor` per second. See [Usage &
+  billing](/administration/billing/) for more details.
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
-
-{{</ annotation >}}
+- Increasing the replication factor does **not** increase the cluster's work
+  capacity. Replicas are exact copies of one another: each replica must do
+  exactly the same work as all the other replicas of the cluster(i.e., maintain
+  the same dataflows and process the same queries). To increase the capacity of
+  a cluster, you must increase its size.
 
 If you require resilience beyond a single region, consider the Level 3 strategy.
 
 ## Level 3: A duplicate Materialize environment (Inter-region resilience)
 
-{{< note >}}
+> **Note:** 
 
-{{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
+<!-- Include not found: /shared-content/regional-dr-infrastructure-as-code.md -->
 
-{{</ note >}}
 
 For region-level fault tolerance, you can choose to have a second Materialize
 environment in another region. With this strategy:
@@ -130,13 +162,9 @@ environment in another region. With this strategy:
 can also be accessed from the second region, the two Materialize environments
 can guarantee the same results.
 
-{{< annotation type="💡 No strict transactional consistency between environments" >}}
-
-This approach does <red>**not**</red> offer strict transactional consistency
+> **💡 No strict transactional consistency between environments:** This approach does <red>**not**</red> offer strict transactional consistency
 across regions. However, as long as both regions are caught up, the results
 should be within about a second of each other.
-
-{{</ annotation >}}
 
 The duplicate Materialize environment setup can be adapted into a more
 cost-effective setup if your deployment uses a [three-tier or a two-tier
@@ -145,13 +173,13 @@ variation](#hybrid-variation).
 
 ### Hybrid variation
 
-{{< note >}}
+> **Note:** 
 
 - The hybrid strategy is available if your deployment uses a [three-tier or a
 two-tier architecture](/manage/operational-guidelines/).
 
-- {{< include-md file="/shared-content/regional-dr-infrastructure-as-code.md" >}}
-{{</ note >}}
+- <!-- Include not found: /shared-content/regional-dr-infrastructure-as-code.md -->
+
 
 For a more cost-effective variation to the duplicate Materialize environment in
 another region, you can choose a hybrid strategy where:
@@ -174,14 +202,16 @@ have:
   characteristics](/manage/disaster-recovery/recovery-characteristics)
 
 
-
-
 ---
 
 ## Monitoring and alerting
 
 
+This section covers monitoring and alerting.
+
 ## Cloud
+
+This section covers cloud.
 
 ### Monitoring
 
@@ -200,6 +230,8 @@ prevent operational incidents. For alert rules guidelines, see
 [Alerting](/manage/monitor/cloud/alerting/).
 
 ## Self-Managed
+
+This section covers self-managed.
 
 ### Monitoring
 
@@ -221,8 +253,6 @@ prevent operational incidents. For alert rules guidelines, see
 [Alerting](/manage/monitor/self-managed/alerting/).
 
 
-
-
 ---
 
 ## Operational guidelines
@@ -232,6 +262,8 @@ The following provides some general guidelines for production.
 
 ## Clusters
 
+This section covers clusters.
+
 ### Production clusters for production workloads only
 
 Use production cluster(s) for production workloads only. That is, avoid using
@@ -239,7 +271,7 @@ production cluster(s) to run development workloads or non-production tasks.
 
 ### Three-tier architecture
 
-{{% best-practices/architecture/three-tier %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 #### Alternatives
 
@@ -252,9 +284,11 @@ architectures](/manage/appendix-alternative-cluster-architectures/) for details.
 
 ## Sources
 
+This section covers sources.
+
 ### Scheduling
 
-{{% best-practices/ingest-data/scheduling %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 ### Separate cluster(s) for sources
 
@@ -262,11 +296,13 @@ In production, if possible, use a dedicated cluster for
 [sources](/concepts/sources/); i.e., avoid putting sources on the same cluster
 that hosts compute objects, sinks, and/or serves queries.
 
-{{% best-practices/architecture/upsert-source %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 See also [Production cluster architecture](#three-tier-architecture).
 
 ## Sinks
+
+This section covers sinks.
 
 ### Separate sinks from sources
 
@@ -290,28 +326,20 @@ See also [Cluster architecture](#three-tier-architecture).
 
 ## Role-based access control (RBAC)
 
-{{< tabs >}}
+This section covers role-based access control (rbac).
 
-{{< tab "Cloud" >}}
+#### Cloud
 
 ### Cloud
 
-{{% yaml-sections data="rbac/recommendations-cloud"
-heading-field="recommendation" heading-level=5 %}}
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-cloud... -->
 
-{{< /tab >}}
-
-{{< tab "Self-Managed" >}}
+#### Self-Managed
 
 ### Self-Managed
 
-{{% yaml-sections data="rbac/recommendations-sm"
-heading-field="recommendation" heading-level=5 %}}
-{{< /tab >}}
-
-{{< /tabs >}}
-
-
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-sm"
+h... -->
 
 
 ---
@@ -327,29 +355,23 @@ data pipelines, but also document, test and version-control them.
 Setting up a dbt project with Materialize is similar to setting it up with any
 other database that requires a non-native adapter.
 
-{{< note >}}
+> **Note:** 
 The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
 adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
 require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
-{{</ note >}}
 
 
 ## Available guides
 
-{{< multilinkbox >}}
-{{< linkbox title="To get started" >}}
+
+**To get started**
 [Get started with dbt and Materialize](./get-started/)
-{{</ linkbox >}}
-{{< linkbox title="Development guidelines" >}}
+**Development guidelines**
 [Development guidelines](./development-workflows)
-{{</ linkbox >}}
-{{< linkbox title="Deployment" >}}
+**Deployment**
 - [Blue-green deployment guide](/manage/dbt/blue-green-deployments/)
 
 - [Slim deployment guide](/manage/dbt/slim-deployments/)
-
-{{</ linkbox >}}
-{{</ multilinkbox >}}
 
 
 ## See also
@@ -361,8 +383,6 @@ in your team, and you want to manage objects like
 [clusters](/concepts/clusters/), [connections](/sql/create-connection/), or
 [secrets](/sql/create-secret/) as code, we recommend using the [Materialize
 Terraform provider](/manage/terraform/) as a complementary deployment tool.
-
-
 
 
 ---
@@ -384,29 +404,18 @@ infrastructure with a single `terraform apply` command.
 
 ## Available guides
 
-{{< multilinkbox >}}
-{{< linkbox title="To get started" >}}
+
+**To get started**
 [Get started with Terraform and Materialize](./get-started/)
-{{</ linkbox >}}
 
-{{< linkbox title="Manage resources" >}}
-
+**Manage resources**
 [Manage Materialize resources](./manage-resources)
 
 [Manage cloud resources](./manage-cloud-modules/)
-
-{{</ linkbox >}}
-{{< linkbox title="Additional modules" >}}
-
+**Additional modules**
 - [Appendix: Secret stores](./appendix-secret-stores/)
-
-{{</ linkbox >}}
-{{</ multilinkbox >}}
 
 
 ## Contributing
 
 If you want to help develop the Materialize provider, check out the [contribution guidelines](https://github.com/MaterializeInc/terraform-provider-materialize/blob/main/CONTRIBUTING.md).
-
-
-

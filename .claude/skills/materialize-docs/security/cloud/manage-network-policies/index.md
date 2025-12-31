@@ -1,13 +1,41 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/cloud/manage-network-policies/
+complexity: intermediate
+description: Manage/configure network policies to restrict access to a Materialize
+  region using IP-based rules.
+doc_type: reference
+keywords:
+- CREATE A
+- globally
+- CREATE NETWORK
+- ALTER A
+- administrator
+- Manage network policies
+- ingress traffic
+- 'Note:'
+- 'Tip:'
+product_area: Security
+status: stable
+title: Manage network policies
+---
+
 # Manage network policies
+
+## Purpose
+Manage/configure network policies to restrict access to a Materialize region using IP-based rules.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Manage/configure network policies to restrict access to a Materialize region using IP-based rules.
 
 
 
-{{< tip >}}
+> **Tip:** 
 We recommend using [Terraform](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/network_policy)
 to configure and manage network policies.
-{{< /tip >}}
+
 
 By default, Materialize is available on the public internet without any
 network-layer access control. As an **administrator** of a Materialize
@@ -16,10 +44,10 @@ Materialize region using IP-based rules.
 
 ## Create a network policy
 
-{{< note >}}
+> **Note:** 
 Network policies are applied **globally** (i.e., at the region level) and rules
 can only be configured for **ingress traffic**.
-{{< /note >}}
+
 
 To create a new network policy, use the [`CREATE NETWORK POLICY`](/sql/create-network-policy)
 statement to provide a list of rules for allowed ingress traffic.
@@ -31,7 +59,7 @@ CREATE NETWORK POLICY office_access_policy (
     minnesota (action='allow',direction='ingress',address='2.3.4.5/32')
   )
 );
-```
+```bash
 
 ## Alter a network policy
 
@@ -47,7 +75,7 @@ ALTER NETWORK POLICY office_access_policy SET (
     boston (action='allow',direction='ingress',address='4.5.6.7/32')
   )
 );
-```
+```bash
 
 ### Lockout prevention
 

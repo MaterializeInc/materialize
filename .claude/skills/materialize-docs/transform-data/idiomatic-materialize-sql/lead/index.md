@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/lead/
+complexity: beginner
+description: Use idiomatic Materialize SQL to access the next row's value (lead) when
+  ordered by a field that advances in a regular pattern, such as in regular intervals.
+doc_type: overview
+keywords:
+- regular
+- Lead over
+- SELECT O1
+- SELECT T1
+- 'Idiomatic Materialize SQL:'
+- equality condition
+- 'Important:'
+- equality match
+- SELECT FIELDA
+product_area: SQL
+status: stable
+title: Lead over
+---
+
 # Lead over
 
+## Purpose
 Use idiomatic Materialize SQL to access the next row's value (lead) when ordered by a field that advances in a regular pattern, such as in regular intervals.
 
+This page provides detailed documentation for this topic.
+
+
+Use idiomatic Materialize SQL to access the next row's value (lead) when ordered by a field that advances in a regular pattern, such as in regular intervals.
 
 
 ## Overview
@@ -14,22 +41,17 @@ equality condition (such as when ordering by a field that increases at a regular
 interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
-{{< important >}}
+> **Important:** 
 
 Do not use if the "lead over (order by)" ordering cannot be represented by an
 equality match.
 
-{{</ important >}}
 
 ### Exclude the last row in results
 
@@ -58,12 +80,11 @@ in order to be represented by an equality condition (e.g., `WHERE t1.fieldA =
 t2.fieldA - ...`). The query *excludes* the last row in the results since it
 does not have a next row.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 <br>
 
@@ -73,7 +94,7 @@ SELECT t1.fieldA, t2.fieldB as next_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA - ...  -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -98,7 +119,7 @@ function`](/sql/functions/#lead) when the order by field increases in a regular 
 SELECT fieldA, ...
     LEAD(fieldZ) OVER (ORDER BY fieldA) as next_row_value
 FROM tableA;
-```
+```text
 
 </div>
 
@@ -137,12 +158,10 @@ increment in a regular pattern in order to be represented by an equality
 condition (e.g., `ON t1.fieldA = t2.fieldA - ...`). The query *includes* the
 last row, returning `null` as its lead value.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 ```mzsql
@@ -152,7 +171,7 @@ FROM tableA t1
 LEFT JOIN tableA t2
 ON t1.fieldA = t2.fieldA - ... -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -177,7 +196,7 @@ intervals.
 SELECT fieldA, ...
     LEAD(fieldZ) OVER (ORDER BY fieldA) as next_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -188,12 +207,11 @@ FROM tableA;
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Find next row's value (exclude the last row in results)
 
@@ -225,14 +243,12 @@ SELECT o1.order_date, o1.daily_total,
 FROM orders_daily_totals o1, orders_daily_totals o2
 WHERE o1.order_date = o2.order_date - INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 </td>
@@ -254,7 +270,7 @@ order by field increases in regular intervals.</red>
 SELECT order_date, daily_total,
     LEAD(daily_total) OVER (ORDER BY order_date) as next_daily_total
 FROM orders_daily_totals;
-```
+```text
 
 </td>
 </tr>
@@ -293,14 +309,12 @@ FROM orders_daily_totals o1
 LEFT JOIN orders_daily_totals o2
 ON o1.order_date = o2.order_date - INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lead over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 </td>
@@ -337,4 +351,3 @@ FROM orders_daily_totals;
 - [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
 - [`LEAD()`](/sql/functions/#lead)
 - [Window functions](/sql/functions/#window-functions)
-

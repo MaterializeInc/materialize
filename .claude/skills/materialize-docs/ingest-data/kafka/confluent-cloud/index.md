@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/kafka/confluent-cloud/
+complexity: beginner
+description: How to securely connect a Confluent Cloud Kafka cluster as a source to
+  Materialize.
+doc_type: reference
+keywords:
+- Confluent Cloud
+- CREATE AN
+- CREATE A
+- Create cluster
+- Create a new cluster
+- API Keys
+- SELECT THE
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: Confluent Cloud
+---
+
 # Confluent Cloud
+
+## Purpose
+How to securely connect a Confluent Cloud Kafka cluster as a source to Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to securely connect a Confluent Cloud Kafka cluster as a source to Materialize.
 
@@ -10,9 +38,9 @@ with the Postgres ones. We should include spill to disk in the guidance then."
 This guide goes through the required steps to connect Materialize to a Confluent
 Cloud Kafka cluster.
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 If you already have a Confluent Cloud Kafka cluster, you can skip step 1 and
 directly move on to [Create an API Key](#create-an-api-key). You can also skip

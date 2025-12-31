@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/cast/
+complexity: intermediate
+description: Returns the value converted to the specified type
+doc_type: reference
+keywords:
+- Assignment
+- SELECT CAST
+- CAST function and operator
+- SELECT 100
+- Explicit
+- Implicit
+- SELECT INT
+product_area: Indexes
+status: stable
+title: CAST function and operator
+---
+
 # CAST function and operator
+
+## Purpose
+Returns the value converted to the specified type
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Returns the value converted to the specified type
 
@@ -8,9 +33,9 @@ The `cast` function and operator return a value converted to the specified [type
 
 ## Signatures
 
-{{< diagram "func-cast.svg" >}}
+[See diagram: func-cast.svg]
 
-{{< diagram "op-cast.svg" >}}
+[See diagram: op-cast.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -19,13 +44,15 @@ _type_ | [Typename](../../types) | The return value's type.
 
 The following special syntax is permitted if _val_ is a string literal:
 
-{{< diagram "lit-cast.svg" >}}
+[See diagram: lit-cast.svg]
 
 ### Return value
 
 `cast` returns the value with the type specified by the _type_ parameter.
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -174,31 +201,33 @@ Source type                                | Return type                        
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT INT '4';
-```
+```text
 ```nofmt
  ?column?
 ----------
          4
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT CAST (CAST (100.21 AS numeric(10, 2)) AS float) AS dec_to_float;
-```
+```text
 ```nofmt
  dec_to_float
 --------------
        100.21
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 100.21::numeric(10, 2)::float AS dec_to_float;
-```
+```text
 ```nofmt
  dec_to_float
 --------------

@@ -1,7 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/kafka/
+complexity: advanced
+description: How to export results from Materialize to Kafka/Redpanda.
+doc_type: reference
+keywords:
+- Must be set to 1.
+- native connector
+- 'Tip:'
+- Must be disabled.
+- 'Warning:'
+- Kafka and Redpanda
+- CREATE SINK
+- CREATE CONNECTION
+- CREATE IT
+product_area: Sinks
+status: stable
+title: Kafka and Redpanda
+---
+
 # Kafka and Redpanda
 
+## Purpose
 How to export results from Materialize to Kafka/Redpanda.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to export results from Materialize to Kafka/Redpanda.
 
 
 <!-- Ported over content from sink-kafka.md. -->
@@ -17,13 +43,14 @@ capture (CDC) producers for the given source or view.
 For details on the connector, including syntax, supported formats and examples,
 refer to [`CREATE SINK`](/sql/create-sink/kafka).
 
-{{< tip >}}
+> **Tip:** 
 
 Redpanda uses the same syntax as Kafka [`CREATE SINK`](/sql/create-sink/kafka).
 
-{{< /tip >}}
 
 ## Features
+
+This section covers features.
 
 ### Memory use during creation
 
@@ -66,9 +93,9 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Tiered storage      | We recommend disabling tiered storage to allow for more aggressive data compaction. Fully compacted data requires minimal storage, typically only tens of bytes per sink, making it cost-effective to maintain directly on local disk.
 | Progress topic | Segment bytes.      | Defaults to 128 MiB. We recommend going no higher than 256 MiB to avoid
 slow startups when creating new sinks, as they must process the entire progress topic on startup.
-{{< warning >}}
-{{% kafka-sink-drop %}}
-{{</ warning >}}
+> **Warning:** 
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: kafka-sink-drop --> --> -->
+
 
 ### Exactly-once processing
 
@@ -154,5 +181,10 @@ partioning](/sql/create-sink/kafka#custom-partitioning).
 
 ### Kafka transaction markers
 
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
-
+Materialize uses [Kafka
+transactions](https://www.confluent.io/blog/transactions-apache-kafka/). When
+Kafka transactions are used, special control messages known as **transaction
+markers** are published to the topic. Transaction markers inform both the broker
+and clients about the status of a transaction. When a topic is read using a
+standard Kafka consumer, these markers are not exposed to the application, which
+can give the impression that some offsets are being skipped.

@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-type/
+complexity: intermediate
+description: '`CREATE TYPE` defines a new data type.'
+doc_type: reference
+keywords:
+- CREATE TYPE
+- MAP / LIST
+- CREATE NAMED
+- '='
+product_area: Indexes
+status: stable
+title: CREATE TYPE
+---
+
 # CREATE TYPE
+
+## Purpose
+`CREATE TYPE` defines a new data type.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `CREATE TYPE` defines a new data type.
 
@@ -19,7 +41,7 @@ otherwise-annoying-to-type names.
 
 ## Syntax
 
-{{< diagram "create-type.svg" >}}
+[See diagram: create-type.svg]
 
  Field               | Use
 ---------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -63,18 +85,20 @@ custom type's properties.
 
 ## Examples
 
+This section covers examples.
+
 ### Custom `list`
 
 ```mzsql
 CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
 
 SELECT '{1,2}'::int4_list::text AS custom_list;
-```
+```text
 ```
  custom_list
 -------------
  {1,2}
-```
+```bash
 
 ### Nested custom `list`
 
@@ -82,12 +106,12 @@ SELECT '{1,2}'::int4_list::text AS custom_list;
 CREATE TYPE int4_list_list AS LIST (ELEMENT TYPE = int4_list);
 
 SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
-```
+```text
 ```
  custom_nested_list
 --------------------
  {{1,2}}
-```
+```bash
 
 ### Custom `map`
 
@@ -95,12 +119,12 @@ SELECT '{{1,2}}'::int4_list_list::text AS custom_nested_list;
 CREATE TYPE int4_map AS MAP (KEY TYPE = text, VALUE TYPE = int4);
 
 SELECT '{a=>1}'::int4_map::text AS custom_map;
-```
+```text
 ```
  custom_map
 ------------
  {a=>1}
-```
+```bash
 
 ### Nested custom `map`
 
@@ -108,29 +132,29 @@ SELECT '{a=>1}'::int4_map::text AS custom_map;
 CREATE TYPE int4_map_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_map);
 
 SELECT '{a=>{a=>1}}'::int4_map_map::text AS custom_nested_map;
-```
+```text
 ```
  custom_nested_map
 -------------------
 {a=>{a=>1}}
-```
+```bash
 
 ### Custom `row` type
 ```mzsql
 CREATE TYPE row_type AS (a int, b text);
 SELECT ROW(1, 'a')::row_type as custom_row_type;
-```
+```text
 ```
 custom_row_type
 -----------------
 (1,a)
-```
+```bash
 
 ### Nested `row` type
 ```mzsql
 CREATE TYPE nested_row_type AS (a row_type, b float8);
 SELECT ROW(ROW(1, 'a'), 2.3)::nested_row_type AS custom_nested_row_type;
-```
+```text
 ```
 custom_nested_row_type
 ------------------------
@@ -141,7 +165,11 @@ custom_nested_row_type
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-type.md" >}}
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the type definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
+
 
 ## Related pages
 

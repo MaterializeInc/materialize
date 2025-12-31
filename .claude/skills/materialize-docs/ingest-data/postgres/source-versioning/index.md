@@ -1,16 +1,40 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/postgres/source-versioning/
+complexity: beginner
+description: How to add a column, or drop a column, from your source PostgreSQL database,
+  without any downtime in Materialize
+doc_type: reference
+keywords:
+- DROP A
+- 'Private Preview:'
+- CREATE TABLE
+- INSERT INTO
+- 'Note:'
+- 'Guide: Handle upstream schema changes with zero downtime'
+- CREATE A
+product_area: Sources
+status: experimental
+title: 'Guide: Handle upstream schema changes with zero downtime'
+---
+
 # Guide: Handle upstream schema changes with zero downtime
+
+## Purpose
+How to add a column, or drop a column, from your source PostgreSQL database, without any downtime in Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to add a column, or drop a column, from your source PostgreSQL database, without any downtime in Materialize
 
 
-
-{{< private-preview />}}
-{{< note >}}
+> **Private Preview:** This feature is in private preview.
+> **Note:** 
 - Changing column types is currently unsupported.
 
-- {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-version-requirement" %}}
-{{< /note >}}
+- <!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
+
 
 Materialize allows you to handle certain types of upstream
 table schema changes seamlessly, specifically:
@@ -38,12 +62,11 @@ CREATE TABLE T (
 
 INSERT INTO T (A) VALUES
     (10);
-```
+```bash
 
 ### Connect your source database to Materialize
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-source-prereq" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ## Create a source using the new syntax
 
@@ -53,7 +76,7 @@ syntax](/sql/create-source/postgres-v2/).
 ```sql
 CREATE SOURCE IF NOT EXISTS my_source
     FROM POSTGRES CONNECTION my_connection (PUBLICATION 'mz_source');
-```
+```text
 
 Unlike the [legacy syntax](/sql/create-source/postgres/), the new syntax does
 not include the `FOR [[ALL] TABLES|SCHEMAS]` clause; i.e., the new syntax does
@@ -63,10 +86,10 @@ SOURCE`](/sql/create-table/), which will create the corresponding tables and
 start the snapshotting process. See [Create a table from the
 source](#create-a-table-from-the-source).
 
-{{< note >}}
+> **Note:** 
 The [legacy syntax](/sql/create-source/postgres/) is still supported. However,
 the legacy syntax doesn't support upstream schema changes.
-{{< /note >}}
+
 
 ## Create a table from the source
 To start ingesting specific tables from your source database, you can create a
@@ -77,19 +100,18 @@ CREATE SCHEMA v1;
 
 CREATE TABLE v1.T
     FROM SOURCE my_source(REFERENCE public.T);
-```
+```text
 
 Once you've created a table from source, the [initial
 snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 
-{{< note >}}
+> **Note:** 
 
 During the snapshotting, the data ingestion for the other tables associated with
 the source is temporarily blocked. As before, you can monitor progress for the
 snapshot operation on the overview page for the source in the Materialize
 console.
 
-{{< /note >}}
 
 ## Create a view on top of the table.
 
@@ -99,9 +121,11 @@ sums column `A` from table `T`.
 ```sql
 CREATE MATERIALIZED VIEW v1.matview AS
     SELECT SUM(A) from v1.T;
-```
+```bash
 
 ## Handle upstream column addition
+
+This section covers handle upstream column addition.
 
 ### A. Add a column in your upstream PostgreSQL database
 
@@ -113,7 +137,7 @@ ALTER TABLE T
 
 INSERT INTO T (A, B) VALUES
     (20, true);
-```
+```text
 
 This operation will have no immediate effect in Materialize. In Materialize,
 `v1.T` will continue to ingest only column `A`. The materialized view
@@ -129,19 +153,17 @@ CREATE SCHEMA v2;
 
 CREATE TABLE v2.T
     FROM SOURCE my_source(REFERENCE public.T);
-```
+```text
 
 The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
 `v2.T` will include columns `A` and `B`.
 
-{{< note >}}
+> **Note:** 
 
 During the snapshotting, the data ingestion for the other tables associated with
 the source is temporarily blocked. As before, you can monitor progress for the
 snapshot operation on the overview page for the source in the Materialize
 console.
-
-{{< /note >}}
 
 
 When the new `v2.T` table has finished snapshotting, create a new materialized
@@ -153,9 +175,11 @@ CREATE MATERIALIZED VIEW v2.matview AS
     SELECT SUM(A)
     FROM v2.T
     WHERE B = true;
-```
+```bash
 
 ## Handle upstream column drop
+
+This section covers handle upstream column drop.
 
 ### A. Exclude the column in Materialize
 
@@ -167,16 +191,15 @@ example, we'll drop the column B.
 CREATE SCHEMA v3;
 CREATE TABLE v3.T
     FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE COLUMNS (B));
-```
+```text
 
-{{< note >}}
+> **Note:** 
 
 During the snapshotting, the data ingestion for the other tables associated with
 the source is temporarily blocked. As before, you can monitor progress for the
 snapshot operation on the overview page for the source in the Materialize
 console.
 
-{{< /note >}}
 
 ### B. Drop a column in your upstream PostgreSQL database
 
@@ -184,7 +207,7 @@ In your upstream PostgreSQL database, drop the column `B` from the table `T`:
 
 ```sql
 ALTER TABLE T DROP COLUMN B;
-```
+```text
 
 Dropping the column B will have no effect on `v3.T`. However, the drop affects
 `v2.T` and `v2.matview` from our earlier examples. When the user attempts to
@@ -200,4 +223,3 @@ ALTER SCHEMA v1 SWAP WITH v3;
 
 DROP SCHEMA v3 CASCADE;
 ```
-

@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-connection/
+complexity: intermediate
+description: '`ALTER CONNECTION` allows you to modify the value of connection options;
+  rotate secrets associated with connections; rename a connection; and change owner
+  of a connection.'
+doc_type: reference
+keywords:
+- ALTER CONNECTION
+- CREATE CONNECTION
+- DROP
+- RESET
+- UPDATE YOUR
+product_area: Indexes
+status: stable
+title: ALTER CONNECTION
+---
+
 # ALTER CONNECTION
+
+## Purpose
+`ALTER CONNECTION` allows you to modify the value of connection options; rotate secrets associated with connections; rename a connection; and change owner of a connection.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `ALTER CONNECTION` allows you to modify the value of connection options; rotate secrets associated with connections; rename a connection; and change owner of a connection.
 
@@ -14,48 +39,43 @@ Use `ALTER CONNECTION` to:
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "SET/DROP/RESET options" >}}
+This section covers syntax.
+
+#### SET/DROP/RESET options
 
 ### SET/DROP/RESET options
 
 To modify connection parameters:
 
-{{% include-syntax file="examples/alter_connection" example="syntax-set-drop-reset" %}}
+<!-- Syntax example: examples/alter_connection / syntax-set-drop-reset -->
 
-{{< /tab >}}
-{{< tab "ROTATE KEYS" >}}
+#### ROTATE KEYS
 
 ### ROTATE KEYS
 
 To rotate SSH tunnel connection key pairs:
 
-{{% include-syntax file="examples/alter_connection" example="syntax-rotate-keys" %}}
+<!-- Syntax example: examples/alter_connection / syntax-rotate-keys -->
 
-
-{{< /tab >}}
-
-{{< tab "Rename" >}}
+#### Rename
 
 ### Rename
 
 To rename a connection
 
-{{% include-syntax file="examples/alter_connection" example="syntax-rename" %}}
+<!-- Syntax example: examples/alter_connection / syntax-rename -->
 
-{{< /tab >}}
-{{< tab "Change owner" >}}
+#### Change owner
 
 ### Change owner
 
 To change the owner of a connection:
 
-{{% include-syntax file="examples/alter_connection" example="syntax-change-owner" %}}
-
-{{< /tab >}}
-{{< /tabs >}}
+<!-- Syntax example: examples/alter_connection / syntax-change-owner -->
 
 ## Details
+
+This section covers details.
 
 ### `SET`, `RESET`, `DROP`
 
@@ -105,7 +125,12 @@ be unable to authenticate with the bastion server.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-connection.md" >}}
+- Ownership of the connection.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the connection is namespaced
+  by a schema.
+
 
 ## Related pages
 

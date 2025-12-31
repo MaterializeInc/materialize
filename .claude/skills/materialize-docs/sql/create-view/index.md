@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-view/
+complexity: intermediate
+description: '`CREATE VIEW` defines view, which provides an alias for the embedded
+  `SELECT` statement.'
+doc_type: reference
+keywords:
+- in memory
+- CREATE VIEW
+- IF NOT EXISTS
+- TEMPORARY
+- TEMP
+- OR REPLACE
+product_area: Views
+status: stable
+title: CREATE VIEW
+---
+
 # CREATE VIEW
 
+## Purpose
 `CREATE VIEW` defines view, which provides an alias for the embedded `SELECT` statement.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`CREATE VIEW` defines view, which provides an alias for the embedded `SELECT` statement.
 
 
 `CREATE VIEW` defines a view, which simply provides an alias
@@ -14,12 +38,12 @@ materializing the view.
 
 ### Usage patterns
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
 ## Syntax
 
-{{< diagram "create-view.svg" >}}
+[See diagram: create-view.svg]
 
 Field | Use
 ------|-----
@@ -46,6 +70,8 @@ views may not depend on temporary objects.
 
 ## Examples
 
+This section covers examples.
+
 ### Creating a view
 
 ```mzsql
@@ -65,7 +91,12 @@ AS
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-view.md" >}}
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the view definition.
+- `USAGE` privileges on the schemas for the types in the statement.
+- Ownership of the existing view if replacing an existing
+  view with the same name (i.e., `OR REPLACE` is specified in `CREATE VIEW` command).
+
 
 ## Additional information
 
@@ -78,4 +109,3 @@ The privileges required to execute this statement are:
 - [`DROP VIEW`](../drop-view)
 - [`CREATE MATERIALIZED VIEW`](../create-materialized-view)
 - [`CREATE INDEX`](../create-index)
-

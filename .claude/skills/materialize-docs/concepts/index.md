@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/
+complexity: advanced
+description: Learn about the core concepts in Materialize.
+doc_type: concept
+keywords:
+- ALTER THE
+- materialized views
+- DELETE REPLICA
+- Table
+- indexed views
+- CREATE MATERIALIZED
+- Schema
+- CREATE A
+- DROP CLUSTER
+- Database
+product_area: Concepts
+status: stable
+title: Concepts
+---
+
 # Concepts
 
+## Purpose
 Learn about the core concepts in Materialize.
 
+Read this to understand how this concept works in Materialize.
+
+
+Learn about the core concepts in Materialize.
 
 
 The pages in this section introduces some of the key concepts in Materialize:
@@ -18,22 +45,139 @@ Concept                                  | Description
 Refer to the individual pages for more information.
 
 
-
-
 ---
 
 ## Namespaces
 
 
-{{< include-md file="shared-content/namespaces-content.md" >}}
+Namespaces are a way to organize Materialize objects logically. In organizations
+with multiple objects, namespaces help avoid naming conflicts and make it easier
+to manage objects.
+
+## Namespace hierarchy
+
+Materialize follows SQL standard's namespace hierarchy for most objects (for the
+exceptions, see [Other objects](#other-objects)).
+
+|                           |             |
+|---------------------------| ------------|
+| 1st/Highest level:        |  **Database** |
+| 2nd level:                |  **Schema**   |
+| 3rd level:                | <table><tbody><tr><td><ul><li>**Table**</li><li>**View**</li><li>**Materialized view**</li><li>**Connection**</li></ul></td><td><ul><li>**Source**</li><li>**Sink**</li><li>**Index**</li></ul></td><td><ul><li>**Type**</li><li>**Function**</li><li>**Secret**</li></ul></td></tr></tbody></table>|
+| 4th/Lowest level:             | **Column**     |
+
+Each layer in the hierarchy can contain elements from the level immediately
+beneath it. That is,
+
+- Databases can contain: schemas;
+- Schemas can contain: tables, views, materialized views, connections, sources,
+sinks, indexes, types, functions, and secrets;
+- Tables, views, and materialized views can contain: columns.
 
 
+### Qualifying names
+
+Namespaces enable disambiguation and access to objects across different
+databases and schemas. Namespaces use the dot notation format
+(`<database>.<schema>....`) and allow you to refer to objects by:
+
+- **Fully qualified names**
+
+  Used to reference objects in a different database (Materialize allows
+  cross-database queries); e.g.,
+
+  ```text
+  <Database>.<Schema>
+  <Database>.<Schema>.<Source>
+  <Database>.<Schema>.<View>
+  <Database>.<Schema>.<Table>.<Column>
+  ```text
+
+  > **Tip:** 
+
+  You can use fully qualified names to reference objects within the same
+  database (or within the same database and schema). However, for brevity and
+  readability, you may prefer to use qualified names instead.
+
+  
+
+- **Qualified names**
+
+  - Used to reference objects within the same database but different schema, use
+    the schema and object name; e.g.,
+
+    ```text
+    <Schema>.<Source>
+    <Schema>.<View>
+    <Schema>.<Table>.<Column>
+    ```text
+
+  - Used to reference objects within the same database and schema, use the
+    object name; e.g.,
+
+    ```text
+    <Source>
+    <View>
+    <Table>.<Column>
+    <View>.<Column>
+    ```bash
+
+## Namespace constraints
+
+All namespaces must adhere to [identifier rules](/sql/identifiers).
+
+
+## Other objects
+
+The following Materialize objects  exist outside the standard SQL namespace
+hierarchy:
+
+- **Clusters**: Referenced directly by its name.
+
+  For example, to create a materialized view in the cluster `cluster1`:
+
+  ```mzsql
+  CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ...;
+  ```text
+
+- **Cluster replicas**: Referenced as `<cluster-name>.<replica-name>`.
+
+  For example, to delete replica `r1` in cluster `cluster1`:
+
+  ```mzsql
+  DROP CLUSTER REPLICA cluster1.r1
+  ```text
+
+- **Roles**: Referenced by their name. For example, to alter the `manager` role, your SQL statement would be:
+
+  ```mzsql
+  ALTER ROLE manager ...
+  ```bash
+
+### Other object namespace constraints
+
+- Two clusters or two roles cannot have the same name. However, a cluster and a
+  role can have the same name.
+
+- Replicas can have the same names as long as they belong to different clusters.
+  Materialize automatically assigns names to replicas (e.g., `r1`, `r2`).
+
+## Database details
+
+- By default, Materialize regions have a database named `materialize`.
+- By default, each database has a schema called `public`.
+- You can specify which database you connect to either when you connect (e.g.
+  `psql -d my_db ...`) or within SQL using [`SET DATABASE`](/sql/set/) (e.g.
+  `SET DATABASE = my_db`).
+- Materialize allows cross-database queries.
 
 
 ---
 
 ## Clusters
 
+
+This section covers clusters.
 
 ## Overview
 
@@ -73,11 +217,18 @@ hardware that cause a replica to become unreachable. As long as one replica of
 the cluster remains available, the cluster can continue to maintain dataflows
 and serve queries.
 
-{{< note >}}
+> **Note:** 
 
-{{< include-md file="shared-content/cluster-replica-cost-capacity-notes.md" >}}
+- Each replica incurs cost, calculated as `cluster size *
+  replication factor` per second. See [Usage &
+  billing](/administration/billing/) for more details.
 
-{{< /note >}}
+- Increasing the replication factor does **not** increase the cluster's work
+  capacity. Replicas are exact copies of one another: each replica must do
+  exactly the same work as all the other replicas of the cluster(i.e., maintain
+  the same dataflows and process the same queries). To increase the capacity of
+  a cluster, you must increase its size.
+
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
 view information about individual replicas in the Materialize console and the
@@ -87,7 +238,13 @@ system catalog.
 
 When provisioning replicas,
 
-{{< include-md file="shared-content/multi-replica-az.md" >}}
+- For clusters sized **up to and including `3200cc`**, Materialize guarantees
+  that all provisioned replicas in a cluster are distributed across the
+  underlying cloud provider's availability zones.
+
+- For clusters sized **above `3200cc`**, even distribution of replicas
+  across availability zones **cannot** be guaranteed.
+
 
 <a name="sizing-your-clusters"></a>
 
@@ -103,12 +260,11 @@ volumes.
 
 As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
 
-{{< tip >}}
+> **Tip:** 
 
 To gauge the performance and utilization of your clusters, use the
 [**Environment Overview** page in the Materialize Console](/console/monitoring/).
 
-{{< /tip >}}
 
 ## Best practices
 
@@ -117,7 +273,7 @@ The following provides some general guidelines for clusters. See also
 
 ### Three-tier architecture in production
 
-{{% best-practices/architecture/three-tier %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See best practices documentation --> --> -->
 
 See also [Operational guidelines](/manage/operational-guidelines/).
 
@@ -150,12 +306,12 @@ hydration cost and the steady-state cost.
 - [Operational guidelines](/manage/operational-guidelines/)
 
 
-
-
 ---
 
 ## Indexes
 
+
+This section covers indexes.
 
 ## Overview
 
@@ -166,10 +322,10 @@ views](/concepts/views/#materialized-views).
 
 ## Indexes on sources
 
-{{< note >}}
+> **Note:** 
 In practice, you may find that you rarely need to index a source
 without performing some transformation using a view, etc.
-{{</ note >}}
+
 
 In Materialize, you can create indexes on a [source](/concepts/sources/) to
 maintain in-memory up-to-date source data within the cluster you create the
@@ -181,7 +337,7 @@ directly.
 
 ```mzsql
 CREATE INDEX idx_on_my_source ON my_source (...);
-```
+```bash
 
 ## Indexes on views
 
@@ -191,7 +347,7 @@ the [cluster](/concepts/clusters/) you create the index.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 During the index creation on a [view](/concepts/views/#views "query saved under
 a name"), the view is executed and the view results are stored in memory within
@@ -215,7 +371,7 @@ makes the already up-to-date view results available **in memory** within the
 [cluster](/concepts/clusters/) you create the index. That is, indexes on
 materialized views require no additional computation to keep results up-to-date.
 
-{{< note >}}
+> **Note:** 
 
 A materialized view can be queried from any cluster whereas its indexed results
 are available only within the cluster you create the index. Querying a
@@ -224,14 +380,13 @@ free. However, querying an indexed materialized view within the cluster where
 the index is created is faster since the results are served from memory rather
 than from storage.
 
-{{</ note >}}
 
 For best practices on using indexes, and understanding when to use indexed views
 vs. materialized views, see [Usage patterns](#usage-patterns).
 
 ```mzsql
 CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
-```
+```bash
 
 ## Indexes and clusters
 
@@ -242,21 +397,23 @@ For example, to create an index in the current cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 You can also explicitly specify the cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
-```
+```bash
 
 ## Usage patterns
 
+This section covers usage patterns.
+
 ### Index usage
 
-{{% important %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: > **Important:**  --> -->
 Indexes are local to a cluster. Queries in one cluster cannot use the indexes in another, different cluster.
-{{% /important %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
 Unlike some other databases, Materialize can use an index to serve query results
 even if the query does not specify a `WHERE` condition on the index key. Serving
@@ -267,7 +424,7 @@ For example, consider the following index:
 
 ```mzsql
 CREATE INDEX idx_orders_view_qty ON orders_view (quantity);
-```
+```text
 
 Materialize will maintain the `orders_view` in memory in `idx_orders_view_qty`,
 and it will be able to use the index to serve a various queries on the
@@ -281,7 +438,7 @@ cluster as the index) on `orders_view`:
 SELECT * FROM orders_view;  -- scans the index
 SELECT * FROM orders_view WHERE status = 'shipped';  -- scans the index
 SELECT * FROM orders_view WHERE quantity = 10;  -- point lookup on the index
-```
+```text
 
 For the queries that do not specify a condition on the indexed field,
 Materialize scans the index. For the query that specifies an equality condition
@@ -338,12 +495,11 @@ Consider again the following index on a view:
 
 ```mzsql
 CREATE INDEX idx_orders_view_qty on orders_view (quantity);
-```
+```text
 
 The following table shows various queries and whether Materialize performs a
 point lookup or an index scan.
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity" >}}
 
 Consider that the view has an index on the `quantity` and `price` fields
 instead of an index on the `quantity` field:
@@ -351,19 +507,18 @@ instead of an index on the `quantity` field:
 ```mzsql
 DROP INDEX idx_orders_view_qty;
 CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
-```
+```json
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity_price" >}}
 
 #### Limitations
 
-{{% index_usage/index-ordering %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See index usage documentation --> --> -->
 
 ### Indexes on views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
-{{% include-md file="shared-content/mat-view-use-cases.md" %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
+<!-- Unresolved shortcode: {{% include-md file="shared-content/mat-view-use-c... -->
 
 ### Indexes and query optimizations
 
@@ -375,11 +530,11 @@ query performance](/transform-data/optimization/), such as:
 - Provide fast random access for lookup queries (i.e., selecting individual
   keys).
 
-{{% views-indexes/index-query-optimization-specific-instances %}}
+<!-- Unresolved shortcode: {{% views-indexes/index-query-optimization-specifi... -->
 
 ### Best practices
 
-{{% views-indexes/index-best-practices %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
 ## Related pages
 
@@ -390,8 +545,6 @@ query performance](/transform-data/optimization/), such as:
 <style>
 red { color: Red; font-weight: 500; }
 </style>
-
-
 
 
 ---
@@ -427,7 +580,7 @@ Wallclock lag indicates how far behind real-world wall-clock time your data obje
 ```sql
 SELECT object_id, lag
 FROM mz_internal.mz_wallclock_global_lag;
-```
+```text
 
 ---
 
@@ -447,9 +600,9 @@ FROM mz_internal.mz_wallclock_global_lag;
 
 **Reaction time** is defined as the sum of freshness and query latency. It captures the total time from when a data change occurs upstream to when a downstream consumer can query and act on that change.
 
-```
+```text
 reaction time = freshness + query latency
-```
+```text
 
 This is the most comprehensive measure of system responsiveness and is particularly relevant for applications that depend on timely and accurate decision-making.
 
@@ -486,6 +639,8 @@ This architecture removes the traditional trade-off between fast queries and fre
 
 ## Summary
 
+This section covers summary.
+
 | Concept       | Definition                                    | How Materialize Optimizes It                     |
 | ------------- | --------------------------------------------- | ------------------------------------------------ |
 | Freshness     | Time from upstream change to queryability     | Streaming ingestion + incremental transformation |
@@ -495,12 +650,12 @@ This architecture removes the traditional trade-off between fast queries and fre
 Materialize is built to minimize all three. The result is a system that delivers fast, consistent answers over fresh data, enabling use cases that were previously too costly or complex to implement.
 
 
-
-
 ---
 
 ## Sinks
 
+
+This section covers sinks.
 
 ## Overview
 
@@ -512,7 +667,7 @@ view, a source, or a table.
 
 To create a sink, you can:
 
-{{< yaml-table data="sink_external_systems" >}}
+<!-- Dynamic table: sink_external_systems - see original docs -->
 
 ## Clusters and sinks
 
@@ -530,12 +685,12 @@ memory.
 - [`CREATE SINK`](/sql/create-sink)
 
 
-
-
 ---
 
 ## Sources
 
+
+This section covers sources.
 
 ## Overview
 
@@ -570,7 +725,21 @@ Component      | Use                                                            
 
 Materialize bundles native connectors for the following external systems:
 
-{{< include-md file="shared-content/multilink-box-native-connectors.md" >}}
+
+**Databases (CDC)**
+- [PostgreSQL](/ingest-data/postgres/)
+- [MySQL](/ingest-data/mysql/)
+- [SQL Server](/ingest-data/sql-server/)
+- [CockroachDB](/ingest-data/cdc-cockroachdb/)
+- [MongoDB](/ingest-data/mongodb/)
+**Message Brokers**
+- [Kafka](/ingest-data/kafka/)
+- [Redpanda](/sql/create-source/kafka)
+**Webhooks**
+- [Amazon EventBridge](/ingest-data/webhooks/amazon-eventbridge/)
+- [Segment](/ingest-data/webhooks/segment/)
+- [Other webhooks](/sql/create-source/webhook)
+
 
 For details on the syntax, supported formats and features of each connector, check out the dedicated `CREATE SOURCE` documentation pages.
 
@@ -588,12 +757,12 @@ See also [Operational guidelines](/manage/operational-guidelines/).
 - [`CREATE SOURCE`](/sql/create-source)
 
 
-
-
 ---
 
 ## Views
 
+
+This section covers views.
 
 ## Overview
 
@@ -617,7 +786,7 @@ is accessed, view results are recomputed from scratch.
 ```mzsql
 CREATE VIEW my_view_name AS
   SELECT ... FROM ...  ;
-```
+```text
 
 **However**, in Materialize, you can create an [index](/concepts/indexes/) on a
 view to keep view results **incrementally updated** in memory within a cluster.
@@ -627,7 +796,7 @@ view results in memory.
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 See [Indexes and views](#indexes-on-views) for more information.
 
@@ -647,13 +816,13 @@ For example, to create an index in the current cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view ON my_view_name(...) ;
-```
+```text
 
 You can also explicitly specify the cluster:
 
 ```mzsql
 CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
-```
+```text
 
 **As new data arrives**, the index **incrementally updates** view results in
 memory within that [cluster](/concepts/clusters/). Within the cluster, the
@@ -679,7 +848,7 @@ VIEW`](/sql/create-materialized-view) command:
 ```mzsql
 CREATE MATERIALIZED VIEW my_mat_view_name AS
   SELECT ... FROM ...  ;
-```
+```text
 
 See also:
 
@@ -714,12 +883,11 @@ Because materialized views already maintain the up-to-date results in durable
 storage, indexes on materialized views can serve up-to-date results without
 having to perform additional computation.
 
-{{< note >}}
+> **Note:** 
 Querying a materialized view, whether indexed or not, from any cluster is
 computationally free. However, querying an indexed materialized view within the
 cluster associated with the index is faster since the results are served from
 memory rather than from storage.
-{{</ note >}}
 
 
 See also:
@@ -730,11 +898,11 @@ See also:
 
 ## Indexed views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
-{{% views-indexes/table-usage-pattern %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See views/indexes documentation for details --> --> -->
 
-{{% include-md file="shared-content/mat-view-use-cases.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/mat-view-use-c... -->
 
 ## General information
 
@@ -752,6 +920,3 @@ See also:
 <style>
 red { color: Red; font-weight: 500; }
 </style>
-
-
-

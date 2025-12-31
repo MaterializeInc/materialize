@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/date-bin/
+complexity: intermediate
+description: Bins a timestamp into a specified interval
+doc_type: reference
+keywords:
+- SELECT STR
+- SELECT DATE_BIN
+- date_bin function
+product_area: Indexes
+status: stable
+title: date_bin function
+---
+
 # date_bin function
+
+## Purpose
+Bins a timestamp into a specified interval
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Bins a timestamp into a specified interval
 
@@ -14,7 +35,7 @@ For example, on this number line of abstract units:
           x
 ...|---|---|---|...
    7   8   9   10
-```
+```text
 
 With a `stride` of 1, we would have bins (...7, 8, 9, 10...).
 
@@ -31,7 +52,7 @@ strides, rather than only unit times.
 
 ## Signatures
 
-{{< diagram "func-date-bin.svg" >}}
+[See diagram: func-date-bin.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -51,6 +72,8 @@ _origin_ | Must be the same as _source_ | Align bins to this value.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT
   date_bin(
@@ -58,12 +81,12 @@ SELECT
     timestamp '2001-02-16 20:38:40',
     timestamp '2001-02-16 20:05:00'
   );
-```
+```text
 ```nofmt
       date_bin
 ---------------------
  2001-02-16 20:35:00
-```
+```text
 
 ```mzsql
 SELECT
@@ -80,7 +103,7 @@ FROM (
   ('second', '1 s')
 ) intervals (str, interval),
 (VALUES (timestamp '2020-02-29 15:44:17.71393')) ts (ts);
-```
+```text
 ```nofmt
   str   | interval | equal
 --------+----------+-------

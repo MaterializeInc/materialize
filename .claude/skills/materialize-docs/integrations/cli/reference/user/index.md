@@ -1,7 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/cli/reference/user/
+complexity: intermediate
+description: The `mz user` command manages users in your organization.
+doc_type: reference
+keywords:
+- mz user
+- CREATE FRANZ
+- Required.
+product_area: General
+status: stable
+title: mz user
+---
+
 # mz user
 
+## Purpose
 The `mz user` command manages users in your organization.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+The `mz user` command manages users in your organization.
 
 
 The `mz user` command manages users in your organization.
@@ -12,7 +32,7 @@ Invite a user to your organization.
 
 ```shell
 mz user create <EMAIL> <NAME> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -28,7 +48,7 @@ Invite Franz Kafka to your organization:
 
 ```shell
 mz user create franz@kafka.org "Franz Kafka"
-```
+```bash
 
 ## `list`, `ls`
 
@@ -36,7 +56,7 @@ List all users in your organization.
 
 ```shell
 mz user {list,ls} [options...]
-```
+```bash
 
 ### Arguments
 
@@ -50,12 +70,12 @@ List all users in your organization:
 
 ```shell
 $ mz user list
-```
-```
+```text
+```text
 Email            | Name
 -----------------|-------------
 franz@kafka.org  | Franz Kafka
-```
+```bash
 
 ## `remove`, `rm`
 
@@ -63,7 +83,7 @@ Remove a user from your organization.
 
 ```shell
 mz user {remove,rm} <EMAIL> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -82,7 +102,6 @@ mz user remove franz@kafka.org
 
 ## Global arguments
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profile]: ../../configuration/#authentication-profiles
-

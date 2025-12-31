@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/patterns/rules-engine/
+complexity: intermediate
+description: Encode rules as data and apply them using lateral joins.
+doc_type: reference
+keywords:
+- CREATE RESOURCES
+- CREATE AND
+- data
+- 'Tip:'
+- CREATE TABLE
+- CREATE THE
+- INSERT SOME
+- as data
+- Rules execution engine
+product_area: SQL
+status: stable
+title: Rules execution engine
+---
+
 # Rules execution engine
+
+## Purpose
+Encode rules as data and apply them using lateral joins.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Encode rules as data and apply them using lateral joins.
 
@@ -41,7 +68,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (8, 'Owl', 105.3, '["Gray"]'),
     (9, 'Flamingo', 150.6, '["Pink"]'),
     (10, 'Pelican', 180.4, '["White"]');
-    ```
+    ```text
 1. Create the `bird_rules` table and insert a few rules.
     ```mzsql
     CREATE TABLE bird_rules (
@@ -57,7 +84,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (1, 'P', 'GTE', 50.0, '["Blue"]'),
     (2, 'P', 'LTE', 100.0, '["Black","White"]'),
     (3, 'R', 'GTE', 20.0, '["Red"]');
-    ```
+    ```text
     Each rule has a unique `id` and encodes filters on starting letter, wingspan, and color. For `wingspan_operator`, `'GTE'` means "greater than or equal" and `'LTE'` means "less than or equal". For more complicated rules with varying schemas, consider using the [`jsonb` type](/sql/types/jsonb) and adjust the logic in the upcoming `LATERAL` join to suit your needs.
 
 ### Create the View
@@ -82,56 +109,56 @@ LATERAL (
         )
         AND r.colors <@ birds.colors
 ) AS b;
-```
+```bash
 
 ### Subscribe to Changes
 
 1. Subscribe to the changes of `birds_filtered`.
     ```mzsql
     SUBSCRIBE TO birds_filtered;
-    ```
+    ```text
 
-   {{< tip >}}
+   > **Tip:** 
    If running this example in a client, use `COPY(SUBSCRIBE...) TO STDOUT;`.
-   {{</ tip >}}
+   
 
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors         | wingspan_cm
     --------------|---------|---------|----------|---------------------|------------
     1688673701670      1         2       Penguin     ["Black","White"]       99.5
-    ```
+    ```text
     Notice that the majestic penguin satisfies rule 2. None of the other birds satisfy any of the rules.
 1. In a separate session, insert a new bird that satisfies rule 3. Rule 3 requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red". We will insert a "Really big robin" that satisfies this rule.
     ```mzsql
     INSERT INTO birds VALUES (11, 'Really big robin', 25.0, '["Red"]');
-    ```
+    ```text
     Back in the `SUBSCRIBE` terminal, notice the output was immediately updated.
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |       name         |  colors   | wingspan_cm
     --------------|---------|---------|--------------------|-----------|------------
     1688674195279      1         3       Really big robin     ["Red"]        25
-    ```
+    ```text
 1. For fun, let's delete rule 3 and see what happens.
     ```mzsql
     DELETE FROM bird_rules WHERE id = 3;
-    ```
+    ```text
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |       name         |  colors   | wingspan_cm
     --------------|---------|---------|--------------------|-----------|------------
     1688674195279     -1         3       Really big robin     ["Red"]        25
-    ```
+    ```text
     Notice the bird was removed because the rule no longer exists.
 1. Now let's update an existing bird so that it satisfies a new rule. It turns out our penguin also has some blue coloration we didn't notice before.
     ```mzsql
     UPDATE birds SET colors = '["Black","White","Blue"]' WHERE name = 'Penguin';
-    ```
+    ```text
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors              | wingspan_cm
     --------------|---------|---------|----------|--------------------------|------------
     1688675781416     -1         2       Penguin   ["Black","White"]               99.5
     1688675781416      1         2       Penguin   ["Black","White","Blue"]        99.5
     1688675781416      1         1       Penguin   ["Black","White","Blue"]        99.5
-    ```
+    ```text
     First there was an update to the row corresponding to the penguin's adherence to rule 2: a diff of -1 to delete the old value with just the black and white colors, and a diff of +1 to add the new value with black, white, and blue colors. Then there was a new record showing that the penguin now also adheres to rule 1.
 
 ### Clean Up

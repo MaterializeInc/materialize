@@ -1,14 +1,36 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/normalize/
+complexity: intermediate
+description: Returns a string normalized to the specified Unicode normalization form.
+doc_type: reference
+keywords:
+- NFC
+- NFKD
+- normalize function
+- NFD
+- NFKC
+product_area: Indexes
+status: stable
+title: normalize function
+---
+
 # normalize function
 
+## Purpose
 Returns a string normalized to the specified Unicode normalization form.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Returns a string normalized to the specified Unicode normalization form.
 
 
 `normalize` converts a string to a specified Unicode normalization form.
 
 ## Signatures
 
-{{% include-example file="examples/normalize" example="syntax" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 Parameter | Type | Description
 ----------|------|------------
@@ -36,21 +58,20 @@ For more information, see:
 
 ## Examples
 
-{{% include-example file="examples/normalize" example="normalize-default" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfc" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfd" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfkc-ligatures" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->
 
 <hr/>
 
-{{% include-example file="examples/normalize" example="normalize-nfkc-superscript" %}}
-
+<!-- Unresolved shortcode: {{% include-example file="examples/normalize" exam... -->

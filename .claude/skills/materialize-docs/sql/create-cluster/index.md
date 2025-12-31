@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-cluster/
+complexity: advanced
+description: '`CREATE CLUSTER` creates a new cluster.'
+doc_type: reference
+keywords:
+- CREATE CLUSTER
+- 'Warning:'
+- 'Tip:'
+- resource isolation.
+- should not
+- 'Note:'
+- DROP OR
+product_area: Indexes
+status: experimental
+title: CREATE CLUSTER
+---
+
 # CREATE CLUSTER
 
+## Purpose
 `CREATE CLUSTER` creates a new cluster.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`CREATE CLUSTER` creates a new cluster.
 
 
 `CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
@@ -20,13 +44,15 @@ to be associated with a cluster:
 
 ## Syntax
 
-{{< diagram "create-managed-cluster.svg" >}}
+[See diagram: create-managed-cluster.svg]
 
 ### Options
 
-{{< yaml-table data="syntax_options/create_cluster_options" >}}
+<!-- Dynamic table: syntax_options/create_cluster_options - see original docs -->
 
 ## Details
+
+This section covers details.
 
 ### Initial state
 
@@ -44,13 +70,13 @@ To show your session's active cluster, use the [`SHOW`](/sql/show) command:
 
 ```mzsql
 SHOW cluster;
-```
+```text
 
 To switch your session's active cluster, use the [`SET`](/sql/set) command:
 
 ```mzsql
 SET cluster = other_cluster;
-```
+```bash
 
 ### Resource isolation
 
@@ -73,19 +99,22 @@ example, you could place your development workloads in a cluster named
 The `SIZE` option determines the amount of compute resources available to the
 cluster.
 
-{{< tabs >}}
-{{< tab "M.1 Clusters" >}}
+#### M.1 Clusters
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+> **Note:** 
+The values set forth in the table are solely for illustrative purposes.
+Materialize reserves the right to change the capacity at any time. As such, you
+acknowledge and agree that those values in this table may change at any time,
+and you should not rely on these values for any capacity planning.
 
-{{< yaml-table data="m1_cluster_sizing" >}}
 
-{{< /tab >}}
-{{< tab "Legacy cc Clusters" >}}
+<!-- Dynamic table: m1_cluster_sizing - see original docs -->
+
+#### Legacy cc Clusters
 
 Materialize offers the following legacy cc cluster sizes:
 
-{{< tip >}}
+> **Tip:** 
 In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
 offer better performance per credit for nearly all workloads. We recommend using
 M.1 sizes for all new clusters, and recommend migrating existing
@@ -93,7 +122,7 @@ legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 customers during the transition period as we move to deprecate legacy sizes.
 
 The legacy size information is provided for completeness.
-{{< /tip >}}
+
 
 * `25cc`
 * `50cc`
@@ -117,18 +146,18 @@ cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
 query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
-{{< warning >}}
+> **Warning:** 
 The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
+
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
-{{< /tab >}}
-{{< tab "Legacy t-shirt Clusters" >}}
+
+#### Legacy t-shirt Clusters
 
 Materialize also offers some legacy t-shirt cluster sizes for upsert sources.
 
-{{< tip >}}
+> **Tip:** 
 In most cases, you **should not** use legacy t-shirt sizes. [M.1 sizes](#size)
 offer better performance per credit for nearly all workloads. We recommend using
 M.1 sizes for all new clusters, and recommend migrating existing
@@ -137,14 +166,11 @@ customers during the transition period as we move to deprecate legacy sizes.
 
 The legacy size information is provided for completeness.
 
-{{< /tip >}}
 
-{{< if-past "2024-04-15" >}}
-{{< warning >}}
+> **Warning:** 
 Materialize regions that were enabled after 15 April 2024 do not have access
 to legacy sizes.
-{{< /warning >}}
-{{< /if-past >}}
+
 
 When legacy sizes are enabled for a region, the following sizes are available:
 
@@ -160,9 +186,6 @@ When legacy sizes are enabled for a region, the following sizes are available:
 * `4xlarge`
 * `5xlarge`
 * `6xlarge`
-
-{{< /tab >}}
-{{< /tabs >}}
 
 See also:
 
@@ -181,7 +204,6 @@ the cluster is hosting, this operation **might incur downtime**.
 See the reference documentation for [`ALTER
 CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
 on cluster resizing.
-
 
 
 ### Replication factor
@@ -212,7 +234,7 @@ sources, and sinks on the cluster will cease to make progress, and any queries
 directed to the cluster will block. You can later resume the cluster's work by
 using [`ALTER CLUSTER`] to set a nonzero replication factor.
 
-{{< note >}}
+> **Note:** 
 A common misconception is that increasing a cluster's replication
 factor will increase its capacity for work. This is not the case. Increasing
 the replication factor increases the **fault tolerance** of the cluster, not its
@@ -222,7 +244,7 @@ queries) as all the other replicas of the cluster.
 
 To increase a cluster's capacity, you should instead increase the cluster's
 [size](#size).
-{{< /note >}}
+
 
 ### Credit usage
 
@@ -272,7 +294,7 @@ Cluster `c` will have consumed 0.4 credits in total:
 
 ### Scheduling
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 To support [scheduled refreshes in materialized views](../create-materialized-view/#refresh-strategies),
 you can configure a cluster to automatically turn on and off using the
@@ -283,7 +305,7 @@ CREATE CLUSTER my_scheduled_cluster (
   SIZE = 'M.1-large',
   SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 );
-```
+```text
 
 Scheduled clusters should **only** contain materialized views configured with a
 non-default [refresh strategy](../create-materialized-view/#refresh-strategies)
@@ -298,14 +320,14 @@ scheduling and provision compute resources using [`ALTER CLUSTER`](../alter-clus
 
 ```mzsql
 ALTER CLUSTER my_scheduled_cluster SET (SCHEDULE = MANUAL, REPLICATION FACTOR = 1);
-```
+```text
 
 To re-enable scheduling:
 
 ```mzsql
 ALTER CLUSTER my_scheduled_cluster
 SET (SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'));
-```
+```bash
 
 #### Hydration time estimate
 
@@ -331,7 +353,7 @@ SELECT c.id AS cluster_id,
 FROM mz_internal.mz_cluster_schedules cs
 JOIN mz_clusters c ON cs.cluster_id = c.id
 WHERE c.name = 'my_refresh_cluster';
-```
+```text
 
 To check if a scheduled cluster is turned on, you can query the
 [`mz_catalog.mz_cluster_replicas`](/sql/system-catalog/mz_catalog/#mz_cluster_replicas)
@@ -346,7 +368,7 @@ SELECT cs.cluster_id,
 FROM mz_internal.mz_cluster_schedules cs
 JOIN mz_clusters c ON cs.cluster_id = c.id AND cs.type = 'on-refresh'
 LEFT JOIN mz_cluster_replicas cr ON c.id = cr.cluster_id;
-```
+```text
 
 You can also use the [audit log](../system-catalog/mz_catalog/#mz_audit_events)
 to observe the commands that are automatically run when a scheduled cluster is
@@ -357,7 +379,7 @@ SELECT *
 FROM mz_audit_events
 WHERE object_type = 'cluster-replica'
 ORDER BY occurred_at DESC;
-```
+```text
 
 Any commands attributed to scheduled refreshes will be marked with
 `"reason":"schedule"` under the `details` column.
@@ -372,13 +394,15 @@ Clusters have several known limitations:
 
 ## Examples
 
+This section covers examples.
+
 ### Basic
 
 Create a cluster with two `M.1-large` replicas:
 
 ```mzsql
 CREATE CLUSTER c1 (SIZE = 'M.1-large', REPLICATION FACTOR = 2);
-```
+```bash
 
 ### Empty
 
@@ -394,8 +418,8 @@ You can later add replicas to this cluster with [`ALTER CLUSTER`].
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-cluster.md"
->}}
+- `CREATECLUSTER` privileges on the system.
+
 
 ## See also
 
@@ -408,4 +432,3 @@ The privileges required to execute this statement are:
 [`SELECT`]: /sql/select
 [`SUBSCRIBE`]: /sql/subscribe
 [`mz_cluster_replica_sizes`]: /sql/system-catalog/mz_catalog#mz_cluster_replica_sizes
-

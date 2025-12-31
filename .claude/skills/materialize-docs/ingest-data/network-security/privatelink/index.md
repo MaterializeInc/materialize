@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/network-security/privatelink/
+complexity: intermediate
+description: How to connect Materialize Cloud to a Kafka broker, a Confluent Schema
+  Registry server, a PostgreSQL database, or a MySQL database through an AWS PrivateLink
+  service.
+doc_type: reference
+keywords:
+- CREATE SECRET
+- CREATE AN
+- CREATE SOURCE
+- 'Note:'
+- CREATE CONNECTION
+- AWS PrivateLink connections (Cloud-only)
+product_area: Sources
+status: stable
+title: AWS PrivateLink connections (Cloud-only)
+---
+
 # AWS PrivateLink connections (Cloud-only)
 
+## Purpose
 How to connect Materialize Cloud to a Kafka broker, a Confluent Schema Registry server, a PostgreSQL database, or a MySQL database through an AWS PrivateLink service.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to connect Materialize Cloud to a Kafka broker, a Confluent Schema Registry server, a PostgreSQL database, or a MySQL database through an AWS PrivateLink service.
 
 
 Materialize can connect to a Kafka broker, a Confluent Schema Registry server, a
@@ -13,45 +38,45 @@ retrieve the AWS principal needed to configure the AWS PrivateLink service.
 
 ## Create an AWS PrivateLink connection
 
-{{< tabs tabID="1" >}}
-{{< tab "Kafka on AWS">}}
 
-{{< note >}}
+This section covers create an aws privatelink connection.
+
+#### Kafka on AWS
+
+
+> **Note:** 
 Materialize provides a Terraform module that automates the creation and
 configuration of AWS resources for a PrivateLink connection. For more details,
 see the Terraform module repositories for [Amazon MSK](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
 and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
-{{</ note >}}
 
-{{% network-security/privatelink-kafka %}}
 
-{{< /tab >}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: network-security/privatelink-kafka --> --> -->
 
-{{< tab "PostgreSQL on AWS">}}
 
-{{< note >}}
+#### PostgreSQL on AWS
+
+
+> **Note:** 
 Materialize provides a Terraform module that automates the creation and
 configuration of AWS resources for a PrivateLink connection. For more details,
 see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
-{{</ note >}}
 
-{{% network-security/privatelink-postgres %}}
 
-{{< /tab >}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: network-security/privatelink-postgres --> --> -->
 
-{{< tab "MySQL on AWS">}}
 
-{{< note >}}
+#### MySQL on AWS
+
+
+> **Note:** 
 Materialize provides a Terraform module that automates the creation and
 configuration of AWS resources for a PrivateLink connection. For more details,
 see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
-{{</ note >}}
 
-{{% network-security/privatelink-mysql %}}
 
-{{< /tab >}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: network-security/privatelink-mysql --> --> -->
 
-{{< /tabs >}}
 
 ## Related pages
 
@@ -64,4 +89,3 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
   Kafka](/ingest-data/kafka/kafka-self-hosted), [Amazon
   MSK](/ingest-data/kafka/amazon-msk), [Redpanda
   Cloud](/ingest-data/redpanda/redpanda-cloud/)
-

@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-cluster-replica/
+complexity: intermediate
+description: '`ALTER CLUSTER REPLICA` changes properties of a cluster replica.'
+doc_type: reference
+keywords:
+- ALTER CLUSTER
+- 'Note:'
+- ALTER CLUSTER REPLICA
+product_area: Indexes
+status: stable
+title: ALTER CLUSTER REPLICA
+---
+
 # ALTER CLUSTER REPLICA
+
+## Purpose
+`ALTER CLUSTER REPLICA` changes properties of a cluster replica.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `ALTER CLUSTER REPLICA` changes properties of a cluster replica.
 
@@ -10,38 +31,37 @@ Use `ALTER CLUSTER REPLICA` to:
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "Rename" >}}
+This section covers syntax.
+
+#### Rename
 
 ### Rename
 
 To rename a cluster replica:
 
-{{% include-syntax file="examples/alter_cluster_replica" example="syntax-rename" %}}
+<!-- Syntax example: examples/alter_cluster_replica / syntax-rename -->
 
-{{< note >}}
+> **Note:** 
 You cannot rename replicas in system clusters.
-{{< /note >}}
 
-{{< /tab >}}
-{{< tab "Change owner" >}}
+
+#### Change owner
 
 ### Change owner
 
 To change the owner of a cluster replica:
 
-{{% include-syntax file="examples/alter_cluster_replica" example="syntax-change-owner" %}}
-
-{{< /tab >}}
-
-{{< /tabs >}}
+<!-- Syntax example: examples/alter_cluster_replica / syntax-change-owner -->
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/alter-cluster-replica.md" >}}
+- Ownership of the cluster replica.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing cluster.
+
 
 ## Example
 

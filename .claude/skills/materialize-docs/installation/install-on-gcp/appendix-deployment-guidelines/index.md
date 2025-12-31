@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-gcp/appendix-deployment-guidelines/
+complexity: intermediate
+description: GCP environment setup/deployment guidelines
+doc_type: howto
+keywords:
+- 'Appendix: GCP deployment guidelines'
+- 'Note:'
+product_area: Deployment
+status: stable
+title: 'Appendix: GCP deployment guidelines'
+---
+
 # Appendix: GCP deployment guidelines
+
+## Purpose
+GCP environment setup/deployment guidelines
+
+Follow the steps below to complete this task.
+
 
 GCP environment setup/deployment guidelines
 
@@ -36,13 +56,13 @@ of local SSDs
 to ensure your total disk space is at least twice the amount of RAM in your
 machine type for optimal Materialize performance.
 
-{{< note >}}
+> **Note:** 
 
 Your machine type may only supports predefined number of local SSDs. For instance, `n2d-highmem-32` allows only the following number of local
 SSDs: `4`,`8`,`16`, or `24`. To determine the valid number of Local SSDs to attach for your machine type, see the [GCP
 documentation](https://cloud.google.com/compute/docs/disks/local-ssd#lssd_disk_options).
 
-{{</ note >}}
+
 
 For example, the following table provides a minimum local SSD count to ensure
 the 2:1 disk-to-RAM ratio. Your actual

@@ -1,7 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize/
+complexity: intermediate
+description: Cheatsheet for window functions to idiomatic Materialize SQL.
+doc_type: reference
+keywords:
+- Lag over whose order by field advances in a regular pattern.
+- Window function to idiomatic Materialize
+- Last value within groups.
+- SELECT T1
+- Lead over whose order by field advances in a regular pattern.
+- First value within groups.
+- Top-K queries.
+- SELECT FIELDA
+- SELECT TABLEA
+product_area: SQL
+status: stable
+title: Window function to idiomatic Materialize
+---
+
 # Window function to idiomatic Materialize
 
+## Purpose
 Cheatsheet for window functions to idiomatic Materialize SQL.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Cheatsheet for window functions to idiomatic Materialize SQL.
 
 
 Materialize offers a wide range of [window
@@ -13,13 +39,9 @@ functions](/sql/functions/#window-functions). However, for some
 own idiomatic query patterns that do <red>not</red> use the window functions and
 can provide better performance.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 <table>
 <thead>
@@ -53,7 +75,7 @@ SELECT fieldA, fieldB,
    OVER (PARTITION BY fieldA ORDER BY ...)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -68,7 +90,7 @@ FROM tableA,
       GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -92,7 +114,7 @@ SELECT fieldA, ...
   LAG(fieldZ)
     OVER (ORDER BY fieldA) as previous_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -104,7 +126,7 @@ SELECT t1.fieldA, t2.fieldB as previous_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA + ...
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -132,7 +154,7 @@ SELECT fieldA, fieldB,
             UNBOUNDED FOLLOWING)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -147,7 +169,7 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
        GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -171,7 +193,7 @@ SELECT fieldA, ...
     LEAD(fieldZ)
       OVER (ORDER BY fieldA) as next_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -183,7 +205,7 @@ SELECT t1.fieldA, t2.fieldB as next_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA - ...
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -210,7 +232,7 @@ FROM (
   FROM tableA)
 WHERE rn <= K
 ORDER BY fieldA, fieldZ ...;
-```
+```text
 
 </div>
 </td>
@@ -229,4 +251,3 @@ ORDER BY fieldA, fieldZ ... ;
 </tr>
 </tbody>
 </table>
-

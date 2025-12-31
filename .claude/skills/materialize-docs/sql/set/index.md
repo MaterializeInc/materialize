@@ -1,7 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/set/
+complexity: beginner
+description: Modify the value of a configuration parameter in the current session.
+doc_type: reference
+keywords:
+- DEFAULT
+- SESSION
+- LOCAL
+- SHOW CLUSTER
+- _(Default)_
+- SET
+product_area: Indexes
+status: stable
+title: SET
+---
+
 # SET
 
+## Purpose
 Modify the value of a configuration parameter in the current session.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Modify the value of a configuration parameter in the current session.
 
 
 `SET` modifies the value of a configuration parameter for the current session.
@@ -11,9 +34,11 @@ To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SET [SESSION|LOCAL] <config> TO|= <value|DEFAULT>;
-```
+```text
 
 Syntax element                | Description
 ------------------------------|------------
@@ -23,7 +48,7 @@ Syntax element                | Description
 `<value>`                 | The value to assign to the parameter.
 **DEFAULT**               | Use the parameter's default value. Equivalent to [`RESET`](../reset).
 
-{{% configuration-parameters %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See configuration parameters documentation --> --> -->
 
 ### Aliased configuration parameters
 
@@ -35,6 +60,8 @@ configuration parameters.
 - `time zone`: `time zone` is an alias for `timezone`. The `TO` and `=` syntax must be omitted.
 
 ## Examples
+
+This section covers examples.
 
 ### Set active cluster
 
@@ -52,19 +79,19 @@ SHOW cluster;
   cluster
 ------------
  quickstart
-```
+```bash
 
 ### Set transaction isolation level
 
 ```mzsql
 SET transaction_isolation = 'serializable';
-```
+```bash
 
 ### Set search path
 
 ```mzsql
 SET search_path = public, qck;
-```
+```text
 
 ```mzsql
 SET schema = qck;
@@ -74,4 +101,3 @@ SET schema = qck;
 
 - [`RESET`](../reset)
 - [`SHOW`](../show)
-

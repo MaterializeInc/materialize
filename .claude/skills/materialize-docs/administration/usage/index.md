@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/administration/usage/
+complexity: beginner
+description: Overview of the resource usage for Self-Managed Materialize.
+doc_type: overview
+keywords:
+- CREATE THE
+- free
+- 'Note:'
+- Usage (Self-Managed)
+product_area: General
+status: stable
+title: Usage (Self-Managed)
+---
+
 # Usage (Self-Managed)
+
+## Purpose
+Overview of the resource usage for Self-Managed Materialize.
+
+This page provides detailed documentation for this topic.
+
 
 Overview of the resource usage for Self-Managed Materialize.
 
@@ -11,13 +33,13 @@ In Materialize, [clusters](/concepts/clusters/) are pools of compute resources
 maintaining up-to-date results while also providing strong [consistency
 guarantees](/get-started/isolation-level/).
 
-{{< note >}}
+> **Note:** 
 
 In Materialize,various [system clusters](/sql/system-clusters/) are
 pre-installed to improve the user experience as well as support system
 administration tasks.
 
-{{</ note >}}
+
 
 You must provision at least one cluster to power your workloads. You can then
 use the cluster to create the objects ([indexes](/concepts/indexes/) and

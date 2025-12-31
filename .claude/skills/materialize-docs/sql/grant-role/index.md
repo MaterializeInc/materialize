@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/grant-role/
+complexity: advanced
+description: '`GRANT` grants membership of one role to another role.'
+doc_type: reference
+keywords:
+- SHOW ROLE
+- DROP USER
+- CREATE ROLE
+- GRANT ROLE
+- ALTER ROLE
+- DROP ROLE
+product_area: Indexes
+status: stable
+title: GRANT ROLE
+---
+
 # GRANT ROLE
+
+## Purpose
+`GRANT` grants membership of one role to another role.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `GRANT` grants membership of one role to another role.
 
@@ -9,7 +33,7 @@ other roles, as well as inherit all the privileges of those roles.
 
 ## Syntax
 
-{{< diagram "grant-role.svg" >}}
+[See diagram: grant-role.svg]
 
 Field         | Use
 --------------|--------------------------------------------------
@@ -18,9 +42,11 @@ _member_name_ | The role name to add to _role_name_ as a member.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 GRANT data_scientist TO joe;
-```
+```text
 
 ```mzsql
 GRANT data_scientist TO joe, mike;
@@ -30,7 +56,8 @@ GRANT data_scientist TO joe, mike;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/grant-role.md" >}}
+- `CREATEROLE` privileges on the system.
+
 
 ## Useful views
 

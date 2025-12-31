@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/integer/
+complexity: intermediate
+description: Express signed integers
+doc_type: reference
+keywords:
+- Integer types
+- Catalog name
+- OID
+- Aliases
+- Size
+- Range
+- SELECT 123
+- SELECT 1
+product_area: Indexes
+status: stable
+title: Integer types
+---
+
 # Integer types
+
+## Purpose
+Express signed integers
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Express signed integers
 
@@ -35,6 +61,8 @@ Detail | Info
 **Range** | [-9,223,372,036,854,775,808, 9,223,372,036,854,775,807]
 
 ## Details
+
+This section covers details.
 
 ### Valid casts
 
@@ -81,20 +109,22 @@ From | Required context
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 123::integer AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------
    123
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 1.23::integer AS int_v;
-```
+```text
 ```nofmt
  int_v
 -------

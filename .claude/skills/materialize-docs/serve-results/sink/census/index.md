@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/census/
+complexity: beginner
+description: How to use Census to export data out of Materialize.
+doc_type: reference
+keywords:
+- CREATE AN
+- Destinations
+- CREATE A
+- Census
+- Materialize
+- Connect
+- New Source
+- Sources
+- EXPLAIN HOW
+product_area: Sinks
+status: stable
+title: Census
+---
+
 # Census
+
+## Purpose
+How to use Census to export data out of Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use Census to export data out of Materialize.
 
@@ -28,8 +55,7 @@ To begin you will need to add your Materialize database as a source in Census.
 
 Next you will add a destination where data will be sent.
 
-{{< tabs >}}
-{{< tab "Braze">}}
+#### Braze
 
 1. In Census, navigate to **Destinations** and then click **New Destination**.
 
@@ -39,15 +65,11 @@ Next you will add a destination where data will be sent.
    The [Census guide for Braze](https://docs.getcensus.com/destinations/braze) will explain how to create an API key with the
    correct permissions. Then click the **Connect**.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 ## Step 3. Create a Sync
 
 After successfully adding the Materialize source, you can create a sync to send data from Materialize to your downstream destination.
 
-{{< tabs >}}
-{{< tab "Braze">}}
+#### Braze
 
 1. In Census, navigate to **Syncs** and then click **New Sync**.
 
@@ -64,9 +86,6 @@ After successfully adding the Materialize source, you can create a sync to send 
 1. Under **Set Up Braze Field Mappings** set any of the columns in the Materialize object to their corresponding fields in the Braze User entity.
 
 1. Click **Next** to see an overview of your sync and click **Create** to create the sync.
-
-{{< /tab >}}
-{{< /tabs >}}
 
 ## Step 4. Add a Schedule (Optional)
 

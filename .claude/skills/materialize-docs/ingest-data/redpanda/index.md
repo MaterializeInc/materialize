@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/redpanda/
+complexity: beginner
+description: Get details about using Materialize with Redpanda
+doc_type: reference
+keywords:
+- CREATE A
+- CREATE SOURCE
+- SELECT AN
+- Redpanda 24.1+
+- Redpanda
+- Next
+- CREATE SINK
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: beta
+title: Redpanda
+---
+
 # Redpanda
+
+## Purpose
+Get details about using Materialize with Redpanda
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Get details about using Materialize with Redpanda
 
@@ -11,9 +38,9 @@ Because [Redpanda](https://www.redpanda.com/) is Kafka API-compatible,
 Materialize can process data from it in the same way it processes data from
 Kafka sources.
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 ## Configuration
 
@@ -23,7 +50,7 @@ enabled explicitly in Redpanda:
 ```nofmt
 --set redpanda.enable_transactions=true
 --set redpanda.enable_idempotence=true
-```
+```text
 
 For more information on general Redpanda configuration, see the
 [Redpanda documentation](https://docs.redpanda.com/home/).
@@ -52,17 +79,17 @@ This guide goes through the required steps to connect Materialize to a Redpanda
 Cloud cluster. If you already have a Redpanda Cloud cluster up and running,
 skip straight to [Step 2](#step-2-create-a-user).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 ## Step 1. Create a Redpanda Cloud cluster
 
-{{< note >}}
+> **Note:** 
 Once created, provisioning a Dedicated Redpanda Cloud cluster can take up to 40 minutes.
 
 Serverless clusters are provisioned in a few minutes.
-{{</ note >}}
+
 
 1. Sign in to the [Redpanda Cloud console](https://cloud.redpanda.com/).
 
@@ -125,8 +152,7 @@ Now that you’ve configured your Redpanda cluster, you can start ingesting data
 into Materialize. The exact steps depend on your networking configuration, so
 start by selecting the relevant option.
 
-{{< tabs >}}
-{{< tab "Public cluster">}}
+#### Public cluster
 
 1. Open the [Redpanda Cloud console](https://cloud.redpanda.com/) and select your cluster.
 
@@ -151,11 +177,9 @@ command:
           SASL USERNAME = SECRET redpanda_username,
           SASL PASSWORD = SECRET redpanda_password
       );
-    ```
+    ```bash
 
-{{< /tab >}}
-
-{{< tab "Use AWS PrivateLink (Cloud-only)" >}}
+#### Use AWS PrivateLink (Cloud-only)
 
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
 Materialize to your Redpanda Cloud instance without exposing traffic to the
@@ -208,7 +232,7 @@ in a region supported by Materialize: `us-east-1`,`us-west-2`, or `eu-west-1`.
         -H "Authorization: Bearer $AUTH_TOKEN" \
         $PUBLIC_API_ENDPOINT/v1beta2/clusters/$CLUSTER_ID | jq \
         '.cluster.aws_private_link'
-    ```
+    ```text
 
 1. In the Materialize [SQL shell](/console/), or your
 preferred SQL client, create a [PrivateLink connection](/ingest-data/network-security/privatelink/)
@@ -220,7 +244,7 @@ availability zones** of your Redpanda Cloud cluster.
       SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-abcdefghijk',
       AVAILABILITY ZONES ('use1-az4','use1-az1','use1-az2')
     );
-    ```
+    ```text
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just
 created:
@@ -230,14 +254,14 @@ created:
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
     WHERE c.name = 'rp_privatelink';
-    ```
+    ```text
     <p></p>
 
     ```
                                      principal
     ---------------------------------------------------------------------------
      arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
-    ```
+    ```text
 
 1. Patch your Redpanda Cloud cluster to accept connections from the AWS
 principal:
@@ -275,14 +299,14 @@ principal:
        -H "Authorization: Bearer $AUTH_TOKEN" \
        -d "$CLUSTER_PATCH_BODY" \
        $PUBLIC_API_ENDPOINT/v1beta2/clusters/$CLUSTER_ID
-    ```
+    ```text
 
 1. In Materialize, validate the AWS PrivateLink connection you created using the
 [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
     ```mzsql
     VALIDATE CONNECTION rp_privatelink;
-    ```
+    ```text
 
     If no validation error is returned, move to the next step.
 
@@ -305,10 +329,7 @@ Privatelink connection you created earlier:
         SASL USERNAME = SECRET redpanda_username,
         SASL PASSWORD = SECRET redpanda_password
     );
-    ```
-
-{{< /tab >}}
-{{< /tabs >}}
+    ```bash
 
 ## Step 6. Start ingesting data
 

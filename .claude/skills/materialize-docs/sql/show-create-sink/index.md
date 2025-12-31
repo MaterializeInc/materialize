@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-create-sink/
+complexity: intermediate
+description: '`SHOW CREATE SINK` returns the statement used to create the sink.'
+doc_type: reference
+keywords:
+- CREATE THE
+- SHOW CREATE SINK
+- SHOW CREATE
+product_area: Sinks
+status: stable
+title: SHOW CREATE SINK
+---
+
 # SHOW CREATE SINK
+
+## Purpose
+`SHOW CREATE SINK` returns the statement used to create the sink.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW CREATE SINK` returns the statement used to create the sink.
 
@@ -8,29 +29,33 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```sql
 SHOW [REDACTED] CREATE SINK <sink_name>;
-```
+```text
 
-{{< yaml-table data="show_create_redacted_option" >}}
+<!-- Dynamic table: show_create_redacted_option - see original docs -->
 
 For available sink names, see [`SHOW SINKS`](/sql/show-sinks).
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SINKS
-```
+```text
 
 ```nofmt
      name
 --------------
  my_view_sink
-```
+```text
 
 ```mzsql
 SHOW CREATE SINK my_view_sink;
-```
+```text
 
 ```nofmt
                name              |                                                                                                        create_sql
@@ -42,8 +67,8 @@ SHOW CREATE SINK my_view_sink;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-create-sink.md"
->}}
+- `USAGE` privileges on the schema containing the sink.
+
 
 ## Related pages
 

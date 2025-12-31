@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/s3/
+complexity: advanced
+description: How to export results from Materialize to Amazon S3.
+doc_type: reference
+keywords:
+- CREATE AN
+- CREATE AND
+- CREATE A
+- S3
+- Amazon S3
+- strongly
+- AWS Services
+- AWS IAM
+product_area: Sinks
+status: stable
+title: Amazon S3
+---
+
 # Amazon S3
+
+## Purpose
+How to export results from Materialize to Amazon S3.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to export results from Materialize to Amazon S3.
 
@@ -83,7 +109,7 @@ To create a new IAM policy:
            }
        ]
    }
-   ```
+   ```text
 
 1. Click **Next**.
 
@@ -119,7 +145,7 @@ Next, you must attach the policy you just created to a Materialize-specific
            }
        ]
    }
-   ```
+   ```text
 
    Materialize **always uses the provided IAM principal** to assume the role, and
    also generates an **external ID** which uniquely identifies your AWS connection
@@ -149,7 +175,7 @@ Next, you must attach the policy you just created to a Materialize-specific
    ```mzsql
    CREATE CONNECTION aws_connection
       TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::<account-id>:role/<role>');
-   ```
+   ```text
 
 1. Retrieve the external ID for the connection:
 
@@ -158,31 +184,31 @@ Next, you must attach the policy you just created to a Materialize-specific
     FROM mz_internal.mz_aws_connections awsc
     JOIN mz_connections c ON awsc.id = c.id
     WHERE c.name = 'aws_connection';
-   ```
+   ```text
 
    The external ID will have the following format:
 
    ```text
    mz_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX_uXXX
-   ```
+   ```text
 
 1. In your AWS account, find the IAM role you created in [Create an IAM role](#create-an-iam-role)
    and, under **Trust relationships**, click **Edit trust policy**. Use the
    `external_id` from the previous step to update the trust policy's
    `sts:ExternalId`, then click **Update policy**.
 
-   {{< warning >}}
+   > **Warning:** 
    Failing to constrain the external ID in your role trust policy
    will allow other Materialize customers to assume your role and use AWS
    privileges you have granted the role!
-   {{< /warning >}}
+   
 
 1. Back in Materialize, validate the AWS connection you created using the
    [`VALIDATE CONNECTION`](/sql/validate-connection) command.
 
    ```mzsql
    VALIDATE CONNECTION aws_connection;
-   ```
+   ```text
 
    If no validation error is returned, you're ready to use this connection to
    run a bulk export from Materialize to your target S3 bucket! 🔥
@@ -192,8 +218,7 @@ Next, you must attach the policy you just created to a Materialize-specific
 To export data to your target S3 bucket, use the [`COPY TO`](/sql/copy-to/#copy-to-s3)
 command, and the AWS connection you created in the previous step.
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 ```mzsql
 COPY some_object TO 's3://<bucket>/<path>'
@@ -201,14 +226,12 @@ WITH (
     AWS CONNECTION = aws_connection,
     FORMAT = 'parquet'
   );
-```
+```text
 
 For details on the Parquet writer settings Materialize uses, as well as data
 type support and conversion, check the [reference documentation](/sql/copy-to/#copy-to-s3-parquet).
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 ```mzsql
 COPY some_object TO 's3://<bucket>/<path>'
@@ -217,10 +240,6 @@ WITH (
     FORMAT = 'csv'
   );
 ```
-
-{{< /tab >}}
-
-{{< /tabs >}}
 
 You might notice that Materialize first writes a sentinel file to the target S3
 bucket. When the copy operation is complete, this file is deleted. This allows

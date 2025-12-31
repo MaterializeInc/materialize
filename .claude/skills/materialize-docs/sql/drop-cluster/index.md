@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-cluster/
+complexity: intermediate
+description: '`DROP CLUSTER` removes an existing cluster from Materialize.'
+doc_type: reference
+keywords:
+- DROP THEM
+- IF EXISTS
+- DROP CLUSTER
+- RESTRICT
+- CASCADE
+product_area: Indexes
+status: stable
+title: DROP CLUSTER
+---
+
 # DROP CLUSTER
+
+## Purpose
+`DROP CLUSTER` removes an existing cluster from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP CLUSTER` removes an existing cluster from Materialize.
 
@@ -8,9 +31,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP CLUSTER [IF EXISTS] <cluster_name> [CASCADE|RESTRICT];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -21,19 +46,21 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ### Dropping a cluster with no dependencies
 
 To drop an existing cluster, run:
 
 ```mzsql
 DROP CLUSTER auction_house;
-```
+```text
 
 To avoid issuing an error if the specified cluster does not exist, use the `IF EXISTS` option:
 
 ```mzsql
 DROP CLUSTER IF EXISTS auction_house;
-```
+```bash
 
 ### Dropping a cluster with dependencies
 
@@ -41,11 +68,11 @@ If the cluster has dependencies, Materialize will throw an error similar to:
 
 ```mzsql
 DROP CLUSTER auction_house;
-```
+```text
 
 ```nofmt
 ERROR:  cannot drop cluster with active indexes or materialized views
-```
+```text
 
 , and you'll have to explicitly ask to also remove any dependent objects using the `CASCADE` option:
 
@@ -57,7 +84,8 @@ DROP CLUSTER auction_house CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-cluster.md" >}}
+- Ownership of the dropped cluster.
+
 
 ## Related pages
 

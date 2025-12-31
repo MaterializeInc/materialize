@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/cloud/
+complexity: intermediate
+description: Security for Materialize Cloud
+doc_type: reference
+keywords:
+- 'database
+
+  objects'
+- CREATE ROLES
+- CREATE NETWORK
+- 'Disambiguation:'
+- administrator
+- CREATE A
+- 'Tip:'
+- Cloud
+product_area: Security
+status: stable
+title: Cloud
+---
+
 # Cloud
 
+## Purpose
 Security for Materialize Cloud
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Security for Materialize Cloud
 
 
 This section covers security for Materialize Cloud.
@@ -20,21 +47,16 @@ See also:
 - [Appendix: Built-in roles](/security/appendix/appendix-built-in-roles/)
 
 
-
-
 ---
 
 ## Access control (Role-based)
 
 
-{{< annotation type="Disambiguation" >}}
-{{< include-md file="shared-content/rbac-cloud/rbac-intro-disambiguation.md" >}}
+> **Disambiguation:** <!-- Include not found: shared-content/rbac-cloud/rbac-intro-disambiguation.md -->
 
 This section focuses on the database access control. For information on
 organization roles, see [Users and service
 accounts](../users-service-accounts/).
-{{</ annotation >}}
-
 
 
 ## Role-based access control (RBAC)
@@ -45,20 +67,29 @@ roles](./manage-roles/).
 
 ## Roles and privileges
 
-{{% include-md file="shared-content/rbac-cloud/db-roles.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/db-... -->
 
 ### Managing privileges
 
-{{% include-md file="shared-content/rbac-cloud/db-roles-managing-privileges.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/db-... -->
 
-{{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-cloud/grant-vs-alter-default-privilege.md"
-%}}
-{{</ annotation >}}
+> **Disambiguation:** <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/gra... -->
 
 ### Initial privileges
 
-{{< include-md file="shared-content/rbac-cloud/db-roles-initial-privileges.md" >}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/db-... -->
+
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/pub... -->
+
+In addition, all roles have:
+- `USAGE` on all built-in types and [all system catalog
+schemas](/sql/system-catalog/).
+- `SELECT` on [system catalog objects](/sql/system-catalog/).
+- All [applicable privileges](/security/appendix/appendix-privileges/) for
+  an object they create; for example, the creator of a schema gets `CREATE` and
+  `USAGE`; the creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and
+  `DELETE`.
+
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the modify default privileges for `PUBLIC`.
@@ -80,13 +111,11 @@ combining existing roles, enabling modular access control. However:
 
 - Inheritance only applies to role privileges; role attributes and parameters
   are not inherited.
-- {{% include-md file="shared-content/rbac-cloud/revoke-roles-consideration.md" %}}
+- <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-cloud/rev... -->
 
 ## Best practices
 
-{{% yaml-sections data="rbac/recommendations-cloud" heading-field="recommendation" heading-level=3 %}}
-
-
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-cloud... -->
 
 
 ---
@@ -94,10 +123,10 @@ combining existing roles, enabling modular access control. However:
 ## Manage network policies
 
 
-{{< tip >}}
+> **Tip:** 
 We recommend using [Terraform](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/network_policy)
 to configure and manage network policies.
-{{< /tip >}}
+
 
 By default, Materialize is available on the public internet without any
 network-layer access control. As an **administrator** of a Materialize
@@ -106,10 +135,10 @@ Materialize region using IP-based rules.
 
 ## Create a network policy
 
-{{< note >}}
+> **Note:** 
 Network policies are applied **globally** (i.e., at the region level) and rules
 can only be configured for **ingress traffic**.
-{{< /note >}}
+
 
 To create a new network policy, use the [`CREATE NETWORK POLICY`](/sql/create-network-policy)
 statement to provide a list of rules for allowed ingress traffic.
@@ -121,7 +150,7 @@ CREATE NETWORK POLICY office_access_policy (
     minnesota (action='allow',direction='ingress',address='2.3.4.5/32')
   )
 );
-```
+```bash
 
 ## Alter a network policy
 
@@ -137,7 +166,7 @@ ALTER NETWORK POLICY office_access_policy SET (
     boston (action='allow',direction='ingress',address='4.5.6.7/32')
   )
 );
-```
+```bash
 
 ### Lockout prevention
 
@@ -158,8 +187,6 @@ subsequently set as default), you must first set a new system default using
 the [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) statement.
 
 
-
-
 ---
 
 ## User and service accounts
@@ -174,7 +201,22 @@ resources.
 During creation of a user/service account in Materialize, the account is
 assigned an organization role:
 
-{{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+<!-- Dynamic table: rbac/organization_roles - see original docs -->
+
+> **Note:** 
+- The first user for an organization is automatically assigned the
+  **Organization Admin** role.
+
+- An [Organization
+Admin](/security/cloud/users-service-accounts/#organization-roles) has
+<red>**superuser**</red> privileges in the database. Following the principle of
+least privilege, only assign **Organization Admin** role to those users who
+require superuser privileges.
+
+
+- Users/service accounts can be granted additional database roles and privileges
+  as needed.
+
 
 ## User accounts
 
@@ -182,32 +224,39 @@ As an **Organization admin**, you can [invite new
 users](./invite-users/) via the Materialize Console. When you invite a new user,
 Materialize will email the user with an invitation link.
 
-{{< include-md file="shared-content/rbac-cloud/invite-user-note.md" >}}
+> **Note:** 
+- Until the user accepts the invitation and logs in, the user is listed as
+**Pending Approval**.
+
+- When the user accepts the invitation, the user can set the user password and
+log in to activate their account. The first time the user logs in, a database
+role with the same name as their e-mail address is created, and the account
+creation is complete.
+
 
 For instructions on inviting users to your Materialize organization, see [Invite
 users](./invite-users/).
 
 ## Service accounts
 
-{{< tip >}}
+> **Tip:** 
 
 As a best practice, we recommend you use service accounts to connect external
 applications and services to Materialize.
 
-{{</ tip >}}
 
 As an **Organization admin**, you can create a new service account via
 the [Materialize Console](/console/) or via
 [Terraform](/manage/terraform/).
 
-{{< note >}}
+> **Note:** 
 
 - The new account creation is not finished until the first time you connect with
 the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-{{</ note >}}
 
 For instructions on creating a new service account in your Materialize
 organization, see [Create service accounts](./create-service-accounts/).
@@ -230,6 +279,3 @@ guide](./sso/).
 - [Role-based access control](/security/cloud/access-control/)
 - [Manage with dbt](/manage/dbt/)
 - [Manage with Terraform](/manage/terraform/)
-
-
-

@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/license/
+complexity: intermediate
+description: Human-readable license for Materialize
+doc_type: reference
+keywords:
+- License
+product_area: General
+status: stable
+title: License
+---
+
 # License
+
+## Purpose
+Human-readable license for Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Human-readable license for Materialize
 
@@ -19,7 +38,7 @@ agreement.
 
 A license key is required to use Self-Managed Materialize.
 
-{{< yaml-table data="self_managed/license_key" >}}
+<!-- Dynamic table: self_managed/license_key - see original docs -->
 
 ### Self-Managed Community Edition Privacy Policy
 

@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/ruby/
+complexity: advanced
+description: Use Ruby to connect, insert, manage, query and stream from Materialize.
+doc_type: reference
+keywords:
+- CREATE A
+- CREATE TABLES
+- Ruby cheatsheet
+- SHOW TABLES
+- Active Record
+- 'Basic Example:'
+- CREATE TABLE
+- INSERT DATA
+- updated,
+- wire-compatible
+product_area: General
+status: stable
+title: Ruby cheatsheet
+---
+
 # Ruby cheatsheet
+
+## Purpose
+Use Ruby to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use Ruby to connect, insert, manage, query and stream from Materialize.
 
@@ -14,13 +42,13 @@ To connect to Materialize using `pg`:
 require 'pg'
 
 conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
-```
+```text
 
 If you don't have a `pg` gem, you can install it with:
 
 ```bash
 gem install pg
-```
+```bash
 
 ## Create tables
 
@@ -40,7 +68,7 @@ res  = conn.exec('SHOW TABLES')
 res.each do |row|
   puts row
 end
-```
+```bash
 
 ## Insert data into tables
 
@@ -59,7 +87,7 @@ res  = conn.exec('SELECT * FROM countries')
 res.each do |row|
   puts row
 end
-```
+```bash
 
 ## Query
 
@@ -79,7 +107,7 @@ res  = conn.exec('SELECT * FROM countries')
 res.each do |row|
   puts row
 end
-```
+```text
 
 For more details, see the [`exec` instance method](https://rubydoc.info/gems/pg/0.10.0/PGconn#exec-instance_method) documentation.
 
@@ -106,7 +134,7 @@ res = conn.exec("SHOW SOURCES")
 res.each do |row|
   puts row
 end
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -130,7 +158,7 @@ res = conn.exec("SHOW MATERIALIZED VIEWS")
 res.each do |row|
   puts row
 end
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -156,7 +184,7 @@ while true
     end
   end
 end
-```
+```text
 
 Each `result` of the [SUBSCRIBE output format](/sql/subscribe/#output) has exactly object. When a row of a subscribed view is **updated,** two objects will show up:
 
@@ -167,7 +195,7 @@ Each `result` of the [SUBSCRIBE output format](/sql/subscribe/#output) has exact
 {"mz_timestamp"=>"1648126887708", "mz_diff"=>"1", "sum"=>"3"}
 {"mz_timestamp"=>"1648126897364", "mz_diff"=>"-1", "sum"=>"1"}
 ...
-```
+```text
 
 An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same `mz_timestamp`.
 

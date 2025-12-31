@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/connection-pooling/
+complexity: beginner
+description: How to use connection pooling with Materialize
+doc_type: reference
+keywords:
+- CREATE AN
+- UPDATE THE
+- SELECT ROLNAME
+- For Self-Managed
+- Connection Pooling
+- For Cloud
+- 'Note:'
+product_area: General
+status: stable
+title: Connection Pooling
+---
+
 # Connection Pooling
+
+## Purpose
+How to use connection pooling with Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use connection pooling with Materialize
 
@@ -22,7 +47,7 @@ You can [install PgBouncer](https://www.pgbouncer.org/downloads/) on your local 
 
 The userlist file contains the credentials for your Materialize user/app. The file has the format of:
 
-```
+```text
 "user@example.com" "mypassword-or-scram-secret"
 ```
 
@@ -30,11 +55,11 @@ The userlist file contains the credentials for your Materialize user/app. The fi
 
 Specify the password in plaintext:
 
-- **For Cloud**, use the password from an existing [Service Account](https://materialize.com/docs/security/cloud/users-service-accounts/create-service-accounts/) or generate a [new one](https://materialize.com/docs/security/cloud/users-service-accounts/create-service-accounts/).
+- **For Cloud**, use the password from an existing [Service Account](../security/cloud/users-service-accounts/create-service-accounts/) or generate a [new one](../security/cloud/users-service-accounts/create-service-accounts/).
 - **For Self-Managed**, use the password associated with the role.
 
 Example userlist file:
-```
+```text
 "foo@bar.com" "mypassword"
 ```
 
@@ -44,16 +69,16 @@ Specify the SCRAM secret. To find the SCRAM secret, run the following query as a
 
 ```sql
 SELECT rolname, rolpassword FROM pg_authid WHERE rolname = 'your_role_name';
-```
+```text
 
-{{< note >}}
+> **Note:** 
 You must be a superuser to access the `pg_authid` table.
-{{< /note >}}
+
 
 Once you have the SCRAM secret, add it to the userlist file in the following format:
 ```
 "your_role_name" "the-hash-you-got-from-pg_authid"
-```
+```bash
 
 ### Step 3: Configure PgBouncer to connect to your Materialize instance
 
@@ -87,7 +112,7 @@ auth_type = scram-sha-256
 
 ;; Set the authentication user list file
 auth_file = /etc/pgbouncer/userlist.txt
-```
+```text
 
 For additional information on configuring PgBouncer, refer to the [PgBouncer documentation](https://www.pgbouncer.org/config.html).
 

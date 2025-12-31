@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-schema/
+complexity: intermediate
+description: '`ALTER SCHEMA` change properties of a schema'
+doc_type: reference
+keywords:
+- ALTER SCHEMA
+- CREATE TABLE
+- CREATE SCHEMA
+product_area: Indexes
+status: stable
+title: ALTER SCHEMA
+---
+
 # ALTER SCHEMA
+
+## Purpose
+`ALTER SCHEMA` change properties of a schema
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `ALTER SCHEMA` change properties of a schema
 
@@ -12,39 +33,36 @@ Use `ALTER SCHEMA` to:
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "Swap with" >}}
+This section covers syntax.
+
+#### Swap with
 
 ### Swap with
 
 To swap the name of a schema with that of another schema:
 
-{{% include-syntax file="examples/alter_schema" example="syntax-swap-with" %}}
+<!-- Syntax example: examples/alter_schema / syntax-swap-with -->
 
-{{< /tab >}}
-{{< tab "Rename schema" >}}
+#### Rename schema
 
 ### Rename schema
 
 To rename a schema:
 
-{{% include-syntax file="examples/alter_schema" example="syntax-rename" %}}
+<!-- Syntax example: examples/alter_schema / syntax-rename -->
 
-{{< /tab >}}
-{{< tab "Change owner to" >}}
+#### Change owner to
 
 ### Change owner to
 
 To change the owner of a schema:
 
-{{% include-syntax file="examples/alter_schema" example="syntax-change-owner" %}}
-
-{{< /tab >}}
-
-{{< /tabs >}}
+<!-- Syntax example: examples/alter_schema / syntax-change-owner -->
 
 
 ## Examples
+
+This section covers examples.
 
 ### Swap schema names
 
@@ -68,7 +86,14 @@ SELECT * FROM blue.tags;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-schema.md" >}}
+- Ownership of the schema.
+- In addition,
+  - To swap with another schema:
+    - Ownership of the other schema
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing database.
+
 
 ## See also
 

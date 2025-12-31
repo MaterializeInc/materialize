@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/now_and_mz_now/
+complexity: advanced
+description: Details the differences between the `now()` and `mz_now()` functions.
+doc_type: reference
+keywords:
+- CREATE AN
+- CREATE A
+- Temporal filters
+- temporal filter
+- now and mz_now functions
+- CREATE TABLE
+- CREATE THE
+- Query timestamp introspection
+product_area: Indexes
+status: stable
+title: now and mz_now functions
+---
+
 # now and mz_now functions
+
+## Purpose
+Details the differences between the `now()` and `mz_now()` functions.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Details the differences between the `now()` and `mz_now()` functions.
 
@@ -12,9 +38,26 @@ as a [`mz_timestamp`] value.
 
 ## Details
 
+This section covers details.
+
 ### `mz_now()` clause
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+```mzsql
+mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
+```text
+
+- `mz_now()` must be used with one of the following comparison operators: `=`,
+`<`, `<=`, `>`, `>=`, or an operator that desugars to them or to a conjunction
+(`AND`) of them (for example, `BETWEEN...AND...`). That is, you cannot use
+date/time operations directly on  `mz_now()` to calculate a timestamp in the
+past or future. Instead, rewrite the query expression to move the operation to
+the other side of the comparison.
+
+
+- `mz_now()` can only be compared to either a
+  [`numeric`](/sql/types/numeric) expression or a
+  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
+
 
 ### Usage patterns
 
@@ -68,11 +111,20 @@ materialized would be resource prohibitive.
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- When used in a materialized view definition, a view definition that is being
+indexed (i.e., although you can create the view and perform ad-hoc query on
+the view, you cannot create an index on that view), or a `SUBSCRIBE`
+statement:
+
+- `mz_now()` clauses can only be combined using an `AND`, and
+
+- All top-level `WHERE` or `HAVING` conditions must be combined using an `AND`,
+  even if the `mz_now()` clause is nested.
+
 
   For example:
 
-  {{< yaml-table data="mz_now/mz_now_combination" >}}
+  <!-- Dynamic table: mz_now/mz_now_combination - see original docs -->
 
   For alternatives, see [Disjunction (OR)
   alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
@@ -81,6 +133,8 @@ restrictions:
  `FILTER` expression](/sql/functions/filters).
 
 ## Examples
+
+This section covers examples.
 
 ### Temporal filters
 
@@ -100,13 +154,13 @@ CREATE VIEW last_30_sec AS
 SELECT event_ts, content
 FROM events
 WHERE mz_now() <= event_ts + INTERVAL '30s';
-```
+```text
 
 Next, subscribe to the results of the view.
 
 ```mzsql
 COPY (SUBSCRIBE (SELECT event_ts, content FROM last_30_sec)) TO STDOUT;
-```
+```text
 
 In a separate session, insert a record.
 
@@ -115,14 +169,14 @@ INSERT INTO events VALUES (
     'hello',
     now()
 );
-```
+```text
 
 Back in the first session, watch the record expire after 30 seconds. Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 ```nofmt
 1686868190714   1       2023-06-15 22:29:50.711 hello
 1686868220712   -1      2023-06-15 22:29:50.711 hello
-```
+```text
 
 You can materialize the `last_30_sec` view by creating an index on it (results stored in memory) or by recreating it as a `MATERIALIZED VIEW` (results persisted to storage). When you do so, Materialize will keep the results up to date with records expiring automatically according to the temporal filter.
 
@@ -149,13 +203,13 @@ INSERT INTO events VALUES (
     'goodbye',
     now()
 );
-```
+```text
 
 Execute this ad hoc query that adds the current system timestamp and current logical timestamp to the events in the `events` table.
 
 ```mzsql
 SELECT now(), mz_now(), * FROM events
-```
+```text
 
 ```nofmt
             now            |    mz_now     | content |       event_ts
@@ -164,14 +218,14 @@ SELECT now(), mz_now(), * FROM events
  2023-06-15 22:38:14.18+00 | 1686868693480 | goodbye | 2023-06-15 22:29:51.233
  2023-06-15 22:38:14.18+00 | 1686868693480 | welcome | 2023-06-15 22:29:50.874
 (3 rows)
-```
+```text
 
 Notice when you try to materialize this query, you get errors:
 
 ```mzsql
 CREATE MATERIALIZED VIEW cant_materialize
     AS SELECT now(), mz_now(), * FROM events;
-```
+```text
 
 ```nofmt
 ERROR:  cannot materialize call to current_timestamp

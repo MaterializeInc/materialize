@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-columns/
+complexity: intermediate
+description: '`SHOW COLUMNS` lists the columns available for an object.'
+doc_type: reference
+keywords:
+- LIKE
+- WHERE
+- name
+- type
+- SHOW COLUMNS
+- nullable
+product_area: Indexes
+status: stable
+title: SHOW COLUMNS
+---
+
 # SHOW COLUMNS
+
+## Purpose
+`SHOW COLUMNS` lists the columns available for an object.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW COLUMNS` lists the columns available for an object.
 
@@ -9,11 +33,13 @@ subsource, materialized view, view, or table.
 
 ## Syntax
 
+This section covers syntax.
+
 ```sql
 SHOW COLUMNS FROM <object_name>
 [LIKE <pattern> | WHERE <condition(s)>]
 ;
-```
+```text
 
 Syntax element                | Description
 ------------------------------|------------
@@ -21,6 +47,8 @@ Syntax element                | Description
 **WHERE** <condition(s)>      | If specified, only show columns that match the condition(s).
 
 ## Details
+
+This section covers details.
 
 ### Output format
 
@@ -32,7 +60,7 @@ Syntax element                | Description
 |---------+------------+--------|
 | ...     | ...        | ...    |
 +---------+------------+--------+
-```
+```text
 
 Field | Meaning
 ------|--------
@@ -45,17 +73,19 @@ object.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SOURCES;
-```
+```text
 ```nofmt
    name
 ----------
 my_sources
-```
+```text
 ```mzsql
 SHOW COLUMNS FROM my_source;
-```
+```text
 ```nofmt
   name  | nullable | type
 ---------+----------+------
@@ -67,7 +97,8 @@ SHOW COLUMNS FROM my_source;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-columns.md" >}}
+- `USAGE` privileges on the schema containing `item_ref`.
+
 
 ## Related pages
 

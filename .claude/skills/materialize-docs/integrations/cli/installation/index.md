@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/cli/installation/
+complexity: intermediate
+description: The Materialize CLI can be installed through several different methods.
+doc_type: reference
+keywords:
+- UPDATE SUDO
+- Materialize CLI Installation
+product_area: Deployment
+status: stable
+title: Materialize CLI Installation
+---
+
 # Materialize CLI Installation
+
+## Purpose
+The Materialize CLI can be installed through several different methods.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 The Materialize CLI can be installed through several different methods.
 
@@ -17,14 +37,14 @@ You'll need [Homebrew] installed on your system. Then install `mz` from
 
 ```shell
 brew install materializeinc/materialize/mz
-```
+```bash
 
 ### Binary download
 
 ```shell
 curl -L https://binaries.materialize.com/mz-latest-$(uname -m)-apple-darwin.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
-```
+```bash
 
 ## Linux
 
@@ -36,14 +56,14 @@ On Linux, we recommend using APT, if supported by your distribution.
 curl -fsSL https://dev.materialize.com/apt/materialize.sources | sudo tee /etc/apt/sources.list.d/materialize.sources
 sudo apt update
 sudo apt install materialize-cli
-```
+```bash
 
 ### Binary download
 
 ```shell
 curl -L https://binaries.materialize.com/mz-latest-$(uname -m)-unknown-linux-gnu.tar.gz \
     | sudo tar -xzC /usr/local --strip-components=1
-```
+```bash
 
 ## Docker
 

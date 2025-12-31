@@ -1,7 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/mz-debug/emulator/
+complexity: intermediate
+description: Use mz-debug to debug Materialize Emulator environments running in Docker.
+doc_type: reference
+keywords:
+- mz-debug emulator
+product_area: General
+status: stable
+title: mz-debug emulator
+---
+
 # mz-debug emulator
 
+## Purpose
 Use mz-debug to debug Materialize Emulator environments running in Docker.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Use mz-debug to debug Materialize Emulator environments running in Docker.
 
 
 `mz-debug emulator` debugs Docker-based Materialize deployments. It collects:
@@ -17,19 +35,23 @@ Use mz-debug to debug Materialize Emulator environments running in Docker.
 
 ## Syntax
 
+This section covers syntax.
+
 ```shell
 mz-debug emulator [OPTIONS]
-```
+```bash
 
 ## Options
 
+This section covers options.
+
 ### `mz-debug emulator` options
 
-{{< yaml-table data="mz-debug/emulator_options" >}}
+<!-- Dynamic table: mz-debug/emulator_options - see original docs -->
 
 ### `mz-debug` global options
 
-{{< yaml-table data="mz-debug/mz_debug_option" >}}
+<!-- Dynamic table: mz-debug/mz_debug_option - see original docs -->
 
 ## Output
 
@@ -46,19 +68,20 @@ files](#system-catalog-files).
 In `mz_debug_YYYY-MM-DD-HH-TMM-SSZ/`, under the `docker/<CONTAINER-ID>`
 sub-directory,  the following Docker resource debug files are generated:
 
-{{< yaml-table data="mz-debug/docker_resource_files" >}}
+<!-- Dynamic table: mz-debug/docker_resource_files - see original docs -->
 
-{{% integrations/mz-debug/system-catalog-files %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: integrations/mz-debug/system-catalog-fil --> --> -->
 
-{{% integrations/mz-debug/prometheus-files %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: integrations/mz-debug/prometheus-files --> --> -->
 
-{{% integrations/mz-debug/memory-profiles %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: integrations/mz-debug/memory-profiles --> --> -->
 
 ## Example
+
+This section covers example.
 
 ### Debug a running local emulator container
 ```console
 mz-debug emulator \
     --docker-container-id 123abc456def
 ```
-

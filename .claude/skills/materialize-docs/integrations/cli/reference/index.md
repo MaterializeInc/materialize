@@ -1,10 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/cli/reference/
+complexity: intermediate
+description: Reference section for `mz`, Materialize command-line interface (CLI).
+doc_type: reference
+keywords:
+- SHOW THE
+- mz Reference
+- CREATE AN
+- SHOW DETAILED
+- Required.
+- CREATE CI
+product_area: General
+status: stable
+title: mz Reference
+---
+
 # mz Reference
 
+## Purpose
 Reference section for `mz`, Materialize command-line interface (CLI).
 
+If you need to understand the syntax and options for this command, you're in the right place.
 
 
-
+Reference section for `mz`, Materialize command-line interface (CLI).
 
 
 ---
@@ -20,7 +40,7 @@ Create an app password.
 
 ```shell
 mz app-password create <NAME> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -35,10 +55,10 @@ Create an app password for a continuous integration tool:
 
 ```shell
 $ mz app-password create CI
-```
-```
+```text
+```text
 mzp_f283gag2t3...
-```
+```bash
 
 ## `list`, `ls`
 
@@ -46,7 +66,7 @@ List all app passwords.
 
 ```shell
 mz app-password {list,ls} [options...]
-```
+```bash
 
 ### Arguments
 
@@ -60,21 +80,19 @@ List all app passwords:
 
 ```shell
 mz app-password list
-```
-```
+```text
+```text
 Name        | Created at
 ------------|-----------------
 personal    | January 21, 2022
 CI          | January 23, 2022
-```
+```bash
 
 ## Global flags
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profile]: ../../configuration/#authentication-profiles
-
-
 
 
 ---
@@ -90,7 +108,7 @@ Get the value of a configuration parameter.
 
 ```shell
 mz config get <NAME> [options...]
-```
+```text
 
 See [Global parameters] for a description of the available configuration
 parameters.
@@ -107,10 +125,10 @@ Get the default profile:
 
 ```shell
 $ mz config get profile
-```
-```
+```text
+```text
 acme-corp
-```
+```bash
 
 ## `list`, `ls`
 
@@ -118,7 +136,7 @@ List all configuration parameters.
 
 ```shell
 mz config {list,ls} [options...]
-```
+```text
 
 See [Global parameters] for a description of the available configuration
 parameters.
@@ -127,13 +145,13 @@ parameters.
 
 ```shell
 $ mz config list
-```
-```
+```text
+```text
 Name    | Value
 --------|----------
 profile | default
 vault   | keychain
-```
+```bash
 
 ## `remove`, `rm`
 
@@ -141,7 +159,7 @@ Remove a configuration parameter.
 
 ```shell
 mz config {remove,rm} <NAME> [options...]
-```
+```text
 
 See [Global parameters] for a description of the available configuration
 parameters.
@@ -158,7 +176,7 @@ Remove the `vault` configuration parameter:
 
 ```shell
 mz config remove vault
-```
+```bash
 
 ## `set`
 
@@ -166,7 +184,7 @@ Set a configuration parameter.
 
 ```shell
 mz config set <NAME> <VALUE> [options...]
-```
+```text
 
 See [Global parameters] for a description of the available configuration
 parameters.
@@ -184,16 +202,14 @@ Set the `profile` configuration parameter to `hooli`:
 
 ```shell
 mz config set profile hooli
-```
+```bash
 
 ## Global flags
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [global configuration parameters]: ../../configuration/#global-parameters
 [Global parameters]: ../../configuration/#global-parameters
-
-
 
 
 ---
@@ -210,7 +226,7 @@ credentials for an app password.
 
 ```shell
 mz profile init [options...]
-```
+```bash
 
 ### Arguments
 
@@ -226,12 +242,12 @@ Argument                    | Environment variables | Description
 
 ```shell
 $ mz profile init --no-browser
-```
-```
+```text
+```text
 Email: remote@example.com
 Password: ...
 Successfully logged in.
-```
+```bash
 
 ## `list`, `ls`
 
@@ -239,20 +255,20 @@ List available authentication profiles.
 
 ```shell
 mz profile {list,ls} [options...]
-```
+```bash
 
 ### Examples
 
 ```shell
 $ mz profile list
-```
-```
+```text
+```text
 Name
 ------------
 development
 production
 staging
-```
+```bash
 
 ## `remove`, `rm`
 
@@ -260,7 +276,7 @@ Remove an authentication profile.
 
 ```shell
 mz profile {remove,rm} [options...]
-```
+```bash
 
 ### Arguments
 
@@ -274,7 +290,7 @@ Remove the `acme-corp` profile:
 
 ```shell
 mz profile remove --profile=acme-corp
-```
+```bash
 
 ## `config get`
 
@@ -282,7 +298,7 @@ Get a configuration parameter in an authentication profile.
 
 ```shell
 mz profile config get <NAME> <VALUE> [options...]
-```
+```bash
 
 ### Flags
 
@@ -297,10 +313,10 @@ Get the default region for the `acme-corp` profile:
 
 ```shell
 $ mz profile config get region --profile=acme-corp
-```
-```
+```text
+```text
 aws/us-east-1
-```
+```bash
 
 ## `config list`, `config ls`
 
@@ -308,18 +324,18 @@ List all configuration parameters in an authentication profile.
 
 ```shell
 mz profile config {list,ls} [options...]
-```
+```bash
 
 ### Examples
 
-```
+```bash
 $ mz profile config list
 
 Name                   | Value
 -----------------------|---------
 profile                | default
 vault                  | keychain
-```
+```bash
 
 ## `config set`
 
@@ -327,7 +343,7 @@ Set a configuration parameter in an authentication profile.
 
 ```shell
 mz profile config set <NAME> <VALUE> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -343,7 +359,7 @@ Set the default region for the active profile:
 
 ```shell
 mz profile config set region aws/eu-west-1
-```
+```bash
 
 ## `config remove`, `config rm`
 
@@ -351,7 +367,7 @@ Remove a configuration parameter in an authentication profile.
 
 ```shell
 mz profile config {remove,rm} <NAME> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -366,15 +382,13 @@ Remove the default region for the active profile:
 
 ```shell
 mz profile config rm region
-```
+```bash
 
 ## Global flags
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profiles]: ../../configuration/#authentication-profiles
-
-
 
 
 ---
@@ -390,11 +404,11 @@ Enable a region.
 
 ```shell
 mz region enable [options...]
-```
+```text
 
-{{< warning >}}
+> **Warning:** 
 You cannot disable a region with `mz`. To disable a region, contact support.
-{{< /warning >}}
+
 
 ### Arguments
 
@@ -409,10 +423,10 @@ Enable the `aws/us-east-1` region:
 
 ```shell
 $ mz region enable --region=aws/us-east-1
-```
-```
+```text
+```text
 Region enabled.
-```
+```bash
 
 ## `list`, `ls`
 
@@ -420,7 +434,7 @@ List all regions.
 
 ```shell
 mz region {list,ls}
-```
+```bash
 
 ### Arguments
 
@@ -433,13 +447,13 @@ Argument              | Environment variables | Description
 
 ```shell
 $ mz region list
-```
-```
+```text
+```text
 Region                  | Status
 ------------------------|---------
 aws/us-east-1           | enabled
 aws/eu-west-1           | enabled
-```
+```bash
 
 ## `show`
 
@@ -447,7 +461,7 @@ Show detailed status for a region.
 
 ```shell
 mz region show [options...]
-```
+```bash
 
 ### Arguments
 
@@ -463,20 +477,18 @@ Show the status of the `aws/us-east-1` region:
 
 ```shell
 $ mz region show --region=aws/us-east-1
-```
-```
+```text
+```text
 Healthy:      yes
 SQL address:  2358g2t42.us-east-1.aws.materialize.cloud:6875
 HTTP URL:     https://2358g2t42.us-east-1.aws.materialize.cloud
-```
+```bash
 
 ## Global flags
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profile]: ../../configuration/#authentication-profiles
-
-
 
 
 ---
@@ -492,7 +504,7 @@ Create a new secret.
 
 ```shell
 mz secret create <NAME> [options...]
-```
+```text
 
 The secret's value is read from the standard input stream.
 
@@ -500,10 +512,10 @@ By default, the command returns an error if a secret with the provided name
 already exists. Pass `--force` to instead update the existing secret with the
 new value, if it exists.
 
-{{< note >}}
+> **Note:** 
 Using this command is preferred to executing [`CREATE SECRET`](/sql/create-secret) directly, as it avoids leaving the
 secret's value in your shell history.
-{{< /note >}}
+
 
 ### Arguments
 
@@ -518,11 +530,9 @@ Flag                    | Environment variables | Description
 
 ## Global arguments
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profile]: ../../configuration/#authentication-profiles
-
-
 
 
 ---
@@ -534,7 +544,7 @@ The `mz sql` command executes SQL statements in a region.
 
 ```shell
 mz sql [options...] [-- psql options...]
-```
+```bash
 
 ## Arguments
 
@@ -549,21 +559,19 @@ Launch a SQL shell against the `aws/us-east-1` region:
 
 ```shell
 mz sql --region=aws/us-east-1
-```
+```text
 
 Execute a single SQL query against the default region for the profile:
 
 ```shell
 mz sql -- -c "SELECT * FROM mz_sources"
-```
+```bash
 
 ## Global flags
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profile]: ../../configuration/#authentication-profiles
-
-
 
 
 ---
@@ -579,7 +587,7 @@ Invite a user to your organization.
 
 ```shell
 mz user create <EMAIL> <NAME> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -595,7 +603,7 @@ Invite Franz Kafka to your organization:
 
 ```shell
 mz user create franz@kafka.org "Franz Kafka"
-```
+```bash
 
 ## `list`, `ls`
 
@@ -603,7 +611,7 @@ List all users in your organization.
 
 ```shell
 mz user {list,ls} [options...]
-```
+```bash
 
 ### Arguments
 
@@ -617,12 +625,12 @@ List all users in your organization:
 
 ```shell
 $ mz user list
-```
-```
+```text
+```text
 Email            | Name
 -----------------|-------------
 franz@kafka.org  | Franz Kafka
-```
+```bash
 
 ## `remove`, `rm`
 
@@ -630,7 +638,7 @@ Remove a user from your organization.
 
 ```shell
 mz user {remove,rm} <EMAIL> [options...]
-```
+```bash
 
 ### Arguments
 
@@ -649,9 +657,6 @@ mz user remove franz@kafka.org
 
 ## Global arguments
 
-{{% cli-global-args %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: cli-global-args --> --> -->
 
 [authentication profile]: ../../configuration/#authentication-profiles
-
-
-

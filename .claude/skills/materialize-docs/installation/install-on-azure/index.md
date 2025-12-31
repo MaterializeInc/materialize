@@ -1,10 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-azure/
+complexity: advanced
+description: Install Materialize on Azure Kubernetes Service (AKS) using Terraform
+doc_type: reference
+keywords:
+- 'Warning:'
+- Install on Azure (via Terraform)
+- CREATE ONE
+- CREATE A
+- SELECT THE
+- 'Note:'
+- 'Tip:'
+product_area: Deployment
+status: stable
+title: Install on Azure (via Terraform)
+---
+
 # Install on Azure (via Terraform)
+
+## Purpose
+Install Materialize on Azure Kubernetes Service (AKS) using Terraform
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Install Materialize on Azure Kubernetes Service (AKS) using Terraform
 
 
-
-{{% self-managed/materialize-components-sentence blobstorage="blob storage; specifically **block** blob storage on Azure" %}}
+<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence b... -->
 
 The tutorial deploys Materialize to Azure Kubernetes Service (AKS) with a
 PostgreSQL database as the metadata database and Azure premium block blob
@@ -17,15 +41,14 @@ modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to:
    module to deploy Materialize Operator and Materialize instances to that AKS
    cluster
 
-{{< warning >}}
+> **Warning:** 
 
-{{< self-managed/terraform-disclaimer >}}
+> **Note:** Terraform configurations may vary based on your environment.
 
-{{< self-managed/tutorial-disclaimer >}}
-
-{{< /warning >}}
 
 ## Prerequisites
+
+This section covers prerequisites.
 
 ### Azure subscription
 
@@ -64,7 +87,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 Starting in v26.0, Self-Managed Materialize requires a license key.
 
-{{< yaml-table data="self_managed/license_key" >}}
+<!-- Dynamic table: self_managed/license_key - see original docs -->
 
 ## A. Authenticate with Azure
 
@@ -74,7 +97,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
     ```bash
     az login
-    ```
+    ```text
 
    The command opens a browser window to sign in to Azure. Sign in.
 
@@ -92,7 +115,7 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
    The default is marked with an *; the default tenant is '<Tenant>' and
    subscription is '<Subscription Name>' (<Subscription ID>).
-   ```
+   ```text
 
    Select the subscription and tenant.
 
@@ -100,56 +123,51 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 
     ```bash
     export ARM_SUBSCRIPTION_ID=<subscription-id>
-    ```
+    ```bash
 
 ## B. Set up Azure Kubernetes environment and install Materialize
 
-{{< warning >}}
+> **Warning:** 
 
-{{< self-managed/terraform-disclaimer >}}
+> **Note:** Terraform configurations may vary based on your environment.
 
-{{< /warning >}}
 
-{{< tabs >}}
+#### Deployed components
 
-{{< tab "Deployed components" >}}
 
 [Materialize on Azure Terraform
 module](https://github.com/MaterializeInc/terraform-azurerm-materialize) for
 deploys a sample infrastructure on Azure with the following components:
 
-{{< yaml-table data="self_managed/azure_terraform_deployed_components" >}}
+<!-- Dynamic table: self_managed/azure_terraform_deployed_components - see original docs -->
 
-{{< tip >}}
+> **Tip:** 
 
-{{% self-managed/azure-terraform-configs %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-{{< /tip >}}
 
-{{</ tab >}}
-{{< tab "Releases" >}}
+#### Releases
 
-{{< yaml-table data="self_managed/azure_terraform_versions" >}}
 
-{{</ tab >}}
-{{</ tabs >}}
+<!-- Dynamic table: self_managed/azure_terraform_versions - see original docs -->
+
 
 1. Open a Terminal window.
 
-{{% self-managed/versions/step-clone-azure-terraform-repo %}}
+<!-- Unresolved shortcode: {{% self-managed/versions/step-clone-azure-terrafo... -->
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
 
    ```bash
    cd terraform-azurerm-materialize/examples/simple
-   ```
+   ```text
 
-   {{< tip >}}
+   > **Tip:** 
 
-   {{% self-managed/azure-terraform-configs %}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-   {{< /tip >}}
+   
 
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
@@ -158,18 +176,18 @@ deploys a sample infrastructure on Azure with the following components:
     ```bash
     python3 -m venv <path to the new virtual environment>
 
-    ```
+    ```text
 
    Activate the virtual environment:
     ```bash
     source <path to the new virtual environment>/bin/activate
-    ```
+    ```text
 
 1. Install the required packages.
 
     ```bash
     pip install -r requirements.txt
-    ```
+    ```text
 
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify:
@@ -182,31 +200,31 @@ deploys a sample infrastructure on Azure with the following components:
    ```bash
    prefix="enter-prefix"  //  maximum 12 characters, containing only alphanumeric characters and hyphens; e.g. mydemo
    location="eastus2"
-   ```
+   ```text
 
-   {{< tip >}}
+   > **Tip:** 
 
-   {{% self-managed/azure-terraform-configs %}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-   {{< /tip >}}
+   
 
 1. Initialize the terraform directory.
 
     ```bash
     terraform init
-    ```
+    ```text
 
 1. Use terraform plan to review the changes to be made.
 
     ```bash
     terraform plan
-    ```
+    ```text
 
 1. If you are satisfied with the changes, apply.
 
     ```bash
     terraform apply
-    ```
+    ```text
 
    To approve the changes and apply, enter `yes`.
 
@@ -222,7 +240,7 @@ deploys a sample infrastructure on Azure with the following components:
    kube_config = <sensitive>
    load_balancer_details = {}
    resource_group_name = "mydemo-rg"
-   ```
+   ```text
 
 1. Configure `kubectl` to connect to your cluster:
 
@@ -233,20 +251,20 @@ deploys a sample infrastructure on Azure with the following components:
 
    ```bash
    az aks get-credentials --resource-group <resource_group_name> --name <cluster_name>
-   ```
+   ```text
 
    Alternatively, you can use the following command to get the cluster name and
    resource group name from the Terraform output:
 
    ```bash
    az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -json aks_cluster | jq -r '.name')
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
    ```bash
    kubectl cluster-info
-   ```
+   ```text
 
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
@@ -255,14 +273,15 @@ deploys a sample infrastructure on Azure with the following components:
    starting in v0.3.0, a `cert-manager`. Verify the
    installation and check the status:
 
-   {{< tabs >}}
-   {{< tab "Materialize Operator" >}}
+   
+   #### Materialize Operator
+
 
    Verify the installation and check the status:
 
    ```shell
    kubectl get all -n materialize
-   ```
+   ```text
 
    Wait for the components to be in the `Running` state:
 
@@ -275,19 +294,20 @@ deploys a sample infrastructure on Azure with the following components:
 
    NAME                                                                        DESIRED   CURRENT   READY   AGE
    replicaset.apps/materialize-mydemo-materialize-operator-74d8f549d6          1         1         1       36m
-   ```
+   ```json
 
-   {{</ tab >}}
+   
 
-   {{< tab "cert-manager (Starting in version 0.3.0)" >}}
+   #### cert-manager (Starting in version 0.3.0)
+
 
    Verify the installation and check the status:
 
    ```shell
    kubectl get all -n cert-manager
-   ```
+   ```text
    Wait for the components to be in the `Running` state:
-   ```
+   ```text
    NAME                                           READY   STATUS    RESTARTS   AGE
    pod/cert-manager-8576d99cc8-xqxbc              1/1     Running   0          4m22s
    pod/cert-manager-cainjector-664b5878d6-wc4tz   1/1     Running   0          4m22s
@@ -307,10 +327,10 @@ deploys a sample infrastructure on Azure with the following components:
    replicaset.apps/cert-manager-8576d99cc8              1         1         1       4m23s
    replicaset.apps/cert-manager-cainjector-664b5878d6   1         1         1       4m23s
    replicaset.apps/cert-manager-webhook-6ddb7bd6c5      1         1         1       4m23s
-   ```
+   ```json
 
-   {{</ tab >}}
-   {{</ tabs >}}
+   
+   
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
@@ -336,11 +356,11 @@ deploys a sample infrastructure on Azure with the following components:
        }
    ]
    EOF
-   ```
+   ```text
 
    - **Starting in v26.0**, Self-Managed Materialize requires a license key. To
      get your license key:
-     {{% yaml-table data="self_managed/license_key" %}}
+     <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- Dynamic table - see original docs --> --> -->
 
    - **Starting in v0.3.0**, the Materialize on Azure Terraform module also
      deploys, by default, a self-signed `ClusterIssuer`. The `ClusterIssuer` is
@@ -359,31 +379,31 @@ deploys a sample infrastructure on Azure with the following components:
    - **Starting in v0.4.3**, you can specify addition configuration options via
      `environmentd_extra_args`.
 
-   {{< tip >}}
-   {{% self-managed/azure-terraform-upgrade-notes %}}
+   > **Tip:** 
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
    See [Materialize on Azure releases](/installation/appendix-terraforms/#materialize-on-azure-terraform-module) for notable changes.
-   {{</ tip >}}
+   
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
    ```bash
    terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
-   ```
+   ```text
 
    The plan should show the changes to be made, with a summary similar to the
    following:
 
-   ```
+   ```text
    Plan: 9 to add, 1 to change, 0 to destroy.
-   ```
+   ```text
 
 1. If you are satisfied with the changes, apply.
 
    ```bash
    terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
-   ```
+   ```text
 
    To approve the changes and apply, enter `yes`.
 
@@ -406,13 +426,13 @@ deploys a sample infrastructure on Azure with the following components:
       }
    }
    resource_group_name = "mydemo-rg"
-   ```
+   ```text
 
 1. Verify the installation and check the status:
 
    ```bash
    kubectl get all -n materialize-environment
-   ```
+   ```text
 
    Wait for the components to be ready and in the `Running` state.
 
@@ -453,7 +473,7 @@ deploys a sample infrastructure on Azure with the following components:
    NAME                   STATUS     COMPLETIONS   DURATION   AGE
    job.batch/db-demo-db   Complete   1/1           10s        2m21s
 
-   ```
+   ```text
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
@@ -461,9 +481,10 @@ deploys a sample infrastructure on Azure with the following components:
 1. Open the Materialize Console in your browser:
 
 
-   {{< tabs >}}
+   
 
-   {{< tab  "Via Network Load Balancer" >}}
+   #### Via Network Load Balancer
+
 
    Starting in v0.3.1, for each Materialize instance, Materialize on Azure
    Terraform module also deploys load balancers (by default, internal) with the
@@ -484,35 +505,36 @@ deploys a sample infrastructure on Azure with the following components:
    from an official Certificate Authority (CA) rather than self-signed
    certificates.
 
-   {{</ tab >}}
+   
 
-   {{< tab "Via port forwarding" >}}
+   #### Via port forwarding
 
-   {{% self-managed/port-forwarding-handling %}}
 
-   {{</ tab>}}
-   {{</ tabs >}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-   {{< tip >}}
+   
+   
 
-   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+   > **Tip:** 
 
-   {{< /tip >}}
+   <!-- Unresolved shortcode: {{% self-managed/troubleshoot-console-mz_catalog_s... -->
+
+   
 
 ## Next steps
 
-{{% self-managed/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Cleanup
 
-{{% self-managed/cleanup-cloud %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-  {{< tip>}}
+  > **Tip:** 
 
   If the `terraform destroy` command is unable to delete the subnet because it
   is in use, you can rerun the `terraform destroy` command.
 
-  {{</ tip >}}
+  
 
 ## See also
 
@@ -523,12 +545,12 @@ deploys a sample infrastructure on Azure with the following components:
 - [Installation](/installation/)
 
 
-
-
 ---
 
 ## Appendix: Azure deployment guidelines
 
+
+This section covers appendix: azure deployment guidelines.
 
 ## Recommended instance types
 
@@ -552,12 +574,11 @@ Azure VM Types with Local NVMe Disk:
 | Standard_E16pds_v6 | 16    | 128 GiB | 600 GiB        | ~4.7:1           |
 | Standard_E32pds_v6 | 32    | 256 GiB | 1,200 GiB      | ~4.7:1           |
 
-{{< important >}}
+> **Important:** 
 
 These VM types provide **ephemeral** local NVMe SSD disks. Data is lost
 when the VM is stopped or deleted.
 
-{{</ important >}}
 
 See also [Locally attached NVMe storage](#locally-attached-nvme-storage).
 
@@ -616,8 +637,6 @@ Certificate Authority (CA) rather than self-signed certificates.
     https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_setup_image
 
 
-
-
 ---
 
 ## Appendix: Required configuration
@@ -633,7 +652,7 @@ When using the root `main.tf` file from the [Materialize on Azure Terraform
 module](https://github.com/MaterializeInc/terraform-azurerm-materialize), the
 following variables must be set: [^1]
 
-{{< yaml-table data="self_managed/azure_required_variables" >}}
+<!-- Dynamic table: self_managed/azure_required_variables - see original docs -->
 
 For a list of all variables, see the
 [README.md](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#inputs)
@@ -655,7 +674,7 @@ create a new resource group or use an existing resource group:
     location = var.location                    # Defaults to eastus2
     tags     = var.tags                        # Optional
   }
-  ```
+  ```text
 
 - **To use an existing resource group**, set the [`resource_group_name`
   variable](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/variables.tf)
@@ -694,12 +713,10 @@ provider "helm" {
     cluster_ca_certificate = base64decode(module.aks.kube_config[0].cluster_ca_certificate)
   }
 }
-```
+```json
 
 [^1]: If using the `examples/simple/main.tf`, the example configuration handles
 them for you.
-
-
 
 
 ---
@@ -707,17 +724,14 @@ them for you.
 ## Upgrade on Azure (Terraform)
 
 
-{{< annotation type="Disambiguation" >}}
-
-- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
-Terraform version to `v0.6.1` or higher, {{< include-md
-file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md" >}}.
+> **Disambiguation:** - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1` or higher, [Azure Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061)
+.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided Terraforms, you must
 prepare your nodes by adding the required labels. For detailed instructions, see
 [Prepare for swap and upgrade to v26.0](/installation/upgrade-to-swap/).
-
-{{< /annotation >}}
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on Azure Kubernetes Service (AKS).
@@ -729,32 +743,32 @@ directory or the root).
 
 ## Version compatibility
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+> **Important:** 
+
+When performing major version upgrades, you can upgrade only one major version
+at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
+but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
+not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](../self-managed/v25.2/release-notes/#v25216).
 
 
+#### Materialize on Azure Terraform Releases
 
-{{< tabs >}}
-
-{{< tab "Materialize on Azure Terraform Releases" >}}
 
 When upgrading, you may need or want to update your fork of the Terraform module
 to upgrade.
 
-{{< yaml-table data="self_managed/azure_terraform_versions" >}}
+<!-- Dynamic table: self_managed/azure_terraform_versions - see original docs -->
 
-{{</ tab >}}
-{{</ tabs >}}
 
 ## Prerequisites
 
-{{< important >}}
+> **Important:** 
 
 The following procedure performs a rolling upgrade, where both the old and new
 Materialize instances are running before the the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
-{{</ important >}}
 
 ### Azure subscription
 
@@ -791,7 +805,9 @@ If you want to use `jq` and do not have `jq` installed, install.
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+Starting in v26.0, Materialize requires a license key. If your existing
+deployment does not have a license key configured, contact [Materialize support](../support/).
+
 
 ## A. Authenticate with Azure
 
@@ -801,7 +817,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
     ```bash
     az login
-    ```
+    ```text
 
    The command opens a browser window to sign in to Azure. Sign in.
 
@@ -819,7 +835,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    The default is marked with an *; the default tenant is '<Tenant>' and
    subscription is '<Subscription Name>' (<Subscription ID>).
-   ```
+   ```text
 
    Select the subscription and tenant.
 
@@ -827,7 +843,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
     ```bash
     export ARM_SUBSCRIPTION_ID=<subscription-id>
-    ```
+    ```bash
 
 ## B. Upgrade process
 
@@ -836,36 +852,36 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    cd terraform-azurerm-materialize/examples/simple
-   ```
+   ```text
 
 1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
-   {{< yaml-table data="self_managed/azure_terraform_versions" >}}
+   <!-- Dynamic table: self_managed/azure_terraform_versions - see original docs -->
 
-   {{< tip >}}
+   > **Tip:** 
 
-   {{% self-managed/azure-terraform-upgrade-notes %}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-   {{</ tip >}}
+   
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
    environment:
 
     ```bash
     python3 -m venv <path to the new virtual environment>
-    ```
+    ```text
 
    Activate the virtual environment:
     ```bash
     source <path to the new virtual environment>/bin/activate
-    ```
+    ```text
 
 1. Install the required packages.
 
     ```bash
     pip install -r requirements.txt
-    ```
+    ```text
 
 1. Configure `kubectl` to connect to your cluster:
 
@@ -877,7 +893,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    az aks get-credentials --resource-group <resource_group_name> --name <cluster_name>
-   ```
+   ```text
 
    Alternatively, you can use the following command to get the cluster name and
    resource group name from the Terraform output (in your `terraform.tfstate`
@@ -885,7 +901,7 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    ```bash
    az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -json aks_cluster | jq -r '.name')
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
@@ -896,7 +912,4 @@ If you want to use `jq` and do not have `jq` installed, install.
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
-
-
-
+<!-- Unresolved shortcode: {{% self-managed/versions/upgrade/upgrade-steps-cl... -->

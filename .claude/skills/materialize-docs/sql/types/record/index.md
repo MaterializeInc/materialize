@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/record/
+complexity: intermediate
+description: A tuple with arbitrary contents
+doc_type: reference
+keywords:
+- Quick Syntax
+- Catalog name
+- SELECT RECORD
+- Size
+- record type
+- SELECT ROW
+product_area: Indexes
+status: stable
+title: record type
+---
+
 # record type
+
+## Purpose
+A tuple with arbitrary contents
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 A tuple with arbitrary contents
 
@@ -15,7 +39,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-record.svg" >}}
+[See diagram: type-record.svg]
 
 ## Details
 
@@ -39,25 +63,27 @@ You cannot cast from any other types to `record`.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT ROW(1, 2) AS record;
-```
+```text
 ```nofmt
  record
 --------
  (1,2)
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT record, (record).f2 FROM (SELECT ROW(1, 2) AS record);
-```
+```text
 ```nofmt
 record | f2
 --------+----
  (1,2)  |  2
-```
+```text
 
 <hr>
 
@@ -66,7 +92,7 @@ will result in errors like the following
 
 ```mzsql
 SELECT record.f2 FROM (SELECT ROW(1, 2) AS record);
-```
+```text
 ```nofmt
 ERROR:  column "record.f2" does not exist
 ```

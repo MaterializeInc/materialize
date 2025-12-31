@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/system-catalog/information_schema/
+complexity: intermediate
+description: information_schema is a system catalog that presents metadata in the
+  format used by SQL standard.
+doc_type: reference
+keywords:
+- information_schema
+product_area: Indexes
+status: stable
+title: information_schema
+---
+
 # information_schema
+
+## Purpose
+information_schema is a system catalog that presents metadata in the format used by SQL standard.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 information_schema is a system catalog that presents metadata in the format used by SQL standard.
 

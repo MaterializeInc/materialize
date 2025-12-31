@@ -1,4 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/
+complexity: advanced
+description: Connect via client libraries/SQL drivers
+doc_type: reference
+keywords:
+- create relations
+- not guaranteed
+- stream out results
+- CREATE A
+- CREATE TABLES
+- 'execute
+
+  queries'
+- CREATE TABLE
+- CREATE RELATIONS
+- Client libraries
+- 'Note:'
+product_area: General
+status: stable
+title: Client libraries
+---
+
 # Client libraries
+
+## Purpose
+Connect via client libraries/SQL drivers
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Connect via client libraries/SQL drivers
 
@@ -8,19 +38,17 @@ Applications can use various common language-specific PostgreSQL client
 libraries to interact with Materialize and **create relations**, **execute
 queries** and **stream out results**.
 
-{{< note >}}
+> **Note:** 
 Client libraries tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if PostgreSQL is supported, it's **not guaranteed** that the same integration will work out-of-the-box.
-{{</ note >}}
 
-| Language | Tested drivers                                                  | Notes                                                 |
-| -------- | --------------------------------------------------------------- | ----------------------------------------------------- |
-| Go       | [`pgx`](https://github.com/jackc/pgx)                           | See the [Go cheatsheet](/integrations/client-libraries/golang/).       |
-| Java     | [PostgreSQL JDBC driver](https://jdbc.postgresql.org/)          | See the [Java cheatsheet](/integrations/client-libraries/java-jdbc/).  |
-| Node.js  | [`node-postgres`](https://node-postgres.com/)                   | See the [Node.js cheatsheet](/integrations/client-libraries/node-js/). |
-| PHP      | [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php)      | See the [PHP cheatsheet](/integrations/client-libraries/php/).         |
-| Python   | [`psycopg2`](https://pypi.org/project/psycopg2/)                | See the [Python cheatsheet](/integrations/client-libraries/python/).   |
-| Ruby     | [`pg` gem](https://rubygems.org/gems/pg/)                       | See the [Ruby cheatsheet](/integrations/client-libraries/ruby/).       |
-| Rust     | [`postgres-openssl`](https://crates.io/crates/postgres-openssl) | See the [Rust cheatsheet](/integrations/client-libraries/rust/).       |
+
+- **Go**: [`pgx`](https://github.com/jackc/pgx) | See the [Go cheatsheet](/integrations/client-libraries/golang/).
+- **Java**: [PostgreSQL JDBC driver](https://jdbc.postgresql.org/) | See the [Java cheatsheet](/integrations/client-libraries/java-jdbc/).
+- **Node.js**: [`node-postgres`](https://node-postgres.com/) | See the [Node.js cheatsheet](/integrations/client-libraries/node-js/).
+- **PHP**: [`pdo_pgsql`](https://www.php.net/manual/en/ref.pgsql.php) | See the [PHP cheatsheet](/integrations/client-libraries/php/).
+- **Python**: [`psycopg2`](https://pypi.org/project/psycopg2/) | See the [Python cheatsheet](/integrations/client-libraries/python/).
+- **Ruby**: [`pg` gem](https://rubygems.org/gems/pg/) | See the [Ruby cheatsheet](/integrations/client-libraries/ruby/).
+- **Rust**: [`postgres-openssl`](https://crates.io/crates/postgres-openssl) | See the [Rust cheatsheet](/integrations/client-libraries/rust/).
 
 👋 _Is there another client library you'd like to use with Materialize? Submit a
 [feature
@@ -60,7 +88,7 @@ func main() {
 	}
 	defer conn.Close()
 }
-```
+```text
 
 To create a concurrency-safe connection pool, import the [`pgxpool` package](https://pkg.go.dev/github.com/jackc/pgx/v4/pgxpool) and use `pgxpool.Connect`.
 
@@ -84,7 +112,7 @@ _, err := conn.Exec(ctx, createTableSQL)
 if err != nil {
     log.Fatal(err)
 }
-```
+```bash
 
 ## Insert data into tables
 
@@ -97,7 +125,7 @@ _, err := conn.Exec(ctx, insertSQL, "GH", "GHANA")
 if err != nil {
     log.Fatal(err)
 }
-```
+```bash
 
 ## Query
 
@@ -121,7 +149,7 @@ for rows.Next() {
     }
     // operate on result
 }
-```
+```bash
 
 ## Manage sources, views, and indexes
 
@@ -139,7 +167,7 @@ _, err = conn.Exec(ctx, createSourceSQL)
 if err != nil {
     log.Fatal(err)
 }
-```
+```text
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
 ### Create a view from Go
@@ -155,7 +183,7 @@ _, err = conn.Exec(ctx, createViewSQL)
 if err != nil {
     log.Fatal(err)
 }
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -201,14 +229,14 @@ err = tx.Commit(ctx)
 if err != nil {
     log.Fatal(err)
 }
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of `subscribeResult` contains all of the columns of `amount_sum`, prepended with several additional columns that describe the nature of the update.  When a row of a subscribed view is **updated,** two objects will show up in the result set:
 
 ```go
 {MzTimestamp:1646868332570 MzDiff:1 row...}
 {MzTimestamp:1646868332570 MzDiff:-1 row...}
-```
+```text
 
 An `MzDiff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`MzDiff:-1`) and an insertion (`MzDiff:1`) with the same timestamp.
 
@@ -220,7 +248,7 @@ To clean up the sources, views, and tables that we created, first connect to Mat
 DROP MATERIALIZED VIEW IF EXISTS amount_sum;
 DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
-```
+```bash
 
 ## Go ORMs
 
@@ -283,7 +311,7 @@ public class App {
         app.connect();
     }
 }
-```
+```text
 
 To establish the connection to Materialize, call the `getConnection()` method on the `DriverManager` class.
 
@@ -343,7 +371,7 @@ public class App {
     }
 
 }
-```
+```bash
 
 ## Insert data into tables
 
@@ -400,7 +428,7 @@ public class App {
         app.insert();
     }
 }
-```
+```bash
 
 ## Query
 
@@ -459,7 +487,7 @@ public class App {
         app.query();
     }
 }
-```
+```text
 
 For more details, see the [JDBC](https://jdbc.postgresql.org/documentation/head/query.html) documentation.
 
@@ -518,7 +546,7 @@ public class App {
         app.source();
     }
 }
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -540,7 +568,7 @@ For more information, see [`CREATE SOURCE`](/sql/create-source/).
             System.out.println(ex.getMessage());
         }
     }
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -601,7 +629,7 @@ public class App {
         app.subscribe();
     }
 }
-```
+```text
 
 The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `rs` is a `ResultSet` of view updates. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
@@ -611,7 +639,7 @@ The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `rs` is a `ResultSet`
     1648567761801 1 value_4
     1648567785802 -1 value_4
     ...
-```
+```text
 
 A `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
@@ -623,7 +651,7 @@ To clean up the sources, views, and tables that we created, first connect to Mat
 DROP MATERIALIZED VIEW IF EXISTS amount_sum;
 DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
-```
+```bash
 
 ## Java ORMs
 
@@ -662,7 +690,7 @@ async function main() {
 }
 
 main();
-```
+```bash
 
 ## Create tables
 
@@ -696,7 +724,7 @@ async function main() {
 }
 
 main();
-```
+```bash
 
 ## Insert data into tables
 
@@ -724,7 +752,7 @@ async function main() {
 }
 
 main();
-```
+```bash
 
 ## Query
 
@@ -753,7 +781,7 @@ async function main() {
 };
 
 main();
-```
+```text
 
 For more details, see the [`node-postgres` query](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) documentation.
 
@@ -784,7 +812,7 @@ async function main() {
 }
 
 main();
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -813,7 +841,7 @@ async function main() {
 }
 
 main();
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -847,7 +875,7 @@ async function main() {
 }
 
 main();
-```
+```text
 
 The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an array of view update objects. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
@@ -866,7 +894,7 @@ The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an arra
     },
     ...
 ]
-```
+```text
 
 An `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
@@ -886,7 +914,7 @@ client.connect((err, client) => {
   const stream = client.query(new QueryStream('SUBSCRIBE avg_bid', []));
   stream.pipe(process.stdout);
 });
-```
+```text
 --->
 
 ## Clean up
@@ -897,7 +925,7 @@ To clean up the sources, views, and tables that we created, first connect to Mat
 DROP MATERIALIZED VIEW IF EXISTS amount_sum;
 DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
-```
+```bash
 
 ## Node.js ORMs
 
@@ -940,7 +968,7 @@ function connect(string $host, int $port, string $db, string $user, string $pass
 }
 
 $connection = connect('MATERIALIZE_HOST', 6875, 'materialize', 'MATERIALIZE_USERNAME', 'MATERIALIZE_PASSWORD');
-```
+```text
 
 You can add the above code to a `config.php` file and then include it in your application with `require 'connect.php';`.
 
@@ -962,7 +990,7 @@ $sql = 'CREATE TABLE IF NOT EXISTS countries (
 
 $statement = $connection->prepare($sql);
 $statement->execute();
-```
+```bash
 
 ## Insert data into tables
 
@@ -985,7 +1013,7 @@ $count = $connection->query($countStmt);
 while (($row = $count->fetch(PDO::FETCH_ASSOC)) !== false) {
     var_dump($row);
 }
-```
+```bash
 
 ## Query
 
@@ -1006,7 +1034,7 @@ $statement = $connection->query($sql);
 while (($row = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
     var_dump($row);
 }
-```
+```text
 
 For more details, see the [PHP `PDOStatement`](https://www.php.net/manual/en/pdostatement.fetch.php) documentation.
 
@@ -1031,7 +1059,7 @@ $statement = $connection->query($sources);
 $result = $statement->fetchAll(PDO::FETCH_ASSOC);
 var_dump($result);
 
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -1051,7 +1079,7 @@ $views = "SHOW MATERIALIZED VIEWS";
 $statement = $connection->query($views);
 $result = $statement->fetchAll(PDO::FETCH_ASSOC);
 var_dump($result);
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -1081,7 +1109,7 @@ while (true) {
     $result = $subscribe->fetchAll(PDO::FETCH_ASSOC);
     print_r($result);
 }
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of view updates objects. When a row of a subscribed view is **updated,** two objects will show up in the `result` array:
 
@@ -1108,7 +1136,7 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `result` is an array of
 
         )
     ...
-```
+```text
 
 An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
@@ -1120,7 +1148,7 @@ To clean up the sources, views, and tables that we created, first connect to Mat
 DROP MATERIALIZED VIEW IF EXISTS ammount_sum;
 DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
-```
+```bash
 
 ## PHP ORMs
 
@@ -1150,7 +1178,7 @@ import sys
 
 dsn = "user=MATERIALIZE_USERNAME password=MATERIALIZE_PASSWORD host=MATERIALIZE_HOST port=6875 dbname=materialize sslmode=require"
 conn = psycopg2.connect(dsn)
-```
+```bash
 
 ## Create tables
 
@@ -1173,7 +1201,7 @@ with conn.cursor() as cur:
 with conn.cursor() as cur:
     cur.execute("SHOW TABLES")
     print(cur.fetchone())
-```
+```bash
 
 ## Insert data into tables
 
@@ -1201,7 +1229,7 @@ with conn.cursor() as cur:
     print(cur.fetchone())
 
 conn.close()
-```
+```bash
 
 ## Query
 
@@ -1224,7 +1252,7 @@ with conn.cursor() as cur:
     cur.execute("SELECT * FROM countries;")
     for row in cur:
         print(row)
-```
+```text
 
 For more details, see the [Psycopg](https://www.psycopg.org/docs/usage.html) documentation.
 
@@ -1250,7 +1278,7 @@ with conn.cursor() as cur:
 with conn.cursor() as cur:
     cur.execute("SHOW SOURCES")
     print(cur.fetchone())
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -1274,7 +1302,7 @@ with conn.cursor() as cur:
 with conn.cursor() as cur:
     cur.execute("SHOW VIEWS")
     print(cur.fetchone())
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -1299,7 +1327,7 @@ with conn.cursor() as cur:
         cur.execute("FETCH ALL c")
         for row in cur:
             print(row)
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
@@ -1311,7 +1339,7 @@ The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access 
 (Decimal('1648737065479'), -1, 'my_value_3')
 (Decimal('1648737065479'), 1, 'my_value_4')
     ...
-```
+```text
 
 A `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
@@ -1332,7 +1360,7 @@ conn = psycopg.connect(dsn)
 with conn.cursor() as cur:
     for row in cur.stream("SUBSCRIBE amount_sum"):
         print(row)
-```
+```bash
 
 ## Clean up
 
@@ -1342,7 +1370,7 @@ To clean up the sources, views, and tables that we created, first connect to Mat
 DROP MATERIALIZED VIEW IF EXISTS amount_sum;
 DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
-```
+```bash
 
 ## Python ORMs
 
@@ -1371,13 +1399,13 @@ To connect to Materialize using `pg`:
 require 'pg'
 
 conn = PG.connect(host:"MATERIALIZE_HOST", port: 6875, user: "MATERIALIZE_USERNAME", password: "MATERIALIZE_PASSWORD")
-```
+```text
 
 If you don't have a `pg` gem, you can install it with:
 
 ```bash
 gem install pg
-```
+```bash
 
 ## Create tables
 
@@ -1397,7 +1425,7 @@ res  = conn.exec('SHOW TABLES')
 res.each do |row|
   puts row
 end
-```
+```bash
 
 ## Insert data into tables
 
@@ -1416,7 +1444,7 @@ res  = conn.exec('SELECT * FROM countries')
 res.each do |row|
   puts row
 end
-```
+```bash
 
 ## Query
 
@@ -1436,7 +1464,7 @@ res  = conn.exec('SELECT * FROM countries')
 res.each do |row|
   puts row
 end
-```
+```text
 
 For more details, see the [`exec` instance method](https://rubydoc.info/gems/pg/0.10.0/PGconn#exec-instance_method) documentation.
 
@@ -1463,7 +1491,7 @@ res = conn.exec("SHOW SOURCES")
 res.each do |row|
   puts row
 end
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -1487,7 +1515,7 @@ res = conn.exec("SHOW MATERIALIZED VIEWS")
 res.each do |row|
   puts row
 end
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -1513,7 +1541,7 @@ while true
     end
   end
 end
-```
+```text
 
 Each `result` of the [SUBSCRIBE output format](/sql/subscribe/#output) has exactly object. When a row of a subscribed view is **updated,** two objects will show up:
 
@@ -1524,7 +1552,7 @@ Each `result` of the [SUBSCRIBE output format](/sql/subscribe/#output) has exact
 {"mz_timestamp"=>"1648126887708", "mz_diff"=>"1", "sum"=>"3"}
 {"mz_timestamp"=>"1648126897364", "mz_diff"=>"-1", "sum"=>"1"}
 ...
-```
+```text
 
 An `mz_diff` value of `-1` indicates Materialize is deleting one row with the included values.  An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same `mz_timestamp`.
 
@@ -1536,7 +1564,7 @@ To clean up the sources, views, and tables that we created, first connect to Mat
 DROP MATERIALIZED VIEW IF EXISTS amount_sum;
 DROP SOURCE IF EXISTS auction CASCADE;
 DROP TABLE IF EXISTS countries;
-```
+```bash
 
 ## Ruby ORMs
 
@@ -1571,7 +1599,7 @@ pub(crate) fn create_client() -> Result<Client, Error> {
     let config = "postgres://MATERIALIZE_USERNAME:APP_SPECIFIC_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=require";
     Client::connect(config, connector)
 }
-```
+```bash
 
 ## Create tables
 
@@ -1597,7 +1625,7 @@ pub(crate) fn create_table() -> Result<u64, Error> {
         &[],
     )
 }
-```
+```bash
 
 ## Insert data into tables
 
@@ -1619,7 +1647,7 @@ pub(crate) fn insert() -> Result<u64, Error> {
         &[&code, &name],
     )
 }
-```
+```bash
 
 ## Query
 
@@ -1637,7 +1665,7 @@ pub(crate) fn run_query () {
         println!("{:} - {:}", row.get::<usize, String>(0), row.get::<usize, String>(1));
     };
 }
-```
+```bash
 
 ## Manage sources, views, and indexes
 
@@ -1661,7 +1689,7 @@ pub(crate) fn create_source() -> Result<u64, Error> {
         &[],
     )
 }
-```
+```bash
 
 ### Create a view from Rust
 
@@ -1682,7 +1710,7 @@ pub(crate) fn create_materialized_view() -> Result<u64, Error> {
         &[],
     )
 }
-```
+```bash
 
 ## Stream
 
@@ -1703,7 +1731,7 @@ pub(crate) fn subscribe() {
         }
     }
 }
-```
+```text
 
 The [SUBSCRIBE output format](/sql/subscribe/#output) of the `amount_sum` view contains all of the columns of the view, prepended with several additional columns that describe the nature of the update.
 

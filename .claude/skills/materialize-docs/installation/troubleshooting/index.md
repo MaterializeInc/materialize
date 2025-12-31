@@ -1,8 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/troubleshooting/
+complexity: advanced
+description: 'To check the status of the Materialize operator:'
+doc_type: troubleshooting
+keywords:
+- Troubleshooting
+- SHOW CLUSTERS
+- ALTER CLUSTER
+product_area: Deployment
+status: stable
+title: Troubleshooting
+---
+
 # Troubleshooting
+
+## Purpose
+
+
+This page provides detailed documentation for this topic.
+
 
 
 
 ## Troubleshooting Kubernetes
+
+This section covers troubleshooting kubernetes.
 
 ### Materialize operator
 
@@ -10,7 +33,7 @@ To check the status of the Materialize operator:
 
 ```shell
 kubectl -n materialize get all
-```
+```text
 
 If you encounter issues with the Materialize operator,
 
@@ -18,14 +41,14 @@ If you encounter issues with the Materialize operator,
 
   ```shell
   kubectl -n materialize logs -l app.kubernetes.io/name=materialize-operator
-  ```
+  ```text
 
 - Check the log of a specific object (pod/deployment/etc) running in
   your namespace:
 
   ```shell
   kubectl -n materialize logs <type>/<name>
-  ```
+  ```text
 
   In case of a container restart, to get the logs for previous instance, include
   the `--previous` flag.
@@ -36,14 +59,14 @@ If you encounter issues with the Materialize operator,
 
     ```shell
     kubectl -n materialize describe pod/<pod-name>
-    ```
+    ```text
 
   - You can use `kubectl get events`, substituting your pod name for
     `<pod-name>`:
 
     ```shell
     kubectl -n materialize get events --sort-by=.metadata.creationTimestamp --field-selector involvedObject.name=<pod-name>
-    ```
+    ```bash
 
 ### Materialize deployment
 
@@ -51,14 +74,14 @@ If you encounter issues with the Materialize operator,
 
   ```shell
   kubectl  -n materialize-environment get all
-  ```
+  ```text
 
 - To check the log of a specific object (pod/deployment/etc) running in your
   namespace:
 
   ```shell
   kubectl -n materialize-environment logs <type>/<name>
-  ```
+  ```text
 
   In case of a container restart, to get the logs for previous instance, include
   the `--previous` flag.
@@ -67,7 +90,7 @@ If you encounter issues with the Materialize operator,
 
   ```shell
   kubectl -n materialize-environment describe <type>/<name>
-  ```
+  ```text
 
 For additional `kubectl` commands, see [kubectl Quick reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
@@ -91,20 +114,20 @@ To increase the cluster's size, you can follow the following steps:
 
        ```
        psql -h localhost -p 6877 --user mz_system
-       ```
+       ```text
 
 3. Run the following [ALTER CLUSTER](/sql/alter-cluster/#resizing) statement
    to change the cluster size to `50cc`:
 
     ```mzsql
     ALTER CLUSTER mz_catalog_server SET (SIZE = '50cc');
-    ```
+    ```text
 
 4. Verify your changes via `SHOW CLUSTERS;`
 
    ```mzsql
    show clusters;
-   ```
+   ```text
 
    The output should include the `mz_catalog_server` cluster with a size of `50cc`:
 

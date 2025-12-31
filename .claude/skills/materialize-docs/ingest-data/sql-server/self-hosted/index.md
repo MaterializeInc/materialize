@@ -1,39 +1,64 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/sql-server/self-hosted/
+complexity: beginner
+description: How to stream data from self-hosted SQL Server database to Materialize
+doc_type: reference
+keywords:
+- UPDATE YOUR
+- 'you can
+
+  skip this step'
+- Ingest data from self-hosted SQL Server
+- 'Allow Materialize IPs:'
+- CREATE A
+- SELECT THE
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: Ingest data from self-hosted SQL Server
+---
+
 # Ingest data from self-hosted SQL Server
 
+## Purpose
 How to stream data from self-hosted SQL Server database to Materialize
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to stream data from self-hosted SQL Server database to Materialize
 
 
 This page shows you how to stream data from a self-hosted SQL Server database
 to Materialize using the [SQL Server Source](/sql/create-source/sql-server/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
 
 ## Before you begin
 
-{{% sql-server-direct/before-you-begin %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: sql-server-direct/before-you-begin --> --> -->
 
 ## A. Configure SQL Server
 
-{{< note >}}
+> **Note:** 
 
 To configure SQL Server for data ingestion into Materialize, you must be a user
 with privileges to enable CDC and create/manage login, users, roles, and
 privileges.
 
-{{</ note >}}
 
-{{% sql-server-direct/ingesting-data/enable-cdc %}}
+<!-- Unresolved shortcode: {{% sql-server-direct/ingesting-data/enable-cdc %}... -->
 
 ## B. (Optional) Configure network security
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and your SQL Server instance is publicly accessible, **you can
 skip this step**. For production scenarios, we recommend configuring one of the
 network security options below.
-{{< /note >}}
+
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -47,9 +72,7 @@ to connect:
 
 Select the option that works best for you.
 
-{{< tabs >}}
-
-{{< tab "Allow Materialize IPs">}}
+#### Allow Materialize IPs
 
 1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
@@ -57,14 +80,12 @@ Select the option that works best for you.
 
     ```mzsql
     SELECT * FROM mz_egress_ips;
-    ```
+    ```text
 
 1. Update your database firewall rules to allow traffic from each IP address
    from the previous step.
 
-{{< /tab >}}
-
-{{< tab "Use AWS PrivateLink">}}
+#### Use AWS PrivateLink
 
 Materialize can connect to a SQL Server database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
 service. Your SQL Server database must be running on AWS in order to use this
@@ -137,7 +158,7 @@ option.
         SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
         AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
     );
-    ```
+    ```text
 
     Update the list of the availability zones to match the ones that you are
     using in your AWS account.
@@ -152,13 +173,13 @@ option.
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
     WHERE c.name = 'privatelink_svc';
-    ```
+    ```text
 
-    ```
+    ```text
                                      principal
     ---------------------------------------------------------------------------
      arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
-    ```
+    ```text
 
     Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
     to configure your VPC endpoint service to accept connections from the
@@ -173,9 +194,7 @@ option.
       show up, so you would need to wait for the endpoint service connection to
       be ready before you create a source.
 
-{{< /tab >}}
-
-{{< tab "Use an SSH tunnel">}}
+#### Use an SSH tunnel
 
 To create an SSH tunnel from Materialize to your database, you launch an VM to
 serve as an SSH bastion host, configure the bastion host to allow traffic only
@@ -207,22 +226,20 @@ traffic from the bastion host.
 1. Update your database firewall rules to allow traffic from the SSH bastion
    host.
 
-{{< /tab >}}
-
-{{< /tabs >}}
-
 ## C. Ingest data in Materialize
+
+This section covers c. ingest data in materialize.
 
 ### 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your SQL Server
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
 
-{{% sql-server-direct/create-a-cluster %}}
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: sql-server-direct/create-a-cluster --> --> -->
 
 
 ### 2. Create a connection
@@ -230,46 +247,40 @@ scenarios, we recommend separating your workloads into multiple clusters for
 Once you have configured your network, create a connection in Materialize per
 your networking configuration.
 
-{{< tabs >}}
+#### Allow Materialize IPs
 
-{{< tab "Allow Materialize IPs">}}
-{{% sql-server-direct/ingesting-data/allow-materialize-ips %}}
-{{< /tab >}}
+<!-- Unresolved shortcode: {{% sql-server-direct/ingesting-data/allow-materia... -->
 
-{{< tab "Use an AWS Privatelink (Cloud-only)">}}
-{{% sql-server-direct/ingesting-data/use-aws-privatelink %}}
-{{< /tab >}}
+#### Use an AWS Privatelink (Cloud-only)
 
-{{< tab "Use an SSH tunnel">}}
-{{% sql-server-direct/ingesting-data/use-ssh-tunnel %}}
-{{< /tab >}}
+<!-- Unresolved shortcode: {{% sql-server-direct/ingesting-data/use-aws-priva... -->
 
-{{< /tabs >}}
+#### Use an SSH tunnel
+
+<!-- Unresolved shortcode: {{% sql-server-direct/ingesting-data/use-ssh-tunne... -->
 
 ### 3. Start ingesting data
 
-{{< note >}}
+> **Note:** 
 For a new SQL Server source, if none of the replicating tables
 are receiving write queries, snapshotting may take up to an additional 5 minutes
 to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
-{{</ note >}}
 
-{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="create-source" %}}
 
-{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="create-source-options" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/ingest_data/sql... -->
 
-{{% include-example file="examples/ingest_data/sql_server/create_source_cloud"
-example="schema-changes" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/ingest_data/sql... -->
+
+<!-- Unresolved shortcode: {{% include-example file="examples/ingest_data/sql... -->
 
 ### 4. Right-size the cluster
 
-{{% sql-server-direct/right-size-the-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: sql-server-direct/right-size-the-cluster --> --> -->
 
 ## D. Explore your data
 
-{{% sql-server-direct/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: sql-server-direct/next-steps --> --> -->
 
 ## Considerations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
-
+<!-- Unresolved shortcode: {{% include-md file="shared-content/sql-server-con... -->

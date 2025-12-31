@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/delete/
+complexity: intermediate
+description: '`DELETE` removes values stored in tables.'
+doc_type: reference
+keywords:
+- FROM
+- WHERE
+- Low performance.
+- DELETE
+- CREATE TABLE
+- USING
+- AS
+- DELETE FROM
+- INSERT INTO
+product_area: Indexes
+status: stable
+title: DELETE
+---
+
 # DELETE
+
+## Purpose
+`DELETE` removes values stored in tables.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DELETE` removes values stored in tables.
 
@@ -8,12 +35,14 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DELETE FROM <table_name> [AS <alias>]
 [USING <from_item> [, ...]]
 [WHERE <condition>]
 ;
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -23,6 +52,8 @@ Syntax element | Description
 **WHERE** `<condition>` | Optional. Only remove rows which evaluate to `true` for _condition_.
 
 ## Details
+
+This section covers details.
 
 ### Known limitations
 
@@ -34,6 +65,8 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 CREATE TABLE delete_me (a int, b text);
 INSERT INTO delete_me
@@ -43,13 +76,13 @@ INSERT INTO delete_me
     (3, 'ok');
 DELETE FROM delete_me WHERE b = 'hello';
 SELECT * FROM delete_me ORDER BY a;
-```
+```text
 ```
  a |    b
 ---+---------
  2 | goodbye
  3 | ok
-```
+```text
 ```mzsql
 CREATE TABLE delete_using (b text);
 INSERT INTO delete_using VALUES ('goodbye'), ('ciao');
@@ -57,16 +90,16 @@ DELETE FROM delete_me
     USING delete_using
     WHERE delete_me.b = delete_using.b;
 SELECT * FROM delete_me;
-```
+```text
 ```
  a | b
 ---+----
  3 | ok
-```
+```text
 ```mzsql
 DELETE FROM delete_me;
 SELECT * FROM delete_me;
-```
+```text
 ```
  a | b
 ---+---
@@ -76,7 +109,15 @@ SELECT * FROM delete_me;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/delete.md" >}}
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `DELETE` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+    granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
+
 
 ## Related pages
 

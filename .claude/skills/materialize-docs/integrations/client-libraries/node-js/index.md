@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/client-libraries/node-js/
+complexity: advanced
+description: Use Node.js to connect, insert, manage, query and stream from Materialize.
+doc_type: reference
+keywords:
+- wire-compatible
+- Sequelize
+- CREATE A
+- CREATE TABLES
+- Node.js cheatsheet
+- 'Basic Example:'
+- CREATE TABLE
+- INSERT DATA
+- updated,
+- Prisma
+product_area: General
+status: stable
+title: Node.js cheatsheet
+---
+
 # Node.js cheatsheet
+
+## Purpose
+Use Node.js to connect, insert, manage, query and stream from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use Node.js to connect, insert, manage, query and stream from Materialize.
 
@@ -27,7 +55,7 @@ async function main() {
 }
 
 main();
-```
+```bash
 
 ## Create tables
 
@@ -61,7 +89,7 @@ async function main() {
 }
 
 main();
-```
+```bash
 
 ## Insert data into tables
 
@@ -89,7 +117,7 @@ async function main() {
 }
 
 main();
-```
+```bash
 
 ## Query
 
@@ -118,7 +146,7 @@ async function main() {
 };
 
 main();
-```
+```text
 
 For more details, see the [`node-postgres` query](https://node-postgres.com/features/queries) and [pg.Result](https://node-postgres.com/api/result) documentation.
 
@@ -149,7 +177,7 @@ async function main() {
 }
 
 main();
-```
+```text
 
 For more information, see [`CREATE SOURCE`](/sql/create-source/).
 
@@ -178,7 +206,7 @@ async function main() {
 }
 
 main();
-```
+```text
 
 For more information, see [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
 
@@ -212,7 +240,7 @@ async function main() {
 }
 
 main();
-```
+```text
 
 The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an array of view update objects. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
 
@@ -231,7 +259,7 @@ The [`SUBSCRIBE` output format](/sql/subscribe/#output) of `res.rows` is an arra
     },
     ...
 ]
-```
+```text
 
 An `mz_diff` value of `-1` indicates that Materialize is deleting one row with the included values. An update is just a retraction (`mz_diff: '-1'`) and an insertion (`mz_diff: '1'`) with the same timestamp.
 
@@ -251,7 +279,7 @@ client.connect((err, client) => {
   const stream = client.query(new QueryStream('SUBSCRIBE avg_bid', []));
   stream.pipe(process.stdout);
 });
-```
+```text
 --->
 
 ## Clean up

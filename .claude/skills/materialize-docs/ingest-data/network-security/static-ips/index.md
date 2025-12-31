@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/network-security/static-ips/
+complexity: intermediate
+description: Materialize Cloud provides static IP addresses that you can use to configure
+  egress policies in your virtual networks that target outbound traffic to Materialize.
+doc_type: reference
+keywords:
+- 'Connections may originate from
+
+  any address in the region'
+- Static IP addresses (Cloud-only)
+- SELECT CIDR
+- 'Note:'
+product_area: Sources
+status: stable
+title: Static IP addresses (Cloud-only)
+---
+
 # Static IP addresses (Cloud-only)
+
+## Purpose
+Materialize Cloud provides static IP addresses that you can use to configure egress policies in your virtual networks that target outbound traffic to Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Materialize Cloud provides static IP addresses that you can use to configure egress policies in your virtual networks that target outbound traffic to Materialize.
 
@@ -9,10 +34,10 @@ Each Materialize Cloud region is associated with a unique set of static egress
 blocks. All connections to the public internet initiated by your Materialize
 region will originate from an IP address in the provided blocks.
 
-{{< note >}}
+> **Note:** 
 On rare occasion, we may need to change the static egress CIDR blocks associated
 with a region. We make every effort to provide advance notice of such changes.
-{{< /note >}}
+
 
 When connecting Materialize to services in your private networks (e.g., Kafka,
 PostgreSQL, MySQL), you must configure any firewalls to allow connections from
@@ -37,14 +62,14 @@ system catalog table.
 
 ```mzsql
 SELECT * FROM mz_egress_ips;
-```
+```text
 
 ```nofmt
   egress_ip    | prefix_length |      cidr
 ---------------+---------------+-----------------
  3.215.237.176 |            32 | 3.215.237.176/32
  98.80.4.128   |            27 | 98.80.4.128/27
-```
+```text
 
 As an alternative, you can also submit an HTTP request to Materialize's
 [SQL API](/integrations/http-api/) querying the [`mz_egress_ips`](/sql/system-catalog/mz_catalog/#mz_egress_ips)

@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-table/
+complexity: intermediate
+description: '`CREATE TABLE` creates a table that is persisted in durable storage.'
+doc_type: reference
+keywords:
+- 'Private Preview:'
+- CREATE VIEWS
+- Private Preview
+- CREATE TABLE
+- 'Note:'
+product_area: Indexes
+status: experimental
+title: CREATE TABLE
+---
+
 # CREATE TABLE
 
+## Purpose
 `CREATE TABLE` creates a table that is persisted in durable storage.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`CREATE TABLE` creates a table that is persisted in durable storage.
 
 
 `CREATE TABLE` defines a table that is persisted in durable storage.
@@ -13,8 +35,7 @@ In Materialize, you can create:
 -  ***Private Preview***. Read-only tables from [PostgreSQL sources (new
   syntax)](/sql/create-source/postgres-v2/). Users cannot be write ([`INSERT`],
   [`UPDATE`], [`DELETE`]) to these tables. These tables are populated by [data
-  ingestion from a source](/ingest-data/postgres/). {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-version-requirement" %}}
+  ingestion from a source](/ingest-data/postgres/). <!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
 
 Tables in Materialize are similar to tables in standard relational databases:
@@ -30,34 +51,34 @@ clarity around best practices."
 
 ## Syntax
 
-{{< tabs >}}
-{{< tab "Read-write table" >}}
+This section covers syntax.
+
+#### Read-write table
+
 ### Read-write table
 
-{{% include-example file="examples/create_table/example_user_populated_table" example="syntax" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
-{{% include-example file="examples/create_table/example_user_populated_table" example="syntax-options" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
-{{< /tab >}}
-{{< tab "PostgreSQL source table" >}}
+#### PostgreSQL source table
+
 ### PostgreSQL source table
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
-{{< note >}}
-{{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-version-requirement" %}}
-{{< /note >}}
+> **Note:** 
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
-{{% include-example file="examples/create_table/example_postgres_table" example="syntax" %}}
 
-{{% include-example file="examples/create_table/example_postgres_table" example="syntax-options" %}}
-{{< /tab >}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
-{{< /tabs >}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
 
 ## Read-write tables
+
+This section covers read-write tables.
 
 ### Table names and column names
 
@@ -77,12 +98,11 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 
 ## PostgreSQL source tables
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
-{{< note >}}
-{{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-version-requirement" %}}
-{{< /note >}}
+> **Note:** 
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
+
 
 ### Table names and column names
 
@@ -93,72 +113,83 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Read-only tables
 
-{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+Source-populated tables are **read-only** tables. Users **cannot** perform write
+operations
+([`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)) on
+these tables.
+
 
 ### Source-populated tables and snapshotting
 
-{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
->}}
+Creating the tables from sources starts the [snapshotting](/ingest-data/#snapshotting) process. Snapshotting syncs the
+currently available data into Materialize. Because the initial snapshot is
+persisted in the storage layer atomically (i.e., at the same ingestion
+timestamp), you are not able to query the table until snapshotting is complete.
+
+> **Note:** 
+
+During the snapshotting, the data ingestion for
+the existing tables for the same source is temporarily blocked. As such, if
+possible, you can resize the cluster to speed up the snapshotting process and
+once the process finishes, resize the cluster for steady-state.
+
 
 ### Supported data types
 
-{{% include-from-yaml data="postgres_source_details" name="postgres-supported-types" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Handling table schema changes
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-compatible-schema-changes" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 #### Incompatible schema changes
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-incompatible-schema-changes" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Upstream table truncation restrictions
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Inherited tables
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-inherited-tables" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-inherited-tables-action" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-table.md" >}}
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the table definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
+
 
 ## Examples
 
+This section covers examples.
+
 ### Create a table (User-populated)
 
-{{% include-example file="examples/create_table/example_user_populated_table"
- example="create-table" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
 Once a user-populated table is created, you can perform CRUD
 (Create/Read/Update/Write) operations on it.
 
-{{% include-example file="examples/create_table/example_user_populated_table"
- example="write-to-table" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
-{{% include-example file="examples/create_table/example_user_populated_table"
- example="read-from-table" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
 ### Create a table (PostgreSQL source)
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
-{{< note >}}
+> **Note:** 
 
-{{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-version-requirement" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
 The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
 enabled logical replication, created the publication for the various tables and
@@ -167,16 +198,16 @@ replication user, and updated the network configuration).
 For details about configuring your upstream system, see the [PostgreSQL
 integration guides](/ingest-data/postgres/#supported-versions-and-services).
 
-{{</ note >}}
 
-{{% include-example file="examples/create_table/example_postgres_table"
- example="create-table" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
-{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+Source-populated tables are **read-only** tables. Users **cannot** perform write
+operations
+([`INSERT`](/sql/insert/)/[`UPDATE`](/sql/update/)/[`DELETE`](/sql/delete/)) on
+these tables.
 
 
-{{% include-example file="examples/create_table/example_postgres_table"
- example="read-from-table" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/create_table/ex... -->
 
 
 ## Related pages
@@ -188,4 +219,3 @@ integration guides](/ingest-data/postgres/#supported-versions-and-services).
 [`SELECT`]: /sql/select/
 [`UPDATE`]: /sql/update/
 [`DELETE`]: /sql/delete/
-

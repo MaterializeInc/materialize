@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/interval/
+complexity: intermediate
+description: Expresses a duration of time
+doc_type: reference
+keywords:
+- Quick Syntax
+- Catalog name
+- OID
+- interval type
+- Size
+- SELECT INTERVAL
+- Min value
+product_area: Indexes
+status: stable
+title: interval type
+---
+
 # interval type
+
+## Purpose
+Expresses a duration of time
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses a duration of time
 
@@ -22,17 +47,19 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 #### INTERVAL
 
-{{< diagram "type-interval-val.svg" >}}
+[See diagram: type-interval-val.svg]
 
 #### `time_expr`
 
-{{< diagram "type-interval-time-expr.svg" >}}
+[See diagram: type-interval-time-expr.svg]
 
 #### `time_unit`
 
-{{< diagram "time-unit.svg" >}}
+[See diagram: time-unit.svg]
 
 Field | Use
 ------|----
@@ -42,6 +69,8 @@ _head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger 
 _tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`.
 
 ## Details
+
+This section covers details.
 
 ### `time_expr` Syntax
 
@@ -113,39 +142,41 @@ Operation | Computes | Notes
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT INTERVAL '1' MINUTE AS interval_m;
-```
+```text
 
 ```nofmt
  interval_m
 ------------
  00:01:00
-```
+```bash
 
 ### SQL Standard syntax
 
 ```mzsql
 SELECT INTERVAL '1-2 3 4:5:6.7' AS interval_p;
-```
+```text
 
 ```nofmt
             interval_f
 -----------------------------------
  1 year 2 months 3 days 04:05:06.7
-```
+```bash
 
 ### PostgreSQL syntax
 
 ```mzsql
 SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
-```
+```text
 
 ```nofmt
         interval_p
 --------------------------
  1 year 2 days 07:12:04.5
-```
+```bash
 
 ### Negative intervals
 
@@ -153,13 +184,13 @@ SELECT INTERVAL '1 year 2.3 days 4.5 seconds' AS interval_p;
 
 ```mzsql
 SELECT INTERVAL '-1 day 2:3:4.5' AS interval_n;
-```
+```text
 
 ```nofmt
  interval_n
 -------------
  -1 days +02:03:04.5
-```
+```bash
 
 ### Truncating interval
 
@@ -168,13 +199,13 @@ interval.
 
 ```mzsql
 SELECT INTERVAL '1-2 3 4:5:6.7' DAY TO MINUTE AS interval_r;
-```
+```text
 
 ```nofmt
    interval_r
 -----------------
  3 days 04:05:00
-```
+```bash
 
 ### Complex example
 
@@ -184,19 +215,19 @@ of the `interval` string.
 
 ```mzsql
 SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
-```
+```text
 
 ```nofmt
            interval_w
 ---------------------------------
  2 years 3 months 1 day 00:04:00
-```
+```bash
 
 ### Interaction with timestamps
 
 ```mzsql
 SELECT TIMESTAMP '2020-01-01 8:00:00' + INTERVAL '1' DAY AS ts_interaction;
-```
+```text
 
 ```nofmt
    ts_interaction

@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/pushdown/
+complexity: advanced
+description: Functions for use with the filter pushdown feature
+doc_type: reference
+keywords:
+- SELECT TRY_PARSE_MONOTONIC_ISO8601_TIMESTAMP
+- Pushdown functions
+product_area: Indexes
+status: stable
+title: Pushdown functions
+---
+
 # Pushdown functions
+
+## Purpose
+Functions for use with the filter pushdown feature
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Functions for use with the filter pushdown feature
 
@@ -39,20 +59,22 @@ optimization for your query.
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT try_parse_monotonic_iso8601_timestamp('2015-09-18T23:56:04.123Z') AS ts;
-```
+```text
 ```nofmt
  ts
 --------
  2015-09-18 23:56:04.123
-```
+```text
 
  <hr/>
 
 ```mzsql
 SELECT try_parse_monotonic_iso8601_timestamp('nope') AS ts;
-```
+```text
 ```nofmt
  ts
 --------

@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-privileges/
+complexity: beginner
+description: SHOW PRIVILEGES lists the privileges granted on all objects via role-based
+  access control (RBAC).
+doc_type: reference
+keywords:
+- FOR
+- 'ON'
+- SHOW PRIVILEGES
+product_area: Indexes
+status: stable
+title: SHOW PRIVILEGES
+---
+
 # SHOW PRIVILEGES
+
+## Purpose
+SHOW PRIVILEGES lists the privileges granted on all objects via role-based access control (RBAC).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 SHOW PRIVILEGES lists the privileges granted on all objects via role-based access control (RBAC).
 
@@ -9,9 +31,11 @@ SHOW PRIVILEGES lists the privileges granted on all objects via role-based acces
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW PRIVILEGES [ ON <object_type> ] [ FOR <role_name> ];
-```
+```text
 
 Syntax element               | Description
 -----------------------------|-----------------------------------------------
@@ -22,9 +46,11 @@ Syntax element               | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW PRIVILEGES;
-```
+```text
 
 ```nofmt
   grantor  |   grantee   |  database   | schema |    name     | object_type | privilege_type
@@ -41,11 +67,11 @@ SHOW PRIVILEGES;
  mz_system | materialize |             |        |             | system      | CREATECLUSTER
  mz_system | materialize |             |        |             | system      | CREATEDB
  mz_system | materialize |             |        |             | system      | CREATEROLE
-```
+```text
 
 ```mzsql
 SHOW PRIVILEGES ON SCHEMAS;
-```
+```text
 
 ```nofmt
   grantor  |   grantee   |  database   | schema |  name  | object_type | privilege_type
@@ -53,11 +79,11 @@ SHOW PRIVILEGES ON SCHEMAS;
  mz_system | PUBLIC      | materialize |        | public | schema      | USAGE
  mz_system | materialize | materialize |        | public | schema      | CREATE
  mz_system | materialize | materialize |        | public | schema      | USAGE
-```
+```text
 
 ```mzsql
 SHOW PRIVILEGES FOR materialize;
-```
+```text
 
 ```nofmt
   grantor  |   grantee   |  database   | schema |    name     | object_type | privilege_type

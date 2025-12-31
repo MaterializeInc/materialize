@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/support/
+complexity: intermediate
+description: How to get support for Materialize
+doc_type: reference
+keywords:
+- 'Tip:'
+- Talk to a human
+- Support
+- materialize.com
+- 'Note:'
+- Materialize Console
+product_area: General
+status: stable
+title: Support
+---
+
 # Support
+
+## Purpose
+How to get support for Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to get support for Materialize
 
@@ -6,9 +30,9 @@ How to get support for Materialize
 
 Whether you're building, scaling, or debugging, we're here to help.
 
-{{< note >}}
+> **Note:** 
 We're retiring access to Slack and Microsoft Teams workspaces. We've introduced the messenger app to streamline and scale how users engage with support — starting with AI-first assistance and seamless escalation paths when needed.
-{{< /note >}}
+
 
 ## Materialize Support
 
@@ -25,10 +49,10 @@ answer questions, suggest documentation, and assist with troubleshooting. You
 can also submit a request to **Talk to a human**. Just look for the messenger
 widget on the bottom right.
 
-{{< tip >}}
+> **Tip:** 
 If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
 you can use the **Report Production Outage** option for fastest response.
-{{</ tip >}}
+
 
 ### Email
 

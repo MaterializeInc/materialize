@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/
+complexity: advanced
+description: Sinking results from Materialize to external systems.
+doc_type: reference
+keywords:
+- S3
+- strongly
+- Sink results
+- CREATE A
+- CREATE AN
+- materialized
+- CREATE AND
+- AWS Services
+product_area: Sinks
+status: beta
+title: Sink results
+---
+
 # Sink results
 
+## Purpose
 Sinking results from Materialize to external systems.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Sinking results from Materialize to external systems.
 
 
 A [sink](/concepts/sinks/) describes the external system you want Materialize to
@@ -12,7 +37,7 @@ write data to and details the encoding of that data. You can sink data from a
 
 To create a sink, you can:
 
-{{< yaml-table data="sink_external_systems" >}}
+<!-- Dynamic table: sink_external_systems - see original docs -->
 
 ### Operational guideline
 
@@ -23,8 +48,6 @@ To create a sink, you can:
 
 For help, see [Troubleshooting
 sinks](/serve-results/sink/sink-troubleshooting/).
-
-
 
 
 ---
@@ -111,7 +134,7 @@ To create a new IAM policy:
            }
        ]
    }
-   ```
+   ```text
 
 1. Click **Next**.
 
@@ -147,7 +170,7 @@ Next, you must attach the policy you just created to a Materialize-specific
            }
        ]
    }
-   ```
+   ```text
 
    Materialize **always uses the provided IAM principal** to assume the role, and
    also generates an **external ID** which uniquely identifies your AWS connection
@@ -177,7 +200,7 @@ Next, you must attach the policy you just created to a Materialize-specific
    ```mzsql
    CREATE CONNECTION aws_connection
       TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::<account-id>:role/<role>');
-   ```
+   ```text
 
 1. Retrieve the external ID for the connection:
 
@@ -186,31 +209,31 @@ Next, you must attach the policy you just created to a Materialize-specific
     FROM mz_internal.mz_aws_connections awsc
     JOIN mz_connections c ON awsc.id = c.id
     WHERE c.name = 'aws_connection';
-   ```
+   ```text
 
    The external ID will have the following format:
 
    ```text
    mz_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX_uXXX
-   ```
+   ```text
 
 1. In your AWS account, find the IAM role you created in [Create an IAM role](#create-an-iam-role)
    and, under **Trust relationships**, click **Edit trust policy**. Use the
    `external_id` from the previous step to update the trust policy's
    `sts:ExternalId`, then click **Update policy**.
 
-   {{< warning >}}
+   > **Warning:** 
    Failing to constrain the external ID in your role trust policy
    will allow other Materialize customers to assume your role and use AWS
    privileges you have granted the role!
-   {{< /warning >}}
+   
 
 1. Back in Materialize, validate the AWS connection you created using the
    [`VALIDATE CONNECTION`](/sql/validate-connection) command.
 
    ```mzsql
    VALIDATE CONNECTION aws_connection;
-   ```
+   ```text
 
    If no validation error is returned, you're ready to use this connection to
    run a bulk export from Materialize to your target S3 bucket! 🔥
@@ -220,8 +243,7 @@ Next, you must attach the policy you just created to a Materialize-specific
 To export data to your target S3 bucket, use the [`COPY TO`](/sql/copy-to/#copy-to-s3)
 command, and the AWS connection you created in the previous step.
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 ```mzsql
 COPY some_object TO 's3://<bucket>/<path>'
@@ -229,14 +251,12 @@ WITH (
     AWS CONNECTION = aws_connection,
     FORMAT = 'parquet'
   );
-```
+```text
 
 For details on the Parquet writer settings Materialize uses, as well as data
 type support and conversion, check the [reference documentation](/sql/copy-to/#copy-to-s3-parquet).
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 ```mzsql
 COPY some_object TO 's3://<bucket>/<path>'
@@ -244,11 +264,7 @@ WITH (
     AWS CONNECTION = aws_connection,
     FORMAT = 'csv'
   );
-```
-
-{{< /tab >}}
-
-{{< /tabs >}}
+```text
 
 You might notice that Materialize first writes a sentinel file to the target S3
 bucket. When the copy operation is complete, this file is deleted. This allows
@@ -262,8 +278,6 @@ you want to export results, you must run the command. To automate running bulk
 exports on a regular basis, you can set up scheduling, for example using a
 simple `cron`-like service or an orchestration platform like Airflow or
 Dagster.
-
-
 
 
 ---
@@ -295,8 +309,7 @@ To begin you will need to add your Materialize database as a source in Census.
 
 Next you will add a destination where data will be sent.
 
-{{< tabs >}}
-{{< tab "Braze">}}
+#### Braze
 
 1. In Census, navigate to **Destinations** and then click **New Destination**.
 
@@ -306,15 +319,11 @@ Next you will add a destination where data will be sent.
    The [Census guide for Braze](https://docs.getcensus.com/destinations/braze) will explain how to create an API key with the
    correct permissions. Then click the **Connect**.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 ## Step 3. Create a Sync
 
 After successfully adding the Materialize source, you can create a sync to send data from Materialize to your downstream destination.
 
-{{< tabs >}}
-{{< tab "Braze">}}
+#### Braze
 
 1. In Census, navigate to **Syncs** and then click **New Sync**.
 
@@ -332,9 +341,6 @@ After successfully adding the Materialize source, you can create a sync to send 
 
 1. Click **Next** to see an overview of your sync and click **Create** to create the sync.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 ## Step 4. Add a Schedule (Optional)
 
 Your Census sync is created and ready to run. It can be invoked manually but a schedule will ensure all new data
@@ -345,8 +351,6 @@ is sent to the destination.
 1. Within your sync toolbar click **Configuration**. In **Sync Trigger > Schedule** you can select from a number of
    difference schedules. If you are using a source or materialized view as your source object, you can choose "Continuous"
    and Census will retrieve new data as soon as it exists within Materialize.
-
-
 
 
 ---
@@ -367,13 +371,14 @@ capture (CDC) producers for the given source or view.
 For details on the connector, including syntax, supported formats and examples,
 refer to [`CREATE SINK`](/sql/create-sink/kafka).
 
-{{< tip >}}
+> **Tip:** 
 
 Redpanda uses the same syntax as Kafka [`CREATE SINK`](/sql/create-sink/kafka).
 
-{{< /tip >}}
 
 ## Features
+
+This section covers features.
 
 ### Memory use during creation
 
@@ -416,9 +421,9 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Tiered storage      | We recommend disabling tiered storage to allow for more aggressive data compaction. Fully compacted data requires minimal storage, typically only tens of bytes per sink, making it cost-effective to maintain directly on local disk.
 | Progress topic | Segment bytes.      | Defaults to 128 MiB. We recommend going no higher than 256 MiB to avoid
 slow startups when creating new sinks, as they must process the entire progress topic on startup.
-{{< warning >}}
-{{% kafka-sink-drop %}}
-{{</ warning >}}
+> **Warning:** 
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: kafka-sink-drop --> --> -->
+
 
 ### Exactly-once processing
 
@@ -474,7 +479,7 @@ CREATE SINK ... INTO KAFKA CONNECTION <name> (PARTITION BY = <expression>) ...;
 CREATE SINK ... INTO KAFKA CONNECTION <name> (
     PARTITION BY = kafka_murmur2(name || address)
 ) ...;
-```
+```text
 
 The expression:
   * Must have a type that can be assignment cast to [`uint8`].
@@ -504,9 +509,13 @@ partioning](/sql/create-sink/kafka#custom-partitioning).
 
 ### Kafka transaction markers
 
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
-
-
+Materialize uses [Kafka
+transactions](https://www.confluent.io/blog/transactions-apache-kafka/). When
+Kafka transactions are used, special control messages known as **transaction
+markers** are published to the topic. Transaction markers inform both the broker
+and clients about the status of a transaction. When a topic is read using a
+standard Kafka consumer, these markers are not exposed to the application, which
+can give the impression that some offsets are being skipped.
 
 
 ---
@@ -541,11 +550,11 @@ Cloud Storage, or Cloudflare R2.
         ENDPOINT = 'https://storage.googleapis.com',
         REGION = 'us'
     );
-    ```
+    ```text
 
-{{< warning >}}
+> **Warning:** 
   `VALIDATE CONNECTION` only works for AWS S3 connections. Using `VALIDATE CONNECTION` to test a connection to S3 compatible object storage service will result in an error. However, you can still use the connection to copy data.
-{{< /warning >}}
+
 
 ## Step 2. Run a bulk export
 
@@ -553,8 +562,7 @@ To export data to your target bucket, use the [`COPY TO`](/sql/copy-to/#copy-to-
 command and the AWS connection you created in the previous step. Replace the `<S3_BUCKET_URI>`
 with the S3 compatible URI for your target bucket.
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 ```mzsql
 COPY some_object TO '<S3_BUCKET_URI>'
@@ -562,14 +570,12 @@ WITH (
     AWS CONNECTION = bucket_connection,
     FORMAT = 'parquet'
   );
-```
+```text
 
 For details on the Parquet writer settings Materialize uses, as well as data
 type support and conversion, check the [reference documentation](/sql/copy-to/#copy-to-s3-parquet).
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 ```mzsql
 COPY some_object TO '<S3_BUCKET_URI>'
@@ -577,11 +583,7 @@ WITH (
     AWS CONNECTION = bucket_connection,
     FORMAT = 'csv'
   );
-```
-
-{{< /tab >}}
-
-{{< /tabs >}}
+```bash
 
 ## Step 3. (Optional) Add scheduling
 
@@ -590,8 +592,6 @@ you want to export results, you must run the command. To automate running bulk
 exports on a regular basis, you can set up scheduling, for example using a
 simple `cron`-like service or an orchestration platform like Airflow or
 Dagster.
-
-
 
 
 ---
@@ -603,7 +603,7 @@ Dagster.
 Snowflake continuously using the Snowflake connector for Kafka. We should also
 document that approach."
 
-{{< public-preview />}}
+> **Public Preview:** This feature is in public preview.
 
 This guide walks you through the steps required to bulk-export results from
 Materialize to Snowflake using Amazon S3 as the intermediate object store.
@@ -625,6 +625,8 @@ S3 bucket that Materialize securely writes data into. This will be your
 starting point for bulk-loading Materialize data into Snowflake.
 
 ## Step 2. Configure a Snowflake storage integration
+
+This section covers step 2. configure a snowflake storage integration.
 
 ### Create an IAM policy
 
@@ -687,7 +689,7 @@ To create a new IAM policy:
          }
       ]
    }
-   ```
+   ```text
 
 1. Click **Next**.
 
@@ -722,11 +724,11 @@ Next, you must attach the policy you just created to a Snowflake-specific
 
 ### Create a Snowflake storage integration
 
-{{< note >}}
+> **Note:** 
 Only users with either the [`ACCOUNTADMIN` role](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#using-the-accountadmin-role),
 or a role with the [global `CREATE INTEGRATION` privilege](https://docs.snowflake.com/en/user-guide/security-access-control-privileges#global-privileges-account-level-privileges)
 can execute this step.
-{{< /note >}}
+
 
 1. In [Snowsight](https://app.snowflake.com/), or your preferred SQL client
 connected to Snowflake, create a [storage integration](https://docs.snowflake.com/en/sql-reference/sql/create-storage-integration),
@@ -739,7 +741,7 @@ replacing `<role>` with the name of the role you created in the previous step:
      ENABLED = TRUE
      STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::001234567890:role/<role>'
      STORAGE_ALLOWED_LOCATIONS = ('*');
-   ```
+   ```text
 
 1. Retrieve the IAM principal for your Snowflake account using the
    [`DESC INTEGRATION`](https://docs.snowflake.com/en/sql-reference/sql/desc-integration)
@@ -747,7 +749,7 @@ replacing `<role>` with the name of the role you created in the previous step:
 
    ```sql
    DESC INTEGRATION s3_int;
-   ```
+   ```text
 
    Note down the values for the `STORAGE_AWS_IAM_USER_ARN` and
    `STORAGE_AWS_EXTERNAL_ID` properties. You will need them in the next step to
@@ -769,14 +771,14 @@ Back in Snowflake, create an [external stage](https://docs.snowflake.com/en/user
 CREATE STAGE s3_stage
   STORAGE_INTEGRATION = s3_int
   URL = 's3://<bucket>/<prefix>/';
-```
+```text
 
-{{< note >}}
+> **Note:** 
 To create a stage that uses a storage integration, the active user must have a
 role with the [`CREATE STAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/create-stage)
 for the active schema, as well as the [`USAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#syntax)
 on the relevant storage integration.
-{{< /note >}}
+
 
 ## Step 4. Import data into Snowflake
 
@@ -784,8 +786,7 @@ To import the data stored in S3 into Snowflake, you can then create a table and
 use the [`COPY INTO`](https://docs.snowflake.com/en/sql-reference/sql/copy-into-table)
 command to load it from the external stage.
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 Create a table with a single column of type [`VARIANT`](https://docs.snowflake.com/en/sql-reference/data-types-semistructured#variant):
 
@@ -793,7 +794,7 @@ Create a table with a single column of type [`VARIANT`](https://docs.snowflake.c
 CREATE TABLE s3_table_parquet (
     col VARIANT
 );
-```
+```text
 
 Use `COPY INTO` to load the data into the table:
 
@@ -801,14 +802,12 @@ Use `COPY INTO` to load the data into the table:
 COPY INTO s3_table_parquet
   FROM @S3_stage
   FILE_FORMAT = (TYPE = 'PARQUET');
-```
+```text
 
 For more details on importing Parquet files staged in S3 into Snowflake, check the
 [Snowflake documentation](https://docs.snowflake.com/en/sql-reference/sql/copy-into-table#type-parquet).
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 Create a table with the same number of columns as the number of delimited
 columns in the input data file:
@@ -819,7 +818,7 @@ CREATE TABLE s3_table_csv (
     col_2 TEXT,
     col_3 TIMESTAMP
 );
-```
+```text
 
 Use `COPY INTO` to load the data into the table:
 
@@ -827,14 +826,10 @@ Use `COPY INTO` to load the data into the table:
 COPY INTO s3_table_csv
   FROM @s3_stage
   FILE_FORMAT = (TYPE = 'CSV');
-```
+```text
 
 For more details on importing CSV files staged in S3 into Snowflake, check the
 [Snowflake documentation](https://docs.snowflake.com/en/sql-reference/sql/copy-into-table#type-csv).
-
-{{< /tab >}}
-
-{{< /tabs >}}
 
 
 ## Step 5. (Optional) Add scheduling
@@ -844,8 +839,6 @@ you want to export results, you must run the command. To automate running bulk
 exports from Materialize to Snowflake on a regular basis, you can set up
 scheduling, for example using a simple `cron`-like service or an orchestration
 platform like Airflow or Dagster.
-
-
 
 
 ---
@@ -860,7 +853,7 @@ First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#
 ```mzsql
 SELECT * FROM mz_internal.mz_sink_statuses
 WHERE name = <SINK_NAME>;
-```
+```text
 
 If your sink reports a status of `stalled` or `failed`, you likely have a
 configuration issue. The returned `error` field will provide details.
@@ -907,6 +900,3 @@ If the `*_staged` statistics are making progress, but the `*_committed` ones
 are not, there may be a configuration issues with the external service that is
 preventing Materialize from committing transactions. Check the `reason`
 column in `mz_sink_statuses`, which can provide more information.
-
-
-

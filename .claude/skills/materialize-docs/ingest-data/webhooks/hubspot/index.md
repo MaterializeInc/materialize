@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/webhooks/hubspot/
+complexity: advanced
+description: How to stream data from HubSpot to Materialize using webhooks
+doc_type: reference
+keywords:
+- does not support
+- 'Warning:'
+- CREATE CLUSTER
+- CREATE A
+- you can skip this step
+- HubSpot
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: HubSpot
+---
+
 # HubSpot
+
+## Purpose
+How to stream data from HubSpot to Materialize using webhooks
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to stream data from HubSpot to Materialize using webhooks
 
@@ -7,9 +33,9 @@ How to stream data from HubSpot to Materialize using webhooks
 This guide walks through the steps to ingest data from [HubSpot](https://www.hubspot.com/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 ### Before you begin
 
@@ -19,12 +45,12 @@ Ensure that you have:
 
 ## Step 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your webhook
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
+
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
@@ -32,7 +58,7 @@ To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/crea
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
-```
+```bash
 
 ## Step 2. Create a secret
 
@@ -40,7 +66,7 @@ To validate requests between HubSpot and Materialize, you must create a [secret]
 
 ```mzsql
 CREATE SECRET hubspot_webhook_secret AS '<secret_value>';
-```
+```text
 
 Change the `<secret_value>` to a unique value that only you know and store it in
 a secure location.
@@ -67,7 +93,7 @@ CREATE SOURCE hubspot_source
       -- for ease of use.
       constant_time_eq(headers->'authorization', validation_secret)
 );
-```
+```text
 
 After a successful run, the command returns a `NOTICE` message containing the
 unique [webhook URL](/sql/create-source/webhook/#webhook-url)
@@ -78,7 +104,7 @@ The URL will have the following format:
 
 ```
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
-```
+```text
 
 If you missed the notice, you can find the URLs for all webhook sources in the
 [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
@@ -86,11 +112,11 @@ system table.
 
 ### Access and authentication
 
-{{< warning >}}
+> **Warning:** 
 Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
-{{< /warning >}}
+
 
 The `CHECK` clause defines how to validate each request. At the time of writing,
 HubSpot supports API key authentication, which you can use to validate
@@ -162,9 +188,11 @@ HubSpot, you can now query the incoming data:
 
     ```mzsql
     SELECT * FROM hubspot_source LIMIT 10;
-    ```
+    ```bash
 
 ## Step 7. Transform incoming data
+
+This section covers step 7. transform incoming data.
 
 ### JSON parsing
 
@@ -181,7 +209,7 @@ CREATE VIEW parse_hubspot AS SELECT
 FROM hubspot_source;
 ```
 
-{{< json-parser >}}
+<!-- JSON Parser Widget - see original docs -->
 
 ### Timestamp handling
 

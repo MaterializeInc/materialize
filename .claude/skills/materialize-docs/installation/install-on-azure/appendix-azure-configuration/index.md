@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-azure/appendix-azure-configuration/
+complexity: intermediate
+description: Required configuration for Materialize on Azure Terraform.
+doc_type: reference
+keywords:
+- CREATE A
+- 'Appendix: Required configuration'
+- CREATE IN
+- To use an existing resource group
+- To create a new resource group
+product_area: Deployment
+status: stable
+title: 'Appendix: Required configuration'
+---
+
 # Appendix: Required configuration
+
+## Purpose
+Required configuration for Materialize on Azure Terraform.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Required configuration for Materialize on Azure Terraform.
 
@@ -14,7 +37,7 @@ When using the root `main.tf` file from the [Materialize on Azure Terraform
 module](https://github.com/MaterializeInc/terraform-azurerm-materialize), the
 following variables must be set: [^1]
 
-{{< yaml-table data="self_managed/azure_required_variables" >}}
+<!-- Dynamic table: self_managed/azure_required_variables - see original docs -->
 
 For a list of all variables, see the
 [README.md](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#inputs)
@@ -36,7 +59,7 @@ create a new resource group or use an existing resource group:
     location = var.location                    # Defaults to eastus2
     tags     = var.tags                        # Optional
   }
-  ```
+  ```text
 
 - **To use an existing resource group**, set the [`resource_group_name`
   variable](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/variables.tf)

@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/timestamp/
+complexity: intermediate
+description: Expresses a date and time
+doc_type: reference
+keywords:
+- SELECT TIMESTAMPTZ
+- Quick Syntax
+- Catalog name
+- OID
+- Size
+- Min value
+- SELECT TIMESTAMP
+- Timestamp types
+product_area: Indexes
+status: stable
+title: Timestamp types
+---
+
 # Timestamp types
+
+## Purpose
+Expresses a date and time
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses a date and time
 
@@ -34,7 +60,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-timestamp.svg" >}}
+[See diagram: type-timestamp.svg]
 
 Field | Use
 ------|-----
@@ -92,22 +118,24 @@ Operation | Computes
 
 ## Examples
 
+This section covers examples.
+
 ### Return timestamp
 
 ```mzsql
 SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
-```
+```text
 ```nofmt
         ts_v
 ---------------------
  2007-02-01 15:04:05
-```
+```bash
 
 ### Return timestamp with time zone
 
 ```mzsql
 SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
-```
+```text
 ```nofmt
          tstz_v
 -------------------------

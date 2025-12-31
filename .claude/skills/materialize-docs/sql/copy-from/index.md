@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/copy-from/
+complexity: intermediate
+description: '`COPY FROM` copies data into a table using the COPY protocol.'
+doc_type: reference
+keywords:
+- Text Format
+- INSERT IS
+- )
+- (
+- CSV Format
+- COPY FROM
+product_area: Indexes
+status: stable
+title: COPY FROM
+---
+
 # COPY FROM
+
+## Purpose
+`COPY FROM` copies data into a table using the COPY protocol.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `COPY FROM` copies data into a table using the COPY protocol.
 
@@ -8,7 +32,7 @@
 
 ## Syntax
 
-{{< diagram "copy-from.svg" >}}
+[See diagram: copy-from.svg]
 
 Field | Use
 ------|-----
@@ -33,6 +57,8 @@ Name | Value type | Default value | Description
 Note that `DELIMITER` and `QUOTE` must use distinct values.
 
 ## Details
+
+This section covers details.
 
 ### Text formatting
 
@@ -64,13 +90,15 @@ except that:
 
 ## Example
 
+This section covers example.
+
 ```mzsql
 COPY t FROM STDIN WITH (DELIMITER '|');
-```
+```text
 
 ```mzsql
 COPY t FROM STDIN (FORMAT CSV);
-```
+```text
 
 ```mzsql
 COPY t FROM STDIN (DELIMITER '|');
@@ -80,7 +108,9 @@ COPY t FROM STDIN (DELIMITER '|');
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/copy-from.md" >}}
+- `USAGE` privileges on the schema containing the table.
+- `INSERT` privileges on the table.
+
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
 

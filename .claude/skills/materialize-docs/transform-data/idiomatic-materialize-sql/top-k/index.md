@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/top-k/
+complexity: advanced
+description: Use idiomatic Materialize SQL to find the top-k/top-n elements in each
+  group.
+doc_type: overview
+keywords:
+- Idiomatic Materialize SQL
+- SELECT FIELDB
+- SELECT DISTINCT
+- 'Note:'
+- SELECT FIELDA
+- Top-K in group
+product_area: SQL
+status: stable
+title: Top-K in group
+---
+
 # Top-K in group
 
+## Purpose
 Use idiomatic Materialize SQL to find the top-k/top-n elements in each group.
 
+This page provides detailed documentation for this topic.
+
+
+Use idiomatic Materialize SQL to find the top-k/top-n elements in each group.
 
 
 ## Overview
@@ -9,15 +33,13 @@ Use idiomatic Materialize SQL to find the top-k/top-n elements in each group.
 The "Top-K in group" query pattern groups by some key and return the first K
 elements within each group according to some ordering.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
+
+This section covers idiomatic materialize sql.
 
 ### For K >= 1
 
@@ -51,7 +73,7 @@ FROM (SELECT DISTINCT fieldA FROM tableA) grp,
         WHERE fieldA = grp.fieldA
         ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 </td>
 </tr>
@@ -74,7 +96,7 @@ FROM (
    FROM tableA)
 WHERE rn <= K     -- K is a number >= 1
 ORDER BY fieldA, fieldZ ...;
-```
+```text
 
 </div>
 </td>
@@ -96,7 +118,7 @@ FROM (SELECT DISTINCT fieldA FROM tableA) grp,
         OPTIONS (LIMIT INPUT GROUP SIZE = ...)
         ORDER BY fieldZ ... LIMIT K)   -- K is a number >= 1
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 For more information on setting `LIMIT INPUT GROUP SIZE`, see
 [Optimization](/transform-data/optimization/#query-hints).
@@ -127,7 +149,7 @@ pattern, specifying 1 as the limit.
 SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
 FROM tableA
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 </div>
 </td>
@@ -152,7 +174,7 @@ FROM (
    FROM tableA)
 WHERE rn = 1
 ORDER BY fieldA, fieldZ ...;
-```
+```text
 
 </div>
 </td>
@@ -171,19 +193,18 @@ SELECT DISTINCT ON(fieldA) fieldA, fieldB, ...
 FROM tableA
 OPTIONS (DISTINCT ON INPUT GROUP SIZE = ...)
 ORDER BY fieldA, fieldZ ... ;
-```
+```text
 
 For more information on setting `DISTINCT ON INPUT GROUP SIZE`, see
 [`EXPLAIN ANALYZE HINTS`](/sql/explain-analyze/#explain-analyze-hints).
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Select Top-3 items
 
@@ -213,7 +234,7 @@ FROM (SELECT DISTINCT order_id FROM orders_view) grp,
         WHERE order_id = grp.order_id
         ORDER BY subtotal DESC LIMIT 3)
 ORDER BY order_id, subtotal DESC;
-```
+```text
 
 </td>
 </tr>
@@ -236,7 +257,7 @@ FROM (
    FROM orders_view)
 WHERE rn <= 3
 ORDER BY order_id, subtotal DESC;
-```
+```text
 
 </div>
 </td>
@@ -269,7 +290,7 @@ ON`/grouping key, then the descending subtotal). [^1]
 SELECT DISTINCT ON(order_id) order_id, item, subtotal
 FROM orders_view
 ORDER BY order_id, subtotal DESC;
-```
+```text
 
 </td>
 </tr>
@@ -308,4 +329,3 @@ ORDER BY order_id, subtotal DESC;
 - [LATERAL subqueries](/sql/select/join/#lateral-subqueries)
 - [Query hints for Top K](/transform-data/optimization/#query-hints)
 - [Window functions](/sql/functions/#window-functions)
-

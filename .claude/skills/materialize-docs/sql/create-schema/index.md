@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-schema/
+complexity: intermediate
+description: '`CREATE SCHEMA` creates a new schema.'
+doc_type: reference
+keywords:
+- CREATE SCHEMA
+- IF NOT EXISTS
+- SHOW SCHEMAS
+product_area: Indexes
+status: stable
+title: CREATE SCHEMA
+---
+
 # CREATE SCHEMA
+
+## Purpose
+`CREATE SCHEMA` creates a new schema.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `CREATE SCHEMA` creates a new schema.
 
@@ -22,7 +43,7 @@ For more information, see [Namespaces](../namespaces).
 
 ## Syntax
 
-{{< diagram "create-schema.svg" >}}
+[See diagram: create-schema.svg]
 
 Field | Use
 ------|-----
@@ -31,12 +52,14 @@ _schema&lowbar;name_ | A name for the schema. <br/><br/>You can specify the data
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 CREATE SCHEMA my_db.my_schema;
-```
+```text
 ```mzsql
 SHOW SCHEMAS FROM my_db;
-```
+```text
 ```nofmt
 public
 my_schema
@@ -46,7 +69,8 @@ my_schema
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-schema.md" >}}
+- `CREATE` privileges on the containing database.
+
 
 ## Related pages
 

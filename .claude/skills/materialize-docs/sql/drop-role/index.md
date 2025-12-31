@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-role/
+complexity: intermediate
+description: '`DROP ROLE` removes a role from Materialize.'
+doc_type: reference
+keywords:
+- DROP THE
+- DROP ROLE
+- IF EXISTS
+product_area: Indexes
+status: stable
+title: DROP ROLE
+---
+
 # DROP ROLE
+
+## Purpose
+`DROP ROLE` removes a role from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP ROLE` removes a role from Materialize.
 
@@ -7,6 +28,8 @@
 `DROP ROLE` removes a role from Materialize.
 
 ## Syntax
+
+This section covers syntax.
 
 ```mzsql
 DROP ROLE [IF EXISTS] <role_name>;
@@ -25,7 +48,8 @@ You cannot drop the current role.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-role.md" >}}
+- `CREATEROLE` privileges on the system.
+
 
 ## Related pages
 

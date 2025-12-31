@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/query-results/
+complexity: advanced
+description: Querying results from Materialize using `SELECT` and `SUBSCRIBE`.
+doc_type: reference
+keywords:
+- 'Tip:'
+- '`SELECT` and `SUBSCRIBE`'
+- CREATE AN
+- SELECT REGION
+- SELECT YOU
+product_area: Sinks
+status: stable
+title: '`SELECT` and `SUBSCRIBE`'
+---
+
 # `SELECT` and `SUBSCRIBE`
 
+## Purpose
 Querying results from Materialize using `SELECT` and `SUBSCRIBE`.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Querying results from Materialize using `SELECT` and `SUBSCRIBE`.
 
 
 You can query results from Materialize using `SELECT` and `SUBSCRIBE` SQL
@@ -20,7 +42,7 @@ FROM mysql_simple_purchase AS purchase
 JOIN mysql_simple_user AS user ON purchase.user_id = user.id
 JOIN mysql_simple_region AS region ON user.region_id = region.id
 GROUP BY region.id;
-```
+```text
 
 Performing a `SELECT` on an indexed view or a materialized view is
 Materialize's ideal operation. When Materialize receives such a `SELECT` query,
@@ -36,7 +58,7 @@ the results. These dataflows are bound to the active [cluster](/concepts/cluster
 
 ```mzsql
 SET cluster = <cluster name>;
-```
+```text
 
 Materialize will remove the dataflow as soon as it has returned the query
 results to you.
@@ -44,7 +66,7 @@ results to you.
 For more information, see [`SELECT`](/sql/select/) reference page.  See
 also the following client library guides:
 
-{{< multicolumn-list columns="2" >}}
+
 - [Go](/integrations/client-libraries/golang/#query)</li>
 - [Java](/integrations/client-libraries/java-jdbc/#query)</li>
 - [Node.js](/integrations/client-libraries/node-js/#query)</li>
@@ -52,7 +74,7 @@ also the following client library guides:
 - [Python](/integrations/client-libraries/python/#query)</li>
 - [Ruby](/integrations/client-libraries/ruby/#query)</li>
 - [Rust](/integrations/client-libraries/rust/#query)</li>
-{{</ multicolumn-list >}}
+
 
 ## SUBSCRIBE
 
@@ -76,14 +98,14 @@ You can use `SUBSCRIBE` to:
 
 - Replicate the complete history of a relation while `SUBSCRIBE` is active.
 
-{{< tip >}}
+> **Tip:** 
 Use materialized view (instead of an indexed view) with `SUBSCRIBE`.
-{{</ tip >}}
+
 
 For more information, see [`SUBSCRIBE`](/sql/subscribe/) reference page.  See
 also the following client library guides:
 
-{{< multicolumn-list columns="2" >}}
+
 - [Go](/integrations/client-libraries/golang/#stream)</li>
 - [Java](/integrations/client-libraries/java-jdbc/#stream)</li>
 - [Node.js](/integrations/client-libraries/node-js/#stream)</li>
@@ -91,5 +113,3 @@ also the following client library guides:
 - [Python](/integrations/client-libraries/python/#stream)</li>
 - [Ruby](/integrations/client-libraries/ruby/#stream)</li>
 - [Rust](/integrations/client-libraries/rust/#stream)</li>
-{{</ multicolumn-list >}}
-

@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/create-new/
+complexity: beginner
+description: Create new clusters, sources, and application passwords in the Materialize
+  console
+doc_type: reference
+keywords:
+- New cluster
+- Name
+- Create new
+- + Create New
+- CREATE NEW
+- Cluster
+product_area: General
+status: stable
+title: Create new
+---
+
 # Create new
 
+## Purpose
 Create new clusters, sources, and application passwords in the Materialize console
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Create new clusters, sources, and application passwords in the Materialize console
 
 
 From the Console, you can create new [clusters](/concepts/clusters/ "Isolated
@@ -36,7 +60,7 @@ From the Materialize Console:
 
 ### Create new source
 
-{{< tip >}}
+> **Tip:** 
 
 - For PostgreSQL and MySQL, you must configure your upstream database first.
   Refer to the [Ingest data](/ingest-data/) section for your data source.
@@ -45,7 +69,6 @@ From the Materialize Console:
   is created as well as some best practice guidelines, see [Ingest
   data](/ingest-data/).
 
-{{</ tip >}}
 
 ![Image of the Create New Source start for
 PostgreSQL](/images/console/console-create-new/postgresql/create-new-source-start.png
@@ -58,12 +81,12 @@ From the Materialize Console:
 
 1. Choose the source type and follow the instructions to configure a new source.
 
-    {{< tip >}}
+    > **Tip:** 
 
     For PostgreSQL and MySQL, you must configure your upstream database first. Refer
     to the [Ingest data](/ingest-data/) section for your data source.
 
-    {{</ tip >}}
+    
 
 
 ### Create new app password (Cloud-only)
@@ -79,7 +102,7 @@ application password")
 1. In the  **New app password** modal, specify the **Type** (either **Personal**
    or **Service**) and the associated details:
 
-   {{< note >}}
+   > **Note:** 
 
 - Only **Organization admins** can create a service account.
 - **Personal** apps are run under your user account.
@@ -87,11 +110,12 @@ application password")
    Service account user does not exist, it will be automatically created the
    **first time** the app password is used.
 
-   {{</ note >}}
+   
 
 
-   {{< tabs >}}
-   {{< tab "Personal" >}}
+   
+   #### Personal
+
 
    For a personal app that you will run under your user account, specify the
    type and required field(s):
@@ -101,38 +125,40 @@ application password")
    | **Type** | Select **Personal** |
    | **Name** | Specify a descriptive name. |
 
-   {{</ tab >}}
-   {{< tab "Service account" >}}
+   
+   #### Service account
+
 
    For an app that you will run under a Service account, specify the
    type and required field(s):
 
-   {{< yaml-table data="console/service_account_fields" >}}
+   <!-- Dynamic table: console/service_account_fields - see original docs -->
 
    See also [Create service
    accounts](/security/cloud/users-service-accounts/create-service-accounts/)
    for creating service accounts via Terraform.
 
-   {{</ tab >}}
-   {{</ tabs >}}
+   
+   
 
 
 1. Click **Create password** to generate the app password.
 
 1. Store the new password securely.
 
-   {{< note >}}
+   > **Note:** 
 
    Do not reload or navigate away from the screen before storing the
    password. This information is not displayed again.
 
-   {{</ note >}}
+   
 
 1. **For a new service account only**.
 
    For a new service account, after creating the new app password, you must
-   connect with the service account to complete the account creation. {{<
-   include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+   connect with the service account to complete the account creation. The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
+
 
    To connect:
 
@@ -141,8 +167,9 @@ application password")
    1. Click on the **Connect** button to get details on connecting with the new
       account.
 
-      {{< tabs >}}
-      {{< tab "psql" >}}
+      
+      #### psql
+
 If you have `psql` installed:
 
 1. Click on the **Terminal** tab.
@@ -152,8 +179,9 @@ If you have `psql` installed:
 Once connected, the service account creation is complete and you can grant roles
 to the new service account.
 
-      {{</ tab >}}
-      {{< tab "Other clients" >}}
+      
+      #### Other clients
+
 To use a non-psql client to connect,
 
 1. Click on the **External tools** tab to get the connection details.
@@ -162,9 +190,8 @@ To use a non-psql client to connect,
 
 Once connected, the service account creation is complete and you can grant roles
 to the new service account.
-      {{</ tab >}}
-      {{</ tabs >}}
+      
+      
 
 To view the created app accounts, go to [Admin > App
 Passwords](/console/admin/).
-

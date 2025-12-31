@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/length/
+complexity: intermediate
+description: Returns the number of characters in a string.
+doc_type: reference
+keywords:
+- LENGTH function
+- SELECT LENGTH
+product_area: Indexes
+status: stable
+title: LENGTH function
+---
+
 # LENGTH function
+
+## Purpose
+Returns the number of characters in a string.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Returns the number of characters in a string.
 
@@ -9,7 +29,7 @@ an encoded string.
 
 ## Signatures
 
-{{< diagram "func-length.svg" >}}
+[See diagram: func-length.svg]
 
 Parameter | Type | Description
 ----------|------|------------
@@ -21,6 +41,8 @@ _encoding&lowbar;name_ | [`string`](../../types/string) | The [encoding](#encodi
 `length` returns an [`int`](../../types/int).
 
 ## Details
+
+This section covers details.
 
 ### Errors
 
@@ -52,20 +74,22 @@ following cases:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT length('你好') AS len;
-```
+```text
 ```nofmt
  len
 -----
    2
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT length('你好', 'big5') AS len;
-```
+```text
 ```nofmt
  len
 -----

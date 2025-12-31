@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-view/
+complexity: intermediate
+description: '`DROP VIEW` removes a view from Materialize.'
+doc_type: reference
+keywords:
+- DROP VIEW
+- DROP ALL
+- IF EXISTS
+- DROP SOURCE...CASCADE
+- CREATE THEM
+- RESTRICT
+- CASCADE
+product_area: Views
+status: stable
+title: DROP VIEW
+---
+
 # DROP VIEW
+
+## Purpose
+`DROP VIEW` removes a view from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP VIEW` removes a view from Materialize.
 
@@ -16,9 +41,11 @@ rely on a source before you can [drop the source](../drop-source) itself. You ca
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP VIEW [IF EXISTS] <view_name> [RESTRICT|CASCADE];
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -29,17 +56,19 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW VIEWS;
-```
+```text
 ```nofmt
   name
 ---------
  my_view
-```
+```text
 ```mzsql
 DROP VIEW my_view;
-```
+```text
 ```nofmt
 DROP VIEW
 ```
@@ -48,7 +77,9 @@ DROP VIEW
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-view.md" >}}
+- Ownership of the dropped view.
+- `USAGE` privileges on the containing schema.
+
 
 ## Related pages
 

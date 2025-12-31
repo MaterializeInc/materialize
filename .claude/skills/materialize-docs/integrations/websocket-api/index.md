@@ -1,18 +1,42 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/websocket-api/
+complexity: intermediate
+description: How to use Materialize via WebSocket
+doc_type: reference
+keywords:
+- Connect to Materialize via WebSocket
+- Simple
+- SELECT 2
+- SELECT 1
+- Extended
+- CREATE TABLE
+- SELECT A
+product_area: General
+status: stable
+title: Connect to Materialize via WebSocket
+---
+
 # Connect to Materialize via WebSocket
+
+## Purpose
+How to use Materialize via WebSocket
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use Materialize via WebSocket
 
-
-
-{{< private-preview enabled-by-default="true" />}}
 
 You can access Materialize through its interactive WebSocket API endpoint:
 
 ```bash
 wss://<MZ host address>/api/experimental/sql
-```
+```bash
 
 ## Details
+
+This section covers details.
 
 ### General semantics
 
@@ -47,30 +71,32 @@ The WebSocket API provides two modes with slightly different transactional seman
 
 ## Usage
 
+This section covers usage.
+
 ### Endpoint
 
-```
+```text
 wss://<MZ host address>/api/experimental/sql
-```
+```text
 
 To authenticate using a username and password, send an initial text or binary message containing a JSON object:
 
-```
+```json
 {
     "user": "<Your email to access Materialize>",
     "password": "<Your app password>",
     "options": { <Optional map of session variables> }
 }
-```
+```text
 
 To authenticate using a token, send an initial text or binary message containing a JSON object:
 
-```
+```json
 {
     "token": "<Your access token>",
     "options": { <Optional map of session variables> }
 }
-```
+```text
 
 Successful authentication will result in:
 
@@ -100,7 +126,7 @@ semicolons.
 {
     "query": "select * from a; select * from b;"
 }
-```
+```bash
 
 #### Extended
 
@@ -120,7 +146,7 @@ Key | Value
         { "query": "select a + $1 from a;", "params": [null] }
     ]
 }
-```
+```bash
 
 ### Output format
 
@@ -154,7 +180,7 @@ The payload is a `string` describing the current transaction state:
 A notice can appear at any time and contains diagnostic messages that were generated during execution of the query.
 The payload has the following structure:
 
-```
+```json
 {
     "message": <informational message>,
     "code": <notice code>,
@@ -162,21 +188,21 @@ The payload has the following structure:
     "detail": <optional error detail>,
     "hint": <optional error hint>,
 }
-```
+```bash
 
 #### `Error`
 
 Executing a statement resulted in an error.
 The payload has the following structure:
 
-```
+```json
 {
     "message": <informational message>,
     "code": <error code>,
     "detail": <optional error detail>,
     "hint": <optional error hint>,
 }
-```
+```bash
 
 #### `CommandStarting`
 
@@ -184,12 +210,12 @@ A statement has executed and response data will be returned.
 This message can be used to know if rows or streaming data will follow.
 The payload has the following structure:
 
-```
+```json
 {
     "has_rows": <boolean>,
     "is_streaming": <boolean>,
 }
-```
+```text
 
 The `has_rows` field is `true` if a `Rows` message will follow.
 The `is_streaming` field is `true` if there is no expectation that a `CommandComplete` message will ever occur.
@@ -206,7 +232,7 @@ A rows-returning statement is executing and some number (possibly 0) of `Row` me
 Either a `CommandComplete` or `Error` message will then follow indicating there are no more rows and the final result of the statement.
 The payload has the following structure:
 
-```
+```json
 {
     "columns":
         [
@@ -219,7 +245,7 @@ The payload has the following structure:
             ...
         ]
 }
-```
+```text
 
 The inner object's various `type_X` fields are lower-level details that can be used to convert the row results from a string to a more specific data type.
 `type_oid` is the OID of the data type.
@@ -239,24 +265,24 @@ Announces the value of a session setting.
 These are sent during startup and when a statement caused a session parameter to change.
 The payload has the following structure:
 
-```
+```json
 {
     "name": <name of parameter>,
     "value": <new value of parameter>,
 }
-```
+```bash
 
 #### `BackendKeyData`
 
 Information used to cancel queries.
 The payload has the following structure:
 
-```
+```json
 {
     "conn_id": <connection id>,
     "secret_key": <secret key>,
 }
-```
+```bash
 
 #### TypeScript definition
 
@@ -334,9 +360,11 @@ type WebSocketResult =
     | { type: "CommandStarting"; payload: CommandStarting }
     | { type: "BackendKeyData"; payload: BackendKeyData }
     ;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ### Run a query
 
@@ -359,4 +387,3 @@ $ echo '{"query": "select 1,2; values (4), (5)"}' | websocat wss://<MZ host addr
 
 [simple-query]: https://www.postgresql.org/docs/current/protocol-flow.html#id-1.10.5.7.4
 [extended-query]: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
-

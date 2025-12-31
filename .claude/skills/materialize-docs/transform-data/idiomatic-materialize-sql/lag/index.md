@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/lag/
+complexity: beginner
+description: Use idiomatic Materialize SQL to access the previous row's value (lag)
+  when ordered by a field that advances in a regular pattern, such as in regular intervals.
+doc_type: overview
+keywords:
+- regular
+- SELECT O1
+- SELECT T1
+- 'Idiomatic Materialize SQL:'
+- equality condition
+- Lag over
+- 'Important:'
+- equality match
+- SELECT FIELDA
+product_area: SQL
+status: stable
+title: Lag over
+---
+
 # Lag over
 
+## Purpose
 Use idiomatic Materialize SQL to access the previous row's value (lag) when ordered by a field that advances in a regular pattern, such as in regular intervals.
 
+This page provides detailed documentation for this topic.
+
+
+Use idiomatic Materialize SQL to access the previous row's value (lag) when ordered by a field that advances in a regular pattern, such as in regular intervals.
 
 
 ## Overview
@@ -14,22 +41,17 @@ equality condition (such as when ordering by a field that increases at a regular
 interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
-{{< important >}}
+> **Important:** 
 
 Do not use if the "lag over (order by)" ordering cannot be represented by an
 equality match.
 
-{{</ important >}}
 
 ### Exclude the first row in results
 
@@ -59,12 +81,11 @@ t2.fieldA + ...`). The
 query *excludes* the first row in the results since it does not have a previous
 row.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 <br>
 
@@ -74,7 +95,7 @@ SELECT t1.fieldA, t2.fieldB as previous_row_value
 FROM tableA t1, tableA t2
 WHERE t1.fieldA = t2.fieldA + ... -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -99,7 +120,7 @@ function when the order by field increases in a regular pattern.
 SELECT fieldA, ...
     LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
 FROM tableA;
-```
+```text
 
 </div>
 
@@ -138,12 +159,10 @@ increment in a regular pattern in order to be represented by an equality
 condition (e.g., `ON t1.fieldA = t2.fieldA + ...`). The
 query *includes* the first row, returning `null` as its lag value.
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
-
-{{</ important >}}
 
 
 <br>
@@ -155,7 +174,7 @@ FROM tableA t1
 LEFT JOIN tableA t2
 ON t1.fieldA = t2.fieldA + ... -- or some other operand
 ORDER BY fieldA;
-```
+```text
 
 </td>
 </tr>
@@ -180,7 +199,7 @@ pattern.
 SELECT fieldA, ...
     LAG(fieldZ) OVER (ORDER BY fieldA) as previous_row_value
 FROM tableA;
-```
+```text
 
 </div>
 </td>
@@ -192,12 +211,11 @@ FROM tableA;
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Find previous row's value (exclude the first row in results)
 
@@ -229,14 +247,13 @@ SELECT o1.order_date, o1.daily_total,
 FROM orders_daily_totals o1, orders_daily_totals o2
 WHERE o1.order_date = o2.order_date + INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 </td>
 </tr>
@@ -257,7 +274,7 @@ field increases in a regular pattern.</red>
 SELECT order_date, daily_total,
     LAG(daily_total) OVER (ORDER BY order_date) as previous_daily_total
 FROM orders_daily_totals;
-```
+```text
 
 </td>
 </tr>
@@ -295,14 +312,13 @@ FROM orders_daily_totals o1
 LEFT JOIN orders_daily_totals o2
 ON o1.order_date = o2.order_date + INTERVAL '1' DAY
 ORDER BY order_date;
-```
+```text
 
-{{< important >}}
+> **Important:** 
 
 The idiomatic Materialize SQL applies only to those "lag over" queries whose
 ordering can be represented by some **equality condition**.
 
-{{</ important >}}
 
 </td>
 </tr>
@@ -338,4 +354,3 @@ FROM orders_daily_totals;
 - [`LEFT JOIN/LEFT OUTER JOIN`](/sql/select/join/#left-outer-join)
 - [`LAG()`](/sql/functions/#lag)
 - [Window functions](/sql/functions/#window-functions)
-

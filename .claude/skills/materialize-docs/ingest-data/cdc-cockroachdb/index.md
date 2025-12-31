@@ -1,12 +1,37 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/cdc-cockroachdb/
+complexity: beginner
+description: How to propagate Change Data Capture (CDC) data from a CockroachDB database
+  to Materialize
+doc_type: reference
+keywords:
+- CockroachDB CDC using Kafka and Changefeeds
+- CREATE AND
+- CREATE CHANGEFEEDS
+- you can skip this step
+- CREATE CHANGEFEED
+- CREATE A
+- 'Tip:'
+- 'Note:'
+product_area: Sources
+status: stable
+title: CockroachDB CDC using Kafka and Changefeeds
+---
+
 # CockroachDB CDC using Kafka and Changefeeds
+
+## Purpose
+How to propagate Change Data Capture (CDC) data from a CockroachDB database to Materialize
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to propagate Change Data Capture (CDC) data from a CockroachDB database to Materialize
 
 
+> **Tip:** 
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
 CockroachDB database to downstream consumers. In this guide, we’ll cover how to
@@ -17,6 +42,8 @@ incrementally updated results on top of CockroachDB CDC data.
 details like the minimum required Cockroach version to follow this."
 
 ## A. Configure CockroachDB
+
+This section covers a. configure cockroachdb.
 
 ### 1. Enable rangefeeds
 
@@ -35,7 +62,7 @@ tables you want to replicate to Materialize.
 
    ```sql
    SET CLUSTER SETTING kv.rangefeed.enabled = true;
-   ```
+   ```bash
 
 ### 2. Configure per-table changefeeds
 
@@ -59,7 +86,7 @@ for transformation.
        confluent_schema_registry = 'http://registry:8081',
        diff,
        envelope = wrapped
-   ```
+   ```text
 
    We recommend creating changefeeds using the Avro format (`format = avro`) and
    the default [diff envelope](https://www.cockroachlabs.com/docs/v24.3/create-changefeed#envelope)
@@ -73,16 +100,18 @@ refer to the [CockroachDB documentation](https://www.cockroachlabs.com/docs/stab
 
 ## B. Ingest data in Materialize
 
+This section covers b. ingest data in materialize.
+
 ### 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your Kafka
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
 
-{{% kafka/cockroachdb/create-a-cluster %}}
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: kafka/cockroachdb/create-a-cluster --> --> -->
 
 ### 2. Create a connection
 
@@ -102,7 +131,7 @@ guidance.
     CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
     CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
     CREATE SECRET csr_password AS '<CSR_PASSWORD>';
-    ```
+    ```text
 
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/#kafka) command to create
    a connection object with access and authentication details for Materialize to
@@ -114,7 +143,7 @@ guidance.
       SSL KEY = SECRET kafka_ssl_key,
       SSL CERTIFICATE = SECRET kafka_ssl_crt
     );
-    ```
+    ```text
 
     If you're using a schema registry, create an additional connection object:
 
@@ -126,7 +155,7 @@ guidance.
       USERNAME = 'foo',
       PASSWORD = SECRET csr_password
     );
-    ```
+    ```bash
 
 ### 3. Start ingesting data
 
@@ -148,15 +177,15 @@ guidance.
 
 ### 4. Monitor the ingestion status
 
-{{% kafka/cockroachdb/check-the-ingestion-status %}}
+<!-- Unresolved shortcode: {{% kafka/cockroachdb/check-the-ingestion-status %... -->
 
 ### 5. Create a view
 
-{{% ingest-data/ingest-data-kafka-debezium-view %}}
+<!-- Unresolved shortcode: {{% ingest-data/ingest-data-kafka-debezium-view %}... -->
 
 ### 6. Create an index on the view
 
-{{% ingest-data/ingest-data-kafka-debezium-index %}}
+<!-- Unresolved shortcode: {{% ingest-data/ingest-data-kafka-debezium-index %... -->
 
 ## Next steps
 
@@ -176,4 +205,3 @@ new data arrives, and serving results efficiently.
 
 - Check out the [tools and integrations](/integrations/) supported by
   Materialize.
-

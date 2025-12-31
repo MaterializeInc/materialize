@@ -1,10 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/begin/
+complexity: advanced
+description: '`BEGIN` starts a transaction block.'
+doc_type: reference
+keywords:
+- read-only
+- SELECT O
+- BEGIN
+- 'Note:'
+- write-only
+product_area: Indexes
+status: stable
+title: BEGIN
+---
+
 # BEGIN
+
+## Purpose
+`BEGIN` starts a transaction block.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `BEGIN` starts a transaction block.
 
 
-
-{{% txns/txn-details %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See transactions documentation --> --> -->
 
 Materialize only supports [**read-only** transactions](#read-only-transactions)
 or [**write-only** (specifically, insert-only)
@@ -13,9 +35,11 @@ information.
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 BEGIN [ <option>, ... ];
-```
+```text
 
 You can specify the following optional settings for `BEGIN`:
 
@@ -45,7 +69,7 @@ In Materialize, read-only transactions can be either:
     contains a single [`DECLARE ... CURSOR FOR`] [`SUBSCRIBE`] statement
     followed by subsequent [`FETCH`](/sql/fetch) statement(s). [^1]
 
-{{< note >}}
+> **Note:** 
 
 - During the first query, a timestamp is chosen that is valid for all of the
   objects referenced in the query. This timestamp will be used for all other
@@ -54,7 +78,6 @@ In Materialize, read-only transactions can be either:
 - The transaction will additionally hold back normal compaction of the objects,
   potentially increasing memory usage for very long running transactions.
 
-{{</ note >}}
 
 #### SELECT-only transactions
 
@@ -91,7 +114,7 @@ JOIN public.items as i ON o.item = i.item;
 SELECT * FROM test.auctions limit 1;
 SELECT * FROM public.sales_items;
 COMMIT;
-```
+```text
 
 Reading from a schema not referenced in the first statement or querying objects
 created after the transaction started (even if in the allowed schema(s)) will
@@ -103,7 +126,7 @@ transaction.
 
 ```none
 Transactions can only reference objects in the same timedomain.
-```
+```text
 
 The first `SELECT` statement in a transaction determines which schemas the
 subsequent `SELECT` statements in the transaction can query. If a subsequent
@@ -148,7 +171,7 @@ statements.
 
 #### INSERT-only transactions
 
-{{% txns/txn-insert-only %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See transactions documentation --> --> -->
 
 ## See also
 
@@ -162,4 +185,3 @@ statements.
 [`SUBSCRIBE`]: /sql/subscribe/
 [`DECLARE ... CURSOR FOR`]: /sql/declare/
 [`INSERT`]: /sql/insert/
-

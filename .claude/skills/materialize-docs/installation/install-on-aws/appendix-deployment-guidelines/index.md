@@ -1,7 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-aws/appendix-deployment-guidelines/
+complexity: intermediate
+description: AWS environment setup/deployment guidelines
+doc_type: howto
+keywords:
+- 'Appendix: AWS deployment guidelines'
+product_area: Deployment
+status: stable
+title: 'Appendix: AWS deployment guidelines'
+---
+
 # Appendix: AWS deployment guidelines
 
+## Purpose
 AWS environment setup/deployment guidelines
 
+Follow the steps below to complete this task.
+
+
+AWS environment setup/deployment guidelines
 
 
 ## Recommended instance types
@@ -17,7 +35,7 @@ As a general guideline, we recommend:
   - If spill-to-disk is enabled (*Recommended*): 1:16 ratio of vCPU to GiB local
     instance storage
 
-{{% self-managed/aws-recommended-instances %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Locally-attached NVMe storage
 
@@ -60,4 +78,3 @@ Certificate Authority (CA) rather than self-signed certificates.
 - [Configuration](/installation/configuration/)
 - [Installation](/installation/)
 - [Troubleshooting](/installation/troubleshooting/)
-

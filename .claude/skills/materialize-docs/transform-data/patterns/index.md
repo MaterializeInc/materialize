@@ -1,13 +1,37 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/patterns/
+complexity: advanced
+description: Learn about common Materialize query patterns.
+doc_type: reference
+keywords:
+- 'Important:'
+- SELECT D
+- Patterns
+- CREATE MATERIALIZED
+- SELECT AUCTION_ID
+- 'For sources, tables and materialized views:'
+- retain history
+- 'Private Preview:'
+- ALTER MATERIALIZED
+product_area: SQL
+status: experimental
+title: Patterns
+---
+
 # Patterns
+
+## Purpose
+Learn about common Materialize query patterns.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Learn about common Materialize query patterns.
 
 
-
 The following section provides examples of implementing some common query
 patterns in Materialize:
-
-
 
 
 ---
@@ -35,7 +59,7 @@ application following a connection disruption, you can:
 
 ## History retention period
 
-{{< private-preview />}}
+> **Private Preview:** This feature is in private preview.
 
 By default, all user-defined sources, tables, materialized views, and indexes
 keep track of the most recent version of their underlying data. To gracefully
@@ -43,13 +67,12 @@ recover from connection disruptions and enable lossless, _durable
 subscriptions_, you can configure the sources, tables, and materialized views
 that the subscription depends on to **retain history**.
 
-{{< important >}}
+> **Important:** 
 
 Configuring indexes to retain history is not recommended. Instead, consider
 creating a materialized view for your subscription query and configuring the
 history retention period on that view.
 
-{{</ important >}}
 
 To configure the history retention period for sources, tables and materialized
 views, use the `RETAIN HISTORY` option in its `CREATE` statement. This value can
@@ -88,7 +111,7 @@ See also [Considerations](#considerations).
 
 ### Set history retention period
 
-{{< important >}}
+> **Important:** 
 
 Setting the history retention period for an object will lead to increased
 resource utilization. Moreover, for indexes, setting history retention period is
@@ -96,7 +119,6 @@ not recommended. Instead, consider creating a materialized view for your
 subscription query and configuring the history retention period on that view.
 See [Considerations](#considerations).
 
-{{</ important >}}
 
 To set the history retention period for [sources](/sql/create-source/),
 [tables](/sql/create-table/), and [materialized
@@ -115,7 +137,7 @@ views](/sql/create-materialized-view/), you can either:
          amount
    FROM highest_bid_per_auction
    WHERE end_time < mz_now();
-   ```
+   ```text
 
 - Specify the `RETAIN HISTORY` option in the `ALTER` statement. The `RETAIN
   HISTORY` option accepts positive [interval](/sql/types/interval/) values
@@ -123,7 +145,7 @@ views](/sql/create-materialized-view/), you can either:
 
   ```mzsql
   ALTER MATERIALIZED VIEW winning_bids SET (RETAIN HISTORY FOR '2hr');
-  ```
+  ```bash
 
 ### View history retention period for an object
 
@@ -145,7 +167,7 @@ FROM
         LEFT JOIN mz_databases AS d ON s.database_id = d.id
         LEFT JOIN mz_internal.mz_history_retention_strategies AS hrs ON mv.id = hrs.id
 WHERE mv.name = 'winning_bids';
-```
+```text
 
 If set, the returning result includes the value (in milliseconds) of the history
 retention period:
@@ -155,7 +177,7 @@ retention period:
  database_name | schema_name |     name     | strategy |  value
 ---------------+-------------+--------------+----------+---------
  materialize   | public      | winning_bids | FOR      | 7200000
-```
+```bash
 
 ### Unset/reset history retention period
 
@@ -164,7 +186,7 @@ the `RESET (RETAIN HISTORY)` option in the `ALTER` statement. For example:
 
 ```mzsql
 ALTER MATERIALIZED VIEW winning_bids RESET (RETAIN HISTORY);
-```
+```bash
 
 ### Considerations
 
@@ -218,7 +240,7 @@ continuous query against Materialize in your application code:
 
    ```mzsql
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT true);
-   ```
+   ```text
 
    If you do not need a full snapshot to bootstrap your application,  change
    this to `SNAPSHOT false`.
@@ -235,7 +257,7 @@ continuous query against Materialize in your application code:
 
    ```mzsql
    SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
-   ```
+   ```text
 
    In a similar way, as results come in continuously, buffer the latest results
    in memory until you receive a [progress](/sql/subscribe#progress) message. At that point,
@@ -264,8 +286,6 @@ application crashes, you must write the progress message `mz_timestamp` and all
 buffered data **together in a single transaction**.
 
 
-
-
 ---
 
 ## Partitioning and filter pushdown
@@ -281,10 +301,10 @@ Using the `PARTITION BY` option, you can specify the internal ordering that
 Materialize will use to sort, partition, and store these runs of data.
 A well-chosen partitioning can unlock optimizations like [filter pushdown](#filter-pushdown), which in turn can make queries and other operations more efficient.
 
-{{< note >}}
+> **Note:** 
 The `PARTITION BY` option has no impact on the order in which records are returned by queries.
 If you want to return results in a specific order, use an `ORDER BY` clause on your [`SELECT` statement](/sql/select/).
-{{< /note >}}
+
 
 ## Syntax
 
@@ -296,7 +316,7 @@ CREATE TABLE events (event_ts timestamptz, body jsonb)
 WITH (
     PARTITION BY (event_ts)
 );
-```
+```text
 
 This `PARTITION BY` clause declares that events with similar `event_ts` timestamps should be stored together.
 
@@ -305,9 +325,9 @@ For example, `PARTITION BY (event_date, event_time)` would partition first by th
 if many rows have the same `event_date`, those rows would be partitioned by the `event_time` column.
 Durable collections without a `PARTITION BY` option can be partitioned arbitrarily.
 
-{{< note >}}
+> **Note:** 
 The `PARTITION BY` option does not mean that rows with different values for the specified columns will be stored in different parts, only that rows with similar values for those columns should be stored together.
-{{< /note >}}
+
 
 ## Requirements
 
@@ -330,7 +350,7 @@ Suppose that our example `events` table has accumulated years' worth of data, bu
 
 ```mzsql
 SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
-```
+```text
 
 This query returns only rows with similar values for `event_ts`: timestamps in the last five minutes.
 Since we declared that our `events` table is partitioned by `event_ts`, that means all the rows that pass this filter will be stored in the same small subset of parts.
@@ -353,7 +373,7 @@ Explained Query:
 Source materialize.public.events
   [...]
   pushdown=((mz_now() <= timestamp_to_mz_timestamp((#0 + 00:05:00))))
-```
+```text
 
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
@@ -375,33 +395,32 @@ For timeseries or "event"-type collections, it's often useful to partition the d
     ) WITH (
         PARTITION BY (event_ts)
     );
-    ```
+    ```text
 
 1. Insert a few records, one "older" record and one more recent.
     ```mzsql
     INSERT INTO events VALUES (now()::timestamp - '5 minutes', 'hello');
     INSERT INTO events VALUES (now(), 'world');
-    ```
+    ```text
 
 1. Run a select statement against the data within the next five minutes. This should return only the more recent of the two rows.
     ```mzsql
     SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
-    ```
+    ```text
 
 1. To verify that Materialize fetched only the parts that contain data with the
    recent timestamps, run an `EXPLAIN FILTER PUSHDOWN` statement.
     ```mzsql
     EXPLAIN FILTER PUSHDOWN FOR
     SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
-    ```
+    ```text
 
 If you wait a few minutes longer until there are no events that match the temporal filter, you'll notice that not only does the query return zero rows, but the explain shows that we fetched zero parts.
 
-{{< note >}}
+> **Note:** 
 
 The exact numbers you see here may vary: parts can be much larger than a single row, and the actual level of filtering may fluctuate for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
 
-{{< /note >}}
 
 ### Partitioning by category
 
@@ -418,32 +437,28 @@ Other datasets don't have a strong timeseries component, but they do have a clea
     ) WITH (
         PARTITION BY (country_code)
     );
-    ```
+    ```text
 
 1. Insert a few records with different country codes.
     ```mzsql
     INSERT INTO venues VALUES ('US', 1, 'Rock World');
     INSERT INTO venues VALUES ('CA', 2, 'Friendship Cove');
-    ```
+    ```text
 
 1. Query for venues in particular countries.
     ```mzsql
     SELECT * FROM venues WHERE country_code IN ('US', 'MX');
-    ```
+    ```text
 
 1. Run `EXPLAIN FILTER PUSHDOWN` to check that we're filtering out parts that don't include data that's relevant to the query.
     ```mzsql
     EXPLAIN FILTER PUSHDOWN FOR
     SELECT * FROM venues WHERE country_code IN ('US', 'MX');
-    ```
+    ```text
 
-{{< note >}}
+> **Note:** 
 
 As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections... but for datasets of over a few gigabytes, we should reliably be able to filter down to a subset of the parts we'd otherwise need to fetch.
-
-{{< /note >}}
-
-
 
 
 ---
@@ -493,13 +508,13 @@ To use histograms to compute exact percentiles:
   counts (sum of the counts for all buckets up to and including that bucket) by
   the total count.
 
-  {{< note >}}
+  > **Note:** 
 
   The use of the cross join produces a number of outputs that is quadratic in
   the input. And, while the results will only be linear in size, it may take a
   disproportionate amount of time to produce and maintain.
 
-  {{</ note >}}
+  
 
 ### Example
 
@@ -507,14 +522,14 @@ To use histograms to compute exact percentiles:
 
    ```mzsql
    CREATE TABLE input (value BIGINT);
-   ```
+   ```text
 
 2. Insert into the `input` table values `1` to `10`.
 
    ```mzsql
    INSERT INTO input
    SELECT n FROM generate_series(1,10) AS n;
-   ```
+   ```text
 
 1. Create a `histogram` view to track unique values from the
    `input` table and their count:
@@ -526,7 +541,7 @@ To use histograms to compute exact percentiles:
      count(*) AS count_of_bucket_values
    FROM input
    GROUP BY value;
-   ```
+   ```text
 
 1. Create a view `distribution` to calculate the cumulative count and the
    cumulative density for each bucket. The cumulative density is calculated by
@@ -544,15 +559,15 @@ To use histograms to compute exact percentiles:
    WHERE g.bucket <= h.bucket
    GROUP BY h.bucket, h.count_of_bucket_values
    ORDER BY cumulative_density;
-   ```
+   ```text
 
-   {{< note >}}
+   > **Note:** 
 
    The use of the cross join produces a number of outputs that is quadratic in
    the input. And, while the results will only be linear in size, it may take a
    disproportionate amount of time to produce and maintain.
 
-   {{</ note >}}
+   
 
 1. You can then query `distribution` by the `cumulative_density` field to
    return specific percentiles. For example, the following query returns the
@@ -564,7 +579,7 @@ To use histograms to compute exact percentiles:
    WHERE cumulative_density >= 0.9
    ORDER BY cumulative_density
    LIMIT 1;
-   ```
+   ```bash
 
 
 ## Using HDR histograms to compute approximate percentiles
@@ -595,27 +610,26 @@ same for HDR histograms.
 
 ### Example
 
-{{< tip >}}
+> **Tip:** 
 
 The following example assumes you have not previously created and populated the
 `input` table from the [Using histograms to compute exact percentiles
 example](#example). If you have created and populated the table, skip the
 corresponding steps.
 
-{{</ tip >}}
 
 1. Create a table `input`:
 
    ```mzsql
    CREATE TABLE input (value BIGINT);
-   ```
+   ```text
 
 2. Insert into the `input` table values `1` to `10`.
 
    ```mzsql
    INSERT INTO input
    SELECT n FROM generate_series(1,10) AS n;
-   ```
+   ```text
 
 1. Create a `hdr_histogram` view. To reduce the number of buckets, the values
    are rounded down to the nearest multiple of 1/16. Specifically, the values
@@ -623,9 +637,10 @@ corresponding steps.
    precision of the significand to 1/16 (4 bits), the value is reconstructed to
    an approximated value.
 
-   {{< tabs >}}
+   
 
-   {{< tab "Materialize Console" >}}
+   #### Materialize Console
+
 
 ```mzsql
 CREATE VIEW hdr_histogram AS
@@ -653,11 +668,12 @@ SELECT
   count(*) AS count_of_bucket_values
 FROM buckets
 GROUP BY bucket;
-```
+```json
 
-   {{</ tab >}}
+   
 
-   {{< tab "psql" >}}
+   #### psql
+
 
 ```mzsql
 -- precision for the representation of the significand in bits
@@ -688,9 +704,9 @@ SELECT
   count(*) AS count_of_bucket_values
 FROM buckets
 GROUP BY bucket;
-```
-   {{</ tab >}}
-   {{</ tabs >}}
+```json
+   
+   
 
 1. Create a view `hdr_distribution` to calculate the cumulative count and the
    cumulative density for each bucket. The cumulative density is calculated by
@@ -707,7 +723,7 @@ GROUP BY bucket;
    FROM hdr_histogram g, hdr_histogram h
    WHERE g.bucket <= h.bucket
    GROUP BY h.bucket, h.count_of_bucket_values;
-   ```
+   ```text
 
 1. You can then query `hdr_distribution` by the `cumulative_density` field
    to return _approximate_ percentiles. More precisely, the query returns the
@@ -723,7 +739,7 @@ GROUP BY bucket;
    WHERE cumulative_density >= 0.9
    ORDER BY cumulative_density
    LIMIT 1;
-   ```
+   ```bash
 
 ### HDR Histograms and approximate values
 
@@ -733,7 +749,7 @@ verify, query `hdr_distribution`:
 
 ```mzsql
 SELECT * FROM hdr_distribution;
-```
+```text
 
 The query returns the following:
 
@@ -751,13 +767,13 @@ The query returns the following:
       9 |         1 |                    9 |                     0.9
      10 |         1 |                   10 |                       1
 (10 rows)
-```
+```text
 
 But if values grow larger, buckets can contain more than one value. Let's see what happens if more values are added to the `input` table.
 
 ```mzsql
 INSERT INTO input SELECT n FROM generate_series(11,10001) AS n;
-```
+```text
 
 Unlike the `distribution` view (used in the histogram approach) where each
 bucket contains only a single value and has 10001 rows, a single bucket in
@@ -765,7 +781,7 @@ bucket contains only a single value and has 10001 rows, a single bucket in
 
 ```mzsql
 SELECT * FROM hdr_distribution ORDER BY cumulative_density;
-```
+```text
 
 The query returns the following:
 
@@ -786,7 +802,7 @@ The query returns the following:
    9216 |       512 |                 9727 | 0.972602739726027397260273972602739726027
    9728 |       274 |                10001 |                                         1
 (163 rows)
-```
+```text
 
 When querying `hdr_distribution`  for the 90-th percentile value:
 
@@ -796,7 +812,7 @@ FROM hdr_distribution
 WHERE cumulative_density >= 0.9
 ORDER BY cumulative_density
 LIMIT 1;
-```
+```text
 
 The query returns an approximate
 percentile of `8704` (or more precisely between `8704`and `9216`) whereas the
@@ -807,11 +823,9 @@ precise percentile is `9001`.
 ------------------------
                    8704
 (1 row)
-```
+```text
 
 The precision of the approximation can be adapted by changing the `precision` in the definition of `hdr_histogram`. The higher the `precision`, the fewer items are kept in the same bucket and therefore the more precise the approximate percentile becomes. The lower the `precision`, the more items are kept in the same bucket and therefore the less memory is required.
-
-
 
 
 ---
@@ -856,7 +870,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (8, 'Owl', 105.3, '["Gray"]'),
     (9, 'Flamingo', 150.6, '["Pink"]'),
     (10, 'Pelican', 180.4, '["White"]');
-    ```
+    ```text
 1. Create the `bird_rules` table and insert a few rules.
     ```mzsql
     CREATE TABLE bird_rules (
@@ -872,7 +886,7 @@ In our example, for each rule in a `bird_rules` dataset, we filter the `birds` d
     (1, 'P', 'GTE', 50.0, '["Blue"]'),
     (2, 'P', 'LTE', 100.0, '["Black","White"]'),
     (3, 'R', 'GTE', 20.0, '["Red"]');
-    ```
+    ```text
     Each rule has a unique `id` and encodes filters on starting letter, wingspan, and color. For `wingspan_operator`, `'GTE'` means "greater than or equal" and `'LTE'` means "less than or equal". For more complicated rules with varying schemas, consider using the [`jsonb` type](/sql/types/jsonb) and adjust the logic in the upcoming `LATERAL` join to suit your needs.
 
 ### Create the View
@@ -897,56 +911,56 @@ LATERAL (
         )
         AND r.colors <@ birds.colors
 ) AS b;
-```
+```bash
 
 ### Subscribe to Changes
 
 1. Subscribe to the changes of `birds_filtered`.
     ```mzsql
     SUBSCRIBE TO birds_filtered;
-    ```
+    ```text
 
-   {{< tip >}}
+   > **Tip:** 
    If running this example in a client, use `COPY(SUBSCRIBE...) TO STDOUT;`.
-   {{</ tip >}}
+   
 
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors         | wingspan_cm
     --------------|---------|---------|----------|---------------------|------------
     1688673701670      1         2       Penguin     ["Black","White"]       99.5
-    ```
+    ```text
     Notice that the majestic penguin satisfies rule 2. None of the other birds satisfy any of the rules.
 1. In a separate session, insert a new bird that satisfies rule 3. Rule 3 requires a bird whose first letter is 'R', with a wingspan greater than or equal to 20 centimeters, and whose colors contain "Red". We will insert a "Really big robin" that satisfies this rule.
     ```mzsql
     INSERT INTO birds VALUES (11, 'Really big robin', 25.0, '["Red"]');
-    ```
+    ```text
     Back in the `SUBSCRIBE` terminal, notice the output was immediately updated.
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |       name         |  colors   | wingspan_cm
     --------------|---------|---------|--------------------|-----------|------------
     1688674195279      1         3       Really big robin     ["Red"]        25
-    ```
+    ```text
 1. For fun, let's delete rule 3 and see what happens.
     ```mzsql
     DELETE FROM bird_rules WHERE id = 3;
-    ```
+    ```text
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |       name         |  colors   | wingspan_cm
     --------------|---------|---------|--------------------|-----------|------------
     1688674195279     -1         3       Really big robin     ["Red"]        25
-    ```
+    ```text
     Notice the bird was removed because the rule no longer exists.
 1. Now let's update an existing bird so that it satisfies a new rule. It turns out our penguin also has some blue coloration we didn't notice before.
     ```mzsql
     UPDATE birds SET colors = '["Black","White","Blue"]' WHERE name = 'Penguin';
-    ```
+    ```text
     ```nofmt
     mz_timestamp  | mz_diff | rule_id |   name   |      colors              | wingspan_cm
     --------------|---------|---------|----------|--------------------------|------------
     1688675781416     -1         2       Penguin   ["Black","White"]               99.5
     1688675781416      1         2       Penguin   ["Black","White","Blue"]        99.5
     1688675781416      1         1       Penguin   ["Black","White","Blue"]        99.5
-    ```
+    ```text
     First there was an update to the row corresponding to the penguin's adherence to rule 2: a diff of -1 to delete the old value with just the black and white colors, and a diff of +1 to add the new value with black, white, and blue colors. Then there was a new record showing that the penguin now also adheres to rule 1.
 
 ### Clean Up
@@ -956,13 +970,11 @@ Press `Ctrl+C` to stop your `SUBSCRIBE` query and then drop the tables to clean 
 ```mzsql
 DROP TABLE birds CASCADE;
 DROP TABLE bird_rules CASCADE;
-```
+```bash
 
 ## Conclusion
 
 Rule execution engines can be much more complex than the minimal example presented here, but the underlying principle is the same; define the rules as **data** and use a `LATERAL` join to apply each rule to the dataset. Once you materialize the view, either by creating an index or creating it as a materialized view, the results will be kept up to date automatically as the dataset changes and as the rules change.
-
-
 
 
 ---
@@ -992,13 +1004,13 @@ records whose event timestamp column (`event_ts`) is no more than 5 minutes ago:
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '5min'
-```
+```text
 
-{{< note >}}
+> **Note:** 
 It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
 However, there are currently no valid operators for the [`mz_timestamp`
 type](/sql/types/mz_timestamp) that would allow this.  See [`mz_now()` requirements and restrictions](#mz_now-requirements-and-restrictions).
-{{< /note >}}
+
 
 The following diagram shows record `B` falling out of the result set as time
 moves forward:
@@ -1013,27 +1025,52 @@ moves forward:
 
 ## `mz_now()` requirements and restrictions
 
+This section covers `mz_now()` requirements and restrictions.
+
 ### `mz_now()` requirements
 
-{{< tip >}}
+> **Tip:** 
 
 When possible, prefer materialized views when using temporal filter to take
 advantage of custom consolidation.
 
-{{</ tip >}}
 
 When creating a temporal filter using
 [`mz_now()`](/sql/functions/now_and_mz_now) in a `WHERE` or `HAVING` clause, the
 clause has the following shape:
 
-{{< include-md file="shared-content/mz_now_clause_requirements.md" >}}
+```mzsql
+mz_now() <comparison_operator> <numeric_expr | timestamp_expr>
+```text
+
+- `mz_now()` must be used with one of the following comparison operators: `=`,
+`<`, `<=`, `>`, `>=`, or an operator that desugars to them or to a conjunction
+(`AND`) of them (for example, `BETWEEN...AND...`). That is, you cannot use
+date/time operations directly on  `mz_now()` to calculate a timestamp in the
+past or future. Instead, rewrite the query expression to move the operation to
+the other side of the comparison.
+
+
+- `mz_now()` can only be compared to either a
+  [`numeric`](/sql/types/numeric) expression or a
+  [`timestamp`](/sql/types/timestamp) expression not containing `mz_now()`.
+
 
 ### `mz_now()` restrictions
 
 The [`mz_now()`](/sql/functions/now_and_mz_now) clause has the following
 restrictions:
 
-- {{< include-md file="shared-content/mz_now_clause_disjunction_restrictions.md" >}}
+- When used in a materialized view definition, a view definition that is being
+indexed (i.e., although you can create the view and perform ad-hoc query on
+the view, you cannot create an index on that view), or a `SUBSCRIBE`
+statement:
+
+- `mz_now()` clauses can only be combined using an `AND`, and
+
+- All top-level `WHERE` or `HAVING` conditions must be combined using an `AND`,
+  even if the `mz_now()` clause is nested.
+
 
   To rewrite the query, see [Disjunction (OR)
   alternatives](http://localhost:1313/docs/transform-data/idiomatic-materialize-sql/mz_now/#disjunctions-or).
@@ -1046,12 +1083,11 @@ restrictions:
 These examples create real objects.
 After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
 
-{{< tip >}}
+> **Tip:** 
 
 When possible, prefer materialized views when using temporal filter to take
 advantage of custom consolidation.
 
-{{</ tip >}}
 
 ### Sliding window
 
@@ -1075,30 +1111,29 @@ In this case, we will filter a table to only include only records from the last 
     SELECT event_ts, content
     FROM events
     WHERE mz_now() <= event_ts + INTERVAL '30s';
-    ```
+    ```text
 
 1. Next, subscribe to the results of the view.
     ```mzsql
     COPY (SUBSCRIBE (SELECT ts, content FROM last_30_sec)) TO STDOUT;
-    ```
+    ```text
 
 1. In a separate session, insert a record.
     ```mzsql
     INSERT INTO events VALUES ('hello', now());
-    ```
+    ```text
 
 1. Back in the first session, watch the record expire after 30 seconds.
     ```nofmt
     1686868190714   1       2023-06-15 22:29:50.711 hello
     1686868220712   -1      2023-06-15 22:29:50.711 hello
-    ```
+    ```text
     Press `Ctrl+C` to quit the `SUBSCRIBE` when you are ready.
 
 You can materialize the `last_30_sec` view by [recreating it as a `MATERIALIZED
 VIEW`](/sql/create-materialized-view/) (results persisted to storage). When
 you do so, Materialize will keep the results up to date with records expiring
 automatically according to the temporal filter.
-
 
 
 ### Time-to-Live (TTL)
@@ -1110,14 +1145,14 @@ Materialize then helps perform actions according to each task's expiration time.
 1. First, create a table:
     ```mzsql
     CREATE TABLE tasks (name TEXT, created_ts TIMESTAMP, ttl INTERVAL);
-    ```
+    ```text
 
 1. Add some tasks to track:
     ```mzsql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 minutes');
     INSERT INTO tasks VALUES ('time_to_eat', now(), INTERVAL '1 hour');
     INSERT INTO tasks VALUES ('security_block', now(), INTERVAL '1 day');
-    ```
+    ```text
 
 1. Create a view using a temporal filter **over the expiration time**. For our example, the expiration time represents the sum between the task's `created_ts` and its `ttl`.
     ```mzsql
@@ -1127,7 +1162,7 @@ Materialize then helps perform actions according to each task's expiration time.
       created_ts + ttl as expiration_time
     FROM tasks
     WHERE mz_now() < created_ts + ttl;
-    ```
+    ```text
     The moment `mz_now()` crosses the expiration time of a record, that record is retracted (removed) from the result set.
 
 You can now:
@@ -1137,26 +1172,26 @@ You can now:
     SELECT expiration_time - now() AS remaining_ttl
     FROM tracking_tasks
     WHERE name = 'time_to_eat';
-  ```
+  ```text
 
 - Check if a particular row is still available:
   ```mzsql
   SELECT true
   FROM tracking_tasks
   WHERE name = 'security_block';
-  ```
+  ```text
 
 - Trigger an external process when a row expires:
   ```mzsql
     INSERT INTO tasks VALUES ('send_email', now(), INTERVAL '5 seconds');
     COPY( SUBSCRIBE tracking_tasks WITH (SNAPSHOT = false) ) TO STDOUT;
 
-  ```
+  ```text
   ```nofmt
   mz_timestamp | mz_diff | name       | expiration_time |
   -------------|---------|------------|-----------------|
   ...          | -1      | send_email | ...             | <-- Time to send the email!
-  ```
+  ```bash
 
 ### Periodically emit results
 
@@ -1169,7 +1204,7 @@ The strategy for this example is to put an initial temporal filter on the input 
 1. First, create a table for the input records.
     ```mzsql
     CREATE TABLE input (id INT, event_ts TIMESTAMP);
-    ```
+    ```text
 1. Create a view that filters the input for the most recent 30 days and buckets records into 1 minute windows.
     ```mzsql
     CREATE VIEW
@@ -1186,7 +1221,7 @@ The strategy for this example is to put an initial temporal filter on the input 
                     AS window_end
             FROM input
             WHERE mz_now() <= event_ts + INTERVAL '30 days';
-    ```
+    ```text
 1. Create the final output view that does the aggregation and maintains 7 days worth of results.
     ```mzsql
     CREATE MATERIALIZED VIEW output
@@ -1201,12 +1236,12 @@ The strategy for this example is to put an initial temporal filter on the input 
                     AND
                 mz_now() < window_end + INTERVAL '7 days'
             GROUP BY window_end, id;
-    ```
+    ```text
     This `WHERE` clause means "the result for a 1-minute window should come into effect when `mz_now()` reaches `window_end` and be removed 7 days later". Without the latter constraint, records in the result set would receive strange updates as records expire from the initial 30 day filter on the input.
 1. Subscribe to the `output`.
     ```mzsql
     COPY (SUBSCRIBE (SELECT * FROM output)) TO STDOUT;
-    ```
+    ```text
 1. In a different session, insert some records.
     ```mzsql
     INSERT INTO input VALUES (1, now());
@@ -1216,14 +1251,14 @@ The strategy for this example is to put an initial temporal filter on the input 
     INSERT INTO input VALUES (1, now());
     -- wait a moment
     INSERT INTO input VALUES (2, now());
-    ```
+    ```text
 1. Back at the `SUBSCRIBE`, wait about a minute for your final aggregation result to show up the moment the 1 minute window ends.
     ```nofmt
      mz_timestamp | mz_diff |  id   | count |      window_end
     --------------|---------|-------|-------|----------------------
     1686889140000       1       1       3       2023-06-16 04:19:00
     1686889140000       1       2       1       2023-06-16 04:19:00
-    ```
+    ```text
     If you are very patient, you will see these results retracted in 7 days.
     Press `Ctrl+C` to exit the `SUBSCRIBE` when you are finished playing.
 
@@ -1239,7 +1274,7 @@ Consider the temporal filter for the most recent hour's worth of records.
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
-```
+```text
 
 Suppose a record with a timestamp `11:00:00` arrives "late" with a virtual timestamp of `11:59:59` and you query this collection at a virtual timestamp of `12:00:00`.
 According to the temporal filter, the record is included for results as of virtual time `11:59:59` and retracted just after `12:00:00`.
@@ -1282,9 +1317,5 @@ The filter in our query appears in the `pushdown=` list at the bottom of the out
 
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
-{{< note >}}
+> **Note:** 
 See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
-{{< /note >}}
-
-
-

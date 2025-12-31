@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/list_agg/
+complexity: advanced
+description: Concatenates input values (including nulls) into a string.
+doc_type: reference
+keywords:
+- CREATE A
+- SELECT TITLE
+- SELECT LIST_AGG
+- list_agg function
+- CREATE VIEW
+- CREATE MATERIALIZED
+product_area: Indexes
+status: stable
+title: list_agg function
+---
+
 # list_agg function
+
+## Purpose
+Concatenates input values (including nulls) into a string.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Concatenates input values (including nulls) into a string.
 
@@ -10,7 +34,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "list-agg.svg" >}}
+[See diagram: list-agg.svg]
 
 ## Signatures
 
@@ -27,6 +51,8 @@ ignored. If you need to perform aggregation in a specific order, you must specif
 
 ## Details
 
+This section covers details.
+
 ### Usage in dataflows
 
 While `list_agg` is available in Materialize, materializing `list_agg(values)`
@@ -41,9 +67,11 @@ on top of that. That pattern is illustrated in the following statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT list_agg(foo_view.bar) FROM foo_view;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT

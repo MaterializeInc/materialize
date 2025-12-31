@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/appendix/example-orders/
+complexity: intermediate
+description: Sample data used in various examples.
+doc_type: reference
+keywords:
+- CREATE TABLE
+- CREATE VIEW
+- INSERT INTO
+- 'Example data: items and orders'
+product_area: SQL
+status: stable
+title: 'Example data: items and orders'
+---
+
 # Example data: items and orders
+
+## Purpose
+Sample data used in various examples.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Sample data used in various examples.
 

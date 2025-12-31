@@ -1,7 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/cloud/users-service-accounts/create-service-accounts/
+complexity: intermediate
+description: Create a new service account (i.e., non-human user) to connect external
+  applications and services to Materialize.
+doc_type: reference
+keywords:
+- App Password
+- 'Note:'
+- CREATE SERVICE
+- User
+- CREATE A
+- + Create New
+- Create service accounts
+- administrator
+- CREATE NEW
+product_area: Security
+status: stable
+title: Create service accounts
+---
+
 # Create service accounts
 
+## Purpose
 Create a new service account (i.e., non-human user) to connect external applications and services to Materialize.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Create a new service account (i.e., non-human user) to connect external applications and services to Materialize.
 
 
 It's a best practice to use service accounts (i.e., non-human users) to connect
@@ -13,14 +40,14 @@ Materialize organization, you can create service accounts manually via the
 More granular permissions for the service account can then be configured using
 [role-based access control (RBAC)](/security/cloud/access-control/).
 
-{{< note >}}
+> **Note:** 
 
 - The new account creation is not finished until the first time you connect with
 the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-{{</ note >}}
 
 ## Materialize Console
 
@@ -30,59 +57,67 @@ the account.
 
 1. In the **New app password** modal, specify the type and required field(s):
 
-   {{< yaml-table data="console/service_account_fields" >}}
+   <!-- Dynamic table: console/service_account_fields - see original docs -->
 
 1. Click **Create Password** to generate a new password for your service
    account.
 
 1. Store the new password securely.
 
-   {{< note >}}
+   > **Note:** 
 
    Do not reload or navigate away from the screen before storing the
    password. This information is not displayed again.
 
-   {{</ note >}}
+   
 
 1. Connect with the new service account to finish creating the new
    account.
 
-   {{< note >}}
+   > **Note:** 
 
 - The new account creation is not finished until the first time you connect with
   the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-   {{</ note >}}
+
+   
 
    1. Find your new service account in the **App Passwords** table.
 
    1. Click on the **Connect** button to get details on connecting with the new
       account.
 
-      {{< tabs >}}
-      {{< tab "psql" >}}
+      
+      #### psql
+
 If you have `psql` installed:
 
 1. Click on the **Terminal** tab.
 1. From a terminal, connect using the psql command displayed.
 1. When prompted for the password, enter the app's password.
 
-{{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-      {{</ tab >}}
-      {{< tab "Other clients" >}}
+
+      
+      #### Other clients
+
 To use a different client to connect,
 
 1. Click on the **External tools** tab to get the connection details.
 
 1. Update the client to use these details and connect.
 
-{{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-      {{</ tab >}}
-      {{</ tabs >}}
+
+      
+      
 
 ## Terraform
 
@@ -96,7 +131,7 @@ To use a different client to connect,
       name   = "svc_production_dashboard"
       region = "aws/us-east-1"
     }
-    ```
+    ```text
 
 1. Create a new `service` app password using the [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)
    resource, and associate it with the service user created in the previous
@@ -109,7 +144,7 @@ To use a different client to connect,
       user = materialize_role.production_dashboard.name
       roles = ["Member"]
     }
-    ```
+    ```text
 
 1. Optionally, associate the new service user with existing roles to grant it
    existing database privileges.
@@ -121,7 +156,7 @@ To use a different client to connect,
       database_name = "production_analytics"
       region        = "aws/us-east-1"
     }
-    ```
+    ```text
 
 1. Export the user and password for use in the external application or service.
 
@@ -139,5 +174,8 @@ resources in your region, see the [reference documentation](/manage/terraform/).
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
-
+The organization role for a user/service account determines the default level of
+database access. Once the account creation is complete, you can use [role-based
+access control
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
+control access for that account.

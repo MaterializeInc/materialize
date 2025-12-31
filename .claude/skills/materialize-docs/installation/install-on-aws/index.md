@@ -1,8 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-aws/
+complexity: advanced
+description: '<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence
+  %... -->'
+doc_type: reference
+keywords:
+- DELETE YOUR
+- DELETE THE
+- 'Warning:'
+- CREATE A
+- 'Tip:'
+- Install on AWS (via Terraform)
+- 'Note:'
+- SHOW THE
+product_area: Deployment
+status: beta
+title: Install on AWS (via Terraform)
+---
+
 # Install on AWS (via Terraform)
 
+## Purpose
+<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence %... -->
+
+If you need to understand the syntax and options for this command, you're in the right place.
 
 
-{{% self-managed/materialize-components-sentence %}}
+<!-- Unresolved shortcode: {{% self-managed/materialize-components-sentence %... -->
 
 The tutorial deploys Materialize to AWS Elastic Kubernetes Service (EKS) with a
 PostgreSQL RDS database as the metadata database and AWS S3 for blob storage.
@@ -15,19 +40,20 @@ module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
    module to deploy Materialize Operator and Materialize instances to that EKS
    cluster.
 
-{{< warning >}}
+> **Warning:** 
 
-{{< self-managed/terraform-disclaimer >}}
+> **Note:** Terraform configurations may vary based on your environment.
 
-{{< /warning >}}
 
-{{% self-managed/aws-recommended-instances %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 See [Appendix: AWS Deployment
 guidelines](/installation/install-on-aws/appendix-deployment-guidelines/) for
 more information.
 
 ## Prerequisites
+
+This section covers prerequisites.
 
 ### Terraform
 
@@ -54,58 +80,52 @@ documentation](https://helm.sh/docs/intro/install/).
 
 Starting in v26.0, Self-Managed Materialize requires a license key.
 
-{{< yaml-table data="self_managed/license_key" >}}
+<!-- Dynamic table: self_managed/license_key - see original docs -->
 
 ## Set up AWS Kubernetes environment and install Materialize
 
-{{< warning >}}
+> **Warning:** 
 
-{{< self-managed/terraform-disclaimer >}}
+> **Note:** Terraform configurations may vary based on your environment.
 
-{{< self-managed/tutorial-disclaimer >}}
 
-{{< /warning >}}
+#### Deployed components
 
-{{< tabs >}}
-
-{{< tab "Deployed components" >}}
 
 [Materialize on AWS Terraform
 module](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/README.md)
 deploys a sample infrastructure on AWS (region `us-east-1`) with the following
 components:
 
-{{< yaml-table data="self_managed/aws_terraform_deployed_components" >}}
+<!-- Dynamic table: self_managed/aws_terraform_deployed_components - see original docs -->
 
-{{< tip >}}
-{{% self-managed/aws-terraform-configs %}}
-{{< /tip >}}
+> **Tip:** 
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-{{</ tab >}}
-{{< tab "Releases" >}}
 
-{{< yaml-table data="self_managed/aws_terraform_versions" >}}
+#### Releases
 
-{{</ tab >}}
-{{</ tabs >}}
+
+<!-- Dynamic table: self_managed/aws_terraform_versions - see original docs -->
+
 
 1. Open a Terminal window.
 
 1. Configure AWS CLI with your AWS credentials. For details, see the [AWS
    documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html).
 
-{{% self-managed/versions/step-clone-aws-terraform-repo %}}
+<!-- Unresolved shortcode: {{% self-managed/versions/step-clone-aws-terraform... -->
 
 1. Go to the `examples/simple` folder in the Materialize Terraform repo
    directory.
 
    ```bash
    cd terraform-aws-materialize/examples/simple
-   ```
+   ```text
 
-   {{< tip >}}
-   {{< self-managed/aws-terraform-configs >}}
-   {{< /tip >}}
+   > **Tip:** 
+   
+   
 
 1. Create a `terraform.tfvars` file (you can copy from the
    `terraform.tfvars.example` file) and specify the following variables:
@@ -122,29 +142,29 @@ components:
 
    namespace = "enter-namespace"   // maximum 12 characters, start with a   letter, contain lowercase alphanumeric and hyphens only (e.g. my-demo)
    environment = "enter-environment" // maximum 8 characters, lowercase   alphanumeric only (e.g., dev, test)
-   ```
+   ```text
 
-   {{< tip >}}
-   {{< self-managed/aws-terraform-configs >}}
-   {{< /tip >}}
+   > **Tip:** 
+   
+   
 
 1. Initialize the terraform directory.
 
     ```bash
     terraform init
-    ```
+    ```text
 
 1. Use terraform plan to review the changes to be made.
 
     ```bash
     terraform plan
-    ```
+    ```text
 
 1. If you are satisfied with the changes, apply.
 
    ```bash
    terraform apply
-   ```
+   ```text
 
    To approve the changes and apply, enter `yes`.
 
@@ -168,7 +188,7 @@ components:
    persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
    s3_bucket_name = "my-demo-dev-storage-f2def2a9"
    vpc_id = "vpc-0abc000bed1d111bd"
-   ```
+   ```text
 
 1. Note your specific values for the following fields:
 
@@ -185,13 +205,13 @@ components:
 
    ```bash
    aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
    ```bash
    kubectl get nodes
-   ```
+   ```text
 
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
@@ -200,14 +220,15 @@ components:
    starting in v0.4.0, a `cert-manager`. Verify the installation and check the
    status:
 
-   {{< tabs >}}
-   {{< tab "Materialize Operator" >}}
+   
+   #### Materialize Operator
+
 
    Verify the installation and check the status:
 
    ```shell
    kubectl get all -n materialize
-   ```
+   ```text
 
    Wait for the components to be in the `Running` state:
 
@@ -220,18 +241,19 @@ components:
 
    NAME                                                             DESIRED    CURRENT   READY   AGE
    replicaset.apps/my-demo-dev-materialize-operator-84ff4b4648   1        1         1       12s
-   ```
+   ```json
 
-   {{</ tab >}}
-   {{< tab "cert-manager (Starting in version 0.4.0)" >}}
+   
+   #### cert-manager (Starting in version 0.4.0)
+
 
    Verify the installation and check the status:
 
    ```shell
    kubectl get all -n cert-manager
-   ```
+   ```text
    Wait for the components to be in the `Running` state:
-   ```
+   ```text
    NAME                                           READY   STATUS   RESTARTS     AGE
    pod/cert-manager-cainjector-686546c9f7-v9hwp   1/1     Running  0            4m20s
    pod/cert-manager-d6746cf45-cdmb5               1/1     Running  0            4m20s
@@ -249,10 +271,10 @@ components:
    replicaset.apps/cert-manager-d6746cf45               1         1          1       4m20s
    replicaset.apps/cert-manager-webhook-5f79cd6f4b      1         1         1
    4m20s
-   ```
+   ```json
 
-   {{</ tab >}}
-   {{</ tabs >}}
+   
+   
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting) guide.
@@ -279,11 +301,11 @@ components:
        }
    ]
    EOF
-   ```
+   ```text
 
    - **Starting in v26.0**, Self-Managed Materialize requires a license key. To
      get your license key:
-     {{% yaml-table data="self_managed/license_key" %}}
+     <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- Dynamic table - see original docs --> --> -->
 
    - **Starting in v0.3.0**, the Materialize on AWS Terraform module also
    deploys, by default, Network Load Balancers (NLBs) for each Materialize
@@ -303,31 +325,31 @@ components:
    - **Starting in v0.4.6**, you can specify addition configuration options via
      `environmentd_extra_args`.
 
-   {{< tip >}}
-   {{% self-managed/aws-terraform-upgrade-notes %}}
+   > **Tip:** 
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
    See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-module) for notable changes.
-   {{</ tip >}}
+   
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
    made.
 
    ```bash
    terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
-   ```
+   ```text
 
    The plan should show the changes to be made, with a summary similar to the
    following:
 
-   ```
+   ```text
    Plan: 17 to add, 1 to change, 0 to destroy.
-   ```
+   ```text
 
 1. If you are satisfied with the changes, apply.
 
    ```bash
    terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
-   ```
+   ```text
 
    To approve the changes and apply, enter `yes`.
 
@@ -357,7 +379,7 @@ components:
    persist_backend_url = "s3://my-demo-dev-storage-f2def2a9/dev:serviceaccount:materialize-environment:12345678-1234-1234-1234-12345678912"
    s3_bucket_name = "my-demo-dev-storage-f2def2a9"
    vpc_id = "vpc-0abc000bed1d111bd"
-   ```
+   ```text
 
    The Network Load Balancer (NLB) details `nlb_details` are available when
    running the Terraform module v0.3.0+.
@@ -366,7 +388,7 @@ components:
 
    ```bash
    kubectl get all -n materialize-environment
-   ```
+   ```text
 
    Wait for the components to be in the `Running` state.
 
@@ -404,16 +426,17 @@ components:
 
    NAME                          STATUS     COMPLETIONS   DURATION   AGE
    job.batch/create-db-demo-db   Complete   1/1           11s        33s
-   ```
+   ```text
 
    If you run into an error during deployment, refer to the
    [Troubleshooting](/installation/troubleshooting/).
 
 1. Open the Materialize Console in your browser:
 
-   {{< tabs >}}
+   
 
-   {{< tab  "Via Network Load Balancer" >}}
+   #### Via Network Load Balancer
+
 
    Starting in v0.3.0, for each Materialize instance, Materialize on AWS
    Terraform module also deploys AWS Network Load Balancers (by default,
@@ -434,30 +457,31 @@ components:
    from an official Certificate Authority (CA) rather than self-signed
    certificates.
 
-   {{</ tab >}}
+   
 
-   {{< tab "Via port forwarding" >}}
+   #### Via port forwarding
 
-   {{% self-managed/port-forwarding-handling %}}
 
-   {{</ tab>}}
-   {{</ tabs >}}
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-   {{< tip >}}
+   
+   
 
-   {{% self-managed/troubleshoot-console-mz_catalog_server_blurb %}}
+   > **Tip:** 
 
-   {{< /tip >}}
+   <!-- Unresolved shortcode: {{% self-managed/troubleshoot-console-mz_catalog_s... -->
+
+   
 
 ## Next steps
 
-{{% self-managed/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Cleanup
 
-{{% self-managed/cleanup-cloud %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
-  {{< tip >}}
+  > **Tip:** 
 
   - To delete your S3 bucket, you may need to empty the S3 bucket first. If the
     `terraform destroy` command is unable to delete the S3 bucket and does not
@@ -468,7 +492,7 @@ components:
     regards to CustomResourceDefinition(CRD). You may safely ignore these
     messages as your whole deployment has been destroyed, including the CRDs.
 
-  {{</ tip >}}
+  
 
 ## See also
 
@@ -479,12 +503,12 @@ guidelines](/installation/install-on-aws/appendix-deployment-guidelines/)
 - [Installation](/installation/)
 
 
-
-
 ---
 
 ## Appendix: AWS deployment guidelines
 
+
+This section covers appendix: aws deployment guidelines.
 
 ## Recommended instance types
 
@@ -499,7 +523,7 @@ As a general guideline, we recommend:
   - If spill-to-disk is enabled (*Recommended*): 1:16 ratio of vCPU to GiB local
     instance storage
 
-{{% self-managed/aws-recommended-instances %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Locally-attached NVMe storage
 
@@ -544,19 +568,19 @@ Certificate Authority (CA) rather than self-signed certificates.
 - [Troubleshooting](/installation/troubleshooting/)
 
 
-
-
 ---
 
 ## Appendix: Required configuration
 
+
+This section covers appendix: required configuration.
 
 ## Required variables
 
 The following variables are required when using the [Materialize on AWS
 Terraform modules](https://github.com/MaterializeInc/terraform-aws-materialize):
 
-{{< yaml-table data="self_managed/aws_required_variables" >}}
+<!-- Dynamic table: self_managed/aws_required_variables - see original docs -->
 
 For a list of all variables, see the
 [README.md](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#inputs)
@@ -600,9 +624,7 @@ provider "helm" {
     }
   }
 }
-```
-
-
+```text
 
 
 ---
@@ -610,18 +632,15 @@ provider "helm" {
 ## Upgrade on AWS (Terraform)
 
 
-{{< annotation type="Disambiguation" >}}
-
-- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
-Terraform version to `v0.6.1` or higher, {{< include-md
-file="shared-content/self-managed/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
+> **Disambiguation:** - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1` or higher, [AWS Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061)
+.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided
 Terraforms, you must prepare your nodes by adding the required labels. For
 detailed instructions, see [Prepare for swap and upgrade to
 v26.0](/installation/upgrade-to-swap/).
-
-{{< /annotation >}}
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on  AWS Elastic Kubernetes Service (EKS).
@@ -633,31 +652,32 @@ or the root).
 
 ## Version compatibility
 
-{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+> **Important:** 
+
+When performing major version upgrades, you can upgrade only one major version
+at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
+but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
+not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](../self-managed/v25.2/release-notes/#v25216).
 
 
-{{< tabs >}}
+#### Materialize on AWS Terraform Releases
 
-{{< tab "Materialize on AWS Terraform Releases" >}}
 
 When upgrading, you may need or want to update your fork of the Terraform module
 to upgrade.
 
-{{< yaml-table data="self_managed/aws_terraform_versions" >}}
+<!-- Dynamic table: self_managed/aws_terraform_versions - see original docs -->
 
-{{</ tab >}}
-{{</ tabs >}}
 
 ## Prerequisites
 
-{{< important >}}
+> **Important:** 
 
 The following procedure performs a rolling upgrade, where both the old and new
 Materialize instances are running before the the old instance are removed.
 When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
-{{</ important >}}
 
 ### Terraform
 
@@ -682,7 +702,9 @@ documentation](https://helm.sh/docs/intro/install/).
 
 ### License key
 
-{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
+Starting in v26.0, Materialize requires a license key. If your existing
+deployment does not have a license key configured, contact [Materialize support](../support/).
+
 
 ## Procedure
 
@@ -696,17 +718,17 @@ documentation](https://helm.sh/docs/intro/install/).
 
    ```bash
    cd terraform-aws-materialize/examples/simple
-   ```
+   ```text
 
 1. Optional. You may need to update your fork of the Terraform module to
    upgrade.
 
-   {{< tip >}}
-   {{% self-managed/aws-terraform-upgrade-notes %}}
+   > **Tip:** 
+   <!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
    See [Materialize on AWS releases](/installation/appendix-terraforms/#materialize-on-aws-terraform-module) for notable changes.
 
-   {{</ tip >}}
+   
 
 
 1. Configure `kubectl` to connect to your EKS cluster, replacing:
@@ -720,7 +742,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
    ```bash
    aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
-   ```
+   ```text
 
    To verify that you have configured correctly, run the following command:
 
@@ -731,7 +753,4 @@ documentation](https://helm.sh/docs/intro/install/).
    For help with `kubectl` commands, see [kubectl Quick
    reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
-{{% self-managed/versions/upgrade/upgrade-steps-cloud %}}
-
-
-
+<!-- Unresolved shortcode: {{% self-managed/versions/upgrade/upgrade-steps-cl... -->

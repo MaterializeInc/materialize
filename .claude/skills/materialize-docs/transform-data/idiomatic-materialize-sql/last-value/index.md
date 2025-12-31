@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/idiomatic-materialize-sql/last-value/
+complexity: advanced
+description: Use idiomatic Materialize SQL to find the last value in each group.
+doc_type: overview
+keywords:
+- Last value in group
+- 'Idiomatic Materialize SQL:'
+- 'Note:'
+- SELECT FIELDA
+- SELECT TABLEA
+product_area: SQL
+status: stable
+title: Last value in group
+---
+
 # Last value in group
 
+## Purpose
 Use idiomatic Materialize SQL to find the last value in each group.
 
+This page provides detailed documentation for this topic.
+
+
+Use idiomatic Materialize SQL to find the last value in each group.
 
 
 ## Overview
@@ -9,13 +31,9 @@ Use idiomatic Materialize SQL to find the last value in each group.
 The "last value in each group" query pattern returns the last value, according
 to some ordering, in each group.
 
-{{< callout >}}
 
 ### Materialize and window functions
 
-{{< idiomatic-sql/materialize-window-functions >}}
-
-{{</ callout >}}
 
 ## Idiomatic Materialize SQL
 
@@ -51,7 +69,7 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  GROUP BY fieldA) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 </td>
 </tr>
@@ -64,12 +82,11 @@ ORDER BY fieldA ... ;
 ...)` window function](/sql/functions/#last_value) for last value in each group
 queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <br>
 <div style="background-color: var(--code-block)">
@@ -89,7 +106,7 @@ SELECT fieldA, fieldB,
             UNBOUNDED FOLLOWING)
 FROM tableA
 ORDER BY fieldA, ...;
-```
+```text
 
 </div>
 </td>
@@ -116,19 +133,18 @@ SELECT tableA.fieldA, tableA.fieldB, minmax.Z
  ) minmax
 WHERE tableA.fieldA = minmax.fieldA
 ORDER BY fieldA ... ;
-```
+```text
 
 For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 [Optimization](/transform-data/optimization/#query-hints).
 
 ## Examples
 
-{{< note >}}
+> **Note:** 
 
 The example data can be found in the
 [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
 
-{{</ note >}}
 
 ### Use MAX() to find the last value
 
@@ -161,7 +177,7 @@ FROM orders_view o,
      GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -173,12 +189,11 @@ ORDER BY o.order_id, o.item;
 <red>Do not use of `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ...)`
 for last value in each group queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <div style="background-color: var(--code-block)">
 
@@ -199,7 +214,7 @@ SELECT order_id,
             UNBOUNDED FOLLOWING) AS diff_highest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -238,7 +253,7 @@ FROM orders_view o,
      GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -250,12 +265,11 @@ ORDER BY o.order_id, o.item;
 <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY ... RANGE ... )`
 for last value in each group queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <div style="background-color: var(--code-block)">
 
@@ -276,7 +290,7 @@ SELECT order_id,
             UNBOUNDED FOLLOWING) AS diff_lowest_price
 FROM orders_view
 ORDER BY order_id, item;
-```
+```text
 
 </div>
 </td>
@@ -318,7 +332,7 @@ FROM orders_view o,
       GROUP BY order_id) minmax
 WHERE o.order_id = minmax.order_id
 ORDER BY o.order_id, o.item;
-```
+```text
 
 </td>
 </tr>
@@ -328,12 +342,11 @@ ORDER BY o.order_id, o.item;
 <red>Do not use `LAST_VALUE() OVER (PARTITION BY ... ORDER BY
 )` for last value within groups queries.</red>
 
-{{< note >}}
+> **Note:** 
 
 Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 FOLLOWING`.
 
-{{</ note >}}
 
 <div style="background-color: var(--code-block)">
 
@@ -381,4 +394,3 @@ ORDER BY order_id, item;
 - [`MAX()`](/sql/functions/#max)
 - [Query hints for MIN/MAX](/transform-data/optimization/#query-hints)
 - [Window functions](/sql/functions/#window-functions)
-

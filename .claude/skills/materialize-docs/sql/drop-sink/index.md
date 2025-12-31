@@ -1,18 +1,39 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-sink/
+complexity: intermediate
+description: '`DROP SINK` removes a sink from Materialize.'
+doc_type: reference
+keywords:
+- DROP SINK
+- IF EXISTS
+product_area: Sinks
+status: stable
+title: DROP SINK
+---
+
 # DROP SINK
 
+## Purpose
+`DROP SINK` removes a sink from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
 `DROP SINK` removes a sink from Materialize.
 
 
-
 `DROP SINK` removes a sink from Materialize.
 
-{{% kafka-sink-drop  %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: kafka-sink-drop --> --> -->
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP SINK [IF EXISTS] <sink_name>;
-```
+```text
 
 Syntax element | Description
 ---------------|------------
@@ -21,15 +42,17 @@ Syntax element | Description
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SINKS;
-```
+```text
 ```nofmt
 my_sink
-```
+```text
 ```mzsql
 DROP SINK my_sink;
-```
+```text
 ```nofmt
 DROP SINK
 ```
@@ -38,11 +61,12 @@ DROP SINK
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-sink.md" >}}
+- Ownership of the dropped sink.
+- `USAGE` privileges on the containing schema.
+
 
 ## Related pages
 
 - [`SHOW SINKS`](../show-sinks)
 - [`CREATE SINK`](../create-sink)
 - [`DROP OWNED`](../drop-owned)
-

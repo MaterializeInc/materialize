@@ -1,12 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/appendix-cluster-sizes/
+complexity: advanced
+description: Reference page on self-managed cluster sizes
+doc_type: reference
+keywords:
+- 'Note:'
+- 'Tip:'
+- 'Appendix: Cluster sizes'
+product_area: Deployment
+status: stable
+title: 'Appendix: Cluster sizes'
+---
+
 # Appendix: Cluster sizes
+
+## Purpose
+Reference page on self-managed cluster sizes
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Reference page on self-managed cluster sizes
 
 
-
 ## Default Cluster Sizes
 
-{{% self-managed/materialize-cluster-sizes %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See self-managed installation documentation --> --> -->
 
 ## Custom Cluster Sizes
 
@@ -15,12 +35,11 @@ cluster sizes and resource allocations](#default-cluster-sizes). These
 cluster sizes are used for both internal clusters, such as the `system_cluster`,
 as well as user clusters.
 
-{{< tip >}}
+> **Tip:** 
 
 In general, you should not have to override the defaults. At minimum, we
 recommend that you keep the 25-200cc cluster sizes.
 
-{{</ tip >}}
 
 ```yaml
 operator:
@@ -38,13 +57,10 @@ operator:
         # ex: kubernetes.io/arch: amd64
 ```
 
-{{< yaml-table data="best_practices/sizing_recommendation" >}}
+<!-- Dynamic table: best_practices/sizing_recommendation - see original docs -->
 
-{{< note >}}
+> **Note:** 
 
 If you have modified the default cluster size configurations, you can query the
 [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table for the specific resource allocations.
-
-{{< /note >}}
-

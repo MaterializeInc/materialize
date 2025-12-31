@@ -1,21 +1,49 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/postgres/self-hosted/
+complexity: beginner
+description: How to stream data from self-hosted PostgreSQL database to Materialize
+doc_type: reference
+keywords:
+- UPDATE YOUR
+- Ingest data from self-hosted PostgreSQL
+- 'Allow Materialize IPs:'
+- you can skip this step
+- SHOW WAL_LEVEL
+- CREATE A
+- SELECT THE
+- not
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: Ingest data from self-hosted PostgreSQL
+---
+
 # Ingest data from self-hosted PostgreSQL
 
+## Purpose
 How to stream data from self-hosted PostgreSQL database to Materialize
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to stream data from self-hosted PostgreSQL database to Materialize
 
 
 This page shows you how to stream data from a self-hosted PostgreSQL database to
 Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
 
 ## Before you begin
 
-{{% postgres-direct/before-you-begin %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/before-you-begin --> --> -->
 
 ## A. Configure PostgreSQL
+
+This section covers a. configure postgresql.
 
 ### 1. Enable logical replication
 
@@ -32,7 +60,7 @@ Enable your PostgreSQL's logical replication.
 
     ```postgres
     SHOW wal_level;
-    ```
+    ```text
 
 1. If `wal_level` setting is **not** set to `logical`:
 
@@ -47,23 +75,21 @@ Enable your PostgreSQL's logical replication.
 
         ```postgres
         SHOW wal_level;
-        ```
+        ```bash
 
 ### 2. Create a publication and a replication user
 
-{{% postgres-direct/create-a-publication-other %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/create-a-publication-oth --> --> -->
 
 ## B. (Optional) Configure network security
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and your PostgreSQL instance is publicly
 accessible, **you can skip this step**. For production scenarios, we recommend
 configuring one of the network security options below.
-{{</ note >}}
 
-{{< tabs >}}
 
-{{< tab "Cloud">}}
+#### Cloud
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -77,183 +103,16 @@ to connect:
 
 Select the option that works best for you.
 
-{{< tabs >}}
+#### Self-Managed
 
-{{< tab "Allow Materialize IPs">}}
+<!-- Unresolved shortcode: {{% include-md
+file="shared-content/self-managed/c... -->
 
-1. In the [Materialize console's SQL Shell](/console/),
-   or your preferred SQL client connected to Materialize, find the static egress
-   IP addresses for the Materialize region you are running in:
-
-    ```mzsql
-    SELECT * FROM mz_egress_ips;
-    ```
-
-1. Update your database firewall rules to allow traffic from each IP address
-   from the previous step.
-
-{{< /tab >}}
-
-{{< tab "Use AWS PrivateLink">}}
-
-Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](https://aws.amazon.com/privatelink/)
-service. Your PostgreSQL database must be running on AWS in order to use this
-option.
-
-1. Create a dedicated [target
-    group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
-    for your Postgres instance with the following details:
-
-    a. Target type as **IP address**.
-
-    b. Protocol as **TCP**.
-
-    c. Port as **5432**, or the port that you are using in case it is not 5432.
-
-    d. Make sure that the target group is in the same VPC as the PostgreSQL
-    instance.
-
-    e. Click next, and register the respective PostgreSQL instance to the target
-    group using its IP address.
-
-1. Create a [Network Load
-    Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
-    that is **enabled for the same subnets** that the PostgreSQL instance is in.
-
-1. Create a [TCP
-    listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
-    for your PostgreSQL instance that forwards to the corresponding target group
-    you created.
-
-1. Once the TCP listener has been created, make sure that the [health
-    checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
-    are passing and that the target is reported as healthy.
-
-    If you have set up a security group for your PostgreSQL instance, you must
-    ensure that it allows traffic on the health check port.
-
-    **Remarks**:
-
-    a. Network Load Balancers do not have associated security groups. Therefore,
-    the security groups for your targets must use IP addresses to allow
-    traffic.
-
-    b. You can't use the security groups for the clients as a source in the
-    security groups for the targets. Therefore, the security groups for your
-    targets must use the IP addresses of the clients to allow traffic. For more
-    details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
-
-1. Create a VPC [endpoint
-    service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
-    and associate it with the **Network Load Balancer** that you’ve just
-    created.
-
-    Note the **service name** that is generated for the endpoint service.
-
-    **Remarks**:
-
-    By disabling [Acceptance Required](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests),
-    while still strictly managing who can view your endpoint via IAM,
-    Materialze will be able to seamlessly recreate and migrate endpoints as we
-    work to stabilize this feature.
-
-1. In Materialize, create a [`AWS
-     PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that
-     references the endpoint service that you created in the previous step.
-
-     ```mzsql
-    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
-        SERVICE NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
-        AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az3')
-    );
-    ```
-
-    Update the list of the availability zones to match the ones that you are
-    using in your AWS account.
-
-1. Retrieve the AWS principal for the AWS PrivateLink connection you just
-    created:
-
-    ```mzsql
-    SELECT principal
-    FROM mz_aws_privatelink_connections plc
-    JOIN mz_connections c ON plc.id = c.id
-    WHERE c.name = 'privatelink_svc';
-    ```
-
-    ```
-                                     principal
-    ---------------------------------------------------------------------------
-     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
-    ```
-
-    Follow the instructions in the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html)
-    to configure your VPC endpoint service to accept connections from the
-    provided AWS principal.
-
-    If your AWS PrivateLink service is configured to require acceptance of
-    connection requests, you must manually approve the connection request from
-    Materialize after executing the `CREATE CONNECTION` statement. For more
-    details, check the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
-
-    **Note:** It might take some time for the endpoint service connection to
-      show up, so you would need to wait for the endpoint service connection to
-      be ready before you create a source.
-
-{{< /tab >}}
-{{< tab "Use an SSH tunnel">}}
-
-To create an SSH tunnel from Materialize to your database, you launch an VM to
-serve as an SSH bastion host, configure the bastion host to allow traffic only
-from Materialize, and then configure your database's private network to allow
-traffic from the bastion host.
-
-1. Launch a VM to serve as your SSH bastion host.
-
-    - Make sure the VM is publicly accessible and in the same VPC as your
-      database.
-    - Add a key pair and note the username. You'll use this username when
-      connecting Materialize to your bastion host.
-    - Make sure the VM has a static public IP address. You'll use this IP
-      address when connecting Materialize to your bastion host.
-
-1. Configure the SSH bastion host to allow traffic only from Materialize.
-
-    1. In the [Materialize console's SQL
-       Shell](/console/), or your preferred SQL client
-       connected to Materialize, get the static egress IP addresses for the
-       Materialize region you are running in:
-
-       ```mzsql
-       SELECT * FROM mz_egress_ips;
-       ```
-
-    1. Update your SSH bastion host's firewall rules to allow traffic from each
-       IP address from the previous step.
-
-1. Update your database firewall rules to allow traffic from the SSH bastion
-   host.
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-{{< /tab >}}
-
-{{< tab "Self-Managed">}}
-
-{{% include-md
-file="shared-content/self-managed/configure-network-security-intro.md" %}}
-
-{{< tabs >}}
-
-{{< tab "Allow Materialize IPs" >}}
+#### Allow Materialize IPs
 
 1. Update your database firewall rules to allow traffic from Materialize.
 
-{{< /tab >}}
-
-{{< tab "Use an SSH tunnel">}}
+#### Use an SSH tunnel
 
 To create an SSH tunnel from Materialize to your database, you launch an VM to
 serve as an SSH bastion host, configure the bastion host to allow traffic only
@@ -274,120 +133,90 @@ traffic from the bastion host.
 1. Update your database firewall rules to allow traffic from the SSH bastion
    host.
 
-{{< /tab >}}
-
-{{< /tabs >}}
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
 ## C. Ingest data in Materialize
+
+This section covers c. ingest data in materialize.
 
 ### 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your PostgreSQL
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/create-a-cluster --> --> -->
 
 ### 2. Create a connection
 
 Once you have configured your network, create a connection in Materialize per
 your networking configuration.
 
-{{< tabs >}}
+#### Allow Materialize IPs
 
-{{< tab "Allow Materialize IPs">}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ips_cloud"
-   example="create-secret" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ips_cloud"
-   example="create-connection" indent="true" %}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ips_cloud"
-   example="create-connection-options-general" indent="true" %}}
+#### Use AWS PrivateLink (Cloud-only)
 
-{{< /tab >}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-{{< tab "Use AWS PrivateLink (Cloud-only)" >}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_privatelink_cloud"
-   example="create-secret" indent="true" %}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_privatelink_cloud"
-   example="create-connection" indent="true" %}}
+#### Use an SSH tunnel
 
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_privatelink_cloud"
-   example="create-connection-options-self-hosted" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-{{< /tab >}}
-{{< tab "Use an SSH tunnel">}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-ssh-tunnel-connection" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-ssh-tunnel-connection-options" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="get-public-keys-aurora-rds-self-hosted" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="login-to-ssh-bastion-host" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="validate-ssh-tunnel-connection" indent="true" %}}
+1. <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-secret" indent="true" %}}
-
-1. {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-connection" indent="true" %}}
-
-   {{% include-example
-   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
-   example="create-connection-options-general" indent="true" %}}
-{{< /tab >}}
-
-{{< /tabs >}}
+   <!-- Unresolved shortcode: {{% include-example
+   file="examples/ingest_data/... -->
 
 ### 3. Start ingesting data
 
-{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="ingest-data-step" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/ingest_data/pos... -->
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/check-the-ingestion-stat --> --> -->
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/right-size-the-cluster --> --> -->
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: postgres-direct/next-steps --> --> -->
 
 ## Considerations
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-considerations" %}}
-
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->

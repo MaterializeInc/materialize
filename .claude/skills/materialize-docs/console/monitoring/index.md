@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/monitoring/
+complexity: beginner
+description: Monitoring in the Materialize console
+doc_type: overview
+keywords:
+- Monitoring
+- SELECT A
+- Environment Overview
+- Sources
+- Query History
+product_area: General
+status: stable
+title: Monitoring
+---
+
 # Monitoring
+
+## Purpose
+Monitoring in the Materialize console
+
+This page provides detailed documentation for this topic.
+
 
 Monitoring in the Materialize console
 

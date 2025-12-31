@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/webhooks/amazon-eventbridge/
+complexity: advanced
+description: How to stream data from Amazon EventBridge to Materialize using webhooks
+doc_type: reference
+keywords:
+- 'Warning:'
+- CREATE CLUSTER
+- CREATE A
+- Amazon EventBridge
+- you can skip this step
+- does not support
+- 'Note:'
+- 'Tip:'
+product_area: Sources
+status: stable
+title: Amazon EventBridge
+---
+
 # Amazon EventBridge
+
+## Purpose
+How to stream data from Amazon EventBridge to Materialize using webhooks
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to stream data from Amazon EventBridge to Materialize using webhooks
 
@@ -7,9 +33,9 @@ How to stream data from Amazon EventBridge to Materialize using webhooks
 This guide walks through the steps to ingest data from [Amazon EventBridge](https://aws.amazon.com/eventbridge/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
-{{< tip >}}
-{{< guided-tour-blurb-for-ingest-data >}}
-{{< /tip >}}
+> **Tip:** 
+
+
 
 ## Before you begin
 
@@ -19,12 +45,12 @@ Ensure that you have:
 
 ## Step 1. (Optional) Create a cluster
 
-{{< note >}}
+> **Note:** 
 If you are prototyping and already have a cluster to host your webhook
 source (e.g. `quickstart`), **you can skip this step**. For production
 scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
-{{< /note >}}
+
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
 
@@ -32,7 +58,7 @@ To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/crea
 CREATE CLUSTER webhooks_cluster (SIZE = '25cc');
 
 SET CLUSTER = webhooks_cluster;
-```
+```bash
 
 ## Step 2. Create a secret
 
@@ -41,7 +67,7 @@ a [secret](/sql/create-secret/):
 
 ```mzsql
 CREATE SECRET eventbridge_webhook_secret AS '<secret_value>';
-```
+```text
 
 Change the `<secret_value>` to a unique value that only you know and store it in
 a secure location.
@@ -66,7 +92,7 @@ FROM WEBHOOK
     -- for ease of use.
     constant_time_eq(headers->'x-mz-api-key', validation_secret)
   );
-```
+```text
 
 After a successful run, the command returns a `NOTICE` message containing the
 unique [webhook URL](/sql/create-source/webhook/#webhook-url)
@@ -77,7 +103,7 @@ The URL will have the following format:
 
 ```
 https://<HOST>/api/webhook/<database>/<schema>/<src_name>
-```
+```text
 
 If you missed the notice, you can find the URLs for all webhook sources in the
 [`mz_internal.mz_webhook_sources`](/sql/system-catalog/mz_internal/#mz_webhook_sources)
@@ -85,11 +111,11 @@ system table.
 
 ### Access and authentication
 
-{{< warning >}}
+> **Warning:** 
 Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 actors from injecting data into your source, it is **strongly encouraged** that
 you define a `CHECK` statement with your webhook sources.
-{{< /warning >}}
+
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
 This enables a simple and rudimentary way to grant authorization to your webhook source.
@@ -126,13 +152,15 @@ Amazon EventBridge, you can now query the incoming data:
 
 ## Step 6. Transform incoming data
 
+This section covers step 6. transform incoming data.
+
 ### JSON parsing
 
 Webhook data is ingested as a JSON blob. We recommend creating a parsing view on
 top of your webhook source that uses [`jsonb` operators](/sql/types/jsonb/#operators)
 to map the individual fields to columns with the required data types.
 
-{{< json-parser >}}
+<!-- JSON Parser Widget - see original docs -->
 
 ### Timestamp handling
 

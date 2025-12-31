@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/snowflake/
+complexity: intermediate
+description: How to export results from Materialize to Snowflake.
+doc_type: reference
+keywords:
+- CREATE AN
+- CREATE AND
+- CREATE A
+- 'Public Preview:'
+- Snowflake
+- IAM Dashboard
+- Policies
+- CREATE INTEGRATION
+- AWS Services
+- AWS IAM
+product_area: Sinks
+status: beta
+title: Snowflake
+---
+
 # Snowflake
+
+## Purpose
+How to export results from Materialize to Snowflake.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to export results from Materialize to Snowflake.
 
@@ -8,7 +36,7 @@ How to export results from Materialize to Snowflake.
 Snowflake continuously using the Snowflake connector for Kafka. We should also
 document that approach."
 
-{{< public-preview />}}
+> **Public Preview:** This feature is in public preview.
 
 This guide walks you through the steps required to bulk-export results from
 Materialize to Snowflake using Amazon S3 as the intermediate object store.
@@ -30,6 +58,8 @@ S3 bucket that Materialize securely writes data into. This will be your
 starting point for bulk-loading Materialize data into Snowflake.
 
 ## Step 2. Configure a Snowflake storage integration
+
+This section covers step 2. configure a snowflake storage integration.
 
 ### Create an IAM policy
 
@@ -92,7 +122,7 @@ To create a new IAM policy:
          }
       ]
    }
-   ```
+   ```text
 
 1. Click **Next**.
 
@@ -127,11 +157,11 @@ Next, you must attach the policy you just created to a Snowflake-specific
 
 ### Create a Snowflake storage integration
 
-{{< note >}}
+> **Note:** 
 Only users with either the [`ACCOUNTADMIN` role](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#using-the-accountadmin-role),
 or a role with the [global `CREATE INTEGRATION` privilege](https://docs.snowflake.com/en/user-guide/security-access-control-privileges#global-privileges-account-level-privileges)
 can execute this step.
-{{< /note >}}
+
 
 1. In [Snowsight](https://app.snowflake.com/), or your preferred SQL client
 connected to Snowflake, create a [storage integration](https://docs.snowflake.com/en/sql-reference/sql/create-storage-integration),
@@ -144,7 +174,7 @@ replacing `<role>` with the name of the role you created in the previous step:
      ENABLED = TRUE
      STORAGE_AWS_ROLE_ARN = 'arn:aws:iam::001234567890:role/<role>'
      STORAGE_ALLOWED_LOCATIONS = ('*');
-   ```
+   ```text
 
 1. Retrieve the IAM principal for your Snowflake account using the
    [`DESC INTEGRATION`](https://docs.snowflake.com/en/sql-reference/sql/desc-integration)
@@ -152,7 +182,7 @@ replacing `<role>` with the name of the role you created in the previous step:
 
    ```sql
    DESC INTEGRATION s3_int;
-   ```
+   ```text
 
    Note down the values for the `STORAGE_AWS_IAM_USER_ARN` and
    `STORAGE_AWS_EXTERNAL_ID` properties. You will need them in the next step to
@@ -174,14 +204,14 @@ Back in Snowflake, create an [external stage](https://docs.snowflake.com/en/user
 CREATE STAGE s3_stage
   STORAGE_INTEGRATION = s3_int
   URL = 's3://<bucket>/<prefix>/';
-```
+```text
 
-{{< note >}}
+> **Note:** 
 To create a stage that uses a storage integration, the active user must have a
 role with the [`CREATE STAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/create-stage)
 for the active schema, as well as the [`USAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#syntax)
 on the relevant storage integration.
-{{< /note >}}
+
 
 ## Step 4. Import data into Snowflake
 
@@ -189,8 +219,7 @@ To import the data stored in S3 into Snowflake, you can then create a table and
 use the [`COPY INTO`](https://docs.snowflake.com/en/sql-reference/sql/copy-into-table)
 command to load it from the external stage.
 
-{{< tabs >}}
-{{< tab "Parquet">}}
+#### Parquet
 
 Create a table with a single column of type [`VARIANT`](https://docs.snowflake.com/en/sql-reference/data-types-semistructured#variant):
 
@@ -198,7 +227,7 @@ Create a table with a single column of type [`VARIANT`](https://docs.snowflake.c
 CREATE TABLE s3_table_parquet (
     col VARIANT
 );
-```
+```text
 
 Use `COPY INTO` to load the data into the table:
 
@@ -206,14 +235,12 @@ Use `COPY INTO` to load the data into the table:
 COPY INTO s3_table_parquet
   FROM @S3_stage
   FILE_FORMAT = (TYPE = 'PARQUET');
-```
+```text
 
 For more details on importing Parquet files staged in S3 into Snowflake, check the
 [Snowflake documentation](https://docs.snowflake.com/en/sql-reference/sql/copy-into-table#type-parquet).
 
-{{< /tab >}}
-
-{{< tab "CSV">}}
+#### CSV
 
 Create a table with the same number of columns as the number of delimited
 columns in the input data file:
@@ -224,7 +251,7 @@ CREATE TABLE s3_table_csv (
     col_2 TEXT,
     col_3 TIMESTAMP
 );
-```
+```text
 
 Use `COPY INTO` to load the data into the table:
 
@@ -236,10 +263,6 @@ COPY INTO s3_table_csv
 
 For more details on importing CSV files staged in S3 into Snowflake, check the
 [Snowflake documentation](https://docs.snowflake.com/en/sql-reference/sql/copy-into-table#type-csv).
-
-{{< /tab >}}
-
-{{< /tabs >}}
 
 
 ## Step 5. (Optional) Add scheduling

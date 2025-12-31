@@ -1,7 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/bi-tools/metabase/
+complexity: beginner
+description: How to create real-time dashboards with Metabase
+doc_type: reference
+keywords:
+- CREATE REAL
+- materialize
+- PostgreSQL
+- '6875'
+- Metabase
+product_area: Sinks
+status: stable
+title: Metabase
+---
+
 # Metabase
 
+## Purpose
 How to create real-time dashboards with Metabase
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+How to create real-time dashboards with Metabase
 
 
 You can use [Metabase](https://www.metabase.com/) to create real-time dashboards
@@ -28,7 +50,7 @@ For more details and troubleshooting, check the
 
 ## Configure a custom cluster
 
-{{% alter-cluster/configure-cluster %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: alter-cluster/configure-cluster --> --> -->
 
 ## Refresh rate
 
@@ -45,4 +67,3 @@ for any objects serving results to Metabase.
 
 [//]: # "TODO(morsapaes) Once we revamp quickstarts, add Related pages section
 pointing to a quickstart that uses Metabase"
-

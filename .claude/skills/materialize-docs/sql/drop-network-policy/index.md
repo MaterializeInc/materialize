@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-network-policy/
+complexity: intermediate
+description: '`DROP NETWORK POLICY` removes an existing network policy from Materialize.'
+doc_type: reference
+keywords:
+- DROP NETWORK POLICY (Cloud)
+- ALTER NETWORK
+- IF EXISTS
+- DROP NETWORK
+- ALTER THE
+product_area: Indexes
+status: stable
+title: DROP NETWORK POLICY (Cloud)
+---
+
 # DROP NETWORK POLICY (Cloud)
+
+## Purpose
+`DROP NETWORK POLICY` removes an existing network policy from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP NETWORK POLICY` removes an existing network policy from Materialize.
 
@@ -14,6 +37,8 @@ command.
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 DROP NETWORK POLICY [IF EXISTS] <name>;
 ```
@@ -27,8 +52,8 @@ Syntax element | Description
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/drop-network-policy.md" >}}
+- `CREATENETWORKPOLICY` privileges on the system.
+
 
 ## Related pages
 

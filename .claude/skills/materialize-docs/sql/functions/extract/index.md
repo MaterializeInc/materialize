@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/extract/
+complexity: intermediate
+description: Returns a specified time component from a time-based value
+doc_type: reference
+keywords:
+- EXTRACT function
+- SELECT EXTRACT
+product_area: Indexes
+status: stable
+title: EXTRACT function
+---
+
 # EXTRACT function
+
+## Purpose
+Returns a specified time component from a time-based value
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Returns a specified time component from a time-based value
 
@@ -8,7 +28,7 @@ Returns a specified time component from a time-based value
 
 ## Signatures
 
-{{< diagram "func-extract.svg" >}}
+[See diagram: func-extract.svg]
 
 Parameter | Type                                                                                                                                                                                    | Description
 ----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -44,22 +64,24 @@ decade  |  `DEC`, `DECS`, `DECADE`, `DECADES`
 
 ## Examples
 
+This section covers examples.
+
 ### Extract second from timestamptz
 
 ```mzsql
 SELECT EXTRACT(S FROM TIMESTAMP '2006-01-02 15:04:05.06');
-```
+```text
 ```nofmt
  extract
 ---------
     5.06
-```
+```bash
 
 ### Extract century from date
 
 ```mzsql
 SELECT EXTRACT(CENTURIES FROM DATE '2006-01-02');
-```
+```text
 ```nofmt
  extract
 ---------

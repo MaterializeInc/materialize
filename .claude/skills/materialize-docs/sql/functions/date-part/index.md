@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/date-part/
+complexity: intermediate
+description: Returns a specified time component from a time-based value
+doc_type: reference
+keywords:
+- date_part function
+- SELECT DATE_PART
+product_area: Indexes
+status: stable
+title: date_part function
+---
+
 # date_part function
+
+## Purpose
+Returns a specified time component from a time-based value
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Returns a specified time component from a time-based value
 
@@ -11,7 +31,7 @@ result in a loss of precision in certain uses. Using [`EXTRACT`](../extract) is 
 
 ## Signatures
 
-{{< diagram "func-date-part.svg" >}}
+[See diagram: func-date-part.svg]
 
 Parameter | Type                                                                                                                                                          | Description
 ----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
@@ -47,22 +67,24 @@ day of year | `DOY`
 
 ## Examples
 
+This section covers examples.
+
 ### Extract second from timestamptz
 
 ```mzsql
 SELECT date_part('S', TIMESTAMP '2006-01-02 15:04:05.06');
-```
+```text
 ```nofmt
  date_part
 -----------
       5.06
-```
+```bash
 
 ### Extract century from date
 
 ```mzsql
 SELECT date_part('CENTURIES', DATE '2006-01-02');
-```
+```text
 ```nofmt
  date_part
 -----------

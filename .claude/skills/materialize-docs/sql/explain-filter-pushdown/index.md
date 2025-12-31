@@ -1,18 +1,43 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/explain-filter-pushdown/
+complexity: advanced
+description: '`EXPLAIN FILTER PUSHDOWN` reports filter pushdown statistics for `SELECT`
+  statements and materialized views.'
+doc_type: reference
+keywords:
+- EXPLAIN PLAN
+- 'Public Preview:'
+- EXPLAIN FILTER PUSHDOWN
+- EXPLAIN FILTER
+- MATERIALIZED VIEW name
+- select_stmt
+product_area: Indexes
+status: beta
+title: EXPLAIN FILTER PUSHDOWN
+---
+
 # EXPLAIN FILTER PUSHDOWN
+
+## Purpose
+`EXPLAIN FILTER PUSHDOWN` reports filter pushdown statistics for `SELECT` statements and materialized views.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `EXPLAIN FILTER PUSHDOWN` reports filter pushdown statistics for `SELECT` statements and materialized views.
 
 
 
 
-{{< public-preview />}}
+> **Public Preview:** This feature is in public preview.
 
 `EXPLAIN FILTER PUSHDOWN` reports filter pushdown statistics for `SELECT`
 statements and materialized views.
 
 ## Syntax
 
-{{< diagram "explain-filter-pushdown.svg" >}}
+[See diagram: explain-filter-pushdown.svg]
 
 ### Explained object
 
@@ -54,7 +79,7 @@ Suppose you're interested in checking the number of recent bids.
 
 ```mzsql
 SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
-```
+```text
 
 Over time, the number of bids will grow indefinitely, but the number of recent
 bids should stay about the same. If the filter pushdown optimization can make
@@ -68,7 +93,7 @@ which indicates that this filter can be pushed down.
 ```mzsql
 EXPLAIN
 SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
-```
+```text
 
 ```nofmt
 ...
@@ -76,7 +101,7 @@ SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
  Source materialize.public.bids
    filter=((timestamp_tz_to_mz_timestamp((#4{bid_time} + 00:05:00)) > mz_now()))
    pushdown=((timestamp_tz_to_mz_timestamp((#4{bid_time} + 00:05:00)) > mz_now()))
-```
+```text
 
 However, this doesn't suggest how effective filter pushdown will be. Suppose you
 have two queries: one which filters to the last minute and one to the last
@@ -90,13 +115,13 @@ fetch.
 ```mzsql
 EXPLAIN FILTER PUSHDOWN FOR
 SELECT count(*) FROM bids WHERE bid_time + '5 minutes' > mz_now();
-```
+```text
 
 ```nofmt
          Source          | Total Bytes | Selected Bytes | Total Parts | Selected Parts
 -------------------------+-------------+----------------+-------------+----------------
  materialize.public.bids | 146508      | 34621          | 19          | 11
-```
+```text
 
 It looks like Materialize is fetching about a fifth of the data in terms of
 bytes, and about half of the individual parts (this is not unexpected:
@@ -111,7 +136,7 @@ almost everything.
 ```mzsql
 EXPLAIN FILTER PUSHDOWN FOR
 SELECT count(*) FROM bids WHERE bid_time + '1 hour' > mz_now();
-```
+```text
 
 ```nofmt
          Source          | Total Bytes | Selected Bytes | Total Parts | Selected Parts
@@ -123,6 +148,7 @@ SELECT count(*) FROM bids WHERE bid_time + '1 hour' > mz_now();
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/explain-filter-pushdown.md" >}}
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.
+
 

@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/sql-shell/
+complexity: beginner
+description: SQL Shell in the Materialize console
+doc_type: reference
+keywords:
+- Close Quickstart
+- SQL Shell
+- Query Insights
+- 'SQL
+
+  Shell'
+- SELECT YOUR
+product_area: General
+status: stable
+title: SQL Shell
+---
+
 # SQL Shell
+
+## Purpose
+SQL Shell in the Materialize console
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 SQL Shell in the Materialize console
 

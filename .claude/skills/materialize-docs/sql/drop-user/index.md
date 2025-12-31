@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/drop-user/
+complexity: intermediate
+description: '`DROP USER` removes a role from Materialize.'
+doc_type: reference
+keywords:
+- DROP USER
+- DROP ROLE
+- IF EXISTS
+product_area: Indexes
+status: stable
+title: DROP USER
+---
+
 # DROP USER
+
+## Purpose
+`DROP USER` removes a role from Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `DROP USER` removes a role from Materialize.
 
@@ -8,6 +29,8 @@
 
 
 ## Syntax
+
+This section covers syntax.
 
 ```mzsql
 DROP USER [IF EXISTS] <role_name>;
@@ -22,7 +45,8 @@ Syntax element | Description
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-user.md" >}}
+- `CREATEROLE` privileges on the system.
+
 
 ## Related pages
 

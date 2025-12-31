@@ -1,17 +1,39 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-cluster-replica/
+complexity: beginner
+description: '`CREATE CLUSTER REPLICA` provisions a new replica of a cluster.'
+doc_type: reference
+keywords:
+- fault tolerance
+- unmanaged
+- 'Tip:'
+- CREATE CLUSTER REPLICA
+- CREATE CLUSTER
+- 'Note:'
+product_area: Indexes
+status: stable
+title: CREATE CLUSTER REPLICA
+---
+
 # CREATE CLUSTER REPLICA
 
+## Purpose
 `CREATE CLUSTER REPLICA` provisions a new replica of a cluster.
 
+If you need to understand the syntax and options for this command, you're in the right place.
 
+
+`CREATE CLUSTER REPLICA` provisions a new replica of a cluster.
 
 
 `CREATE CLUSTER REPLICA` provisions a new replica for an [**unmanaged**
 cluster](/sql/create-cluster/#unmanaged-clusters).
 
-{{< tip >}}
+> **Tip:** 
 When getting started with Materialize, we recommend starting with managed
 clusters.
-{{</ tip >}}
+
 
 ## Conceptual framework
 
@@ -26,7 +48,7 @@ remains available.
 
 ## Syntax
 
-{{< diagram "create-cluster-replica.svg" >}}
+[See diagram: create-cluster-replica.svg]
 
 Field | Use
 ------|-----
@@ -35,9 +57,11 @@ _replica_name_ | A name for this replica.
 
 ### Options
 
-{{% replica-options %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See replica options documentation --> --> -->
 
 ## Details
+
+This section covers details.
 
 ### Size
 
@@ -45,20 +69,22 @@ The `SIZE` option for replicas is identical to the [`SIZE` option for
 clusters](/sql/create-cluster/#size) option, except that the size applies only
 to the new replica.
 
-{{< tabs >}}
-{{< tab "M.1 Clusters" >}}
+#### M.1 Clusters
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+> **Note:** 
+The values set forth in the table are solely for illustrative purposes.
+Materialize reserves the right to change the capacity at any time. As such, you
+acknowledge and agree that those values in this table may change at any time,
+and you should not rely on these values for any capacity planning.
 
-{{< yaml-table data="m1_cluster_sizing" >}}
 
-{{< /tab >}}
+<!-- Dynamic table: m1_cluster_sizing - see original docs -->
 
-{{< tab "Legacy cc Clusters" >}}
+#### Legacy cc Clusters
 
 Materialize offers the following legacy cc cluster sizes:
 
-{{< tip >}}
+> **Tip:** 
 In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
 offer better performance per credit for nearly all workloads. We recommend using
 M.1 sizes for all new clusters, and recommend migrating existing
@@ -66,7 +92,7 @@ legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 customers during the transition period as we move to deprecate legacy sizes.
 
 The legacy size information is provided for completeness.
-{{< /tip >}}
+
 
 * `25cc`
 * `50cc`
@@ -90,14 +116,12 @@ cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
 query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
-{{< warning >}}
+> **Warning:** 
 The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
-{{< /warning >}}
+
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
-{{< /tab >}}
-{{< /tabs >}}
 
 See also:
 
@@ -125,6 +149,8 @@ machines had computed.
 
 ## Example
 
+This section covers example.
+
 ```mzsql
 CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
 ```
@@ -133,8 +159,8 @@ CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/create-cluster-replica.md" >}}
+- Ownership of the cluster.
+
 
 ## See also
 
@@ -142,4 +168,3 @@ file="shared-content/sql-command-privileges/create-cluster-replica.md" >}}
 
 [AWS availability zone ID]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
 [`DROP CLUSTER REPLICA`]: /sql/drop-cluster-replica
-

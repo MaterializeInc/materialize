@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-network-policy/
+complexity: intermediate
+description: '`CREATE NETWORK POLICY` creates a network policy that restricts access
+  to a Materialize Cloud region using IP-based rules.'
+doc_type: reference
+keywords:
+- ALTER SYSTEM
+- CREATE NETWORK
+- DROP THIS
+- CREATE NETWORK POLICY (Cloud)
+- 'Note:'
+product_area: Indexes
+status: stable
+title: CREATE NETWORK POLICY (Cloud)
+---
+
 # CREATE NETWORK POLICY (Cloud)
+
+## Purpose
+`CREATE NETWORK POLICY` creates a network policy that restricts access to a Materialize Cloud region using IP-based rules.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `CREATE NETWORK POLICY` creates a network policy that restricts access to a Materialize Cloud region using IP-based rules.
 
@@ -12,11 +36,11 @@ Materialize's framework for [access control](/security/cloud/).
 
 ## Syntax
 
-{{< diagram "create-network-policy.svg" >}}
+[See diagram: create-network-policy.svg]
 
 ### `network_policy_rule`
 
-{{< diagram "network-policy-rule.svg" >}}
+[See diagram: network-policy-rule.svg]
 
 | <div style="min-width:240px">Field</div>  | Value            | Description
 |-------------------------------------------|------------------|------------------------------------------------
@@ -34,27 +58,31 @@ Materialize's framework for [access control](/security/cloud/).
 
 ## Details
 
+This section covers details.
+
 ### Pre-installed network policy
 
 When you enable a Materialize region, a default network policy named `default`
 will be pre-installed. This policy has a wide open ingress rule `allow
 0.0.0.0/0`. You can modify or drop this network policy at any time.
 
-{{< note >}}
+> **Note:** 
 The default value for the `network_policy` session parameter is `default`.
 Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 change the default value.
-{{< /note >}}
+
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/create-network-policy.md" >}}
+- `CREATENETWORKPOLICY` privileges on the system.
+
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 CREATE NETWORK POLICY office_access_policy (
@@ -63,7 +91,7 @@ CREATE NETWORK POLICY office_access_policy (
     minnesota (action='allow',direction='ingress',address='2.3.4.5/32')
   )
 );
-```
+```text
 
 ```mzsql
 ALTER SYSTEM SET network_policy = office_access_policy;

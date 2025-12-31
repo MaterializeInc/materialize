@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/insert/
+complexity: intermediate
+description: '`INSERT` inserts values into a table.'
+doc_type: reference
+keywords:
+- Low performance.
+- INSERT IS
+- INSERT DATA
+- CREATE TABLE
+- INSERT
+- INSERT INTO
+product_area: Indexes
+status: stable
+title: INSERT
+---
+
 # INSERT
+
+## Purpose
+`INSERT` inserts values into a table.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `INSERT` inserts values into a table.
 
@@ -15,7 +39,7 @@ You might want to `INSERT` data into tables when:
 
 ## Syntax
 
-{{< diagram "insert.svg" >}}
+[See diagram: insert.svg]
 
 Field | Use
 ------|-----
@@ -53,7 +77,7 @@ SELECT * FROM t;
 ---+---
    | b
  1 | a
-```
+```text
 
 In the above example, the second tuple provides a `NULL` value for column `a`, which
 is nullable. `NULL` values may not be inserted into column `b`, which is not nullable.
@@ -66,13 +90,13 @@ CREATE TABLE t (a int, b text NOT NULL);
 INSERT INTO t (b, a) VALUES ('a', 1), ('b', NULL);
 
 SELECT * FROM t;
-```
+```text
 ```
  a | b
 ---+---
    | b
  1 | a
-```
+```text
 
 You can also insert the values returned from `SELECT` statements:
 
@@ -84,7 +108,7 @@ INSERT INTO s VALUES ('c');
 INSERT INTO t (b) SELECT * FROM s;
 
 SELECT * FROM t;
-```
+```text
 ```
  a | b
 ---+---
@@ -97,7 +121,15 @@ SELECT * FROM t;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/insert.md" >}}
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `INSERT` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+    granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
+
 
 ## Related pages
 

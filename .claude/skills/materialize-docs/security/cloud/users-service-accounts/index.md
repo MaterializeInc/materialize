@@ -1,7 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/cloud/users-service-accounts/
+complexity: intermediate
+description: Manage users and service accounts.
+doc_type: reference
+keywords:
+- CREATE SERVICE
+- Organization admin
+- CREATE A
+- SELECT THE
+- 'Note:'
+- Organization Admin
+- User and service accounts
+- superuser
+product_area: Security
+status: stable
+title: User and service accounts
+---
+
 # User and service accounts
 
+## Purpose
 Manage users and service accounts.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Manage users and service accounts.
 
 
 As an administrator of a Materialize organization, you can manage the users and
@@ -13,7 +38,22 @@ resources.
 During creation of a user/service account in Materialize, the account is
 assigned an organization role:
 
-{{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+<!-- Dynamic table: rbac/organization_roles - see original docs -->
+
+> **Note:** 
+- The first user for an organization is automatically assigned the
+  **Organization Admin** role.
+
+- An [Organization
+Admin](/security/cloud/users-service-accounts/#organization-roles) has
+<red>**superuser**</red> privileges in the database. Following the principle of
+least privilege, only assign **Organization Admin** role to those users who
+require superuser privileges.
+
+
+- Users/service accounts can be granted additional database roles and privileges
+  as needed.
+
 
 ## User accounts
 
@@ -21,32 +61,39 @@ As an **Organization admin**, you can [invite new
 users](./invite-users/) via the Materialize Console. When you invite a new user,
 Materialize will email the user with an invitation link.
 
-{{< include-md file="shared-content/rbac-cloud/invite-user-note.md" >}}
+> **Note:** 
+- Until the user accepts the invitation and logs in, the user is listed as
+**Pending Approval**.
+
+- When the user accepts the invitation, the user can set the user password and
+log in to activate their account. The first time the user logs in, a database
+role with the same name as their e-mail address is created, and the account
+creation is complete.
+
 
 For instructions on inviting users to your Materialize organization, see [Invite
 users](./invite-users/).
 
 ## Service accounts
 
-{{< tip >}}
+> **Tip:** 
 
 As a best practice, we recommend you use service accounts to connect external
 applications and services to Materialize.
 
-{{</ tip >}}
 
 As an **Organization admin**, you can create a new service account via
 the [Materialize Console](/console/) or via
 [Terraform](/manage/terraform/).
 
-{{< note >}}
+> **Note:** 
 
 - The new account creation is not finished until the first time you connect with
 the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-{{</ note >}}
 
 For instructions on creating a new service account in your Materialize
 organization, see [Create service accounts](./create-service-accounts/).
@@ -71,8 +118,6 @@ guide](./sso/).
 - [Manage with Terraform](/manage/terraform/)
 
 
-
-
 ---
 
 ## Configure single sign-on (SSO)
@@ -86,11 +131,11 @@ identity provider. This ensures that all users can securely log in to the
 Materialize console using the same authentication scheme and credentials across
 all systems in your organization.
 
-{{< note >}}
+> **Note:** 
 Single sign-on in Materialize only supports authentication into the Materialize
 console. Permissions within the database are handled separately using
 [role-based access control](/security/cloud/access-control/).
-{{</ note >}}
+
 
 ## Before you begin
 
@@ -105,35 +150,46 @@ To make Materialize metadata available to Datadog, you must configure and run th
 
 * Navigate to **Account** > **Account Settings** > **SSO**.
 
-{{< tabs >}}
-{{< tab "OpenID Connect" >}}
+#### OpenID Connect
 
 * Click **Add New** and choose the `OpenID Connect` connection type.
 
 * Add the issuer URL, client ID, and secret key provided by your identity provider.
 
-{{< /tab >}}
-{{< tab "SAML" >}}
+#### SAML
 
 * Click **Add New** and choose the `SAML` connection type.
 
 * Add the SSO endpoint and public certificate provided by your identity provider.
 
-{{< /tab >}}
-{{< /tabs >}}
-
 * Optionally, add the SSO domain provided by your identity provider. Click **Proceed**.
 
 * Select the organization role for the user:
 
-  {{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+  <!-- Dynamic table: rbac/organization_roles - see original docs -->
+
+> **Note:** 
+- The first user for an organization is automatically assigned the
+  **Organization Admin** role.
+
+- An [Organization
+Admin](/security/cloud/users-service-accounts/#organization-roles) has
+<red>**superuser**</red> privileges in the database. Following the principle of
+least privilege, only assign **Organization Admin** role to those users who
+require superuser privileges.
+
+
+- Users/service accounts can be granted additional database roles and privileges
+  as needed.
 
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
-
-
+The organization role for a user/service account determines the default level of
+database access. Once the account creation is complete, you can use [role-based
+access control
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
+control access for that account.
 
 
 ---
@@ -150,14 +206,14 @@ Materialize organization, you can create service accounts manually via the
 More granular permissions for the service account can then be configured using
 [role-based access control (RBAC)](/security/cloud/access-control/).
 
-{{< note >}}
+> **Note:** 
 
 - The new account creation is not finished until the first time you connect with
 the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-{{</ note >}}
 
 ## Materialize Console
 
@@ -167,59 +223,67 @@ the account.
 
 1. In the **New app password** modal, specify the type and required field(s):
 
-   {{< yaml-table data="console/service_account_fields" >}}
+   <!-- Dynamic table: console/service_account_fields - see original docs -->
 
 1. Click **Create Password** to generate a new password for your service
    account.
 
 1. Store the new password securely.
 
-   {{< note >}}
+   > **Note:** 
 
    Do not reload or navigate away from the screen before storing the
    password. This information is not displayed again.
 
-   {{</ note >}}
+   
 
 1. Connect with the new service account to finish creating the new
    account.
 
-   {{< note >}}
+   > **Note:** 
 
 - The new account creation is not finished until the first time you connect with
   the account.
 
-- {{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+- The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-   {{</ note >}}
+
+   
 
    1. Find your new service account in the **App Passwords** table.
 
    1. Click on the **Connect** button to get details on connecting with the new
       account.
 
-      {{< tabs >}}
-      {{< tab "psql" >}}
+      
+      #### psql
+
 If you have `psql` installed:
 
 1. Click on the **Terminal** tab.
 1. From a terminal, connect using the psql command displayed.
 1. When prompted for the password, enter the app's password.
 
-{{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-      {{</ tab >}}
-      {{< tab "Other clients" >}}
+
+      
+      #### Other clients
+
 To use a different client to connect,
 
 1. Click on the **External tools** tab to get the connection details.
 
 1. Update the client to use these details and connect.
 
-{{< include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+The first time the account connects, a database role with the same name as the
+specified service account **User** is created, and the service account creation is complete.
 
-      {{</ tab >}}
-      {{</ tabs >}}
+
+      
+      
 
 ## Terraform
 
@@ -233,7 +297,7 @@ To use a different client to connect,
       name   = "svc_production_dashboard"
       region = "aws/us-east-1"
     }
-    ```
+    ```text
 
 1. Create a new `service` app password using the [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)
    resource, and associate it with the service user created in the previous
@@ -246,7 +310,7 @@ To use a different client to connect,
       user = materialize_role.production_dashboard.name
       roles = ["Member"]
     }
-    ```
+    ```text
 
 1. Optionally, associate the new service user with existing roles to grant it
    existing database privileges.
@@ -258,7 +322,7 @@ To use a different client to connect,
       database_name = "production_analytics"
       region        = "aws/us-east-1"
     }
-    ```
+    ```text
 
 1. Export the user and password for use in the external application or service.
 
@@ -276,9 +340,11 @@ resources in your region, see the [reference documentation](/manage/terraform/).
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
-
-
+The organization role for a user/service account determines the default level of
+database access. Once the account creation is complete, you can use [role-based
+access control
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
+control access for that account.
 
 
 ---
@@ -286,7 +352,15 @@ resources in your region, see the [reference documentation](/manage/terraform/).
 ## Invite users
 
 
-{{< include-md file="shared-content/rbac-cloud/invite-user-note.md" >}}
+> **Note:** 
+- Until the user accepts the invitation and logs in, the user is listed as
+**Pending Approval**.
+
+- When the user accepts the invitation, the user can set the user password and
+log in to activate their account. The first time the user logs in, a database
+role with the same name as their e-mail address is created, and the account
+creation is complete.
+
 
 As an **Organization administrator**, you can invite new users via the
 Materialize Console.
@@ -299,17 +373,41 @@ Materialize Console.
 
 1. In the **Select Role**, select the organization role for the user:
 
-   {{< include-md file="shared-content/rbac-cloud/organization-roles.md" >}}
+   <!-- Dynamic table: rbac/organization_roles - see original docs -->
+
+> **Note:** 
+- The first user for an organization is automatically assigned the
+  **Organization Admin** role.
+
+- An [Organization
+Admin](/security/cloud/users-service-accounts/#organization-roles) has
+<red>**superuser**</red> privileges in the database. Following the principle of
+least privilege, only assign **Organization Admin** role to those users who
+require superuser privileges.
+
+
+- Users/service accounts can be granted additional database roles and privileges
+  as needed.
+
 
 1. Click the **Invite** button at the bottom right section of the screen.
 
    Materialize will email the user with an invitation link.
 
-   {{< include-md file="shared-content/rbac-cloud/invite-user-note.md" >}}
+   > **Note:** 
+- Until the user accepts the invitation and logs in, the user is listed as
+**Pending Approval**.
+
+- When the user accepts the invitation, the user can set the user password and
+log in to activate their account. The first time the user logs in, a database
+role with the same name as their e-mail address is created, and the account
+creation is complete.
+
 
 ## Next steps
 
-{{< include-md file="shared-content/rbac-cloud/account-creation-next-steps.md" >}}
-
-
-
+The organization role for a user/service account determines the default level of
+database access. Once the account creation is complete, you can use [role-based
+access control
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
+control access for that account.

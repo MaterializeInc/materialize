@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/filters/
+complexity: intermediate
+description: Use FILTER to specify which rows are sent to an aggregate function
+doc_type: reference
+keywords:
+- SELECT COUNT
+- Aggregate function filters
+product_area: Indexes
+status: stable
+title: Aggregate function filters
+---
+
 # Aggregate function filters
+
+## Purpose
+Use FILTER to specify which rows are sent to an aggregate function
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Use FILTER to specify which rows are sent to an aggregate function
 
@@ -10,9 +30,11 @@ Temporal filters cannot be used in aggregate function filters.
 
 ## Syntax
 
-{{< diagram "aggregate-with-filter.svg" >}}
+[See diagram: aggregate-with-filter.svg]
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT

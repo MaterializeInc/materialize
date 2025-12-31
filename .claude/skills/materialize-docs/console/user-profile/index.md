@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/console/user-profile/
+complexity: intermediate
+description: Manage your user profile and account settings from the Materialize console.
+doc_type: reference
+keywords:
+- User profile
+product_area: General
+status: stable
+title: User profile
+---
+
 # User profile
+
+## Purpose
+Manage your user profile and account settings from the Materialize console.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Manage your user profile and account settings from the Materialize console.
 

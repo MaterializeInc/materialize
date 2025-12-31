@@ -1,4 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/concepts/reaction-time/
+complexity: advanced
+description: Learn about indexes in Materialize.
+doc_type: concept
+keywords:
+- Query latency
+- Freshness
+- Reaction Time, Freshness, and Query Latency
+- SELECT OBJECT_ID
+- Reaction time
+product_area: Concepts
+status: stable
+title: Reaction Time, Freshness, and Query Latency
+---
+
 # Reaction Time, Freshness, and Query Latency
+
+## Purpose
+Learn about indexes in Materialize.
+
+Read this to understand how this concept works in Materialize.
+
 
 Learn about indexes in Materialize.
 
@@ -32,7 +55,7 @@ Wallclock lag indicates how far behind real-world wall-clock time your data obje
 ```sql
 SELECT object_id, lag
 FROM mz_internal.mz_wallclock_global_lag;
-```
+```text
 
 ---
 
@@ -90,6 +113,8 @@ This architecture removes the traditional trade-off between fast queries and fre
 ---
 
 ## Summary
+
+This section covers summary.
 
 | Concept       | Definition                                    | How Materialize Optimizes It                     |
 | ------------- | --------------------------------------------- | ------------------------------------------------ |

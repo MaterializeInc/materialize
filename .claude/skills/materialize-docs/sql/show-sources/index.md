@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-sources/
+complexity: intermediate
+description: '`SHOW SOURCES` returns a list of all sources available in Materialize.'
+doc_type: reference
+keywords:
+- FROM
+- cluster
+- SHOW SOURCES
+- name
+- IN CLUSTER
+- type
+product_area: Sources
+status: stable
+title: SHOW SOURCES
+---
+
 # SHOW SOURCES
+
+## Purpose
+`SHOW SOURCES` returns a list of all sources available in Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 `SHOW SOURCES` returns a list of all sources available in Materialize.
 
@@ -8,9 +32,11 @@
 
 ## Syntax
 
+This section covers syntax.
+
 ```mzsql
 SHOW SOURCES [ FROM <schema_name> ] [ IN CLUSTER <cluster_name> ];
-```
+```text
 
 Syntax element                | Description
 ------------------------------|------------
@@ -18,6 +44,8 @@ Syntax element                | Description
 **IN CLUSTER** <cluster_name> | If specified, only show sources from the specified cluster. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
 
 ## Details
+
+This section covers details.
 
 ### Output format for `SHOW SOURCES`
 
@@ -27,7 +55,7 @@ Syntax element                | Description
 name  | type | cluster
 ------+------+--------
 ...   | ...  | ...
-```
+```text
 
 Field | Meaning
 ------|--------
@@ -37,19 +65,21 @@ Field | Meaning
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SHOW SOURCES;
-```
+```text
 ```nofmt
             name    | type     | cluster
 --------------------+----------+---------
  my_kafka_source    | kafka    | c1
  my_postgres_source | postgres | c2
-```
+```text
 
 ```mzsql
 SHOW SOURCES IN CLUSTER c2;
-```
+```text
 ```nofmt
 name               | type     | cluster
 -------------------+----------+--------

@@ -1,4 +1,26 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/terraform/get-started/
+complexity: beginner
+description: Introductory setup with Materialize Terraform provider
+doc_type: reference
+keywords:
+- Get started with the Materialize provider
+- 'Minimum requirements:'
+- CREATE AN
+- CREATE A
+product_area: Operations
+status: stable
+title: Get started with the Materialize provider
+---
+
 # Get started with the Materialize provider
+
+## Purpose
+Introductory setup with Materialize Terraform provider
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Introductory setup with Materialize Terraform provider
 
@@ -22,7 +44,7 @@ terraform {
     }
   }
 }
-```
+```bash
 
 ## Authentication
 
@@ -37,7 +59,7 @@ with the `TF_VAR_<name>` format.
 
 ```shell
 export TF_VAR_MZ_PASSWORD=<app_password>
-```
+```text
 
 In the `main.tf` file, add the provider configuration and any variable
 references:
@@ -50,7 +72,7 @@ provider "materialize" {
   default_region = <region>
   database       = <database>
 }
-```
+```bash
 
 ## Creating service accounts
 

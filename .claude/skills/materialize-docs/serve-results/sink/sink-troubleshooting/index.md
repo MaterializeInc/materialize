@@ -1,4 +1,24 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/serve-results/sink/sink-troubleshooting/
+complexity: advanced
+description: <!-- Copied over from the old manage/troubleshooting guide -->
+doc_type: troubleshooting
+keywords:
+- SELECT MESSAGES_STAGED
+- Troubleshooting sinks
+product_area: Sinks
+status: stable
+title: Troubleshooting sinks
+---
+
 # Troubleshooting sinks
+
+## Purpose
+<!-- Copied over from the old manage/troubleshooting guide -->
+
+This page provides detailed documentation for this topic.
+
 
 
 
@@ -9,7 +29,7 @@ First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#
 ```mzsql
 SELECT * FROM mz_internal.mz_sink_statuses
 WHERE name = <SINK_NAME>;
-```
+```text
 
 If your sink reports a status of `stalled` or `failed`, you likely have a
 configuration issue. The returned `error` field will provide details.

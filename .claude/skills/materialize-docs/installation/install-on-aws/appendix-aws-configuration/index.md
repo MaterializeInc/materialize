@@ -1,4 +1,23 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/installation/install-on-aws/appendix-aws-configuration/
+complexity: intermediate
+description: Required configuration for Materialize on AWS Terraform.
+doc_type: reference
+keywords:
+- 'Appendix: Required configuration'
+product_area: Deployment
+status: beta
+title: 'Appendix: Required configuration'
+---
+
 # Appendix: Required configuration
+
+## Purpose
+Required configuration for Materialize on AWS Terraform.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Required configuration for Materialize on AWS Terraform.
 
@@ -9,7 +28,7 @@ Required configuration for Materialize on AWS Terraform.
 The following variables are required when using the [Materialize on AWS
 Terraform modules](https://github.com/MaterializeInc/terraform-aws-materialize):
 
-{{< yaml-table data="self_managed/aws_required_variables" >}}
+<!-- Dynamic table: self_managed/aws_required_variables - see original docs -->
 
 For a list of all variables, see the
 [README.md](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#inputs)

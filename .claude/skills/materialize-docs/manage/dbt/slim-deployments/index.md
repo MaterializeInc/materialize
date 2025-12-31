@@ -1,15 +1,44 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/dbt/slim-deployments/
+complexity: intermediate
+description: How to use dbt for slim deployments.
+doc_type: reference
+keywords:
+- Slim deployments
+- 'automated
+
+  workflow'
+- 'avoid re-deploying resources
+
+  that didn''t change'
+- version control
+- 'Note:'
+- SELECT STATE
+- 'Tip:'
+product_area: Operations
+status: stable
+title: Slim deployments
+---
+
 # Slim deployments
+
+## Purpose
+How to use dbt for slim deployments.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use dbt for slim deployments.
 
 
 
-{{< tip >}}
+> **Tip:** 
 Once your dbt project is ready to move out of development, or as soon as you
 start managing multiple users and deployment environments, we recommend
 checking the code in to **version control** and setting up an **automated
 workflow** to control the deployment of changes.
-{{</ tip >}}
+
 
 [//]: # "TODO(morsapaes) Consider moving demos to template repo."
 
@@ -24,10 +53,10 @@ development idle time and CI costs in development environments. For
 production deployments, you should prefer the [blue/green deployment pattern](/manage/dbt/blue-green-deployments/).
 
 
-{{< note >}}
+> **Note:** 
 Check [this demo](https://github.com/morsapaes/dbt-ci-templates) for a sample
 end-to-end workflow using GitHub and GitHub Actions.
-{{</ note >}}
+
 
 1. Fetch the production `manifest.json` file into the CI environment:
 
@@ -40,7 +69,7 @@ end-to-end workflow using GitHub and GitHub Actions.
               AWS_REGION: us-east-1
             run: |
               aws s3 cp s3://mz-test-dbt/manifest.json ./manifest.json
-    ```
+    ```text
 
 1. Then, instruct dbt to run and test changed models and dependencies only:
 
@@ -55,7 +84,7 @@ end-to-end workflow using GitHub and GitHub Actions.
               source .venv/bin/activate
               dbt run-operation drop_environment
               dbt build --profiles-dir ./ --select state:modified+ --state ./ --target production
-    ```
+    ```text
 
     In the example above, `--select state:modified+` instructs dbt to run all
     models that were modified (`state:modified`) and their downstream

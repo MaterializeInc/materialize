@@ -1,4 +1,25 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/encode/
+complexity: intermediate
+description: Converts binary data to and from textual representations
+doc_type: reference
+keywords:
+- SELECT DECODE
+- encode and decode functions
+- SELECT ENCODE
+product_area: Indexes
+status: stable
+title: encode and decode functions
+---
+
 # encode and decode functions
+
+## Purpose
+Converts binary data to and from textual representations
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Converts binary data to and from textual representations
 
@@ -9,12 +30,16 @@ representations. The `decode` function does the reverse.
 
 ## Signatures
 
-```
+This section covers signatures.
+
+```text
 encode(b: bytea, format: text) -> text
 decode(s: text, format: text) -> bytea
 ```
 
 ## Details
+
+This section covers details.
 
 ### Supported formats
 
@@ -48,31 +73,31 @@ Encoding and decoding in the `base64` format:
 
 ```mzsql
 SELECT encode('\x00404142ff', 'base64');
-```
+```text
 ```nofmt
   encode
 ----------
  AEBBQv8=
-```
+```text
 
 ```mzsql
 SELECT decode('A   EB BQv8 =', 'base64');
-```
+```text
 ```nofmt
     decode
 --------------
  \x00404142ff
-```
+```text
 
 ```mzsql
 SELECT encode('This message is long enough that the output will run to multiple lines.', 'base64');
-```
+```text
 ```nofmt
                                     encode
 ------------------------------------------------------------------------------
  VGhpcyBtZXNzYWdlIGlzIGxvbmcgZW5vdWdoIHRoYXQgdGhlIG91dHB1dCB3aWxsIHJ1biB0byBt+
  dWx0aXBsZSBsaW5lcy4=
-```
+```text
 
 <hr>
 
@@ -80,21 +105,21 @@ Encoding and decoding in the `escape` format:
 
 ```mzsql
 SELECT encode('\x00404142ff', 'escape');
-```
+```text
 ```nofmt
    encode
 -------------
  \000@AB\377
-```
+```text
 
 ```mzsql
 SELECT decode('\000@AB\377', 'escape');
-```
+```text
 ```nofmt
     decode
 --------------
  \x00404142ff
-```
+```text
 
 <hr>
 
@@ -102,16 +127,16 @@ Encoding and decoding in the `hex` format:
 
 ```mzsql
 SELECT encode('\x00404142ff', 'hex');
-```
+```text
 ```nofmt
    encode
 ------------
  00404142ff
-```
+```text
 
 ```mzsql
 SELECT decode('00  40  41  42  ff', 'hex');
-```
+```text
 ```nofmt
     decode
 --------------

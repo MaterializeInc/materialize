@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/bytea/
+complexity: beginner
+description: Expresses a Unicode string
+doc_type: reference
+keywords:
+- Quick Syntax
+- Catalog name
+- OID
+- 'Warning:'
+- bytea type
+- Size
+- SELECT CONVERT_FROM
+product_area: Indexes
+status: stable
+title: bytea type
+---
+
 # bytea type
+
+## Purpose
+Expresses a Unicode string
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses a Unicode string
 
@@ -19,15 +44,17 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 ### Hex format
 
-{{< diagram "type-bytea-hex.svg" >}}
+[See diagram: type-bytea-hex.svg]
 
 In some cases, the initial backslash may need to be escaped by doubling it (`\\`). For more information, see the PostgreSQL documentation on [string constants](https://www.postgresql.org/docs/13/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS).
 
 ### Escape format
 
-{{< diagram "type-bytea-esc.svg" >}}
+[See diagram: type-bytea-esc.svg]
 
 In the escape format, octet values can be escaped by converting them into their three-digit octal values and preceding them with backslashes; the backslash itself can be escaped as a double backslash. While any octet value *can* be escaped, the values in the table below *must* be escaped.
 
@@ -40,18 +67,20 @@ Decimal octet value | Description | Escaped input representation | Example | Hex
 
 ## Details
 
+This section covers details.
+
 ### Valid casts
 
 #### From `bytea`
 
 You can [cast](../../functions/cast) `bytea` to [`text`](../text) by assignment.
 
-{{< warning >}}
+> **Warning:** 
 Casting a `bytea` value to `text` unconditionally returns a
 [hex-formatted](#hex-format) string, even if the byte array consists entirely of
 printable characters. See [handling character data](#handling-character-data)
 for alternatives.
-{{< /warning >}}
+
 
 #### To `bytea`
 
@@ -64,12 +93,12 @@ Unless a `text` value is a [hex-formatted](#hex-format) string, casting to
 
 ```mzsql
 SELECT 'hello 👋'::bytea;
-```
+```text
 ```text
          bytea
 ------------------------
  \x68656c6c6f20f09f918b
-```
+```text
 
 The reverse, however, is not true. Casting a `bytea` value to `text` will not
 decode UTF-8 bytes into characters. Instead, the cast unconditionally produces a
@@ -77,42 +106,44 @@ decode UTF-8 bytes into characters. Instead, the cast unconditionally produces a
 
 ```mzsql
 SELECT '\x68656c6c6f20f09f918b'::bytea::text
-```
+```text
 ```text
            text
 ----------------------------
  \x68656c6c6f2c20776f726c6
-```
+```text
 
 To decode UTF-8 bytes into characters, use the
 [`convert_from`](../../functions#convert_from) function instead of casting:
 
 ```mzsql
 SELECT convert_from('\x68656c6c6f20f09f918b', 'utf8') AS text;
-```
+```text
 ```mzsql
   text
 ---------
  hello 👋
-```
+```bash
 
 ## Examples
 
 
+This section covers examples.
+
 ```mzsql
 SELECT '\xDEADBEEF'::bytea AS bytea_val;
-```
+```text
 ```nofmt
  bytea_val
 ---------
  \xdeadbeef
-```
+```text
 
 <hr>
 
 ```mzsql
 SELECT '\000'::bytea AS bytea_val;
-```
+```text
 ```nofmt
    bytea_val
 -----------------

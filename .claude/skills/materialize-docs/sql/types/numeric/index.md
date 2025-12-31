@@ -1,4 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/numeric/
+complexity: advanced
+description: Expresses an exact number with user-defined precision and scale
+doc_type: reference
+keywords:
+- Catalog name
+- OID
+- Precision
+- Aliases
+- Size
+- SELECT C
+- CREATE TABLE
+- numeric type
+- INSERT INTO
+product_area: Indexes
+status: stable
+title: numeric type
+---
+
 # numeric type
+
+## Purpose
+Expresses an exact number with user-defined precision and scale
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Expresses an exact number with user-defined precision and scale
 
@@ -17,9 +44,11 @@ Detail | Info
 
 ## Syntax
 
+This section covers syntax.
+
 ### Numeric values
 
-{{< diagram "type-numeric-val.svg" >}}
+[See diagram: type-numeric-val.svg]
 
 Field | Use
 ------|-----------
@@ -27,7 +56,7 @@ Field | Use
 
 ### Numeric definitions
 
-{{< diagram "type-numeric-dec.svg" >}}
+[See diagram: type-numeric-dec.svg]
 
 Field | Use
 ------|-----------
@@ -35,6 +64,8 @@ _precision_ | **Ignored**: All `numeric` values in Materialize have a precision 
 _scale_ | The total number of fractional decimal digits to track, e.g. `.321` has a scale of 3. _scale_ cannot exceed the maximum precision.
 
 ## Details
+
+This section covers details.
 
 ### Input
 
@@ -82,7 +113,7 @@ SELECT c FROM unscaled;
    987654321098765432109876543210987654321
  0.987654321098765432109876543210987654321
   9876543210987654321.09876543210987654321
-```
+```text
 
 However, if you specify a scale on a `numeric` value, values will be rescaled
 appropriately. If the resulting value exceeds the maximum precision for
@@ -93,10 +124,10 @@ CREATE TABLE scaled (c NUMERIC(39, 20));
 
 INSERT INTO scaled VALUES
   (987654321098765432109876543210987654321);
-```
+```text
 ```
 ERROR:  numeric field overflow
-```
+```text
 ```mzsql
 INSERT INTO scaled VALUES
   (9876543210987654321.09876543210987654321),
@@ -108,7 +139,7 @@ SELECT c FROM scaled;
 ------------------------------------------
                    0.98765432109876543211
  9876543210987654321.09876543210987654321
-```
+```bash
 
 ### Rounding
 
@@ -121,7 +152,7 @@ SELECT 2 * 9876543210987654321.09876543210987654321 AS rounded;
                  rounded
 ------------------------------------------
  19753086421975308642.1975308642197530864
-```
+```text
 
 However, if a value exceeds is >= 1E39 or <= -1E39, it generates an
 overflow, i.e. it will not be rounded.
@@ -185,30 +216,32 @@ You can [cast](../../functions/cast) from the following types to `numeric`:
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 SELECT 1.23::numeric AS num_v;
-```
+```text
 ```nofmt
  num_v
 -------
   1.23
-```
+```text
 <hr/>
 
 ```mzsql
 SELECT 1.23::numeric(38,3) AS num_38_3_v;
-```
+```text
 ```nofmt
  num_38_3_v
 ------------
       1.230
-```
+```text
 
 <hr/>
 
 ```mzsql
 SELECT 1.23e4 AS num_w_exp;
-```
+```text
 ```nofmt
  num_w_exp
 -----------

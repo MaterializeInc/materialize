@@ -1,4 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/ingest-data/monitoring-data-ingestion/
+complexity: advanced
+description: How to monitor the snapshotting progress and data lag for your sources.
+doc_type: overview
+keywords:
+- UPDATE A
+- SELECT BYTES_RECEIVED
+- Up to date
+- SELECT O
+- Monitoring data ingestion
+- SELECT S
+- Lagging
+product_area: Sources
+status: stable
+title: Monitoring data ingestion
+---
+
 # Monitoring data ingestion
+
+## Purpose
+How to monitor the snapshotting progress and data lag for your sources.
+
+This page provides detailed documentation for this topic.
+
 
 How to monitor the snapshotting progress and data lag for your sources.
 
@@ -23,7 +48,7 @@ SELECT
 FROM mz_internal.mz_source_statistics AS s
 INNER JOIN mz_objects AS o ON (s.id = o.id)
 WHERE NOT s.snapshot_committed;
-```
+```text
 
 It's also important to monitor CPU and memory utilization for the cluster
 hosting the source during snapshotting. If there are signs of resource
@@ -51,7 +76,7 @@ SELECT
 	h.hydrated
 FROM mz_sources AS s
 INNER JOIN mz_internal.mz_hydration_statuses AS h ON (s.id = h.object_id);
-```
+```bash
 
 ## Monitoring data lag
 
@@ -72,7 +97,7 @@ SELECT
 FROM mz_internal.mz_source_statistics AS s
 INNER JOIN mz_objects AS o ON (s.id = o.id)
 WHERE s.snapshot_committed;
-```
+```bash
 
 ## Monitoring data ingestion progress
 

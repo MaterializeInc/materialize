@@ -1,7 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/self-managed/
+complexity: beginner
+description: Authentication and authorization in Self-Managed Materialize.
+doc_type: reference
+keywords:
+- CREATE ROLE
+- 'Warning:'
+- superuser
+- SHOW ENABLE_RBAC_CHECKS
+- Self-managed
+- ALTER SYSTEM
+- CREATE ADDITIONAL
+- 'Note:'
+- 'Important:'
+product_area: Security
+status: beta
+title: Self-managed
+---
+
 # Self-managed
 
+## Purpose
 Authentication and authorization in Self-Managed Materialize.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Authentication and authorization in Self-Managed Materialize.
 
 
 This section covers security for Self-Managed Materialize.
@@ -18,17 +44,15 @@ See also
 - [Appendix: Built-in roles](/security/appendix/appendix-built-in-roles/)
 
 
-
-
 ---
 
 ## Access control (Role-based)
 
 
-{{< note >}}
+> **Note:** 
 Initially, only the `mz_system` user (which has superuser/administrator
 privileges) is available to manage roles.
-{{</ note >}}
+
 
 <a name="role-based-access-control-rbac" ></a>
 
@@ -40,28 +64,86 @@ roles](/security/self-managed/access-control/manage-roles/).
 
 ## Enabling RBAC
 
-{{< include-md file="shared-content/rbac-sm/enable-rbac.md" >}}
+> **Warning:** 
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+
+
+By default, role-based access control (RBAC) checks are not enabled (i.e.,
+enforced) when using [authentication](/security/self-managed/authentication/#configuring-authentication-type). To
+enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
+You can enable the parameter in one of the following ways:
+
+- For [local installations using
+  Kind/Minikube](/installation/#installation-guides), set `spec.enableRbac:
+  true` option when instantiating the Materialize object.
+
+- For [Cloud deployments using Materialize's
+  Terraforms](/installation/#installation-guides), set `enable_rbac_checks` in
+  the environment CR via the `environmentdExtraArgs` flag option.
+
+- After the Materialize instance is running, run the following command as
+  `mz_system` user:
+
+  ```mzsql
+  ALTER SYSTEM SET enable_rbac_checks = 'on';
+  ```text
+
+If more than one method is used, the `ALTER SYSTEM` command will take precedence
+over the Kubernetes configuration.
+
+To view the current value for `enable_rbac_checks`, run the following `SHOW`
+command:
+
+```mzsql
+SHOW enable_rbac_checks;
+```text
+
+> **Important:** 
+If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
+
 
 ## Roles and privileges
 
-{{% include-md file="shared-content/rbac-sm/db-roles.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
 
-- {{< include-md file="shared-content/rbac-sm/create-users.md" >}}
+- To create additional users or service accounts, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE
+... WITH LOGIN PASSWORD ...`](/sql/create-role):
 
-- {{< include-md file="shared-content/rbac-sm/create-functional-roles.md" >}}
+```mzsql
+CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
+```text
+
+
+- To create functional roles, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE`](/sql/create-role):
+
+```mzsql
+CREATE ROLE <role>;
+```bash
+
 
 ### Managing privileges
 
-{{% include-md file="shared-content/rbac-sm/db-roles-managing-privileges.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
 
-{{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-sm/grant-vs-alter-default-privilege.md"
-%}}
-{{</ annotation >}}
+> **Disambiguation:** <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/grant-... -->
 
 ### Initial privileges
 
-{{< include-md file="shared-content/rbac-sm/db-roles-initial-privileges.md" >}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/db-rol... -->
+
+<!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/public... -->
+
+In addition, all roles have:
+- `USAGE` on all built-in types and [all system catalog
+schemas](/sql/system-catalog/).
+- `SELECT` on [system catalog objects](/sql/system-catalog/).
+- All [applicable privileges](/security/appendix/appendix-privileges/) for
+  an object they create; for example, the creator of a schema gets `CREATE` and
+  `USAGE`; the creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and
+  `DELETE`.
+
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the modify default privileges for `PUBLIC`.
@@ -82,19 +164,19 @@ combining existing roles, enabling modular access control. However:
 
 - Inheritance only applies to role privileges; role attributes and parameters
   are not inherited.
-- {{% include-md file="shared-content/rbac-sm/revoke-roles-consideration.md" %}}
+- <!-- Unresolved shortcode: {{% include-md file="shared-content/rbac-sm/revoke... -->
 
 ## Best practices
 
-{{% yaml-sections data="rbac/recommendations-sm" heading-field="recommendation" heading-level=3 %}}
-
-
+<!-- Unresolved shortcode: {{% yaml-sections data="rbac/recommendations-sm" h... -->
 
 
 ---
 
 ## Authentication
 
+
+This section covers authentication.
 
 ## Configuring Authentication Type
 
@@ -105,15 +187,15 @@ for the authentication method.
 The `spec.authenticatorKind` setting determines which authentication method is
 used:
 
-{{% yaml-table data="self_managed/authentication_setting" %}}
+<!-- Unresolved shortcode: {{% yaml-table data="self_managed/authentication_s... -->
 
-{{< include-md file="shared-content/auth-kind-warning.md" >}}
-
+> **Warning:** 
+Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
 
 
 ## Configuring password authentication
 
-{{< public-preview >}}This feature{{</ public-preview >}}
+> **Public Preview:** This feature is in public preview.This feature
 
 Password authentication requires users to log in with a password.
 
@@ -151,7 +233,7 @@ spec:
   environmentdImageRef: materialize/environmentd:v0.147.2
   backendSecretName: materialize-backend
   authenticatorKind: Password
-```
+```bash
 
 #### Logging in and creating users
 
@@ -168,16 +250,16 @@ users:
 
    ```mzsql
    CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
-   ```
+   ```json
 
 [^1]: The `mz_system` user is also used by the Materialize Operator for upgrades
 and maintenance tasks.
 
 ## Configuring SASL/SCRAM authentication
 
-{{< note >}}
+> **Note:** 
 SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
-{{</ note >}}
+
 
 SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechanism
 that provides security for **PostgreSQL wire protocol connections**. It is
@@ -217,7 +299,7 @@ spec:
   environmentdImageRef: materialize/environmentd:v0.147.2
   backendSecretName: materialize-backend
   authenticatorKind: Sasl
-```
+```bash
 
 ### Logging in and creating users
 
@@ -251,13 +333,12 @@ spec:
 
 For more information on rollout configuration, view our [installation overview](/installation/#rollout-configuration).
 
-{{< include-md file="shared-content/auth-kind-warning.md" >}}
+> **Warning:** 
+Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
+
 
 ## Enabling RBAC
 
-{{< include-md file="shared-content/enable-rbac.md" >}}
+<!-- Include not found: shared-content/enable-rbac.md -->
 
 See [Access Control](/security/self-managed/access-control/) for details on role based authorization.
-
-
-

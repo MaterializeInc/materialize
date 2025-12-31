@@ -1,8 +1,29 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/security/
+complexity: intermediate
+description: '| Guide | Description |'
+doc_type: reference
+keywords:
+- Security
+product_area: Security
+status: stable
+title: Security
+---
+
 # Security
+
+## Purpose
+
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 
 
 ## Cloud
+
+This section covers cloud.
 
 | Guide | Description |
 |-------|-------------|
@@ -11,6 +32,8 @@
 | [Manage network policies](/security/cloud/manage-network-policies/) | Set up network policies |
 
 ## Self-Managed
+
+This section covers self-managed.
 
 | Guide | Description |
 |-------|-------------|

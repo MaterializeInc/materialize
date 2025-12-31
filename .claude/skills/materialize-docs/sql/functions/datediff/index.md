@@ -1,4 +1,30 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/datediff/
+complexity: intermediate
+description: Returns the difference between two date, time or timestamp expressions
+  based on the specified date or time part.
+doc_type: reference
+keywords:
+- '`quarter`, `qtr`'
+- '`decades`, `decade`, `decs`, `dec`'
+- '`centuries`, `century`, `cent`, `c`'
+- datediff function
+- SELECT DATEDIFF
+- '`years`, `year`, `yrs`, `yr`, `y`'
+- '`millenniums`, `millennium`, `millennia`, `mil`'
+product_area: Indexes
+status: stable
+title: datediff function
+---
+
 # datediff function
+
+## Purpose
+Returns the difference between two date, time or timestamp expressions based on the specified date or time part.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Returns the difference between two date, time or timestamp expressions based on the specified date or time part.
 
@@ -16,27 +42,25 @@ _end_ | [date](../../types), [time](../../types), [timestamp](../../types), [tim
 
 ### `datepart` specifiers
 
-| Specifier                                                        | Description      |
-|------------------------------------------------------------------|------------------|
-| `millenniums`, `millennium`, `millennia`, `mil`                  | Millennia        |
-| `centuries`, `century`, `cent`, `c`                              | Centuries        |
-| `decades`, `decade`, `decs`, `dec`                               | Decades          |
-| `years`, `year`, `yrs`, `yr`, `y`                                | Years            |
-| `quarter`, `qtr`                                                 | Quarters         |
-| `months`, `month`, `mons`, `mon`                                 | Months           |
-| `weeks`, `week`, `w`                                             | Weeks            |
-| `days`, `day`, `d`                                               | Days             |
-| `hours`, `hour`, `hrs`, `hr`, `h`                                | Hours            |
-| `minutes`, `minute`, `mins`, `min`, `m`                          | Minutes          |
-| `seconds`, `second`, `secs`, `sec`, `s`                          | Seconds          |
-| `milliseconds`, `millisecond`, `mseconds`, `msecs`, `msec`, `ms` | Milliseconds     |
-| `microseconds`, `microsecond`, `useconds`, `usecs`, `usec`, `us` | Microseconds     |
+- **`millenniums`, `millennium`, `millennia`, `mil`**: Millennia
+- **`centuries`, `century`, `cent`, `c`**: Centuries
+- **`decades`, `decade`, `decs`, `dec`**: Decades
+- **`years`, `year`, `yrs`, `yr`, `y`**: Years
+- **`quarter`, `qtr`**: Quarters
+- **`months`, `month`, `mons`, `mon`**: Months
+- **`weeks`, `week`, `w`**: Weeks
+- **`days`, `day`, `d`**: Days
+- **`hours`, `hour`, `hrs`, `hr`, `h`**: Hours
+- **`minutes`, `minute`, `mins`, `min`, `m`**: Minutes
+- **`seconds`, `second`, `secs`, `sec`, `s`**: Seconds
+- **`milliseconds`, `millisecond`, `mseconds`, `msecs`, `msec`, `ms`**: Milliseconds
+- **`microseconds`, `microsecond`, `useconds`, `usecs`, `usec`, `us`**: Microseconds
 
 ## Examples
 
 To calculate the difference between two dates in millennia:
 
-```
+```sql
 SELECT datediff('millennia', '2000-12-31', '2001-01-01') as d;
   d
 -----
@@ -46,7 +70,7 @@ SELECT datediff('millennia', '2000-12-31', '2001-01-01') as d;
 Even though the difference between `2000-12-31` and `2001-01-01` is a single day, a millennium boundary is crossed from one date to the other, so the result is `1`.
 
 To see how this function handles leap years:
-```
+```sql
 SELECT datediff('day', '2004-02-28', '2004-03-01') as leap;
     leap
 ------------

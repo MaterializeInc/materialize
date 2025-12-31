@@ -1,4 +1,34 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/troubleshooting/
+complexity: advanced
+description: How to troubleshoot common data transformation scenarios where Materialize
+  is not working as expected.
+doc_type: troubleshooting
+keywords:
+- EXPLAIN PLAN
+- '"Materialized Views"'
+- '"Indexes"'
+- UPDATE TIME
+- '"Clusters"'
+- '`LIMIT` clause'
+- 'a
+
+  single'
+- UPDATE THIS
+- Troubleshooting
+product_area: SQL
+status: stable
+title: Troubleshooting
+---
+
 # Troubleshooting
+
+## Purpose
+How to troubleshoot common data transformation scenarios where Materialize is not working as expected.
+
+This page provides detailed documentation for this topic.
+
 
 How to troubleshoot common data transformation scenarios where Materialize is not working as expected.
 
@@ -109,7 +139,7 @@ offsets.
 SELECT <column list or *>
 FROM <source, materialized view or table>
 LIMIT <25 or less>;
-```
+```text
 
 To verify whether the query will return quickly, use [`EXPLAIN PLAN`](/sql/explain-plan/)
 to get the execution plan for the query, and validate that it starts with
@@ -122,7 +152,7 @@ the insertion or update time of each row. For example:
 
 ```mzsql
 WHERE mz_now() <= event_ts + INTERVAL '1hr'
-```
+```text
 
 Materialize is able to “push down” temporal filters all the way down to its
 storage layer, skipping over old data that isn't relevant to the query. For
@@ -202,11 +232,11 @@ Each of these reasons requires a different approach for troubleshooting. Follow
 the guidance below to first detect the source of the hang, and then address it
 accordingly.
 
-{{< note >}}
+> **Note:** 
 Your query may be running, just slowly. If none of the reasons below detects
 your issue, jump to [Why is my query slow?](#why-is-my-query-slow) for further
 guidance.
-{{< /note >}}
+
 
 ### Stalled source
 
@@ -238,21 +268,21 @@ If your cluster replica reaches its capacity (i.e., it OOMs at 100% Memory Utili
 
 If your cluster replica is CPU-maxed out (~100% CPU usage), your query may be blocked while the cluster processes the other activity. It may eventually complete, but it will continue to be slow and potentially blocked until the CPU usage goes down. As an example, if you issue a lot of resource-intensive queries at once, that might spike the CPU.
 
-We recommend setting [Alerting thresholds](https://materialize.com/docs/manage/monitor/alerting/#thresholds) to notify your team when a cluster is reaching its capacity. Please note that these are recommendations, and some configurations may reach unstable memory utilization levels sooner than the thresholds.
+We recommend setting [Alerting thresholds](../manage/monitor/alerting/#thresholds) to notify your team when a cluster is reaching its capacity. Please note that these are recommendations, and some configurations may reach unstable memory utilization levels sooner than the thresholds.
 
-To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [https://console.materialize.com/](/console/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
+To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](../console/clusters/), go to [https://console.materialize.com/](/console/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
 
 #### Address
 
-Your query may have been the root cause of the increased Memory Utilization and CPU usage, or it may have been something else happening on the cluster at the same time. To troubleshoot and fix Memory Utilization and CPU usage, follow the steps in the [dataflow troubleshooting](https://materialize.com/docs/transform-data/dataflow-troubleshooting) guide.
+Your query may have been the root cause of the increased Memory Utilization and CPU usage, or it may have been something else happening on the cluster at the same time. To troubleshoot and fix Memory Utilization and CPU usage, follow the steps in the [dataflow troubleshooting](../transform-data/dataflow-troubleshooting) guide.
 
-For guidance on how to reduce Memory Utilization and CPU usage for this or another query, take a look at the [indexing and query optimization](https://materialize.com/docs/transform-data/troubleshooting/#indexing-and-query-optimization) and result filtering sections above.
+For guidance on how to reduce Memory Utilization and CPU usage for this or another query, take a look at the [indexing and query optimization](../transform-data/troubleshooting/#indexing-and-query-optimization) and result filtering sections above.
 
 If your query was the root cause, you’ll need to kill it for the cluster replica’s Memory Utilization or CPU to go down. If your query was causing an OOM, the cluster replica will continue to be in an “OOM loop” - every time the replica restarts, the query restarts executing automatically then causes an OOM again - until you kill the query.
 
 If your query was not the root cause, you can wait for the other activity on the cluster to stop and Memory Utilization/CPU to go down, or switch to a different cluster.
 
-If you’ve gone through the dataflow troubleshooting and do not want to make any changes to your query, consider [sizing up your cluster](https://materialize.com/docs/sql/create-cluster/#size). A larger size cluster will provision more resources.
+If you’ve gone through the dataflow troubleshooting and do not want to make any changes to your query, consider [sizing up your cluster](../sql/create-cluster/#size). A larger size cluster will provision more resources.
 
 
 ## Which part of my query runs slowly or uses a lot of memory?

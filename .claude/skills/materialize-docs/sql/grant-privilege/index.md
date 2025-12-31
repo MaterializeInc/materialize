@@ -1,7 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/grant-privilege/
+complexity: advanced
+description: Grant privileges on a database object.
+doc_type: reference
+keywords:
+- SHOW PRIVILEGES
+- CREATE ON
+- 'Note:'
+- GRANT PRIVILEGE
+- ALTER ROLE
+- SELECT ON
+- CREATE ROLE
+product_area: Indexes
+status: stable
+title: GRANT PRIVILEGE
+---
+
 # GRANT PRIVILEGE
 
+## Purpose
 Grant privileges on a database object.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Grant privileges on a database object.
 
 
 `GRANT PRIVILEGE` grants privileges to [database
@@ -9,19 +33,17 @@ role(s)](/sql/create-role/).
 
 ## Syntax
 
-{{< note >}}
+> **Note:** 
 
 The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 [*applicable* privileges](/sql/grant-privilege/#available-privileges) for the
 object type.
 
-{{</note>}}
-
-{{< tabs >}}
 
 <!-- ============ CLUSTER syntax ==============  -->
 
-{{< tab "Cluster" >}}
+#### Cluster
+
 
 For specific cluster(s):
 
@@ -29,7 +51,7 @@ For specific cluster(s):
 GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
 ON CLUSTER <name> [, ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all clusters:
 
@@ -37,12 +59,13 @@ For all clusters:
 GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
 ON ALL CLUSTERS
 TO <role_name> [, ... ];
-```
-{{</ tab >}}
+```json
+
 
 <!-- ================== Connection syntax ======================  -->
 
-{{< tab "Connection">}}
+#### Connection
+
 
 For specific connection(s):
 
@@ -50,7 +73,7 @@ For specific connection(s):
 GRANT <USAGE | ALL [PRIVILEGES]>
 ON CONNECTION <name> [, ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all connections or all connections in specific schema(s) or in database(s):
 
@@ -59,13 +82,13 @@ GRANT <USAGE | ALL [PRIVILEGES]>
 ON ALL CONNECTIONS
  [ IN <SCHEMA | DATABASE> <name> [, <name> ...] ]
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- ================== Database syntax =====================  -->
 
-{{< tab "Database">}}
+#### Database
+
 
 For specific database(s):
 
@@ -73,7 +96,7 @@ For specific database(s):
 GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
 ON DATABASE <name> [, ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all database:
 
@@ -81,17 +104,19 @@ For all database:
 GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
 ON ALL DATABASES
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- =============== Materialized view syntax ===================  -->
 
-{{< tab "Materialized view/view/source">}}
+#### Materialized view/view/source
 
-{{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
-{{</ note >}}
+
+> **Note:** 
+To read from a views or a materialized views, you must have `SELECT` privileges
+on the view/materialized views. That is, having `SELECT` privileges on the
+underlying objects defining the view/materialized view is insufficient.
+
 
 For specific materialized view(s)/view(s)/source(s):
 
@@ -99,13 +124,13 @@ For specific materialized view(s)/view(s)/source(s):
 GRANT <SELECT | ALL [PRIVILEGES]>
 ON [TABLE] <name> [, <name> ...] -- For PostgreSQL compatibility, if specifying type, use TABLE
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- ==================== Schema syntax =====================  -->
 
-{{< tab "Schema">}}
+#### Schema
+
 
 For specific schema(s):
 
@@ -113,7 +138,7 @@ For specific schema(s):
 GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
 ON SCHEMA <name> [, ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all schemas or all schemas in a specific database(s):
 
@@ -121,13 +146,13 @@ For all schemas or all schemas in a specific database(s):
 GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
 ON ALL SCHEMAS [IN DATABASE <name> [, <name> ...]]
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- ==================== Secret syntax =====================  -->
 
-{{< tab "Secret">}}
+#### Secret
+
 
 For specific secret(s):
 
@@ -135,7 +160,7 @@ For specific secret(s):
 GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON SECRET <name> [, ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all secrets or all secrets in a specific database(s):
 
@@ -143,25 +168,25 @@ For all secrets or all secrets in a specific database(s):
 GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON ALL SECRET [IN DATABASE <name> [, <name> ...]]
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- ==================== System syntax =====================  -->
 
-{{< tab "System">}}
+#### System
+
 
 ```mzsql
 GRANT <CREATEROLE | CREATEDB | CREATECLUSTER | CREATENETWORKPOLICY | ALL [PRIVILEGES]> [, ... ]
 ON SYSTEM
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- ==================== Type syntax =======================  -->
 
-{{< tab "Type">}}
+#### Type
+
 
 For specific view(s):
 
@@ -169,7 +194,7 @@ For specific view(s):
 GRANT <USAGE | ALL [PRIVILEGES]>
 ON TYPE <name> [, <name> ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all types or all types in a specific schema(s) or in a specific database(s):
 
@@ -178,13 +203,13 @@ GRANT <USAGE | ALL [PRIVILEGES]>
 ON ALL TYPES
   [ IN <SCHEMA|DATABASE> <name> [, <name> ...] ]
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
 
 <!-- ======================= Table syntax =====================  -->
 
-{{< tab "Table">}}
+#### Table
+
 
 For specific table(s):
 
@@ -192,60 +217,65 @@ For specific table(s):
 GRANT <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
 ON [TABLE] <name> [, <name> ...]
 TO <role_name> [, ... ];
-```
+```text
 
 For all tables or all tables in a specific schema(s) or in a specific database(s):
 
-{{< note >}}
+> **Note:** 
 
-{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
+Granting privileges via `ALL TABLES [...]` also applies to sources, views, and
+materialized views (for the applicable privileges).
 
-{{</ note >}}
 
 ```mzsql
 GRANT <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
 ON ALL TABLES
   [ IN <SCHEMA|DATABASE> <name> [, <name> ...] ]
 TO <role_name> [, ... ];
-```
+```json
 
-{{</ tab >}}
-
-{{</ tabs >}}
 
 ## Details
 
+This section covers details.
+
 ### Available privileges
 
-{{< tabs >}}
-{{< tab "By Privilege" >}}
-{{< yaml-table data="rbac/privileges_objects" >}}
-{{</ tab >}}
-{{< tab "By Object" >}}
-{{< yaml-table data="rbac/object_privileges" >}}
-{{</ tab >}}
-{{</ tabs >}}
+
+#### By Privilege
+
+<!-- Dynamic table: rbac/privileges_objects - see original docs -->
+
+#### By Object
+
+<!-- Dynamic table: rbac/object_privileges - see original docs -->
+
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/grant-privilege.md"
->}}
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
+
 
 ## Examples
 
+This section covers examples.
+
 ```mzsql
 GRANT SELECT ON mv_quarterly_sales TO data_analysts, reporting;
-```
+```text
 
 ```mzsql
 GRANT USAGE, CREATE ON DATABASE materialize TO data_analysts;
-```
+```text
 
 ```mzsql
 GRANT ALL ON CLUSTER dev_cluster TO data_analysts, developers;
-```
+```text
 
 ```mzsql
 GRANT CREATEDB ON SYSTEM TO source_owners;
@@ -278,4 +308,3 @@ GRANT CREATEDB ON SYSTEM TO source_owners;
 - [`ALTER OWNER`](/sql/#rbac)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
 - [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)
-

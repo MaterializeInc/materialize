@@ -1,4 +1,32 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/integrations/http-api/
+complexity: beginner
+description: How to use Materialize via HTTP
+doc_type: reference
+keywords:
+- 'Password:'
+- CREATE AND
+- Connect to Materialize via HTTP
+- SELECT 2
+- Extended
+- Simple
+- SELECT A
+- CREATE TABLE
+- SELECT 1
+- 'User ID:'
+product_area: General
+status: stable
+title: Connect to Materialize via HTTP
+---
+
 # Connect to Materialize via HTTP
+
+## Purpose
+How to use Materialize via HTTP
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use Materialize via HTTP
 
@@ -8,9 +36,11 @@ You can access Materialize through its "session-less" HTTP API endpoint:
 
 ```bash
 https://<MZ host address>/api/sql
-```
+```bash
 
 ## Details
+
+This section covers details.
 
 ### General semantics
 
@@ -55,11 +85,13 @@ interface: [environmentd-openapi.yml](/materialize-openapi.yml).
 
 ## Usage
 
+This section covers usage.
+
 ### Endpoint
 
 ```
 https://<MZ host address>/api/sql
-```
+```text
 
 Accessing the endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme). Reuse the same credentials as with a SQL client (e.g. `psql`):
 
@@ -72,7 +104,7 @@ You can optionally specify configuration parameters for each request, as a URL-e
 
 ```
 https://<MZ host address>/api/sql?options=<object>
-```
+```text
 
 For example, this is how you could specify the `application_name` configuration parameter with JavaScript:
 
@@ -84,7 +116,7 @@ const encoded = encodeURIComponent(JSON.stringify(options));
 // Add the object to our URL as the "options" query parameter.
 const url = new URL(`https://${mzHostAddress}/api/sql`);
 url.searchParams.append("options", encoded);
-```
+```bash
 
 ### Input format
 
@@ -98,7 +130,7 @@ semicolons.
 {
     "query": "select * from a; select * from b;"
 }
-```
+```bash
 
 #### Extended
 
@@ -118,7 +150,7 @@ Key | Value
         { "query": "select a + $1 from a;", "params": [null] }
     ]
 }
-```
+```bash
 
 ### Output format
 
@@ -141,7 +173,7 @@ the following structure:
 
 ```
 {"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>}
-```
+```text
 
 Note that the returned values include the results of statements which were
 ultimately rolled back because of an error in a later part of the transaction.
@@ -209,9 +241,11 @@ type SqlResult =
 	error: Error;
 	notices: Notice[];
 };
-```
+```bash
 
 ## Examples
+This section covers examples.
+
 ### Run a transaction
 
 Use the [extended input format](#extended) to run a transaction:
@@ -231,7 +265,7 @@ curl 'https://<MZ host address>/api/sql' \
             { "query": "COMMIT;" }
         ]
     }'
-```
+```text
 
 Response:
 ```json
@@ -247,7 +281,7 @@ Response:
     {"ok": "COMMIT", "notices": []}
   ]
 }
-```
+```bash
 
 ### Run a query
 
@@ -259,7 +293,7 @@ curl 'https://<MZ host address>/api/sql' \
     --data '{
         "query": "SELECT t.a + s.a AS cross_add FROM t CROSS JOIN s; SELECT a FROM t WHERE a IS NOT NULL;"
     }'
-```
+```text
 
 Response:
 ```json

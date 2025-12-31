@@ -1,22 +1,46 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-source/postgres/
+complexity: advanced
+description: Connecting Materialize to a PostgreSQL database for Change Data Capture
+  (CDC).
+doc_type: reference
+keywords:
+- 'Warning:'
+- CREATE CONNECTION
+- IN CLUSTER
+- CREATE SUBSOURCES
+- CREATE A
+- IF NOT EXISTS
+- 'Note:'
+- CREATE SOURCE
+- 'CREATE SOURCE: PostgreSQL (Legacy Syntax)'
+- reusable
+product_area: Sources
+status: experimental
+title: 'CREATE SOURCE: PostgreSQL (Legacy Syntax)'
+---
+
 # CREATE SOURCE: PostgreSQL (Legacy Syntax)
+
+## Purpose
+Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC).
 
 
-
-{{< source-versioning-disambiguation is_new=false
-other_ref="[new reference page](/sql/create-source/postgres-v2)"
-include_blurb=true >}}
-
-{{% create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: create-source/intro --> --> -->
 Materialize supports PostgreSQL (11+) as a data source. To connect to a
 PostgreSQL instance, you first need to [create a connection](#creating-a-connection)
 that specifies access and authentication parameters.
 Once created, a connection is **reusable** across multiple `CREATE SOURCE`
 statements.
-{{% /create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
-{{< warning >}}
+> **Warning:** 
 Before creating a PostgreSQL source, you must set up logical replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
@@ -25,17 +49,19 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Azure DB](/ingest-data/postgres-azure-db/),
 [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
-{{< /warning >}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
+> **Note:** 
+Connections using AWS PrivateLink is for Materialize Cloud only.
+
 
 ## Syntax
 
-{{< diagram "create-source-postgres.svg" >}}
+[See diagram: create-source-postgres.svg]
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+[See diagram: with-options-retain-history.svg]
 
 Field | Use
 ------|-----
@@ -58,6 +84,8 @@ Field                                | Value     | Description
 `EXCLUDE COLUMNS`                    | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
 
 ## Features
+
+This section covers features.
 
 ### Change data capture
 
@@ -85,7 +113,7 @@ stream data for some specific set of tables in your publication.
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR ALL TABLES;
-```
+```text
 
 When you define a source, Materialize will automatically:
 
@@ -98,18 +126,18 @@ When you define a source, Materialize will automatically:
 
     ```mzsql
     SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
-    ```
+    ```text
 
-    ```
+    ```text
        id   |             replication_slot
     --------+----------------------------------------------
      u8     | materialize_7f8a72d0bf2a4b6e9ebc4e61ba769b71
-    ```
+    ```text
 1. Create a **subsource** for each original table in the publication.
 
     ```mzsql
     SHOW SOURCES;
-    ```
+    ```text
 
     ```nofmt
              name         |   type
@@ -118,7 +146,7 @@ When you define a source, Materialize will automatically:
      mz_source_progress   | progress
      table_1              | subsource
      table_2              | subsource
-    ```
+    ```text
 
     And perform an initial, snapshot-based sync of the tables in the publication
     before it starts ingesting change events.
@@ -134,12 +162,10 @@ specified publication using **a single** replication slot. This allows you to
 minimize the performance impact on the upstream database, as well as reuse the
 same source across multiple materializations.
 
-{{< tip >}}
+> **Tip:** 
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-replication-slots-tip-list" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{</ tip >}}
 
 ##### PostgreSQL schemas
 
@@ -153,7 +179,7 @@ an alternative destination schema in Materialize.
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2_table_1 AS s2_table_1);
-```
+```bash
 
 ### Monitoring source progress
 
@@ -173,7 +199,7 @@ And can be queried using:
 ```mzsql
 SELECT lsn
 FROM <src_name>_progress;
-```
+```text
 
 The reported LSN should increase as Materialize consumes **new** WAL records
 from the upstream PostgreSQL database. For more details on monitoring source
@@ -181,52 +207,45 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
+This section covers known limitations.
+
 ### Schema changes
 
 Materialize supports schema changes in the upstream database as follows:
 
 #### Compatible schema changes (Legacy syntax)
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-compatible-schema-changes-legacy" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 #### Incompatible schema changes
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-incompatible-schema-changes-legacy" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Publication membership
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-publication-membership" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-publication-membership-mitigation-legacy" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Supported types
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-supported-types" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-unsupported-types" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Truncation
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ### Inherited tables
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-inherited-tables" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-inherited-tables-action-legacy" %}}
+<!-- Unresolved shortcode: {{% include-from-yaml data="postgres_source_detail... -->
 
 ## Examples
 
-{{< important >}}
+> **Important:** 
 Before creating a PostgreSQL source, you must set up logical replication in the
 upstream database. For step-by-step instructions, see the integration guide for
 your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
@@ -235,7 +254,7 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Azure DB](/ingest-data/postgres-azure-db/),
 [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
-{{< /important >}}
+
 
 ### Creating a connection
 
@@ -257,23 +276,26 @@ CREATE CONNECTION pg_connection TO POSTGRES (
     SSL MODE 'require',
     DATABASE 'postgres'
 );
-```
+```text
 
 If your PostgreSQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
 through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 
-{{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+#### AWS PrivateLink
+
+
+> **Note:** 
+Connections using AWS PrivateLink is for Materialize Cloud only.
+
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
     SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ('use1-az1', 'use1-az4')
 );
-```
+```text
 
 ```mzsql
 CREATE SECRET pgpass AS '<POSTGRES_PASSWORD>';
@@ -286,21 +308,22 @@ CREATE CONNECTION pg_connection TO POSTGRES (
     AWS PRIVATELINK privatelink_svc,
     DATABASE 'postgres'
 );
-```
+```text
 
 For step-by-step instructions on creating AWS PrivateLink connections and
 configuring an AWS PrivateLink service to accept connections from Materialize,
 check [this guide](/ops/network-security/privatelink/).
 
-{{< /tab >}}
-{{< tab "SSH tunnel">}}
+
+#### SSH tunnel
+
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
     PORT 22,
     USER 'materialize',
 );
-```
+```text
 
 ```mzsql
 CREATE CONNECTION pg_connection TO POSTGRES (
@@ -309,14 +332,12 @@ CREATE CONNECTION pg_connection TO POSTGRES (
     SSH TUNNEL ssh_connection,
     DATABASE 'postgres'
 );
-```
+```text
 
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check
 [this guide](/ops/network-security/ssh-tunnel/).
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Creating a source {#create-source-example}
 
@@ -326,7 +347,7 @@ _Create subsources for all tables included in the PostgreSQL publication_
 CREATE SOURCE mz_source
     FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
     FOR ALL TABLES;
-```
+```text
 
 _Create subsources for all tables from specific schemas included in the
  PostgreSQL publication_
@@ -335,7 +356,7 @@ _Create subsources for all tables from specific schemas included in the
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR SCHEMAS (public, project);
-```
+```text
 
 _Create subsources for specific tables included in the PostgreSQL publication_
 
@@ -343,7 +364,7 @@ _Create subsources for specific tables included in the PostgreSQL publication_
 CREATE SOURCE mz_source
   FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
   FOR TABLES (table_1, table_2 AS alias_table_2);
-```
+```bash
 
 #### Handling unsupported types
 
@@ -358,11 +379,16 @@ CREATE SOURCE mz_source
     PUBLICATION 'mz_source',
     TEXT COLUMNS (upstream_table_name.column_of_unsupported_type)
   ) FOR ALL TABLES;
-```
+```bash
 
 ### Handling errors and schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+> **Note:** 
+
+Work to more smoothly support ddl changes to upstream tables is currently in
+progress. The work introduces the ability to re-ingest the same upstream table
+under a new schema and switch over without downtime.
+
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
@@ -406,4 +432,3 @@ addition to dropping any state that Materialize previously had for the table.
 
 [`enum`]: https://www.postgresql.org/docs/current/datatype-enum.html
 [`money`]: https://www.postgresql.org/docs/current/datatype-money.html
-

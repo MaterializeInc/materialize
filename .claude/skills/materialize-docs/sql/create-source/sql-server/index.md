@@ -1,25 +1,53 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/create-source/sql-server/
+complexity: intermediate
+description: Connecting Materialize to a SQL Server database for Change Data Capture
+  (CDC).
+doc_type: reference
+keywords:
+- CREATE CONNECTION
+- 'CREATE SOURCE: SQL Server'
+- IN CLUSTER
+- CONNECTION
+- FOR ALL TABLES
+- CREATE SUBSOURCES
+- CREATE A
+- IF NOT EXISTS
+- FOR TABLES (
+- CREATE SOURCE
+product_area: Sources
+status: experimental
+title: 'CREATE SOURCE: SQL Server'
+---
+
 # CREATE SOURCE: SQL Server
+
+## Purpose
+Connecting Materialize to a SQL Server database for Change Data Capture (CDC).
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Connecting Materialize to a SQL Server database for Change Data Capture (CDC).
 
 
-
-{{% create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See original docs: create-source/intro --> --> -->
 Materialize supports SQL Server (2016+) as a real-time data source. To connect to a
 SQL Server database, you first need to tweak its configuration to enable [Change Data
 Capture](https://learn.microsoft.com/en-us/sql/relational-databases/track-changes/enable-and-disable-change-data-capture-sql-server)
 and [`SNAPSHOT` transaction isolation](https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/sql/snapshot-isolation-in-sql-server)
 for the database that you would like to replicate. Then [create a connection](#creating-a-connection)
 in Materialize that specifies access and authentication parameters.
-{{% /create-source/intro %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode:  --> -->
 
 ## Syntax
 
-{{< diagram "create-source-sql-server.svg" >}}
+[See diagram: create-source-sql-server.svg]
 
 ### `with_options`
 
-{{< diagram "with-options-retain-history.svg" >}}
+[See diagram: with-options-retain-history.svg]
 
 Field | Use
 ------|-----
@@ -40,7 +68,7 @@ upstream SQL Server database that have [Change Data Capture enabled](https://lea
 CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sql_server_connection
   FOR ALL TABLES;
-```
+```text
 
 When you define a source, Materialize will automatically:
 
@@ -50,7 +78,7 @@ When you define a source, Materialize will automatically:
 
     ```mzsql
     SHOW SOURCES;
-    ```
+    ```text
 
     ```nofmt
              name         |   type     |  cluster  |
@@ -59,7 +87,7 @@ When you define a source, Materialize will automatically:
      mz_source_progress   | progress   |
      table_1              | subsource  |
      table_2              | subsource  |
-    ```
+    ```text
 
 1. Incrementally update any materialized or indexed views that depend on the
    source as change events stream in, as a result of `INSERT`, `UPDATE` and
@@ -77,7 +105,7 @@ an alternative destination schema in Materialize.
 CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sql_server_connection
   FOR TABLES (schema1.table_1 AS s1_table_1, schema2.table_1 AS s2_table_1);
-```
+```bash
 
 ### Monitoring source progress
 
@@ -102,7 +130,7 @@ And can be queried using:
 ```mzsql
 SELECT lsn
 FROM <src_name>_progress;
-```
+```text
 
 The reported `lsn` should increase as Materialize consumes **new** CDC events
 from the upstream SQL Server database. For more details on monitoring source
@@ -110,14 +138,14 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
+<!-- Unresolved shortcode: {{% include-md file="shared-content/sql-server-con... -->
 
 ## Examples
 
-{{< important >}}
+> **Important:** 
 Before creating a SQL Server source, you must enable Change Data Capture and
 `SNAPSHOT` transaction isolation in the upstream database.
-{{</ important >}}
+
 
 ### Creating a connection
 
@@ -138,14 +166,15 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
     PASSWORD SECRET sqlserver_pass,
     DATABASE '<DATABASE_NAME>'
 );
-```
+```text
 
 If your SQL Server instance is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
 through and SSH bastion host.
 
-{{< tabs tabID="1" >}}
-{{< tab "SSH tunnel">}}
+
+#### SSH tunnel
+
 ```mzsql
 CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     HOST 'bastion-host',
@@ -153,7 +182,7 @@ CREATE CONNECTION ssh_connection TO SSH TUNNEL (
     USER 'materialize',
     DATABASE '<DATABASE_NAME>'
 );
-```
+```text
 
 ```mzsql
 CREATE CONNECTION sqlserver_connection TO SQL SERVER (
@@ -161,14 +190,12 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
     SSH TUNNEL ssh_connection,
     DATABASE '<DATABASE_NAME>'
 );
-```
+```text
 
 For step-by-step instructions on creating SSH tunnel connections and configuring
 an SSH bastion server to accept connections from Materialize, check
 [this guide](/ops/network-security/ssh-tunnel/).
 
-{{< /tab >}}
-{{< /tabs >}}
 
 ### Creating a source {#create-source-example}
 
@@ -183,7 +210,7 @@ _Create subsources for all tables in SQL Server_
 CREATE SOURCE mz_source
     FROM SQL SERVER CONNECTION sqlserver_connection
     FOR ALL TABLES;
-```
+```text
 
 _Create subsources for specific tables in SQL Server_
 
@@ -191,7 +218,7 @@ _Create subsources for specific tables in SQL Server_
 CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sqlserver_connection
   FOR TABLES (mydb.table_1, mydb.table_2 AS alias_table_2);
-```
+```bash
 
 #### Handling unsupported types
 
@@ -206,11 +233,16 @@ CREATE SOURCE mz_source
     EXCLUDE COLUMNS (mydb.table_1.column_of_unsupported_type)
   )
   FOR ALL TABLES;
-```
+```bash
 
 ### Handling errors and schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+> **Note:** 
+
+Work to more smoothly support ddl changes to upstream tables is currently in
+progress. The work introduces the ability to re-ingest the same upstream table
+under a new schema and switch over without downtime.
+
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
@@ -233,4 +265,3 @@ ALTER SOURCE mz_source ADD SUBSOURCE table_1;
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
 - [`CREATE SOURCE`](../)
-

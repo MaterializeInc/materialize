@@ -1,7 +1,27 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/alter-role/
+complexity: beginner
+description: '`ALTER ROLE` alters the attributes of an existing role.'
+doc_type: reference
+keywords:
+- 'Note:'
+- ALTER ROLE
+- 'Warning:'
+product_area: Indexes
+status: stable
+title: ALTER ROLE
+---
+
 # ALTER ROLE
 
+## Purpose
 `ALTER ROLE` alters the attributes of an existing role.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`ALTER ROLE` alters the attributes of an existing role.
 
 
 `ALTER ROLE` alters the attributes of an existing role.[^1]
@@ -11,34 +31,29 @@
 ## Syntax
 
 
-{{< tabs >}}
+This section covers syntax.
 
-{{< tab "Cloud" >}}
+#### Cloud
 
 ### Cloud
 
-{{% include-example file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-cloud/alte... -->
 
-{{% include-example file="examples/rbac-cloud/alter_roles"
-example="alter-role-options" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-cloud/alte... -->
 
 **Note:**
-{{% include-example file="examples/rbac-cloud/alter_roles"
-example="alter-role-details" %}}
-{{< /tab >}}
-{{< tab "Self-Managed" >}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-cloud/alte... -->
+
+#### Self-Managed
+
 ### Self-Managed
 
-{{% include-example file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_r... -->
 
-{{% include-example file="examples/rbac-sm/alter_roles"
-example="alter-role-options" %}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_r... -->
 
 **Note:**
-{{% include-example file="examples/rbac-sm/alter_roles"
-example="alter-role-details" %}}
-{{< /tab >}}
-{{< /tabs >}}
+<!-- Unresolved shortcode: {{% include-example file="examples/rbac-sm/alter_r... -->
 
 ## Restrictions
 
@@ -47,17 +62,19 @@ Materialize will reject the statement `ALTER ROLE ... INHERIT INHERIT`.
 
 ## Examples
 
+This section covers examples.
+
 #### Altering the attributes of a role
 
 ```mzsql
 ALTER ROLE rj INHERIT;
-```
+```text
 ```mzsql
 SELECT name, inherit FROM mz_roles WHERE name = 'rj';
-```
+```text
 ```nofmt
 rj  true
-```
+```bash
 
 #### Setting configuration parameters for a role
 
@@ -78,7 +95,7 @@ rj_compute
 -- In a new SQL session with a role that is not 'rj'.
 SHOW cluster;
 quickstart
-```
+```bash
 
 
 #### Making a role a superuser  (Self-Managed)
@@ -87,17 +104,17 @@ Unlike regular roles, superusers have unrestricted access to all objects in the 
 
 ```mzsql
 ALTER ROLE rj SUPERUSER;
-```
+```text
 
 To verify that the role has superuser privileges, you can query the `pg_authid` system catalog:
 
 ```mzsql
 SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
-```
+```text
 
 ```nofmt
 rj  t
-```
+```bash
 
 #### Removing the superuser attribute from a role (Self-Managed)
 
@@ -105,25 +122,25 @@ NOSUPERUSER will remove the superuser attribute from a role, preventing it from 
 
 ```mzsql
 ALTER ROLE rj NOSUPERUSER;
-```
+```text
 
 ```mzsql
 SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
-```
+```text
 
 ```nofmt
 rj  f
-```
+```bash
 
 #### Removing a role's password (Self-Managed)
 
-{{< warning >}}
+> **Warning:** 
 Setting a NULL password removes the password.
-{{< /warning >}}
+
 
 ```mzsql
 ALTER ROLE rj PASSWORD NULL;
-```
+```bash
 
 #### Changing a role's password (Self-Managed)
 
@@ -134,7 +151,8 @@ ALTER ROLE rj PASSWORD 'new_password';
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-role.md" >}}
+- `CREATEROLE` privileges on the system.
+
 
 ## Related pages
 
@@ -146,4 +164,3 @@ The privileges required to execute this statement are:
 - [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
-

@@ -1,10 +1,31 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/monitor/
+complexity: intermediate
+description: Monitor the performance of your Materialize region with Datadog and Grafana.
+doc_type: reference
+keywords:
+- Monitoring and alerting
+product_area: Operations
+status: stable
+title: Monitoring and alerting
+---
+
 # Monitoring and alerting
+
+## Purpose
+Monitor the performance of your Materialize region with Datadog and Grafana.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Monitor the performance of your Materialize region with Datadog and Grafana.
 
 
 
 ## Cloud
+
+This section covers cloud.
 
 ### Monitoring
 
@@ -23,6 +44,8 @@ prevent operational incidents. For alert rules guidelines, see
 [Alerting](/manage/monitor/cloud/alerting/).
 
 ## Self-Managed
+
+This section covers self-managed.
 
 ### Monitoring
 

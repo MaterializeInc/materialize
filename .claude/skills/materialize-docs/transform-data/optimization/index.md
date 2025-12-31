@@ -1,7 +1,33 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/transform-data/optimization/
+complexity: advanced
+description: Recommendations for query optimization in Materialize.
+doc_type: reference
+keywords:
+- all
+- CREATE AN
+- different
+- exact
+- 'point
+
+  lookups'
+- Optimization
+- CREATE INDEX
+product_area: SQL
+status: stable
+title: Optimization
+---
+
 # Optimization
 
+## Purpose
 Recommendations for query optimization in Materialize.
 
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Recommendations for query optimization in Materialize.
 
 
 ## Indexes
@@ -47,7 +73,7 @@ lookups**](/concepts/indexes/#point-lookups):
 
 ```mzsql
 CREATE INDEX ON obj_name (<keys>);
-```
+```text
 
 - Specify **only** the keys that are constrained in the query's `WHERE` clause.
   If your index contains keys not specified in the query's `WHERE` clause, then
@@ -86,7 +112,7 @@ CREATE INDEX ON obj_name (<keys>);
     SELECT * FROM orders_view WHERE quantity = 5
     UNION
     SELECT * FROM orders_view WHERE item = 'brownie';
-    ```
+    ```text
 
     Depending on your usage pattern, you may want point-lookup indexes on both
     `quantity` and `item` (i.e., create two indexes, one on `quantity` and one
@@ -97,37 +123,35 @@ CREATE INDEX ON obj_name (<keys>);
 
 #### Examples
 
-| WHERE clause of your query patterns    | Index for point lookups                                 |
-|---------------------------------------------------|------------------------------------------|
-| `WHERE x = 42`                                    | `CREATE INDEX ON obj_name (x);`        |
-| `WHERE x IN (1, 2, 3)`                            | `CREATE INDEX ON obj_name (x);`        |
-| `WHERE x = 1 OR x = 2`                            | `CREATE INDEX ON obj_name (x);`        |
-| `WHERE (x, y) IN ((1, 'a'), (7, 'b'), (8, 'c'))`  | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`  |
-| `WHERE x = 1 AND y = 'abc'`                       | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);` |
-| `WHERE (x = 5 AND y = 'a') OR (x = 7 AND y = ''`) | `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`     |
-| `WHERE y * x = 64`                                | `CREATE INDEX ON obj_name (y * x);`    |
-| `WHERE upper(y) = 'HELLO'`                        | `CREATE INDEX ON obj_name (upper(y));` |
+- **`WHERE x = 42`**: `CREATE INDEX ON obj_name (x);`
+- **`WHERE x IN (1, 2, 3)`**: `CREATE INDEX ON obj_name (x);`
+- **`WHERE x = 1 OR x = 2`**: `CREATE INDEX ON obj_name (x);`
+- **`WHERE (x, y) IN ((1, 'a'), (7, 'b'), (8, 'c'))`**: `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`
+- **`WHERE x = 1 AND y = 'abc'`**: `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`
+- **`WHERE (x = 5 AND y = 'a') OR (x = 7 AND y = ''`)**: `CREATE INDEX ON obj_name (x, y);` or <br/> `CREATE INDEX ON obj_name (y, x);`
+- **`WHERE y * x = 64`**: `CREATE INDEX ON obj_name (y * x);`
+- **`WHERE upper(y) = 'HELLO'`**: `CREATE INDEX ON obj_name (upper(y));`
 
 You can verify that Materialize is accessing the input by an index lookup using [`EXPLAIN`](/sql/explain-plan/).
 
 ```mzsql
 CREATE INDEX ON foo (x, y);
 EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 50;
-```
+```text
 
 In the [`EXPLAIN`](/sql/explain-plan/) output, check for `lookup_value` after
 the index name to confirm that Materialize will use a point lookup; i.e., that
 Materialize will only read the matching records from the index instead of
 scanning the entire index:
 
-```
+```text
  Explained Query (fast path):
    Project (#0{x}, #1{y})
      ReadIndex on=materialize.public.foo foo_x_y_idx=[lookup value=(42, 50)]
 
  Used Indexes:
    - materialize.public.foo_x_y_idx (lookup)
-```
+```bash
 
 ### `JOIN`
 
@@ -139,7 +163,7 @@ Let's create a few tables to work through examples.
 CREATE TABLE teachers (id INT, name TEXT);
 CREATE TABLE sections (id INT, teacher_id INT, course_id INT, schedule TEXT);
 CREATE TABLE courses (id INT, name TEXT);
-```
+```bash
 
 #### Multiple Queries Join On the Same Collection
 
@@ -154,7 +178,7 @@ SELECT
     s.course_id
 FROM teachers t
 INNER JOIN sections s ON t.id = s.teacher_id;
-```
+```text
 
 Here is another query that also joins on `teachers.id`. This one counts the number of sections each teacher teaches.
 
@@ -166,13 +190,13 @@ SELECT
 FROM teachers t
 INNER JOIN sections s ON t.id = s.teacher_id
 GROUP BY t.id, t.name;
-```
+```text
 
 We can eliminate redundant memory usage for these two queries by creating an index on the common column being joined, `teachers.id`.
 
 ```mzsql
 CREATE INDEX pk_teachers ON teachers (id);
-```
+```bash
 
 #### Joins with Filters
 
@@ -190,7 +214,7 @@ SELECT
 FROM teachers t
 INNER JOIN sections s ON t.id = s.teacher_id
 WHERE t.name = 'Escalante';
-```
+```text
 
 In this case, the index on `teachers(name)` might work better, as the `WHERE t.name = 'Escalante'` can filter out a very large percentage of the `teachers` table before the table is fed to the join. You can see an example `EXPLAIN` command output for the above query [here](#use-explain-to-verify-index-usage).
 
@@ -209,7 +233,7 @@ CREATE VIEW course_schedule AS
   FROM teachers t
   INNER JOIN sections s ON t.id = s.teacher_id
   INNER JOIN courses c ON c.id = s.course_id;
-```
+```text
 
 In this case, we create indexes on the join keys to optimize the query:
 
@@ -218,13 +242,13 @@ CREATE INDEX pk_teachers ON teachers (id);
 CREATE INDEX sections_fk_teachers ON sections (teacher_id);
 CREATE INDEX pk_courses ON courses (id);
 CREATE INDEX sections_fk_courses ON sections (course_id);
-```
+```text
 
 ```mzsql
 EXPLAIN SELECT * FROM course_schedule;
-```
+```text
 
-```
+```text
 Optimized Plan
 Explained Query:
   Project (#1, #5, #7)
@@ -242,7 +266,7 @@ Used Indexes:
   - materialize.public.sections_fk_teachers (delta join lookup)
   - materialize.public.pk_courses (delta join lookup)
   - materialize.public.sections_fk_courses (delta join lookup)
-```
+```text
 
 For [ad hoc `SELECT` queries](/sql/select/#ad-hoc-queries) with a delta join, place the smallest input (taking into account predicates that filter from it) first in the `FROM` clause. (This is only relevant for joins with more than two inputs, because two-input joins are always Differential joins.)
 
@@ -261,7 +285,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     CREATE INDEX pk_teachers ON teachers (id);
     CREATE INDEX pk_sections ON sections (id);
     CREATE INDEX pk_courses ON courses (id);
-    ```
+    ```text
 
 
 2. For each foreign key in the join, create a "narrow" view with just two columns: foreign key and primary key. Then create two indexes: one for the foreign key and one for the primary key. In our example, the two foreign keys are `sections.teacher_id` and `sections.course_id`, so we do the following:
@@ -272,7 +296,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     -- Create indexes on those columns
     CREATE INDEX sections_narrow_teachers_0 ON sections_narrow_teachers (id);
     CREATE INDEX sections_narrow_teachers_1 ON sections_narrow_teachers (teacher_id);
-    ```
+    ```text
     ```mzsql
     -- Create a "narrow" view containing primary key sections.id
     -- and foreign key sections.course_id
@@ -280,10 +304,10 @@ In many relational databases, indexes don't replicate the entire collection of d
     -- Create indexes on those columns
     CREATE INDEX sections_narrow_courses_0 ON sections_narrow_courses (id);
     CREATE INDEX sections_narrow_courses_1 ON sections_narrow_courses (course_id);
-    ```
-    {{< note >}}
+    ```text
+    > **Note:** 
   In this case, because both foreign keys are in `sections`, we could have gotten away with one narrow collection `sections_narrow_teachers_and_courses` with indexes on `id`, `teacher_id`, and `course_id`. In general, we won't be so lucky to have all the foreign keys in the same collection, so we've shown the more general pattern of creating a narrow view and two indexes for each foreign key.
-    {{</ note >}}
+    
 
 3. Rewrite your query to use your narrow collections in the join conditions. Example:
 
@@ -297,7 +321,7 @@ In many relational databases, indexes don't replicate the entire collection of d
     INNER JOIN teachers t ON s_t.teacher_id = t.id
     INNER JOIN sections_narrow_courses s_c ON s_c.id = s.id
     INNER JOIN courses c ON s_c.course_id = c.id;
-    ```
+    ```bash
 
 ### Default index
 
@@ -331,9 +355,9 @@ EXPLAIN
   INNER JOIN sections s ON t.id = s.teacher_id
   INNER JOIN courses c ON c.id = s.course_id
   WHERE t.name = 'Escalante';
-```
+```text
 
-```
+```text
                                                   Optimized Plan
 ------------------------------------------------------------------------------------------------------------------
  Explained Query:                                                                                                +
@@ -352,7 +376,7 @@ EXPLAIN
    - materialize.public.sections_fk_teachers (delta join lookup)                                                 +
    - materialize.public.pk_courses (delta join lookup)                                                           +
    - materialize.public.sections_fk_courses (delta join lookup)                                                  +
-```
+```text
 
 You can see in the above `EXPLAIN` printout that the system will use `teachers_name` for a point lookup, and use three other indexes for the execution of the delta join. Note that the `pk_teachers` index is not used, as explained [above](#joins-with-filters).
 
@@ -366,7 +390,7 @@ The following are the possible index usage types:
 
 ### Limitations
 
-{{% index_usage/index-ordering %}}
+<!-- Unresolved shortcode: <!-- Unresolved shortcode: <!-- See index usage documentation --> --> -->
 
 ## Query hints
 
@@ -381,7 +405,7 @@ CREATE MATERIALIZED VIEW max_course_id_per_teacher AS
 SELECT teacher_id, MAX(course_id)
 FROM sections
 GROUP BY teacher_id;
-```
+```text
 
 If the largest number of `course_id` values that are allocated to a single `teacher_id` is known, then this number can be provided as the `AGGREGATE INPUT GROUP SIZE`. For the query above, it is possible to get an estimate for this number by:
 
@@ -392,7 +416,7 @@ FROM (
   FROM sections
   GROUP BY teacher_id
 );
-```
+```text
 
 However, the estimate is based only on data that is already present in the system. So taking into account how much this largest number could expand is critical to avoid issues with update latency after tuning the query hint.
 
@@ -404,7 +428,7 @@ SELECT teacher_id, MAX(course_id)
 FROM sections
 GROUP BY teacher_id
 OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
-```
+```text
 
 The other two hints can be provided in [Top K] query patterns specified by `DISTINCT ON` or `LIMIT`. As examples, consider that we wish not to compute the maximum `course_id`, but rather the `id` of the section of this top course. This computation can be incrementally maintained by the following materialized view:
 
@@ -414,7 +438,7 @@ SELECT DISTINCT ON(teacher_id) teacher_id, id AS section_id
 FROM sections
 OPTIONS (DISTINCT ON INPUT GROUP SIZE = 1000)
 ORDER BY teacher_id ASC, course_id DESC;
-```
+```text
 
 In the above examples, we see that the query hints are always positioned in an `OPTIONS` clause after a `GROUP BY` clause, but before an `ORDER BY`, as captured by the [`SELECT` syntax]. However, in the case of Top K using a `LATERAL` subquery and `LIMIT`, it is important to note that the hint is specified in the subquery. For instance, the following materialized view illustrates how to incrementally maintain the top-3 section `id`s ranked by `course_id` for each teacher:
 
@@ -428,7 +452,7 @@ FROM teachers grp,
               OPTIONS (LIMIT INPUT GROUP SIZE = 1000)
               ORDER BY course_id DESC
               LIMIT 3);
-```
+```text
 
 For indexed and materialized views that have already been created without specifying query hints, Materialize includes an introspection view, [`mz_introspection.mz_expected_group_size_advice`], that can be used to query, for a given cluster, all incrementally maintained [dataflows] where tuning of the above query hints could be beneficial. The introspection view also provides an advice value based on an estimate of how many levels could be cut from the hierarchy. The following query illustrates how to access this introspection view:
 
@@ -452,4 +476,3 @@ Check out the blog post [Delta Joins and Late Materialization](https://materiali
 [`mz_introspection.mz_expected_group_size_advice`]: /sql/system-catalog/mz_introspection/#mz_expected_group_size_advice
 [dataflows]: /get-started/arrangements/#dataflows
 [`SELECT` syntax]: /sql/select/#syntax
-

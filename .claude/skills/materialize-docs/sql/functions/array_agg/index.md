@@ -1,4 +1,28 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/functions/array_agg/
+complexity: advanced
+description: Aggregate values (including nulls) as an array.
+doc_type: reference
+keywords:
+- CREATE A
+- SELECT TITLE
+- SELECT ARRAY_AGG
+- CREATE VIEW
+- CREATE MATERIALIZED
+- array_agg function
+product_area: Indexes
+status: stable
+title: array_agg function
+---
+
 # array_agg function
+
+## Purpose
+Aggregate values (including nulls) as an array.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 Aggregate values (including nulls) as an array.
 
@@ -9,7 +33,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "array-agg.svg" >}}
+[See diagram: array-agg.svg]
 
 ## Signatures
 
@@ -26,6 +50,8 @@ ignored. If you need to perform aggregation in a specific order, you must specif
 
 ## Details
 
+This section covers details.
+
 ### Usage in dataflows
 
 While `array_agg` is available in Materialize, materializing `array_agg(values)`
@@ -40,9 +66,11 @@ on top of that. That pattern is illustrated in the following statements:
 ```mzsql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
 CREATE VIEW bar AS SELECT array_agg(foo_view.bar) FROM foo_view;
-```
+```bash
 
 ## Examples
+
+This section covers examples.
 
 ```mzsql
 SELECT

@@ -1,15 +1,40 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/manage/dbt/blue-green-deployments/
+complexity: intermediate
+description: How to use dbt for blue-green deployments.
+doc_type: reference
+keywords:
+- version control
+- 'Warning:'
+- 'Tip:'
+- can't tolerate downtime
+- Blue-green deployment
+- 'automated
+
+  workflow'
+product_area: Operations
+status: stable
+title: Blue-green deployment
+---
+
 # Blue-green deployment
+
+## Purpose
+How to use dbt for blue-green deployments.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
 
 How to use dbt for blue-green deployments.
 
 
-
-{{< tip >}}
+> **Tip:** 
 Once your dbt project is ready to move out of development, or as soon as you
 start managing multiple users and deployment environments, we recommend
 checking the code in to **version control** and setting up an **automated
 workflow** to control the deployment of changes.
-{{</ tip >}}
+
 
 The `dbt-materialize` adapter ships with helper macros to automate blue/green
 deployments. We recommend using the blue/green pattern any time you need to
@@ -31,13 +56,13 @@ These permissions are required because the blue/green deployment process needs t
 
 ## Configuration and initialization
 
-{{< warning >}}
+> **Warning:** 
 If your dbt project includes [sinks](/manage/dbt/get-started/#sinks), you
 **must** ensure that these are created in a **dedicated schema and cluster**.
 Unlike other objects, sinks must not be recreated in the process of a blue/green
 deployment, and must instead cut over to the new definition of their upstream
 dependencies after the environment swap.
-{{</ warning >}}
+
 
 In a blue/green deployment, you first deploy your code changes to a deployment
 environment ("green") that is a clone of your production environment
@@ -59,7 +84,7 @@ These environments are later swapped transparently.
           schemas:
             # to specify multiple schemas, use [<schema1_name>, <schema2_name>].
             - <schema_name>
-    ```
+    ```text
 
 1. Use the [`run-operation`](https://docs.getdbt.com/reference/commands/run-operation)
    command to invoke the [`deploy_init`](https://github.com/MaterializeInc/materialize/blob/main/misc/dbt-materialize/dbt/include/materialize/macros/deploy/deploy_init.sql)
@@ -67,7 +92,7 @@ These environments are later swapped transparently.
 
     ```bash
     dbt run-operation deploy_init
-    ```
+    ```text
 
     This macro spins up a new cluster named `<cluster_name>_dbt_deploy` and a new
     schema named `<schema_name>_dbt_deploy` using the same configuration
@@ -78,7 +103,7 @@ These environments are later swapped transparently.
 
     ```bash
     dbt run --vars 'deploy: True'
-    ```
+    ```text
 
     The `deploy: True` variable instructs the adapter to append `_dbt_deploy` to
     the original schema or cluster specified for each model scoped for
@@ -87,18 +112,18 @@ These environments are later swapped transparently.
 
     You must [exclude sources and sinks](/manage/dbt/development-workflows/#exclude-sources-and-sinks) when running the dbt project.
 
-    {{< callout >}}
+    
   If you encounter an error like `String 'deploy:' is not valid YAML`, you
   might need to use an alternative syntax depending on your terminal environment.
   Different terminals handle quotes differently, so try:
 
   ```bash
   dbt run --vars "{\"deploy\": true}"
-  ```
+  ```text
 
   This alternative syntax is compatible with Windows terminals, PowerShell, or
   PyCharm Terminal.
-    {{</ callout >}}
+    
 
 ## Validation
 
@@ -118,7 +143,7 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 
     ```bash
     dbt run-operation deploy_await #--args '{poll_interval: 30, lag_threshold: "5s"}'
-    ```
+    ```text
 
     By default, `deploy_await` polls for cluster readiness every **15 seconds**,
     and waits for all objects in the deployment environment to have a lag
@@ -135,11 +160,11 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 
 ## Cutover and cleanup
 
-{{< warning >}}
+> **Warning:** 
 To avoid breakages in your production environment, we recommend **carefully
 [validating](#validation)** the results of the deployed changes in the deployment
 environment before cutting over.
-{{</ warning >}}
+
 
 1. Once `deploy_await` returns successfully and you have [validated the results](#validation)
    of the deployed changes on the deployment environment, it is safe to push the
@@ -153,12 +178,12 @@ environment before cutting over.
     ```bash
     # Do a dry run to validate the sequence of commands to execute
     dbt run-operation deploy_promote --args '{dry_run: true}'
-    ```
+    ```text
 
     ```bash
     # Promote the deployment environment to production
     dbt run-operation deploy_promote #--args '{wait: true, poll_interval: 30, lag_threshold: "5s"}'
-    ```
+    ```text
 
     By default, `deploy_promote` **does not** wait for all objects to be
     hydrated — we recommend carefully [validating](#validation) the results of
@@ -173,9 +198,9 @@ environment before cutting over.
     `poll_interval`                      | `15s`     | When `wait` is set to `true`, the time (in seconds) between each cluster readiness check.
     `lag_threshold`                      | `1s`      | When `wait` is set to `true`, the maximum lag threshold, which determines when all objects in the environment are considered hydrated and it's safe to perform the cutover step.
 
-    {{< note >}}The `deploy_promote` operation might fail if objects are
+    > **Note:** The `deploy_promote` operation might fail if objects are
     concurrently modified by a different session. If this occurs, re-run the
-    operation.{{</ note >}}
+    operation.
 
     This macro ensures all deployment targets, including schemas and clusters,
     are deployed together as a **single atomic operation**, and that any sinks
@@ -191,9 +216,7 @@ environment before cutting over.
     dbt run-operation deploy_cleanup
     ```
 
-   {{< note >}}
+   > **Note:** 
    Any **active `SUBSCRIBE` commands** attached to the swapped
    cluster(s) **will break**. On retry, the client will automatically connect
    to the newly deployed cluster
-   {{</ note >}}
-
