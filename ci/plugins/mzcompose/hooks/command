@@ -224,10 +224,10 @@ cleanup() {
     mzcompose down --volumes || true
   else
     # Ignore failures, we still want the rest of the cleanup
-    mzcompose stop --timeout=0 || true
-    mzcompose rm -f || true
-    bin/ci-builder run "$builder" docker volume prune -f || true
-    bin/ci-builder run "$builder" docker network prune -f || true
+    bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes || {
+        sudo systemctl restart docker || true
+        bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes || true
+    }
   fi
 
   echo "Finding core files"

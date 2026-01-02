@@ -1015,13 +1015,14 @@ class Database:
         for row in exe.cur.fetchall():
             exe.execute(f"DROP CLUSTER {identifier(row[0])} CASCADE")
 
-        exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
-        for row in exe.cur.fetchall():
-            exe.execute(f"DROP ROLE {identifier(row[0])} CASCADE")
-
         exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
         exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
+        exe.execute("DROP SECRET IF EXISTS sql_server_pass CASCADE")
         exe.execute("DROP SECRET IF EXISTS minio CASCADE")
+
+        exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP ROLE {identifier(row[0])}")
 
         print("Creating connections")
 
