@@ -23,7 +23,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_ore::task::JoinHandle;
 use mz_ore::{assert_none, soft_assert_no_log};
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
@@ -32,7 +31,7 @@ use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug, info, trace_span, warn};
+use tracing::{Instrument, debug, info, trace_span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
@@ -42,7 +41,6 @@ use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
@@ -54,7 +52,7 @@ use crate::internal::state::{
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
-use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
+use crate::read::LeasedReaderId;
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
 use crate::write::WriterId;
@@ -1191,83 +1189,6 @@ impl<T: Debug> CompareAndAppendRes<T> {
         match self {
             CompareAndAppendRes::Success(seqno, maintenance) => (seqno, maintenance),
             x => panic!("{:?}", x),
-        }
-    }
-}
-
-impl<K, V, T, D> Machine<K, V, T, D>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
-    D: Monoid + Codec64 + Send + Sync,
-{
-    pub fn start_reader_heartbeat_task(
-        self,
-        reader_id: LeasedReaderId,
-        gc: GarbageCollector<K, V, T, D>,
-    ) -> JoinHandle<()> {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
-        mz_ore::task::spawn(|| name, {
-            metrics.tasks.heartbeat_read.instrument_task(async move {
-                Self::reader_heartbeat_task(self, reader_id, gc).await
-            })
-        })
-    }
-
-    async fn reader_heartbeat_task(
-        machine: Self,
-        reader_id: LeasedReaderId,
-        gc: GarbageCollector<K, V, T, D>,
-    ) {
-        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 2;
-        loop {
-            let before_sleep = Instant::now();
-            tokio::time::sleep(sleep_duration).await;
-
-            let elapsed_since_before_sleeping = before_sleep.elapsed();
-            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                warn!(
-                    "reader ({}) of shard ({}) went {}s between heartbeats",
-                    reader_id,
-                    machine.shard_id(),
-                    elapsed_since_before_sleeping.as_secs_f64()
-                );
-            }
-
-            let before_heartbeat = Instant::now();
-            let (_seqno, existed, maintenance) = machine
-                .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
-                .await;
-            maintenance.start_performing(&machine, &gc);
-
-            let elapsed_since_heartbeat = before_heartbeat.elapsed();
-            if elapsed_since_heartbeat > Duration::from_secs(60) {
-                warn!(
-                    "reader ({}) of shard ({}) heartbeat call took {}s",
-                    reader_id,
-                    machine.shard_id(),
-                    elapsed_since_heartbeat.as_secs_f64(),
-                );
-            }
-
-            if !existed {
-                // If the read handle was intentionally expired, this task
-                // *should* be aborted before it observes the expiration. So if
-                // we get here, this task somehow failed to keep the read lease
-                // alive. Warn loudly, because there's now a live read handle to
-                // an expired shard that will panic if used, but don't panic,
-                // just in case there is some edge case that results in this
-                // task observing the intentional expiration of a read handle.
-                warn!(
-                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
-                     while read handle is live",
-                    reader_id,
-                    machine.shard_id(),
-                );
-                return;
-            }
         }
     }
 }
