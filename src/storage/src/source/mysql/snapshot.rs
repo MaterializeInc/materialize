@@ -123,7 +123,7 @@ use crate::statistics::SourceStatistics;
 use super::schemas::verify_schemas;
 use super::{
     DefiniteError, MySqlTableName, ReplicationError, RewindRequest, SourceOutputInfo,
-    TransientError, return_definite_error, validate_mysql_repl_settings,
+    TransientError, return_definite_error_rows, validate_mysql_repl_settings,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -142,7 +142,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let (raw_handle, raw_data) = builder.new_output();
+    let (raw_handle, raw_data) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -260,7 +260,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         trace!(%id, "timely-{worker_id} received unknown table error from \
                                      lock query");
                         let err = DefiniteError::TableDropped(message);
-                        return Ok(return_definite_error(
+                        return Ok(return_definite_error_rows(
                             err,
                             &all_outputs,
                             &raw_handle,
@@ -283,7 +283,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         let err = DefiniteError::UnsupportedGtidState(err.to_string());
                         // If we received a GTID Set with non-consecutive intervals this breaks all
                         // our assumptions, so there is nothing else we can do.
-                        return Ok(return_definite_error(
+                        return Ok(return_definite_error_rows(
                             err,
                             &all_outputs,
                             &raw_handle,
@@ -309,7 +309,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 // Verify the MySQL system settings are correct for consistent row-based replication using GTIDs
                 match validate_mysql_repl_settings(&mut conn).await {
                     Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
-                        return Ok(return_definite_error(
+                        return Ok(return_definite_error_rows(
                             DefiniteError::ServerConfigurationError(err.to_string()),
                             &all_outputs,
                             &raw_handle,
@@ -369,15 +369,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 for (output, err) in errored_outputs {
                     // Publish the error for this table and stop ingesting it
                     raw_handle
-                        .give_fueled(
+                        .give(
                             &data_cap_set[0],
                             (
                                 (output.output_index, Err(err.clone().into())),
                                 GtidPartition::minimum(),
                                 Diff::ONE,
                             ),
-                        )
-                        .await;
+                        );
                     trace!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
                     removed_outputs.insert(output.output_index);
@@ -422,16 +421,16 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         snapshot_staged += 1;
                         for (output, row_val) in outputs.iter().repeat_clone(row) {
                             let mut update = (output.output_index, Ok((row_val, output.desc.clone())));
+                            // let raw_handle: () = raw_handle;
                             raw_handle
-                                .give_fueled(
+                                .give(
                                     &data_cap_set[0],
                                     (
                                         update,
                                         GtidPartition::minimum(),
                                         Diff::ONE,
                                     ),
-                                )
-                                .await;
+                                );
                             // let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
                             // {
                             //     Ok(row) => Ok(SourceMessage {
@@ -506,7 +505,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
-    let mut text_row = Row::default();
     let mut final_row = Row::default();
     let mut next_worker = (0..u64::cast_from(scope.peers()))
         // Round robin on 1000-records basis to avoid creating tiny containers when there are a
@@ -515,28 +513,32 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         .cycle();
     let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
     let snapshot_updates = raw_data
-        .map::<Vec<_>, _, _>(Clone::clone)
         .unary(round_robin, "mysqlCastSnapshotRows", |_, _| {
             move |input, output| {
                 input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
-                    for ((output_index, row, row_val, output_desc), time, diff) in
+                    for ((output_index, event), time, diff) in
                         data.flat_map(|data| data.drain(..))
                     {
-                        let event = match pack_mysql_row(&mut final_row, row_val, output_desc) {
-                            Ok(row) => Ok(SourceMessage {
-                                key: Row::default(),
-                                value: row,
-                                metadata: Row::default(),
-                            }),
-                            // Produce a DefiniteError in the stream for any rows that fail to decode
-                            Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                                Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                                    err.to_string(),
-                                )))
-                            }
-                            Err(err) => Err(err.into()),
-                        };
+                        let event = event
+                            // .as_ref()
+                            .map_err(|e: DataflowError| e.clone())
+                            .and_then(|(row_val, output_desc)| {
+                                match pack_mysql_row(&mut final_row, row_val, &output_desc) {
+                                    Ok(row) => Ok(SourceMessage {
+                                        key: Row::default(),
+                                        value: row,
+                                        metadata: Row::default(),
+                                    }),
+                                    // Produce a DefiniteError in the stream for any rows that fail to decode
+                                    Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                        Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                                            err.to_string(),
+                                        )))
+                                    }
+                                    Err(err) => Err(err.into())?,
+                                }
+                            });
 
                         session.give(((output_index, event), time, diff));
                     }

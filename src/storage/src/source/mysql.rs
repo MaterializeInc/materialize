@@ -59,6 +59,8 @@ use std::rc::Rc;
 use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
+
+use mysql_common::Row;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
@@ -391,6 +393,37 @@ async fn return_definite_error(
             Diff::ONE,
         );
         data_handle.give_fueled(&data_cap_set[0], update).await;
+    }
+    definite_error_handle.give(
+        &definite_error_cap_set[0],
+        ReplicationError::Definite(Rc::new(err)),
+    );
+    ()
+}
+
+/// Like `return_definite_error`, but for use where the data_handle expects Rows instead of SourceMessages.
+/// The two functions are only necessary until both snapshot and replication workflows have been updated to allow distributed row decoding.
+async fn return_definite_error_rows(
+    err: DefiniteError,
+    outputs: &[usize],
+    data_handle: &AsyncOutputHandle<
+        GtidPartition,
+        CapacityContainerBuilder<Vec<((usize, Result<(Row, MySqlTableDesc), DataflowError>), GtidPartition, Diff)>>,
+    >,
+    data_cap_set: &CapabilitySet<GtidPartition>,
+    definite_error_handle: &AsyncOutputHandle<
+        GtidPartition,
+        CapacityContainerBuilder<Vec<ReplicationError>>,
+    >,
+    definite_error_cap_set: &CapabilitySet<GtidPartition>,
+) {
+    for output_index in outputs {
+        let update = (
+            (*output_index, Err(err.clone().into())),
+            GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
+            Diff::ONE,
+        );
+        data_handle.give(&data_cap_set[0], update);
     }
     definite_error_handle.give(
         &definite_error_cap_set[0],
