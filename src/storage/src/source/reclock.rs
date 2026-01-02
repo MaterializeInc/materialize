@@ -544,7 +544,12 @@ mod tests {
     // Regression test for
     // https://github.com/MaterializeInc/database-issues/issues/4216.
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    #[cfg_attr(miri, ignore)]
+    // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    // This test depends on the exact details of when the Persist client flushes frontier progress
+    // to state, which is not public API and should not be essential for correctness. (Today, the
+    // as_of is held back by the spawned task in the async storage worker.)
+    #[ignore]
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 

@@ -472,7 +472,6 @@ impl Lease {
     }
 
     /// Returns the inner [SeqNo] of this [Lease].
-    #[cfg(test)]
     pub fn seqno(&self) -> SeqNo {
         *self.0
     }
