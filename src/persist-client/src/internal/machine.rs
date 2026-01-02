@@ -618,7 +618,7 @@ where
     pub async fn downgrade_since(
         &self,
         reader_id: &LeasedReaderId,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
@@ -659,20 +659,6 @@ where
             Ok(since) => (Ok(since), maintenance),
             Err((opaque, since)) => (Err((opaque, since)), maintenance),
         }
-    }
-
-    pub async fn heartbeat_leased_reader(
-        &self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
-                state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
-            })
-            .await;
-        (seqno, existed, maintenance)
     }
 
     pub async fn expire_leased_reader(
@@ -1533,7 +1519,9 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let since = args.expect_antichain("since");
-        let seqno = args.optional("seqno");
+        let seqno = args
+            .optional("seqno")
+            .unwrap_or_else(|| datadriven.machine.seqno());
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
@@ -2236,18 +2224,6 @@ pub mod datadriven {
         ))
     }
 
-    pub async fn heartbeat_leased_reader(
-        datadriven: &MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let reader_id = args.expect("reader_id");
-        let _ = datadriven
-            .machine
-            .heartbeat_leased_reader(&reader_id, (datadriven.client.cfg.now)())
-            .await;
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
-    }
-
     pub async fn expire_critical_reader(
         datadriven: &mut MachineState,
         args: DirectiveArgs<'_>,
@@ -2504,9 +2480,12 @@ pub mod tests {
         let client = new_test_client(&dyncfgs).await;
         // set a low rollup threshold so GC/truncation is more aggressive
         client.cfg.set_config(&ROLLUP_THRESHOLD, 5);
-        let (mut write, _) = client
+        let (mut write, read) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
+
+        // Ensure the reader is not holding back the since.
+        read.expire().await;
 
         // Write a bunch of batches. This should result in a bounded number of
         // live entries in consensus.
