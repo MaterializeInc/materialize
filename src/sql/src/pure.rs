@@ -93,9 +93,9 @@ use self::error::{
 pub(crate) mod error;
 mod references;
 
-mod protobuf;
 pub mod mysql;
 pub mod postgres;
+mod protobuf;
 pub mod sql_server;
 
 pub(crate) struct RequestedSourceExport<T> {
