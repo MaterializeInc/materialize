@@ -1,0 +1,73 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/types/mz_timestamp/
+complexity: advanced
+description: Expresses an internal timestamp
+doc_type: reference
+keywords:
+- mz_timestamp type
+- OID
+- Catalog name
+- Max value
+- Size
+- Min value
+product_area: Indexes
+status: stable
+title: mz_timestamp type
+---
+
+# mz_timestamp type
+
+## Purpose
+Expresses an internal timestamp
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+Expresses an internal timestamp
+
+
+
+`mz_timestamp` data expresses an internal timestamp.
+
+## `mz_timestamp` info
+
+Detail | Info
+-------|------
+**Size** | 8 bytes
+**Catalog name** | `mz_catalog.mz_timestamp`
+**OID** | 16552
+**Min value** | 0
+**Max value** | 18446744073709551615
+
+## Details
+
+- This type is produced by `mz_now()`.
+- In general this is an opaque type, designed to ease the use of `mz_now()` by making various timestamp types castable to it.
+
+### Valid casts
+
+For details about casting, including contexts, see [Functions:
+Cast](../../functions/cast).
+
+Integer and numeric casts must be in the form of milliseconds since the Unix epoch. Casting from `text` can be either also in the form of milliseconds since the Unix epoch or in a human-readable form that is the same as for the [`timestamptz`](../timestamptz) type.
+
+From | To | Required context
+-----|----|--------
+`mz_timestamp` | `text` | Assignment
+`mz_timestamp` | `timestamp` | Assignment
+`mz_timestamp` | `timestamptz` | Assignment
+`text` | `mz_timestamp` | Assignment
+`uint4` | `mz_timestamp` | Implicit
+`uint8` | `mz_timestamp` | Implicit
+`int4` | `mz_timestamp` | Implicit
+`int8` | `mz_timestamp` | Implicit
+`numeric` | `mz_timestamp` | Implicit
+`timestamp` | `mz_timestamp` | Implicit
+`timestamptz` | `mz_timestamp` | Implicit
+`date` | `mz_timestamp` | Implicit
+
+### Valid operations
+
+There are no supported operations or functions on `mz_timestamp` types.
+

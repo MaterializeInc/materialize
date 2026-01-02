@@ -1,0 +1,67 @@
+terms:
+  arrangement:
+    aliases: []
+    canonical: arrangement
+    definition: An indexed, incrementally maintained collection in memory
+  cluster:
+    aliases: []
+    canonical: cluster
+    definition: A pool of compute resources that runs dataflows
+    not_to_be_confused_with:
+    - replica
+    - database cluster
+  connection:
+    aliases: []
+    canonical: connection
+    definition: Reusable object storing credentials for external system access
+  dataflow:
+    aliases:
+    - data flow
+    canonical: dataflow
+    definition: A computation graph that processes streaming data
+  index:
+    aliases: []
+    canonical: index
+    definition: An arrangement on a view enabling fast point lookups
+    not_to_be_confused_with:
+    - arrangement
+    - primary key
+  materialized_view:
+    aliases:
+    - matview
+    - MV
+    - mat view
+    canonical: materialized view
+    definition: A view whose results are persisted and incrementally updated
+    not_to_be_confused_with:
+    - view
+    - index
+  replica:
+    aliases:
+    - cluster replica
+    canonical: replica
+    definition: A copy of cluster compute resources for fault tolerance
+    not_to_be_confused_with:
+    - cluster
+  secret:
+    aliases: []
+    canonical: secret
+    definition: Securely stored credential value used by connections
+  sink:
+    aliases:
+    - data sink
+    - output
+    canonical: sink
+    definition: Connection that exports data from Materialize to external systems
+    not_to_be_confused_with:
+    - source
+    - table
+  source:
+    aliases:
+    - data source
+    - ingestion source
+    canonical: source
+    definition: Connection to external system streaming data into Materialize
+    not_to_be_confused_with:
+    - table
+    - view

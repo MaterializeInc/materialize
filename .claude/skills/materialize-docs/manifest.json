@@ -1,0 +1,3500 @@
+{
+  "version": "1.0",
+  "generated": "2025-12-31",
+  "description": "Materialize documentation optimized for LLM accessibility",
+  "files": [
+    {
+      "path": "SKILL.md",
+      "size_bytes": 7111,
+      "estimated_tokens": 1777,
+      "title": "",
+      "doc_type": "",
+      "product_area": "",
+      "complexity": ""
+    },
+    {
+      "path": "administration/billing/index.md",
+      "size_bytes": 7297,
+      "estimated_tokens": 1824,
+      "title": "Usage & billing (Cloud)",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "administration/index.md",
+      "size_bytes": 10902,
+      "estimated_tokens": 2725
+    },
+    {
+      "path": "administration/usage/index.md",
+      "size_bytes": 4370,
+      "estimated_tokens": 1092,
+      "title": "Usage (Self-Managed)",
+      "doc_type": "overview",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "concepts/clusters/index.md",
+      "size_bytes": 5323,
+      "estimated_tokens": 1330,
+      "title": "Clusters",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "advanced"
+    },
+    {
+      "path": "concepts/index.md",
+      "size_bytes": 35282,
+      "estimated_tokens": 8820,
+      "title": "Concepts",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "advanced"
+    },
+    {
+      "path": "concepts/indexes/index.md",
+      "size_bytes": 9194,
+      "estimated_tokens": 2298,
+      "title": "Indexes",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "advanced"
+    },
+    {
+      "path": "concepts/namespaces/index.md",
+      "size_bytes": 4425,
+      "estimated_tokens": 1106,
+      "title": "Namespaces",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "concepts/reaction-time/index.md",
+      "size_bytes": 7780,
+      "estimated_tokens": 1945,
+      "title": "Reaction Time, Freshness, and Query Latency",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "advanced"
+    },
+    {
+      "path": "concepts/sinks/index.md",
+      "size_bytes": 1073,
+      "estimated_tokens": 268,
+      "title": "Sinks",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "beginner"
+    },
+    {
+      "path": "concepts/sources/index.md",
+      "size_bytes": 2965,
+      "estimated_tokens": 741,
+      "title": "Sources",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "beginner"
+    },
+    {
+      "path": "concepts/views/index.md",
+      "size_bytes": 6284,
+      "estimated_tokens": 1571,
+      "title": "Views",
+      "doc_type": "concept",
+      "product_area": "Concepts",
+      "complexity": "advanced"
+    },
+    {
+      "path": "console/admin/index.md",
+      "size_bytes": 1910,
+      "estimated_tokens": 477,
+      "title": "Admin (Cloud-only)",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "console/clusters/index.md",
+      "size_bytes": 1159,
+      "estimated_tokens": 289,
+      "title": "Clusters",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "console/connect/index.md",
+      "size_bytes": 781,
+      "estimated_tokens": 195,
+      "title": "Connect (Cloud-only)",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "console/create-new/index.md",
+      "size_bytes": 5693,
+      "estimated_tokens": 1423,
+      "title": "Create new",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "console/data/index.md",
+      "size_bytes": 3636,
+      "estimated_tokens": 909,
+      "title": "Database object explorer",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "console/index.md",
+      "size_bytes": 14717,
+      "estimated_tokens": 3679,
+      "title": "Materialize console",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "console/integrations/index.md",
+      "size_bytes": 908,
+      "estimated_tokens": 227,
+      "title": "Integrations",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "console/monitoring/index.md",
+      "size_bytes": 1218,
+      "estimated_tokens": 304,
+      "title": "Monitoring",
+      "doc_type": "overview",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "console/sql-shell/index.md",
+      "size_bytes": 1226,
+      "estimated_tokens": 306,
+      "title": "SQL Shell",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "console/user-profile/index.md",
+      "size_bytes": 1099,
+      "estimated_tokens": 274,
+      "title": "User profile",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "customer-responsibilities/index.md",
+      "size_bytes": 5607,
+      "estimated_tokens": 1401,
+      "title": "Customer responsibility model (Cloud)",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "faqs/index.md",
+      "size_bytes": 4099,
+      "estimated_tokens": 1024,
+      "title": "General FAQs",
+      "doc_type": "troubleshooting",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/cdc-cockroachdb/index.md",
+      "size_bytes": 7612,
+      "estimated_tokens": 1903,
+      "title": "CockroachDB CDC using Kafka and Changefeeds",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/debezium/index.md",
+      "size_bytes": 2658,
+      "estimated_tokens": 664,
+      "title": "Debezium",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/fivetran/index.md",
+      "size_bytes": 4501,
+      "estimated_tokens": 1125,
+      "title": "Fivetran",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/index.md",
+      "size_bytes": 4024,
+      "estimated_tokens": 1006,
+      "title": "Ingest Data",
+      "doc_type": "overview",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/kafka/amazon-msk/index.md",
+      "size_bytes": 18888,
+      "estimated_tokens": 4722,
+      "title": "Amazon Managed Streaming for Apache Kafka (Amazon MSK)",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/kafka/confluent-cloud/index.md",
+      "size_bytes": 5674,
+      "estimated_tokens": 1418,
+      "title": "Confluent Cloud",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/kafka/index.md",
+      "size_bytes": 35803,
+      "estimated_tokens": 8950,
+      "title": "Kafka",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/kafka/kafka-self-hosted/index.md",
+      "size_bytes": 5568,
+      "estimated_tokens": 1392,
+      "title": "Ingest data from Self-hosted Kafka",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/kafka/warpstream/index.md",
+      "size_bytes": 6016,
+      "estimated_tokens": 1504,
+      "title": "WarpStream",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/mongodb/index.md",
+      "size_bytes": 15473,
+      "estimated_tokens": 3868,
+      "title": "MongoDB",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/monitoring-data-ingestion/index.md",
+      "size_bytes": 5706,
+      "estimated_tokens": 1426,
+      "title": "Monitoring data ingestion",
+      "doc_type": "overview",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/mysql/amazon-aurora/index.md",
+      "size_bytes": 8539,
+      "estimated_tokens": 2134,
+      "title": "Ingest data from Amazon Aurora",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/mysql/amazon-rds/index.md",
+      "size_bytes": 9674,
+      "estimated_tokens": 2418,
+      "title": "Ingest data from Amazon RDS",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/mysql/azure-db/index.md",
+      "size_bytes": 6121,
+      "estimated_tokens": 1530,
+      "title": "Ingest data from Azure DB",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/mysql/google-cloud-sql/index.md",
+      "size_bytes": 5713,
+      "estimated_tokens": 1428,
+      "title": "Ingest data from Google Cloud SQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/mysql/index.md",
+      "size_bytes": 43004,
+      "estimated_tokens": 10751,
+      "title": "MySQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/mysql/mysql-debezium/index.md",
+      "size_bytes": 8737,
+      "estimated_tokens": 2184,
+      "title": "MySQL CDC using Kafka and Debezium",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/mysql/self-hosted/index.md",
+      "size_bytes": 5466,
+      "estimated_tokens": 1366,
+      "title": "Ingest data from self-hosted MySQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/network-security/privatelink/index.md",
+      "size_bytes": 3348,
+      "estimated_tokens": 837,
+      "title": "AWS PrivateLink connections (Cloud-only)",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/network-security/ssh-tunnel/index.md",
+      "size_bytes": 2695,
+      "estimated_tokens": 673,
+      "title": "SSH tunnel connections",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/network-security/static-ips/index.md",
+      "size_bytes": 3030,
+      "estimated_tokens": 757,
+      "title": "Static IP addresses (Cloud-only)",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/postgres/alloydb/index.md",
+      "size_bytes": 7176,
+      "estimated_tokens": 1794,
+      "title": "Ingest data from AlloyDB",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/amazon-aurora/index.md",
+      "size_bytes": 9291,
+      "estimated_tokens": 2322,
+      "title": "Ingest data from Amazon Aurora",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/amazon-rds/index.md",
+      "size_bytes": 10511,
+      "estimated_tokens": 2627,
+      "title": "Ingest data from Amazon RDS",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/azure-db/index.md",
+      "size_bytes": 6382,
+      "estimated_tokens": 1595,
+      "title": "Ingest data from Azure DB",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/cloud-sql/index.md",
+      "size_bytes": 6279,
+      "estimated_tokens": 1569,
+      "title": "Ingest data from Google Cloud SQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/faq/index.md",
+      "size_bytes": 2421,
+      "estimated_tokens": 605,
+      "title": "FAQ: PostgreSQL sources",
+      "doc_type": "troubleshooting",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/postgres/index.md",
+      "size_bytes": 76292,
+      "estimated_tokens": 19073,
+      "title": "PostgreSQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/neon/index.md",
+      "size_bytes": 10767,
+      "estimated_tokens": 2691,
+      "title": "Ingest data from Neon",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/postgres-debezium/index.md",
+      "size_bytes": 14513,
+      "estimated_tokens": 3628,
+      "title": "PostgreSQL CDC using Kafka and Debezium",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "ingest-data/postgres/self-hosted/index.md",
+      "size_bytes": 6929,
+      "estimated_tokens": 1732,
+      "title": "Ingest data from self-hosted PostgreSQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/postgres/source-versioning/index.md",
+      "size_bytes": 6683,
+      "estimated_tokens": 1670,
+      "title": "Guide: Handle upstream schema changes with zero downtime",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/redpanda/index.md",
+      "size_bytes": 11221,
+      "estimated_tokens": 2805,
+      "title": "Redpanda",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/redpanda/redpanda-cloud/index.md",
+      "size_bytes": 10234,
+      "estimated_tokens": 2558,
+      "title": "Redpanda Cloud",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/sql-server/index.md",
+      "size_bytes": 12126,
+      "estimated_tokens": 3031,
+      "title": "SQL Server",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/sql-server/self-hosted/index.md",
+      "size_bytes": 10528,
+      "estimated_tokens": 2632,
+      "title": "Ingest data from self-hosted SQL Server",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "ingest-data/striim/index.md",
+      "size_bytes": 6229,
+      "estimated_tokens": 1557,
+      "title": "Striim Cloud",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/troubleshooting/index.md",
+      "size_bytes": 7558,
+      "estimated_tokens": 1889,
+      "title": "Troubleshooting",
+      "doc_type": "troubleshooting",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/amazon-eventbridge/index.md",
+      "size_bytes": 6469,
+      "estimated_tokens": 1617,
+      "title": "Amazon EventBridge",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/hubspot/index.md",
+      "size_bytes": 7785,
+      "estimated_tokens": 1946,
+      "title": "HubSpot",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/rudderstack/index.md",
+      "size_bytes": 7112,
+      "estimated_tokens": 1778,
+      "title": "RudderStack",
+      "doc_type": "overview",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/segment/index.md",
+      "size_bytes": 11039,
+      "estimated_tokens": 2759,
+      "title": "Segment",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/snowcatcloud/index.md",
+      "size_bytes": 13733,
+      "estimated_tokens": 3433,
+      "title": "SnowcatCloud",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/stripe/index.md",
+      "size_bytes": 6891,
+      "estimated_tokens": 1722,
+      "title": "Stripe",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "ingest-data/webhooks/webhook-quickstart/index.md",
+      "size_bytes": 4695,
+      "estimated_tokens": 1173,
+      "title": "Webhooks quickstart",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "beginner"
+    },
+    {
+      "path": "installation/appendix-cluster-sizes/index.md",
+      "size_bytes": 1937,
+      "estimated_tokens": 484,
+      "title": "Appendix: Cluster sizes",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "advanced"
+    },
+    {
+      "path": "installation/appendix-materialize-crd-field-descriptions/index.md",
+      "size_bytes": 737,
+      "estimated_tokens": 184,
+      "title": "Appendix: Materialize CRD Field Descriptions",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/appendix-terraforms/index.md",
+      "size_bytes": 2278,
+      "estimated_tokens": 569,
+      "title": "Appendix: Terraforms",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/configuration/index.md",
+      "size_bytes": 1679,
+      "estimated_tokens": 419,
+      "title": "Materialize Operator Configuration",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/faq/index.md",
+      "size_bytes": 1231,
+      "estimated_tokens": 307,
+      "title": "FAQ: Self-managed installation",
+      "doc_type": "troubleshooting",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/index.md",
+      "size_bytes": 3194,
+      "estimated_tokens": 798,
+      "title": "Install/Upgrade (Self-Managed)",
+      "doc_type": "howto",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-aws/appendix-aws-configuration/index.md",
+      "size_bytes": 2269,
+      "estimated_tokens": 567,
+      "title": "Appendix: Required configuration",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-aws/appendix-deployment-guidelines/index.md",
+      "size_bytes": 2675,
+      "estimated_tokens": 668,
+      "title": "Appendix: AWS deployment guidelines",
+      "doc_type": "howto",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-aws/index.md",
+      "size_bytes": 27869,
+      "estimated_tokens": 6967,
+      "title": "Install on AWS (via Terraform)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "advanced"
+    },
+    {
+      "path": "installation/install-on-aws/upgrade-on-aws/index.md",
+      "size_bytes": 5117,
+      "estimated_tokens": 1279,
+      "title": "Upgrade on AWS (Terraform)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-azure/appendix-azure-configuration/index.md",
+      "size_bytes": 3620,
+      "estimated_tokens": 905,
+      "title": "Appendix: Required configuration",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-azure/appendix-deployment-guidelines/index.md",
+      "size_bytes": 4129,
+      "estimated_tokens": 1032,
+      "title": "Appendix: Azure deployment guidelines",
+      "doc_type": "howto",
+      "product_area": "Deployment",
+      "complexity": "beginner"
+    },
+    {
+      "path": "installation/install-on-azure/index.md",
+      "size_bytes": 31843,
+      "estimated_tokens": 7960,
+      "title": "Install on Azure (via Terraform)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "advanced"
+    },
+    {
+      "path": "installation/install-on-azure/upgrade-on-azure/index.md",
+      "size_bytes": 7072,
+      "estimated_tokens": 1768,
+      "title": "Upgrade on Azure (Terraform)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-gcp/appendix-deployment-guidelines/index.md",
+      "size_bytes": 5865,
+      "estimated_tokens": 1466,
+      "title": "Appendix: GCP deployment guidelines",
+      "doc_type": "howto",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-gcp/appendix-gcp-configuration/index.md",
+      "size_bytes": 2218,
+      "estimated_tokens": 554,
+      "title": "Appendix: Required configuration",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-gcp/index.md",
+      "size_bytes": 37051,
+      "estimated_tokens": 9262,
+      "title": "Install on GCP (via Terraform)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "advanced"
+    },
+    {
+      "path": "installation/install-on-gcp/upgrade-on-gcp/index.md",
+      "size_bytes": 8819,
+      "estimated_tokens": 2204,
+      "title": "Upgrade on GCP (Terraform)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/install-on-local-kind/index.md",
+      "size_bytes": 15309,
+      "estimated_tokens": 3827,
+      "title": "Install locally on kind (via Helm)",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "advanced"
+    },
+    {
+      "path": "installation/install-on-local-kind/upgrade-on-local-kind/index.md",
+      "size_bytes": 2695,
+      "estimated_tokens": 673,
+      "title": "Upgrade on kind",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/operational-guidelines/index.md",
+      "size_bytes": 2427,
+      "estimated_tokens": 606,
+      "title": "Operational guidelines",
+      "doc_type": "howto",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/release-versions/index.md",
+      "size_bytes": 633,
+      "estimated_tokens": 158,
+      "title": "Self-managed release versions",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "installation/troubleshooting/index.md",
+      "size_bytes": 3927,
+      "estimated_tokens": 981,
+      "title": "Troubleshooting",
+      "doc_type": "troubleshooting",
+      "product_area": "Deployment",
+      "complexity": "advanced"
+    },
+    {
+      "path": "installation/upgrade-to-swap/index.md",
+      "size_bytes": 8273,
+      "estimated_tokens": 2068,
+      "title": "Appendix: Prepare for swap and upgrade to v26.0",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/configuration/index.md",
+      "size_bytes": 3593,
+      "estimated_tokens": 898,
+      "title": "Materialize CLI Configuration",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/cli/index.md",
+      "size_bytes": 7717,
+      "estimated_tokens": 1929,
+      "title": "mz - Materialize CLI",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/cli/installation/index.md",
+      "size_bytes": 2043,
+      "estimated_tokens": 510,
+      "title": "Materialize CLI Installation",
+      "doc_type": "reference",
+      "product_area": "Deployment",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/app-password/index.md",
+      "size_bytes": 2058,
+      "estimated_tokens": 514,
+      "title": "mz app-password",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/config/index.md",
+      "size_bytes": 2993,
+      "estimated_tokens": 748,
+      "title": "mz config",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/index.md",
+      "size_bytes": 15144,
+      "estimated_tokens": 3786,
+      "title": "mz Reference",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/profile/index.md",
+      "size_bytes": 4754,
+      "estimated_tokens": 1188,
+      "title": "mz profile",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/region/index.md",
+      "size_bytes": 2639,
+      "estimated_tokens": 659,
+      "title": "mz region",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/secret/index.md",
+      "size_bytes": 2052,
+      "estimated_tokens": 513,
+      "title": "mz secret",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/sql/index.md",
+      "size_bytes": 1383,
+      "estimated_tokens": 345,
+      "title": "mz sql",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/cli/reference/user/index.md",
+      "size_bytes": 2529,
+      "estimated_tokens": 632,
+      "title": "mz user",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/client-libraries/golang/index.md",
+      "size_bytes": 6877,
+      "estimated_tokens": 1719,
+      "title": "Golang cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/index.md",
+      "size_bytes": 55041,
+      "estimated_tokens": 13760,
+      "title": "Client libraries",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/java-jdbc/index.md",
+      "size_bytes": 13214,
+      "estimated_tokens": 3303,
+      "title": "Java cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/node-js/index.md",
+      "size_bytes": 8332,
+      "estimated_tokens": 2083,
+      "title": "Node.js cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/php/index.md",
+      "size_bytes": 7865,
+      "estimated_tokens": 1966,
+      "title": "PHP cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/python/index.md",
+      "size_bytes": 8357,
+      "estimated_tokens": 2089,
+      "title": "Python cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/ruby/index.md",
+      "size_bytes": 6788,
+      "estimated_tokens": 1697,
+      "title": "Ruby cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/client-libraries/rust/index.md",
+      "size_bytes": 6254,
+      "estimated_tokens": 1563,
+      "title": "Rust cheatsheet",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/connection-pooling/index.md",
+      "size_bytes": 4116,
+      "estimated_tokens": 1029,
+      "title": "Connection Pooling",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "integrations/fdw/index.md",
+      "size_bytes": 3711,
+      "estimated_tokens": 927,
+      "title": "Foreign data wrapper (FDW)",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/http-api/index.md",
+      "size_bytes": 8968,
+      "estimated_tokens": 2242,
+      "title": "Connect to Materialize via HTTP",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "integrations/index.md",
+      "size_bytes": 2381,
+      "estimated_tokens": 595,
+      "title": "Tools and Integrations",
+      "doc_type": "overview",
+      "product_area": "General",
+      "complexity": "beginner"
+    },
+    {
+      "path": "integrations/llm/index.md",
+      "size_bytes": 4779,
+      "estimated_tokens": 1194,
+      "title": "MCP Server",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/mz-debug/emulator/index.md",
+      "size_bytes": 2580,
+      "estimated_tokens": 645,
+      "title": "mz-debug emulator",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/mz-debug/index.md",
+      "size_bytes": 7616,
+      "estimated_tokens": 1904,
+      "title": "mz-debug",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/mz-debug/self-managed/index.md",
+      "size_bytes": 4489,
+      "estimated_tokens": 1122,
+      "title": "mz-debug self-managed",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "integrations/sql-clients/index.md",
+      "size_bytes": 8166,
+      "estimated_tokens": 2041,
+      "title": "SQL clients",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "advanced"
+    },
+    {
+      "path": "integrations/websocket-api/index.md",
+      "size_bytes": 11104,
+      "estimated_tokens": 2776,
+      "title": "Connect to Materialize via WebSocket",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "license/index.md",
+      "size_bytes": 2275,
+      "estimated_tokens": 568,
+      "title": "License",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/appendix-alternative-cluster-architectures/index.md",
+      "size_bytes": 1284,
+      "estimated_tokens": 321,
+      "title": "Appendix: Alternative cluster architectures",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/dbt/blue-green-deployments/index.md",
+      "size_bytes": 10295,
+      "estimated_tokens": 2573,
+      "title": "Blue-green deployment",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/dbt/development-workflows/index.md",
+      "size_bytes": 10452,
+      "estimated_tokens": 2613,
+      "title": "Development guidelines",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "beginner"
+    },
+    {
+      "path": "manage/dbt/get-started/index.md",
+      "size_bytes": 35263,
+      "estimated_tokens": 8815,
+      "title": "Get started with dbt and Materialize",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/dbt/index.md",
+      "size_bytes": 59932,
+      "estimated_tokens": 14983,
+      "title": "Use dbt to manage Materialize",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/dbt/slim-deployments/index.md",
+      "size_bytes": 4191,
+      "estimated_tokens": 1047,
+      "title": "Slim deployments",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/disaster-recovery/index.md",
+      "size_bytes": 8159,
+      "estimated_tokens": 2039,
+      "title": "Disaster recovery (Cloud)",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/disaster-recovery/recovery-characteristics/index.md",
+      "size_bytes": 3510,
+      "estimated_tokens": 877,
+      "title": "Materialize Cloud DR characteristics",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/index.md",
+      "size_bytes": 13473,
+      "estimated_tokens": 3368,
+      "title": "Manage Materialize",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/cloud/alerting/index.md",
+      "size_bytes": 3457,
+      "estimated_tokens": 864,
+      "title": "Alerting",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/cloud/datadog/index.md",
+      "size_bytes": 7286,
+      "estimated_tokens": 1821,
+      "title": "Datadog",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/cloud/grafana/index.md",
+      "size_bytes": 8993,
+      "estimated_tokens": 2248,
+      "title": "Grafana",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/cloud/index.md",
+      "size_bytes": 19034,
+      "estimated_tokens": 4758,
+      "title": "Cloud",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/index.md",
+      "size_bytes": 3159,
+      "estimated_tokens": 789,
+      "title": "Monitoring and alerting",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/monitor/self-managed/alerting/index.md",
+      "size_bytes": 2361,
+      "estimated_tokens": 590,
+      "title": "Alerting",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/self-managed/datadog/index.md",
+      "size_bytes": 7181,
+      "estimated_tokens": 1795,
+      "title": "Datadog using Prometheus SQL Exporter",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/self-managed/index.md",
+      "size_bytes": 13987,
+      "estimated_tokens": 3496,
+      "title": "Self-Managed",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "advanced"
+    },
+    {
+      "path": "manage/monitor/self-managed/prometheus/index.md",
+      "size_bytes": 5062,
+      "estimated_tokens": 1265,
+      "title": "Grafana using Prometheus",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "beginner"
+    },
+    {
+      "path": "manage/operational-guidelines/index.md",
+      "size_bytes": 2891,
+      "estimated_tokens": 722,
+      "title": "Operational guidelines",
+      "doc_type": "howto",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/terraform/appendix-secret-stores/index.md",
+      "size_bytes": 2288,
+      "estimated_tokens": 572,
+      "title": "Appendix: External secret stores",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/terraform/get-started/index.md",
+      "size_bytes": 3775,
+      "estimated_tokens": 943,
+      "title": "Get started with the Materialize provider",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "beginner"
+    },
+    {
+      "path": "manage/terraform/index.md",
+      "size_bytes": 25440,
+      "estimated_tokens": 6360,
+      "title": "Use Terraform to manage Materialize",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "beginner"
+    },
+    {
+      "path": "manage/terraform/manage-cloud-modules/index.md",
+      "size_bytes": 6225,
+      "estimated_tokens": 1556,
+      "title": "Manage cloud resources",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "beginner"
+    },
+    {
+      "path": "manage/terraform/manage-rbac/index.md",
+      "size_bytes": 11318,
+      "estimated_tokens": 2829,
+      "title": "Manage privileges",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "manage/terraform/manage-resources/index.md",
+      "size_bytes": 3225,
+      "estimated_tokens": 806,
+      "title": "Manage Materialize resources with the Materialize provider",
+      "doc_type": "reference",
+      "product_area": "Operations",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/appendix/appendix-built-in-roles/index.md",
+      "size_bytes": 2832,
+      "estimated_tokens": 708,
+      "title": "Appendix: Built-in roles",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "advanced"
+    },
+    {
+      "path": "security/appendix/appendix-command-privileges/index.md",
+      "size_bytes": 658,
+      "estimated_tokens": 164,
+      "title": "Appendix: Privileges by commands",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/appendix/appendix-privileges/index.md",
+      "size_bytes": 1250,
+      "estimated_tokens": 312,
+      "title": "Appendix: Privileges",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/appendix/index.md",
+      "size_bytes": 3546,
+      "estimated_tokens": 886
+    },
+    {
+      "path": "security/cloud/access-control/index.md",
+      "size_bytes": 24746,
+      "estimated_tokens": 6186,
+      "title": "Access control (Role-based)",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "beginner"
+    },
+    {
+      "path": "security/cloud/access-control/manage-roles/index.md",
+      "size_bytes": 22172,
+      "estimated_tokens": 5543,
+      "title": "Manage database roles",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "beginner"
+    },
+    {
+      "path": "security/cloud/index.md",
+      "size_bytes": 9007,
+      "estimated_tokens": 2251,
+      "title": "Cloud",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/cloud/manage-network-policies/index.md",
+      "size_bytes": 2998,
+      "estimated_tokens": 749,
+      "title": "Manage network policies",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/cloud/users-service-accounts/create-service-accounts/index.md",
+      "size_bytes": 5626,
+      "estimated_tokens": 1406,
+      "title": "Create service accounts",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/cloud/users-service-accounts/index.md",
+      "size_bytes": 13044,
+      "estimated_tokens": 3261,
+      "title": "User and service accounts",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/cloud/users-service-accounts/invite-users/index.md",
+      "size_bytes": 2752,
+      "estimated_tokens": 688,
+      "title": "Invite users",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/cloud/users-service-accounts/sso/index.md",
+      "size_bytes": 3316,
+      "estimated_tokens": 829,
+      "title": "Configure single sign-on (SSO)",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/index.md",
+      "size_bytes": 2566,
+      "estimated_tokens": 641,
+      "title": "Security",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "security/self-managed/access-control/index.md",
+      "size_bytes": 27953,
+      "estimated_tokens": 6988,
+      "title": "Access control (Role-based)",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "beginner"
+    },
+    {
+      "path": "security/self-managed/access-control/manage-roles/index.md",
+      "size_bytes": 23618,
+      "estimated_tokens": 5904,
+      "title": "Manage database roles",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "beginner"
+    },
+    {
+      "path": "security/self-managed/authentication/index.md",
+      "size_bytes": 6670,
+      "estimated_tokens": 1667,
+      "title": "Authentication",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "beginner"
+    },
+    {
+      "path": "security/self-managed/index.md",
+      "size_bytes": 11599,
+      "estimated_tokens": 2899,
+      "title": "Self-managed",
+      "doc_type": "reference",
+      "product_area": "Security",
+      "complexity": "beginner"
+    },
+    {
+      "path": "serve-results/bi-tools/deepnote/index.md",
+      "size_bytes": 3316,
+      "estimated_tokens": 829,
+      "title": "Deepnote",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "serve-results/bi-tools/hex/index.md",
+      "size_bytes": 3121,
+      "estimated_tokens": 780,
+      "title": "Hex",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "beginner"
+    },
+    {
+      "path": "serve-results/bi-tools/index.md",
+      "size_bytes": 18367,
+      "estimated_tokens": 4591,
+      "title": "Use BI/data collaboration tools",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/bi-tools/looker/index.md",
+      "size_bytes": 3836,
+      "estimated_tokens": 959,
+      "title": "Looker",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/bi-tools/metabase/index.md",
+      "size_bytes": 2385,
+      "estimated_tokens": 596,
+      "title": "Metabase",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "beginner"
+    },
+    {
+      "path": "serve-results/bi-tools/power-bi/index.md",
+      "size_bytes": 4016,
+      "estimated_tokens": 1004,
+      "title": "Power BI",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "serve-results/bi-tools/tableau/index.md",
+      "size_bytes": 4191,
+      "estimated_tokens": 1047,
+      "title": "Tableau",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "serve-results/fdw/index.md",
+      "size_bytes": 3757,
+      "estimated_tokens": 939,
+      "title": "Use foreign data wrapper (FDW)",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "serve-results/index.md",
+      "size_bytes": 8991,
+      "estimated_tokens": 2247,
+      "title": "Serve results",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/query-results/index.md",
+      "size_bytes": 3806,
+      "estimated_tokens": 951,
+      "title": "`SELECT` and `SUBSCRIBE`",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/sink/census/index.md",
+      "size_bytes": 3704,
+      "estimated_tokens": 926,
+      "title": "Census",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "beginner"
+    },
+    {
+      "path": "serve-results/sink/index.md",
+      "size_bytes": 34898,
+      "estimated_tokens": 8724,
+      "title": "Sink results",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/sink/kafka/index.md",
+      "size_bytes": 8597,
+      "estimated_tokens": 2149,
+      "title": "Kafka and Redpanda",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/sink/s3/index.md",
+      "size_bytes": 8565,
+      "estimated_tokens": 2141,
+      "title": "Amazon S3",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/sink/s3_compatible/index.md",
+      "size_bytes": 3288,
+      "estimated_tokens": 822,
+      "title": "S3 Compatible Object Storage",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "serve-results/sink/sink-troubleshooting/index.md",
+      "size_bytes": 2751,
+      "estimated_tokens": 687,
+      "title": "Troubleshooting sinks",
+      "doc_type": "troubleshooting",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "serve-results/sink/snowflake/index.md",
+      "size_bytes": 10370,
+      "estimated_tokens": 2592,
+      "title": "Snowflake",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-cluster/index.md",
+      "size_bytes": 12101,
+      "estimated_tokens": 3025,
+      "title": "ALTER CLUSTER",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/alter-cluster-replica/index.md",
+      "size_bytes": 1640,
+      "estimated_tokens": 410,
+      "title": "ALTER CLUSTER REPLICA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-connection/index.md",
+      "size_bytes": 4394,
+      "estimated_tokens": 1098,
+      "title": "ALTER CONNECTION",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-database/index.md",
+      "size_bytes": 1068,
+      "estimated_tokens": 267,
+      "title": "ALTER DATABASE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-default-privileges/index.md",
+      "size_bytes": 4545,
+      "estimated_tokens": 1136,
+      "title": "ALTER DEFAULT PRIVILEGES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/alter-index/index.md",
+      "size_bytes": 1035,
+      "estimated_tokens": 258,
+      "title": "ALTER INDEX",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-materialized-view/index.md",
+      "size_bytes": 2032,
+      "estimated_tokens": 508,
+      "title": "ALTER MATERIALIZED VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-network-policy/index.md",
+      "size_bytes": 2691,
+      "estimated_tokens": 672,
+      "title": "ALTER NETWORK POLICY (Cloud)",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-role/index.md",
+      "size_bytes": 3481,
+      "estimated_tokens": 870,
+      "title": "ALTER ROLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/alter-schema/index.md",
+      "size_bytes": 2116,
+      "estimated_tokens": 529,
+      "title": "ALTER SCHEMA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-secret/index.md",
+      "size_bytes": 2688,
+      "estimated_tokens": 672,
+      "title": "ALTER SECRET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-sink/index.md",
+      "size_bytes": 7664,
+      "estimated_tokens": 1916,
+      "title": "ALTER SINK",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/alter-source/index.md",
+      "size_bytes": 4463,
+      "estimated_tokens": 1115,
+      "title": "ALTER SOURCE",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-system-reset/index.md",
+      "size_bytes": 1422,
+      "estimated_tokens": 355,
+      "title": "ALTER SYSTEM RESET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-system-set/index.md",
+      "size_bytes": 1608,
+      "estimated_tokens": 402,
+      "title": "ALTER SYSTEM SET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-table/index.md",
+      "size_bytes": 1529,
+      "estimated_tokens": 382,
+      "title": "ALTER TABLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-type/index.md",
+      "size_bytes": 1102,
+      "estimated_tokens": 275,
+      "title": "ALTER TYPE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/alter-view/index.md",
+      "size_bytes": 1098,
+      "estimated_tokens": 274,
+      "title": "ALTER VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/begin/index.md",
+      "size_bytes": 6003,
+      "estimated_tokens": 1500,
+      "title": "BEGIN",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/close/index.md",
+      "size_bytes": 677,
+      "estimated_tokens": 169,
+      "title": "CLOSE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/comment-on/index.md",
+      "size_bytes": 1694,
+      "estimated_tokens": 423,
+      "title": "COMMENT ON",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/commit/index.md",
+      "size_bytes": 2817,
+      "estimated_tokens": 704,
+      "title": "COMMIT",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/copy-from/index.md",
+      "size_bytes": 4390,
+      "estimated_tokens": 1097,
+      "title": "COPY FROM",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/copy-to/index.md",
+      "size_bytes": 9770,
+      "estimated_tokens": 2442,
+      "title": "COPY TO",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-cluster/index.md",
+      "size_bytes": 14121,
+      "estimated_tokens": 3530,
+      "title": "CREATE CLUSTER",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-cluster-replica/index.md",
+      "size_bytes": 4913,
+      "estimated_tokens": 1228,
+      "title": "CREATE CLUSTER REPLICA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/create-connection/index.md",
+      "size_bytes": 48008,
+      "estimated_tokens": 12002,
+      "title": "CREATE CONNECTION",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-database/index.md",
+      "size_bytes": 1748,
+      "estimated_tokens": 437,
+      "title": "CREATE DATABASE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-index/index.md",
+      "size_bytes": 9345,
+      "estimated_tokens": 2336,
+      "title": "CREATE INDEX",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-materialized-view/index.md",
+      "size_bytes": 17303,
+      "estimated_tokens": 4325,
+      "title": "CREATE MATERIALIZED VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-network-policy/index.md",
+      "size_bytes": 3549,
+      "estimated_tokens": 887,
+      "title": "CREATE NETWORK POLICY (Cloud)",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-role/index.md",
+      "size_bytes": 3079,
+      "estimated_tokens": 769,
+      "title": "CREATE ROLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-schema/index.md",
+      "size_bytes": 1812,
+      "estimated_tokens": 453,
+      "title": "CREATE SCHEMA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-secret/index.md",
+      "size_bytes": 1634,
+      "estimated_tokens": 408,
+      "title": "CREATE SECRET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-sink/index.md",
+      "size_bytes": 41832,
+      "estimated_tokens": 10458,
+      "title": "CREATE SINK",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-sink/kafka/index.md",
+      "size_bytes": 39098,
+      "estimated_tokens": 9774,
+      "title": "CREATE SINK: Kafka/Redpanda",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-source/index.md",
+      "size_bytes": 4347,
+      "estimated_tokens": 1086,
+      "title": "CREATE SOURCE",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-source/kafka/index.md",
+      "size_bytes": 26478,
+      "estimated_tokens": 6619,
+      "title": "CREATE SOURCE: Kafka/Redpanda",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-source/load-generator/index.md",
+      "size_bytes": 16628,
+      "estimated_tokens": 4157,
+      "title": "CREATE SOURCE: Load generator",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-source/mysql/index.md",
+      "size_bytes": 15494,
+      "estimated_tokens": 3873,
+      "title": "CREATE SOURCE: MySQL",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-source/postgres/index.md",
+      "size_bytes": 15835,
+      "estimated_tokens": 3958,
+      "title": "CREATE SOURCE: PostgreSQL (Legacy Syntax)",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-source/postgres-v2/index.md",
+      "size_bytes": 4493,
+      "estimated_tokens": 1123,
+      "title": "CREATE SOURCE: PostgreSQL (New Syntax)",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-source/sql-server/index.md",
+      "size_bytes": 9729,
+      "estimated_tokens": 2432,
+      "title": "CREATE SOURCE: SQL Server",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-source/webhook/index.md",
+      "size_bytes": 15919,
+      "estimated_tokens": 3979,
+      "title": "CREATE SOURCE: Webhook",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/create-table/index.md",
+      "size_bytes": 6637,
+      "estimated_tokens": 1659,
+      "title": "CREATE TABLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-type/index.md",
+      "size_bytes": 4240,
+      "estimated_tokens": 1060,
+      "title": "CREATE TYPE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/create-view/index.md",
+      "size_bytes": 3763,
+      "estimated_tokens": 940,
+      "title": "CREATE VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/deallocate/index.md",
+      "size_bytes": 1125,
+      "estimated_tokens": 281,
+      "title": "DEALLOCATE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/declare/index.md",
+      "size_bytes": 1228,
+      "estimated_tokens": 307,
+      "title": "DECLARE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/delete/index.md",
+      "size_bytes": 3086,
+      "estimated_tokens": 771,
+      "title": "DELETE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/discard/index.md",
+      "size_bytes": 1002,
+      "estimated_tokens": 250,
+      "title": "DISCARD",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-cluster/index.md",
+      "size_bytes": 2276,
+      "estimated_tokens": 569,
+      "title": "DROP CLUSTER",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-cluster-replica/index.md",
+      "size_bytes": 2141,
+      "estimated_tokens": 535,
+      "title": "DROP CLUSTER REPLICA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/drop-connection/index.md",
+      "size_bytes": 2434,
+      "estimated_tokens": 608,
+      "title": "DROP CONNECTION",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-database/index.md",
+      "size_bytes": 1935,
+      "estimated_tokens": 483,
+      "title": "DROP DATABASE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-index/index.md",
+      "size_bytes": 2171,
+      "estimated_tokens": 542,
+      "title": "DROP INDEX",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-materialized-view/index.md",
+      "size_bytes": 2387,
+      "estimated_tokens": 596,
+      "title": "DROP MATERIALIZED VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-network-policy/index.md",
+      "size_bytes": 1719,
+      "estimated_tokens": 429,
+      "title": "DROP NETWORK POLICY (Cloud)",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-owned/index.md",
+      "size_bytes": 2245,
+      "estimated_tokens": 561,
+      "title": "DROP OWNED",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-role/index.md",
+      "size_bytes": 1382,
+      "estimated_tokens": 345,
+      "title": "DROP ROLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-schema/index.md",
+      "size_bytes": 2276,
+      "estimated_tokens": 569,
+      "title": "DROP SCHEMA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-secret/index.md",
+      "size_bytes": 2434,
+      "estimated_tokens": 608,
+      "title": "DROP SECRET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-sink/index.md",
+      "size_bytes": 1440,
+      "estimated_tokens": 360,
+      "title": "DROP SINK",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-source/index.md",
+      "size_bytes": 2223,
+      "estimated_tokens": 555,
+      "title": "DROP SOURCE",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-table/index.md",
+      "size_bytes": 2484,
+      "estimated_tokens": 621,
+      "title": "DROP TABLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-type/index.md",
+      "size_bytes": 2865,
+      "estimated_tokens": 716,
+      "title": "DROP TYPE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-user/index.md",
+      "size_bytes": 1364,
+      "estimated_tokens": 341,
+      "title": "DROP USER",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/drop-view/index.md",
+      "size_bytes": 1984,
+      "estimated_tokens": 496,
+      "title": "DROP VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/execute/index.md",
+      "size_bytes": 1518,
+      "estimated_tokens": 379,
+      "title": "EXECUTE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/explain-analyze/index.md",
+      "size_bytes": 14807,
+      "estimated_tokens": 3701,
+      "title": "EXPLAIN ANALYZE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/explain-filter-pushdown/index.md",
+      "size_bytes": 5574,
+      "estimated_tokens": 1393,
+      "title": "EXPLAIN FILTER PUSHDOWN",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/explain-plan/index.md",
+      "size_bytes": 20785,
+      "estimated_tokens": 5196,
+      "title": "EXPLAIN PLAN",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/explain-schema/index.md",
+      "size_bytes": 3275,
+      "estimated_tokens": 818,
+      "title": "EXPLAIN SCHEMA",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/explain-timestamp/index.md",
+      "size_bytes": 9383,
+      "estimated_tokens": 2345,
+      "title": "EXPLAIN TIMESTAMP",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/fetch/index.md",
+      "size_bytes": 1521,
+      "estimated_tokens": 380,
+      "title": "FETCH",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/array_agg/index.md",
+      "size_bytes": 2324,
+      "estimated_tokens": 581,
+      "title": "array_agg function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/cast/index.md",
+      "size_bytes": 15917,
+      "estimated_tokens": 3979,
+      "title": "CAST function and operator",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/coalesce/index.md",
+      "size_bytes": 997,
+      "estimated_tokens": 249,
+      "title": "COALESCE function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/csv_extract/index.md",
+      "size_bytes": 1706,
+      "estimated_tokens": 426,
+      "title": "csv_extract function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/date-bin/index.md",
+      "size_bytes": 2760,
+      "estimated_tokens": 690,
+      "title": "date_bin function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/date-part/index.md",
+      "size_bytes": 2988,
+      "estimated_tokens": 747,
+      "title": "date_part function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/date-trunc/index.md",
+      "size_bytes": 1874,
+      "estimated_tokens": 468,
+      "title": "date_trunc function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/datediff/index.md",
+      "size_bytes": 3085,
+      "estimated_tokens": 771,
+      "title": "datediff function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/encode/index.md",
+      "size_bytes": 3178,
+      "estimated_tokens": 794,
+      "title": "encode and decode functions",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/extract/index.md",
+      "size_bytes": 2628,
+      "estimated_tokens": 657,
+      "title": "EXTRACT function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/filters/index.md",
+      "size_bytes": 1227,
+      "estimated_tokens": 306,
+      "title": "Aggregate function filters",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/index.md",
+      "size_bytes": 81573,
+      "estimated_tokens": 20393,
+      "title": "SQL functions & operators",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/jsonb_agg/index.md",
+      "size_bytes": 2643,
+      "estimated_tokens": 660,
+      "title": "jsonb_agg function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/jsonb_object_agg/index.md",
+      "size_bytes": 3234,
+      "estimated_tokens": 808,
+      "title": "jsonb_object_agg function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/justify-days/index.md",
+      "size_bytes": 1553,
+      "estimated_tokens": 388,
+      "title": "justify_days function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/justify-hours/index.md",
+      "size_bytes": 1559,
+      "estimated_tokens": 389,
+      "title": "justify_hours function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/justify-interval/index.md",
+      "size_bytes": 1881,
+      "estimated_tokens": 470,
+      "title": "justify_interval function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/length/index.md",
+      "size_bytes": 2559,
+      "estimated_tokens": 639,
+      "title": "LENGTH function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/list_agg/index.md",
+      "size_bytes": 2347,
+      "estimated_tokens": 586,
+      "title": "list_agg function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/map_agg/index.md",
+      "size_bytes": 3557,
+      "estimated_tokens": 889,
+      "title": "map_agg function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/normalize/index.md",
+      "size_bytes": 2685,
+      "estimated_tokens": 671,
+      "title": "normalize function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/now_and_mz_now/index.md",
+      "size_bytes": 7700,
+      "estimated_tokens": 1925,
+      "title": "now and mz_now functions",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/pushdown/index.md",
+      "size_bytes": 2594,
+      "estimated_tokens": 648,
+      "title": "Pushdown functions",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/string_agg/index.md",
+      "size_bytes": 3404,
+      "estimated_tokens": 851,
+      "title": "string_agg function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/functions/substring/index.md",
+      "size_bytes": 1434,
+      "estimated_tokens": 358,
+      "title": "SUBSTRING function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/table-functions/index.md",
+      "size_bytes": 6733,
+      "estimated_tokens": 1683,
+      "title": "Table functions",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/functions/timezone-and-at-time-zone/index.md",
+      "size_bytes": 2955,
+      "estimated_tokens": 738,
+      "title": "TIMEZONE and AT TIME ZONE functions",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/functions/to_char/index.md",
+      "size_bytes": 5517,
+      "estimated_tokens": 1379,
+      "title": "to_char function",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/grant-privilege/index.md",
+      "size_bytes": 7348,
+      "estimated_tokens": 1837,
+      "title": "GRANT PRIVILEGE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/grant-role/index.md",
+      "size_bytes": 1794,
+      "estimated_tokens": 448,
+      "title": "GRANT ROLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/identifiers/index.md",
+      "size_bytes": 5175,
+      "estimated_tokens": 1293,
+      "title": "Identifiers",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/index.md",
+      "size_bytes": 9538,
+      "estimated_tokens": 2384,
+      "title": "SQL Commands Reference",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/insert/index.md",
+      "size_bytes": 3839,
+      "estimated_tokens": 959,
+      "title": "INSERT",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/namespaces/index.md",
+      "size_bytes": 4478,
+      "estimated_tokens": 1119,
+      "title": "Namespaces",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/prepare/index.md",
+      "size_bytes": 1882,
+      "estimated_tokens": 470,
+      "title": "PREPARE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/reassign-owned/index.md",
+      "size_bytes": 1658,
+      "estimated_tokens": 414,
+      "title": "REASSIGN OWNED",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/reset/index.md",
+      "size_bytes": 1318,
+      "estimated_tokens": 329,
+      "title": "RESET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/revoke-privilege/index.md",
+      "size_bytes": 7496,
+      "estimated_tokens": 1874,
+      "title": "REVOKE PRIVILEGE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/revoke-role/index.md",
+      "size_bytes": 1810,
+      "estimated_tokens": 452,
+      "title": "REVOKE ROLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/rollback/index.md",
+      "size_bytes": 818,
+      "estimated_tokens": 204,
+      "title": "ROLLBACK",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/select/index.md",
+      "size_bytes": 36134,
+      "estimated_tokens": 9033,
+      "title": "SELECT",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/select/join/index.md",
+      "size_bytes": 8251,
+      "estimated_tokens": 2062,
+      "title": "JOIN",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/select/recursive-ctes/index.md",
+      "size_bytes": 15949,
+      "estimated_tokens": 3987,
+      "title": "Recursive CTEs",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/set/index.md",
+      "size_bytes": 2523,
+      "estimated_tokens": 630,
+      "title": "SET",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show/index.md",
+      "size_bytes": 1465,
+      "estimated_tokens": 366,
+      "title": "SHOW",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show-cluster-replicas/index.md",
+      "size_bytes": 1843,
+      "estimated_tokens": 460,
+      "title": "SHOW CLUSTER REPLICAS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show-clusters/index.md",
+      "size_bytes": 4711,
+      "estimated_tokens": 1177,
+      "title": "SHOW CLUSTERS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/show-columns/index.md",
+      "size_bytes": 2197,
+      "estimated_tokens": 549,
+      "title": "SHOW COLUMNS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-connections/index.md",
+      "size_bytes": 1717,
+      "estimated_tokens": 429,
+      "title": "SHOW CONNECTIONS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-create-cluster/index.md",
+      "size_bytes": 1587,
+      "estimated_tokens": 396,
+      "title": "SHOW CREATE CLUSTER",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/show-create-connection/index.md",
+      "size_bytes": 1851,
+      "estimated_tokens": 462,
+      "title": "SHOW CREATE CONNECTION",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-create-index/index.md",
+      "size_bytes": 1815,
+      "estimated_tokens": 453,
+      "title": "SHOW CREATE INDEX",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show-create-materialized-view/index.md",
+      "size_bytes": 2183,
+      "estimated_tokens": 545,
+      "title": "SHOW CREATE MATERIALIZED VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show-create-sink/index.md",
+      "size_bytes": 2039,
+      "estimated_tokens": 509,
+      "title": "SHOW CREATE SINK",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-create-source/index.md",
+      "size_bytes": 1656,
+      "estimated_tokens": 414,
+      "title": "SHOW CREATE SOURCE",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-create-table/index.md",
+      "size_bytes": 1597,
+      "estimated_tokens": 399,
+      "title": "SHOW CREATE TABLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-create-type/index.md",
+      "size_bytes": 1554,
+      "estimated_tokens": 388,
+      "title": "SHOW CREATE TYPE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-create-view/index.md",
+      "size_bytes": 1605,
+      "estimated_tokens": 401,
+      "title": "SHOW CREATE VIEW",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-databases/index.md",
+      "size_bytes": 1304,
+      "estimated_tokens": 326,
+      "title": "SHOW DATABASES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-default-privileges/index.md",
+      "size_bytes": 3016,
+      "estimated_tokens": 754,
+      "title": "SHOW DEFAULT PRIVILEGES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-indexes/index.md",
+      "size_bytes": 2631,
+      "estimated_tokens": 657,
+      "title": "SHOW INDEXES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-materialized-views/index.md",
+      "size_bytes": 1831,
+      "estimated_tokens": 457,
+      "title": "SHOW MATERIALIZED VIEWS",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show-network-policies/index.md",
+      "size_bytes": 2849,
+      "estimated_tokens": 712,
+      "title": "SHOW NETWORK POLICIES (Cloud)",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/show-objects/index.md",
+      "size_bytes": 2039,
+      "estimated_tokens": 509,
+      "title": "SHOW OBJECTS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-privileges/index.md",
+      "size_bytes": 4565,
+      "estimated_tokens": 1141,
+      "title": "SHOW PRIVILEGES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/show-role-membership/index.md",
+      "size_bytes": 1696,
+      "estimated_tokens": 424,
+      "title": "SHOW ROLE MEMBERSHIP",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-roles/index.md",
+      "size_bytes": 1379,
+      "estimated_tokens": 344,
+      "title": "SHOW ROLES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-schemas/index.md",
+      "size_bytes": 1457,
+      "estimated_tokens": 364,
+      "title": "SHOW SCHEMAS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-secrets/index.md",
+      "size_bytes": 2040,
+      "estimated_tokens": 510,
+      "title": "SHOW SECRETS",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-sinks/index.md",
+      "size_bytes": 2082,
+      "estimated_tokens": 520,
+      "title": "SHOW SINKS",
+      "doc_type": "reference",
+      "product_area": "Sinks",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-sources/index.md",
+      "size_bytes": 2278,
+      "estimated_tokens": 569,
+      "title": "SHOW SOURCES",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-subsources/index.md",
+      "size_bytes": 2490,
+      "estimated_tokens": 622,
+      "title": "SHOW SUBSOURCES",
+      "doc_type": "reference",
+      "product_area": "Sources",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-tables/index.md",
+      "size_bytes": 1636,
+      "estimated_tokens": 409,
+      "title": "SHOW TABLES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-types/index.md",
+      "size_bytes": 1251,
+      "estimated_tokens": 312,
+      "title": "SHOW TYPES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/show-views/index.md",
+      "size_bytes": 1411,
+      "estimated_tokens": 352,
+      "title": "SHOW VIEWS",
+      "doc_type": "reference",
+      "product_area": "Views",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/subscribe/index.md",
+      "size_bytes": 24069,
+      "estimated_tokens": 6017,
+      "title": "SUBSCRIBE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/system-catalog/index.md",
+      "size_bytes": 177891,
+      "estimated_tokens": 44472,
+      "title": "System catalog",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/system-catalog/information_schema/index.md",
+      "size_bytes": 2593,
+      "estimated_tokens": 648,
+      "title": "information_schema",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/system-catalog/mz_catalog/index.md",
+      "size_bytes": 42216,
+      "estimated_tokens": 10554,
+      "title": "mz_catalog",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/system-catalog/mz_internal/index.md",
+      "size_bytes": 97155,
+      "estimated_tokens": 24288,
+      "title": "mz_internal",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/system-catalog/mz_introspection/index.md",
+      "size_bytes": 32987,
+      "estimated_tokens": 8246,
+      "title": "mz_introspection",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/system-catalog/pg_catalog/index.md",
+      "size_bytes": 4561,
+      "estimated_tokens": 1140,
+      "title": "pg_catalog",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/system-clusters/index.md",
+      "size_bytes": 3811,
+      "estimated_tokens": 952,
+      "title": "System clusters",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/table/index.md",
+      "size_bytes": 1121,
+      "estimated_tokens": 280,
+      "title": "TABLE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/array/index.md",
+      "size_bytes": 6129,
+      "estimated_tokens": 1532,
+      "title": "Array types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/boolean/index.md",
+      "size_bytes": 1350,
+      "estimated_tokens": 337,
+      "title": "boolean type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/bytea/index.md",
+      "size_bytes": 4020,
+      "estimated_tokens": 1005,
+      "title": "bytea type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "beginner"
+    },
+    {
+      "path": "sql/types/date/index.md",
+      "size_bytes": 2185,
+      "estimated_tokens": 546,
+      "title": "date type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/float/index.md",
+      "size_bytes": 2689,
+      "estimated_tokens": 672,
+      "title": "Floating-point types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/index.md",
+      "size_bytes": 87502,
+      "estimated_tokens": 21875,
+      "title": "SQL data types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/types/integer/index.md",
+      "size_bytes": 2517,
+      "estimated_tokens": 629,
+      "title": "Integer types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/interval/index.md",
+      "size_bytes": 6758,
+      "estimated_tokens": 1689,
+      "title": "interval type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/jsonb/index.md",
+      "size_bytes": 11613,
+      "estimated_tokens": 2903,
+      "title": "jsonb type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/list/index.md",
+      "size_bytes": 15225,
+      "estimated_tokens": 3806,
+      "title": "List types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/map/index.md",
+      "size_bytes": 6490,
+      "estimated_tokens": 1622,
+      "title": "map type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/mz_aclitem/index.md",
+      "size_bytes": 2870,
+      "estimated_tokens": 717,
+      "title": "mz_aclitem type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/mz_timestamp/index.md",
+      "size_bytes": 1923,
+      "estimated_tokens": 480,
+      "title": "mz_timestamp type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/types/numeric/index.md",
+      "size_bytes": 6661,
+      "estimated_tokens": 1665,
+      "title": "numeric type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "advanced"
+    },
+    {
+      "path": "sql/types/oid/index.md",
+      "size_bytes": 1457,
+      "estimated_tokens": 364,
+      "title": "oid type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/record/index.md",
+      "size_bytes": 2130,
+      "estimated_tokens": 532,
+      "title": "record type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/text/index.md",
+      "size_bytes": 2646,
+      "estimated_tokens": 661,
+      "title": "text type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/time/index.md",
+      "size_bytes": 2107,
+      "estimated_tokens": 526,
+      "title": "time type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/timestamp/index.md",
+      "size_bytes": 4348,
+      "estimated_tokens": 1087,
+      "title": "Timestamp types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/uint/index.md",
+      "size_bytes": 2393,
+      "estimated_tokens": 598,
+      "title": "Unsigned Integer types",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/types/uuid/index.md",
+      "size_bytes": 2031,
+      "estimated_tokens": 507,
+      "title": "uuid type",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/update/index.md",
+      "size_bytes": 3691,
+      "estimated_tokens": 922,
+      "title": "UPDATE",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/validate-connection/index.md",
+      "size_bytes": 1848,
+      "estimated_tokens": 462,
+      "title": "VALIDATE CONNECTION",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "sql/values/index.md",
+      "size_bytes": 2006,
+      "estimated_tokens": 501,
+      "title": "VALUES",
+      "doc_type": "reference",
+      "product_area": "Indexes",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "support/index.md",
+      "size_bytes": 4621,
+      "estimated_tokens": 1155,
+      "title": "Support",
+      "doc_type": "reference",
+      "product_area": "General",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/dataflow-troubleshooting/index.md",
+      "size_bytes": 23668,
+      "estimated_tokens": 5917,
+      "title": "Dataflow troubleshooting",
+      "doc_type": "troubleshooting",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/faq/index.md",
+      "size_bytes": 881,
+      "estimated_tokens": 220,
+      "title": "FAQ: Indexes",
+      "doc_type": "troubleshooting",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/any/index.md",
+      "size_bytes": 6264,
+      "estimated_tokens": 1566,
+      "title": "`ANY()` equi-join condition",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "beginner"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/appendix/example-orders/index.md",
+      "size_bytes": 5719,
+      "estimated_tokens": 1429,
+      "title": "Example data: items and orders",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/appendix/idiomatic-sql-chart/index.md",
+      "size_bytes": 1653,
+      "estimated_tokens": 413,
+      "title": "Idiomatic Materialize SQL chart",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/appendix/index.md",
+      "size_bytes": 11456,
+      "estimated_tokens": 2864,
+      "title": "Appendix",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/appendix/window-function-to-materialize/index.md",
+      "size_bytes": 5243,
+      "estimated_tokens": 1310,
+      "title": "Window function to idiomatic Materialize",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/first-value/index.md",
+      "size_bytes": 8004,
+      "estimated_tokens": 2001,
+      "title": "First value in group",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/index.md",
+      "size_bytes": 48708,
+      "estimated_tokens": 12177,
+      "title": "Idiomatic Materialize SQL",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/lag/index.md",
+      "size_bytes": 8767,
+      "estimated_tokens": 2191,
+      "title": "Lag over",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "beginner"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/last-value/index.md",
+      "size_bytes": 9294,
+      "estimated_tokens": 2323,
+      "title": "Last value in group",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/lead/index.md",
+      "size_bytes": 8698,
+      "estimated_tokens": 2174,
+      "title": "Lead over",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "beginner"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/mz_now/index.md",
+      "size_bytes": 3254,
+      "estimated_tokens": 813,
+      "title": "mz_now() expressions",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "beginner"
+    },
+    {
+      "path": "transform-data/idiomatic-materialize-sql/top-k/index.md",
+      "size_bytes": 7910,
+      "estimated_tokens": 1977,
+      "title": "Top-K in group",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/index.md",
+      "size_bytes": 3721,
+      "estimated_tokens": 930,
+      "title": "Transform Data",
+      "doc_type": "overview",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/optimization/index.md",
+      "size_bytes": 26502,
+      "estimated_tokens": 6625,
+      "title": "Optimization",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/patterns/durable-subscriptions/index.md",
+      "size_bytes": 10820,
+      "estimated_tokens": 2705,
+      "title": "Durable subscriptions",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/patterns/index.md",
+      "size_bytes": 54745,
+      "estimated_tokens": 13686,
+      "title": "Patterns",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/patterns/partition-by/index.md",
+      "size_bytes": 9574,
+      "estimated_tokens": 2393,
+      "title": "Partitioning and filter pushdown",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/patterns/percentiles/index.md",
+      "size_bytes": 14132,
+      "estimated_tokens": 3533,
+      "title": "Percentile calculation",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "beginner"
+    },
+    {
+      "path": "transform-data/patterns/rules-engine/index.md",
+      "size_bytes": 7321,
+      "estimated_tokens": 1830,
+      "title": "Rules execution engine",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "intermediate"
+    },
+    {
+      "path": "transform-data/patterns/temporal-filters/index.md",
+      "size_bytes": 15556,
+      "estimated_tokens": 3889,
+      "title": "Temporal filters (time windows)",
+      "doc_type": "reference",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    },
+    {
+      "path": "transform-data/troubleshooting/index.md",
+      "size_bytes": 14730,
+      "estimated_tokens": 3682,
+      "title": "Troubleshooting",
+      "doc_type": "troubleshooting",
+      "product_area": "SQL",
+      "complexity": "advanced"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+---
+audience: developer
+canonical_url: https://materialize.com/docs/sql/show-network-policies/
+complexity: advanced
+description: '`SHOW NETWORK POLICIES` returns a list of all network policies configured
+  in Materialize.'
+doc_type: reference
+keywords:
+- SHOW NETWORK
+- SHOW NETWORK POLICIES (Cloud)
+- 'Note:'
+- LIKE
+product_area: Indexes
+status: stable
+title: SHOW NETWORK POLICIES (Cloud)
+---
+
+# SHOW NETWORK POLICIES (Cloud)
+
+## Purpose
+`SHOW NETWORK POLICIES` returns a list of all network policies configured in Materialize.
+
+If you need to understand the syntax and options for this command, you're in the right place.
+
+
+`SHOW NETWORK POLICIES` returns a list of all network policies configured in Materialize.
+
+
+
+*Available for Materialize Cloud only*
+
+`SHOW NETWORK POLICIES` returns a list of all network policies configured in
+Materialize. Network policies are part of Materialize's framework for
+[access control](/security/cloud/).
+
+## Syntax
+
+This section covers syntax.
+
+```mzsql
+SHOW NETWORK POLICIES [ LIKE <pattern> ];
+```text
+
+Syntax element                | Description
+------------------------------|------------
+**LIKE** \<pattern\>       | If specified, only show network policies whose name matches the pattern.
+
+## Pre-installed network policy
+
+When you enable a Materialize region, a default network policy named `default`
+will be pre-installed. This policy has a wide open ingress rule `allow
+0.0.0.0/0`. You can modify or drop this network policy at any time.
+
+> **Note:** 
+The default value for the `network_policy` session parameter is `default`.
+Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
+Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
+change the default value.
+
+
+## Examples
+
+This section covers examples.
+
+```mzsql
+SHOW NETWORK POLICIES;
+```text
+```nofmt
+| name                 | rules              | comment |
+| -------------------- | ------------------ | ------- |
+| default              | open_ingress       |         |
+| office_access_policy | minnesota,new_york |         |
+```text
+
+To see details for each rule in a network policy, you can query the
+[`mz_internal.mz_network_policy_rules`](/sql/system-catalog/mz_internal/#mz_network_policy_rules)
+system catalog table.
+
+```mzsql
+SELECT * FROM mz_internal.mz_network_policy_rules;
+```text
+```nofmt
+| name         | policy_id | action | address    | direction |
+| ------------ | --------- | ------ | ---------- | --------- |
+| new_york     | u3        | allow  | 1.2.3.4/28 | ingress   |
+| minnesota    | u3        | allow  | 2.3.4.5/32 | ingress   |
+| open_ingress | u1        | allow  | 0.0.0.0/0  | ingress   |
+```
+
+## Related pages
+
+- [`CREATE NETWORK POLICY`](../create-network-policy)
+- [`ALTER NETWORK POLICY`](../alter-network-policy)
+- [`DROP NETWORK POLICY`](../drop-network-policy)
+
