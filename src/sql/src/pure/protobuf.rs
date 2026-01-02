@@ -25,7 +25,7 @@ use protobuf_native::compiler::VirtualSourceTree;
 /// These are the standard types from the `google.protobuf` package that are
 /// commonly imported by user schemas (e.g., `google/protobuf/timestamp.proto`).
 ///
-/// Source: https://github.com/protocolbuffers/protobuf/tree/main/src/google/protobuf
+/// Source: <https://github.com/protocolbuffers/protobuf/tree/main/src/google/protobuf>
 pub static WELL_KNOWN_TYPES: &[(&str, &str)] = &[
     ("google/protobuf/any.proto", ANY_PROTO),
     ("google/protobuf/api.proto", API_PROTO),
