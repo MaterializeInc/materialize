@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Monoid;
@@ -580,10 +580,83 @@ where
             leased_seqnos: BTreeMap::new(),
             unexpired_state: Some(UnexpiredReadHandleState {
                 expire_fn,
-                _heartbeat_tasks: JoinHandle::abort_on_drop(
-                    machine.start_reader_heartbeat_task(reader_id, gc),
-                ),
+                _heartbeat_tasks: JoinHandle::abort_on_drop(Self::start_reader_heartbeat_task(
+                    machine, reader_id, gc,
+                )),
             }),
+        }
+    }
+
+    fn start_reader_heartbeat_task(
+        machine: Machine<K, V, T, D>,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+    ) -> JoinHandle<()> {
+        let metrics = Arc::clone(&machine.applier.metrics);
+        let name = format!(
+            "persist::heartbeat_read({},{})",
+            machine.shard_id(),
+            reader_id
+        );
+        mz_ore::task::spawn(|| name, {
+            metrics.tasks.heartbeat_read.instrument_task(async move {
+                Self::reader_heartbeat_task(machine, reader_id, gc).await
+            })
+        })
+    }
+
+    async fn reader_heartbeat_task(
+        machine: Machine<K, V, T, D>,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+    ) {
+        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 2;
+        loop {
+            let before_sleep = Instant::now();
+            tokio::time::sleep(sleep_duration).await;
+
+            let elapsed_since_before_sleeping = before_sleep.elapsed();
+            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_before_sleeping.as_secs_f64()
+                );
+            }
+
+            let before_heartbeat = Instant::now();
+            let (_seqno, existed, maintenance) = machine
+                .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
+                .await;
+            maintenance.start_performing(&machine, &gc);
+
+            let elapsed_since_heartbeat = before_heartbeat.elapsed();
+            if elapsed_since_heartbeat > Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) heartbeat call took {}s",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_heartbeat.as_secs_f64(),
+                );
+            }
+
+            if !existed {
+                // If the read handle was intentionally expired, this task
+                // *should* be aborted before it observes the expiration. So if
+                // we get here, this task somehow failed to keep the read lease
+                // alive. Warn loudly, because there's now a live read handle to
+                // an expired shard that will panic if used, but don't panic,
+                // just in case there is some edge case that results in this
+                // task observing the intentional expiration of a read handle.
+                warn!(
+                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
+                     while read handle is live",
+                    reader_id,
+                    machine.shard_id(),
+                );
+                return;
+            }
         }
     }
 
