@@ -134,13 +134,10 @@ def setup_materialize(c: Composition, num_views: int) -> str:
         )
     )
 
-    # Create the chain of materialized views
-    prev_source = "data_source"
     for i in range(1, num_views + 1):
-        c.sql(f"CREATE MATERIALIZED VIEW data_mv{i} AS (SELECT DISTINCT * FROM {prev_source});")
-        prev_source = f"data_mv{i}"
+        c.sql(f"CREATE MATERIALIZED VIEW data_mv{i} AS (SELECT DISTINCT * FROM data_source);")
 
-    return prev_source
+    return "data_mv1"
 
 
 class LatencyStats:
