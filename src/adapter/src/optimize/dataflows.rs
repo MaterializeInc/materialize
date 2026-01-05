@@ -239,13 +239,13 @@ impl<'a> DataflowBuilder<'a> {
                         let expr = view.optimized_expr.as_ref();
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
+                    CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
+                        // Can't read from replacements, use the view definition directly.
+                        let expr = mview.optimized_expr.as_ref();
+                        self.import_view_into_dataflow(id, expr, dataflow, features)?;
+                    }
                     CatalogItem::MaterializedView(mview) => {
-                        if mview.replacement_target.is_some() {
-                            let expr = mview.optimized_expr.as_ref();
-                            self.import_view_into_dataflow(id, expr, dataflow, features)?;
-                        } else {
-                            dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
-                        }
+                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);

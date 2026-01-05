@@ -50,6 +50,23 @@ SELECT * FROM rp
 7  4
 11 6
 
+
+# Ensure that querying the replacement view uses the definition, not the (replacement) materialized view.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM rp
+----
+Explained Query:
+  Project (#2, #1{b})
+    Map ((#0{a} + #1{b}))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+
 query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
@@ -192,7 +209,6 @@ DROP MATERIALIZED VIEW mv;
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE;
 
-# TODO(alter-mv): Test: replacement cannot be selected from
 # TODO(alter-mv): Test: not more than one replacement allowed per MV
 # TODO(alter-mv): Test: cannot create an object depending on a replacement
 # TODO(alter-mv): Test: audit log
