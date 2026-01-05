@@ -116,8 +116,11 @@ $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 > SHOW CREATE SOURCE mz_source;
 materialize.public.mz_source "CREATE SOURCE materialize.public.mz_source\nIN CLUSTER quickstart\nFROM MYSQL CONNECTION materialize.public.mysql_conn;"
 
-> SHOW CREATE TABLE table_a;
+>[version<2600700] SHOW CREATE TABLE table_a;
 materialize.public.table_a "CREATE TABLE materialize.public.table_a (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk)) FROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE table_a;
+materialize.public.table_a "CREATE TABLE\n    materialize.public.table_a\n        (pk pg_catalog.int4 NOT NULL, f2 pg_catalog.text, CONSTRAINT \"PRIMARY\" PRIMARY KEY (pk))\nFROM SOURCE materialize.public.mz_source (REFERENCE = public.table_a)\nWITH (\n    <DETAILS>\n);"
 
 #
 # Error checking

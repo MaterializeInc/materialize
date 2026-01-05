@@ -91,8 +91,11 @@ INSERT INTO t1 SELECT * FROM t1;
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE t1;
+>[version<2600700] SHOW CREATE TABLE t1;
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.text, f2 pg_catalog.text, f3 pg_catalog.text, f4 pg_catalog.text, f5 pg_catalog.text, f6 pg_catalog.text, f7 pg_catalog.text, f8 pg_catalog.text, f9 pg_catalog.text) FROM SOURCE materialize.public.da (REFERENCE = public.t1) WITH (TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9), <DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE\n    materialize.public.t1\n        (\n            f1 pg_catalog.text,\n            f2 pg_catalog.text,\n            f3 pg_catalog.text,\n            f4 pg_catalog.text,\n            f5 pg_catalog.text,\n            f6 pg_catalog.text,\n            f7 pg_catalog.text,\n            f8 pg_catalog.text,\n            f9 pg_catalog.text\n        )\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    TEXT COLUMNS = (f1, f2, f3, f4, f5, f6, f7, f8, f9),\n    <DETAILS>\n);"
 
 > DROP SOURCE da CASCADE;
 
