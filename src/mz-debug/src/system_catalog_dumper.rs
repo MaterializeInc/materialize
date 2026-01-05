@@ -349,14 +349,6 @@ static RELATIONS: &[Relation] = &[
         category: RelationCategory::Introspection,
     },
     Relation {
-        name: "mz_dataflow_shutdown_durations_histogram_per_worker",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
-        name: "mz_dataflow_shutdown_durations_histogram",
-        category: RelationCategory::Introspection,
-    },
-    Relation {
         name: "mz_scheduling_elapsed_per_worker",
         category: RelationCategory::Introspection,
     },

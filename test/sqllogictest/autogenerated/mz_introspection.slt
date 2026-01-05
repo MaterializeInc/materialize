@@ -155,12 +155,6 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND o
 2  parent_id  uint8
 
 query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_dataflow_shutdown_durations_histogram' ORDER BY position
-----
-1  duration_ns  uint8
-2  count  numeric
-
-query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_expected_group_size_advice' ORDER BY position
 ----
 1  dataflow_id  uint8
@@ -293,9 +287,6 @@ mz_dataflow_operator_reachability_per_worker
 mz_dataflow_operator_reachability_raw
 mz_dataflow_operators
 mz_dataflow_operators_per_worker
-mz_dataflow_shutdown_durations_histogram
-mz_dataflow_shutdown_durations_histogram_per_worker
-mz_dataflow_shutdown_durations_histogram_raw
 mz_dataflows
 mz_dataflows_per_worker
 mz_expected_group_size_advice
