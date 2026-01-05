@@ -958,7 +958,6 @@ mod tests {
     }
 
     #[crate::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     fn smoke_test_metrics_future_ext() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()

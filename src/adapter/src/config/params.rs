@@ -158,7 +158,6 @@ mod tests {
     use super::SynchronizedParameters;
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_github_18189() {
         let vars = SystemVars::default();
         let mut sync = SynchronizedParameters::new(vars);
@@ -169,7 +168,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_vars_are_synced() {
         let vars = SystemVars::default();
         let sync = SynchronizedParameters::new(vars);

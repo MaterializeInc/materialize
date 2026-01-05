@@ -3252,7 +3252,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
         let relation_type = vec![
             SqlScalarType::Int64.nullable(true),

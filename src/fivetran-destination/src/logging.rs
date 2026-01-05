@@ -195,7 +195,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: `open` not available when isolation is enabled
     fn test_tracing_logging_levels() {
         let writer = TestWriter::default();
 

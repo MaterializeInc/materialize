@@ -19,7 +19,6 @@ use mz_sql_pretty::{Pretty, PrettyConfig, to_pretty};
 // generate identical ASTs when pretty printed. Output the same output as the parser so datadriven
 // is happy. (Having the datadriven parser be exported would be nice here too.)
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_parser() {
     walk("../sql-parser/tests/testdata", |f| {
         f.run(|tc| -> String {

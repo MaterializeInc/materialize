@@ -1314,7 +1314,6 @@ mod tests {
     /// Regression test for (part of) database-issues#5170, where an interrupted
     /// `bin/environmentd --reset` resulted in panic in persist usage code.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_all_live_states_regression_uninitialized(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let state_versions = StateVersions::new(

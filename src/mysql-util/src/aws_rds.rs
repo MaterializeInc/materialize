@@ -113,7 +113,6 @@ mod test {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `getauxval` on OS `linux`
     async fn test_signature() {
         let time_source = TestTimeSource {
             time: SystemTime::UNIX_EPOCH + Duration::from_secs(1740690000),

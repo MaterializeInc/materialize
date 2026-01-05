@@ -238,7 +238,6 @@ impl<'a> FromSql<'a> for Numeric {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
 fn test_to_from_sql_roundtrip() {
     fn inner(s: &str) {
         let mut cx = numeric::cx_datum();

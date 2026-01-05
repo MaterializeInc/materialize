@@ -2410,7 +2410,6 @@ mod tests {
     /// search paths, so do not require schema qualification on system objects such
     /// as types.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_minimal_qualification() {
         Catalog::with_debug(|catalog| async move {
             struct TestCase {
@@ -2480,7 +2479,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_catalog_revision() {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
@@ -2522,7 +2520,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_effective_search_path() {
         Catalog::with_debug(|catalog| async move {
             let mz_catalog_schema = (
@@ -2669,7 +2666,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_normalized_create() {
         use mz_ore::collections::CollectionExt;
         Catalog::with_debug(|catalog| async move {
@@ -2775,7 +2771,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_object_type() {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -2797,7 +2792,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_get_privileges() {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -2820,7 +2814,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn verify_builtin_descs() {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -2875,7 +2868,6 @@ mod tests {
     // Connect to a running Postgres server and verify that our builtin
     // types and functions match it, in addition to some other things.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_compare_builtins_postgres() {
         async fn inner(catalog: Catalog) {
             // Verify that all builtin functions:
@@ -3274,7 +3266,6 @@ mod tests {
 
     // Execute all builtin functions with all combinations of arguments from interesting datums.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_smoketest_all_builtins() {
         fn inner(catalog: Catalog) -> Vec<mz_ore::task::JoinHandle<()>> {
             let catalog = Arc::new(catalog);
@@ -3591,7 +3582,6 @@ mod tests {
 
     // Make sure pg views don't use types that only exist in Materialize.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_pg_views_forbidden_types() {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -3661,7 +3651,6 @@ mod tests {
     // Make sure objects reside in the `mz_introspection` schema iff they depend on per-replica
     // introspection relations.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn test_mz_introspection_builtins() {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
@@ -3693,7 +3682,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_multi_subscriber_catalog() {
         let persist_client = PersistClient::new_for_tests().await;
         let bootstrap_args = test_bootstrap_args();

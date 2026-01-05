@@ -1218,7 +1218,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn prefetches() {
         fn check(budget: usize, runs: Vec<Vec<usize>>, prefetch_all: bool) {
             let desc = Description::new(

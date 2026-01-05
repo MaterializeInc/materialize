@@ -239,7 +239,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn unreliable_blob() {
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
         let handle = UnreliableHandle::default();
@@ -271,7 +270,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn unreliable_consensus() {
         let consensus = Arc::new(MemConsensus::default());
         let handle = UnreliableHandle::default();

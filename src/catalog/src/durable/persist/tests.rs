@@ -17,7 +17,6 @@ use crate::durable::{DurableCatalogError, TestCatalogStateBuilder, test_bootstra
 
 /// Test that the catalog forces users to upgrade one version at a time.
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_upgrade_shard() {
     let first_version = semver::Version::parse("0.147.0").expect("failed to parse version");
     let second_version = semver::Version::parse("26.0.0").expect("failed to parse version");
@@ -152,7 +151,6 @@ async fn test_upgrade_shard() {
 
 /// Test that the catalog cannot be opened with old versions after an upgrade.
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_version_regression() {
     let first_version = semver::Version::parse("0.147.0").expect("failed to parse version");
     let second_version = semver::Version::parse("26.1.0").expect("failed to parse version");

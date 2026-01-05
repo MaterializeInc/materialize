@@ -79,7 +79,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn run() {
         datadriven::walk("tests/testdata", |f| {
             f.run(move |s| -> String {

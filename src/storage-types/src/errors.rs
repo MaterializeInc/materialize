@@ -921,7 +921,6 @@ mod columnation {
 
         proptest! {
             #[mz_ore::test]
-            #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
             fn dataflow_error_roundtrip(expect in any::<DataflowError>()) {
                 let actual = columnation_roundtrip(&expect);
                 proptest::prop_assert_eq!(&expect, &actual[0])

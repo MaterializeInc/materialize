@@ -998,7 +998,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_reader_stream() {
         let schema: Schema = SCHEMA.parse().unwrap();
         let reader = Reader::with_schema(&schema, ENCODED).unwrap();
@@ -1026,7 +1025,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_reader_invalid_block() {
         let schema: Schema = SCHEMA.parse().unwrap();
         let invalid = ENCODED

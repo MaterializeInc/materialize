@@ -20,7 +20,6 @@ fn cmd() -> Command {
 /// This test seems a bit tautological, but it protects against Clap defaults
 /// changing and overwriting our custom version output.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
 fn test_version() {
     // We don't make assertions about the build SHA because caching in CI can
     // cause the test binary and `environmentd` to have different embedded SHAs.

@@ -862,7 +862,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn commit_log() {
         let (d0, d1) = (ShardId::new(), ShardId::new());
         let log0 = CommitLog::new(PersistClient::new_for_tests().await, ShardId::new());

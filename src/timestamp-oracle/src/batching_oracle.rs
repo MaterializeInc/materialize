@@ -137,7 +137,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_batching_timestamp_oracle() -> Result<(), anyhow::Error> {
         let config = match PostgresTimestampOracleConfig::new_for_test() {
             Some(config) => config,

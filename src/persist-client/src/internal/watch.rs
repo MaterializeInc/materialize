@@ -211,7 +211,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn state_watch_concurrency() {
         mz_ore::test::init_logging();
         let metrics = Arc::new(Metrics::new(
@@ -280,7 +279,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn state_watch_listen_snapshot(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
         let waker = noop_waker();

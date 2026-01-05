@@ -1034,7 +1034,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn trace_batch_meta_validate_data() -> Result<(), Error> {
         let metrics = ColumnarMetrics::disconnected();
         let blob = Arc::new(MemBlob::open(MemBlobConfig::default()));
