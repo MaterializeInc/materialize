@@ -98,16 +98,14 @@ OAUTHBEARER reference: [https://www.postgresql.org/docs/18/sasl-authentication.h
 
 Unfortunately, to provide a nice flow to generate the necessary access token and refresh token, we’d need to control the client. Thus we’ll leave the retrieval of the access token/refresh token to the user, similar to CockroachDB.
 
-**Alternative: Revive the mz CLI**
-
-We have an `mz` CLI that’s catered to Cloud and no longer supported. We can potentially bring this back.
-
-**Open question:** Is there anything we can do on our side to easily provide access tokens / refresh tokens to the user without controlling the client? This feels like the missing piece between OIDC authentication and something like `aws sso login` in the AWS CLI
+**Out of scope**:
+- Providing an easy way to gain access tokens  / refresh tokens from the user's IDP.
+- Controlling the client and reviving the `mz` cli
 
 ### Solution proposal: The end user is able to visit the Materialize console, and sign in with their IdP
 
 **Out of scope**:
-A generic Frontend SSO redirect flow would need to be implemented to retrieve an access token and refresh token. However once retrieved, the SQL HTTP / WS API endpoints can use bearer authorization like Cloud and accept the access token. The Console would be in charge of refreshing the access token.
+-A generic Frontend SSO redirect flow would need to be implemented to retrieve an access token and refresh token. However once retrieved, the SQL HTTP / WS API endpoints can use bearer authorization like Cloud and accept the access token. The Console would be in charge of refreshing the access token.
 
 ### Work items:
 
