@@ -16,6 +16,11 @@ Our goal is to enable single sign on (SSO) for our self managed product
 - The end user is able to create a token to connect to materialize via psql / postgres clients
 - The end user is able to visit the Materialize console, and sign in with their IdP
 
+## Non-goals
+- SCIM
+- JWK refresh
+- Generically mapping JWT roles to MZ roles
+
 ## Configuration
 
 OIDC authentication can be enabled by specifying the following Materialize CRD:
@@ -29,13 +34,11 @@ spec:
   ...
   authenticatorKind: Oidc
   oidcAuthenticationSettings:
-  # Must match the OIDC client ID. Required.
+  # Must match the OIDC client ID. Optional.
     audience: 060a4f3d-1cac-46e4-b5a5-6b9c66cd9431
     # The claim that represents the user's name in Materialize.
     # Usually either "sub" or "email". Required.
     authenticationClaim: email
-    # The key for the `groups` claim. Optional and defaults to "groups"
-    groupClaim: groups
     # The expected issuer URL, must correspond to the `iss` field of the JWT.
     # Required.
     issuer: https://dev-123456.okta.com/oauth2/default
@@ -61,7 +64,7 @@ Where in environmentd, it’ll look like so:
 ```bash
 bin/environmentd -- \
 --listeners-config-path='/listeners/oidc.json' \
---oidc-authentication-setting="{\"audience\":\"060a4f3d-1cac-46e4-b5a5-6b9c66cd9431\",\"authentication_claim\":\"email\",\"group_claim\":\"groups\",\"issuer\":\"https://dev-123456.okta.com/oauth2/default\",\"jwks\":{\"keys\":[...]},\"jwks_fetch_from_issuer\":true,\"token_endpoint\":\"https://dev-123456.okta.com/oauth2/default/v1/token\"}"
+--oidc-authentication-setting="{\"audience\":\"060a4f3d-1cac-46e4-b5a5-6b9c66cd9431\",\"authentication_claim\":\"email\",\"issuer\":\"https://dev-123456.okta.com/oauth2/default\",\"jwks\":{\"keys\":[...]},\"jwks_fetch_from_issuer\":true,\"token_endpoint\":\"https://dev-123456.okta.com/oauth2/default/v1/token\"}"
 ```
 
 ## Testing Frameworks
@@ -71,19 +74,23 @@ bin/environmentd -- \
 
 ## Phase 1: Create a OIDC authenticator kind
 
-### Solution proposal: Creating a user & adding roles: An admin gives a user access to Materialize
+### Solution proposal: Creating a user & adding roles: An admin, someone in charge of ensuring that users can only access applications which they are authorized to, gives a user access to Materialize
 
-By requiring the `aud` (audience) claim to match the configured client ID, we ensure that JWTs issued for other applications (e.g., Slack, internal tools) cannot be used to authenticate with Materialize. This means an admin must explicitly grant users access to the Materialize-specific OIDC client in their IdP. When a user first logs in with a valid token, we create a role for them if one does not already exist.
+If an admin wants to forbid JWTs issued for other applications (e.g., Slack, internal tools) authenticating with Materialize, they can specify the `aud` (audience) claim to match the Materialize-specific OIDC client ID. We will keep it optional to keep parity with the Frontegg authenticator.
+
+When a user first logs in with a valid token, we create a role for them if one does not already exist.
 
 ### Solution proposal: The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
 
-When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. The implementation will be very similar to how we refresh tokens for the Frontegg authenticator. This would require users to have their IDP client generate `refresh` tokens.
+When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. This would require users to have their IDP client generate `refresh` tokens. For token expiration checking, in a task, we'll repeatedly wait for `(expiration - now) * 0.8` and see if it's less than a minute. This is also how we check token expiration in the Frontegg authenticator. We'll also implement a config variable to turn off this mechanism and have it default to true.
 
 By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on deprovisioning of a user. When admins deprovision a user, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
 
 **Alternative: Use SASL Authentication using the OAUTHBEARER mechanism rather than a cleartext password**
 
 This would be the most Postgres compatible way of doing this and is what it uses for its `oauth` authentication method. However, it may run into compatibility issues with clients. For example in `psql`, there’s no obvious way of sending the bearer token directly without going through libpq's device-grant flow. Furthermore, assuming access tokens are short lived, this could lead to poor UX given there’s no native way to re-authenticate a pgwire session. Finally, our HTTP endpoints wouldn’t be able to support this given they don’t support SASL auth.
+
+In case we need to support SASL+OAUTH in the same Materialize instance, we can create a new port for it. For now we will call it out of scope.
 
 OAUTHBEARER reference: [https://www.postgresql.org/docs/18/sasl-authentication.html#SASL-OAUTHBEARER](https://www.postgresql.org/docs/18/sasl-authentication.html#SASL-OAUTHBEARER)
 
@@ -124,7 +131,7 @@ An MVP of what this might look like exists here: [https://github.com/Materialize
 - Session should error if access token is invalid (Rust unit test)
 - Session should error if refresh token is invalid (Rust unit test)
 - De-provisioning a user should invalidate the refresh token (e2e mzcompose)
-- Platform-check simple login check (platform-check framework
+- Platform-check simple login check (platform-check framework)
 - JWTs should only be accepted when a valid JWK is set (we do not want to accept JWTs that are not signed with a real, cryptographically sound key)
 
 ## Phase 2: Map the `admin` claim to a user’s superuser attribute
