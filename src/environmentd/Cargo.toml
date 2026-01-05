@@ -101,7 +101,7 @@ rlimit = "0.10.2"
 semver = "1.0.27"
 sentry-tracing = "0.38.1"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.147"
+serde_json = "1.0.148"
 shell-words = "1.1.1"
 stacker = "0.1.22"
 sysctl = "0.7.1"
@@ -157,7 +157,7 @@ rdkafka = { version = "0.29.0", features = [
     "zstd",
 ] }
 reqwest = { version = "0.12.28", features = ["blocking"] }
-serde_json = "1.0.147"
+serde_json = "1.0.148"
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.7"
 timely = "0.25.1"
