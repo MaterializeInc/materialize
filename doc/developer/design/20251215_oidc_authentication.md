@@ -14,12 +14,12 @@ Our goal is to enable single sign on (SSO) for our self managed product
 - Creating a user & adding roles: An admin gives a user access to Materialize
 - The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
 - The end user is able to create a token to connect to materialize via psql / postgres clients
-- The end user is able to visit the Materialize console, and sign in with their IdP
 
 ## Non-goals
-- SCIM
 - JWK refresh
-- Generically mapping JWT roles to MZ roles
+- The end user is able to visit the Materialize console, and sign in with their Identity Provider (IdP)
+- SCIM
+- Syncing IdP roles and attributes to Materialize roles and attributes
 
 ## Configuration
 
@@ -70,7 +70,7 @@ bin/environmentd -- \
 ## Testing Frameworks
 
 - For unit testing, use cargo nextest. Similar to frontegg-mock, create a mock oidc server that exposes the correct endpoints, provides a correct JWKS, and generates a JWT with desired claims and fields.
-- For end to end testing, use mzcompose and integrate an Ory hydra server docker image as the IDP. Then we can assert against an instance of Materialize created by orchestratord.
+- For end to end testing, use mzcompose and integrate an Ory hydra server docker image as the IdP. Then we can assert against an instance of Materialize created by orchestratord.
 
 ## Phase 1: Create a OIDC authenticator kind
 
@@ -82,9 +82,9 @@ When a user first logs in with a valid token, we create a role for them if one d
 
 ### Solution proposal: The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
 
-When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. This would require users to have their IDP client generate `refresh` tokens. For token expiration checking, in a task, we'll repeatedly wait for `(expiration - now) * 0.8` and see if it's less than a minute. This is also how we check token expiration in the Frontegg authenticator. We'll also implement a config variable to turn off this mechanism and have it default to true.
+When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. This would require users to have their IdP client generate `refresh` tokens. For token expiration checking, in a task, we'll repeatedly wait for `(expiration - now) * 0.8` and see if it's less than a minute. This is also how we check token expiration in the Frontegg authenticator. We'll also implement a config variable to turn off this mechanism and have it default to true.
 
-By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on deprovisioning of a user. When admins deprovision a user, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
+By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on de-provisioning of a user. When admins de-provision a user, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
 
 **Alternative: Use SASL Authentication using the OAUTHBEARER mechanism rather than a cleartext password**
 
@@ -99,7 +99,7 @@ OAUTHBEARER reference: [https://www.postgresql.org/docs/18/sasl-authentication.h
 Unfortunately, to provide a nice flow to generate the necessary access token and refresh token, we’d need to control the client. Thus we’ll leave the retrieval of the access token/refresh token to the user, similar to CockroachDB.
 
 **Out of scope**:
-- Providing an easy way to gain access tokens  / refresh tokens from the user's IDP.
+- Providing an easy way to gain access tokens  / refresh tokens from the user's IdP.
 - Controlling the client and reviving the `mz` cli
 
 ### Solution proposal: The end user is able to visit the Materialize console, and sign in with their IdP
@@ -113,7 +113,7 @@ Unfortunately, to provide a nice flow to generate the necessary access token and
     - Create environmentd CLI arguments to accept the OIDC authentication configuration above
     - Wire up the HTTP endpoints, WS endpoints, and pgwire for this authenticator kind
 - Add a `Oidc` authenticator kind to orchestratord and create a `Oidc` listener config
-    - Still leave a port open for password auth for `mz_system` logins given admins can’t map a user in their IDP to `mz_system`
+    - Still leave a port open for password auth for `mz_system` logins given admins can’t map a user in their IdP to `mz_system`
 
 An MVP of what this might look like exists here: [https://github.com/MaterializeInc/materialize/pull/34516](https://github.com/MaterializeInc/materialize/pull/34516). Some differences from the proposed design:
 - Does not implement the refresh token flow
@@ -132,32 +132,18 @@ An MVP of what this might look like exists here: [https://github.com/Materialize
 - Platform-check simple login check (platform-check framework)
 - JWTs should only be accepted when a valid JWK is set (we do not want to accept JWTs that are not signed with a real, cryptographically sound key)
 
-## Phase 2: Map the `admin` claim to a user’s superuser attribute
+## Out of scope: Sync roles and attributes from an IdP to Materialize roles and attributes
 
-Based on the `admin` claim, we can set the `superuser` attribute we store in the catalog for password authentication. We do this by doing the following:
+This phase is out of scope, but it's still useful to describe how we can implement it.
 
-- First, in our authenticator, save `admin` inside the user’s `external_metadata`
-- Next, in `handle_startup_inner()` we diff them with the user’s current superuser status and if there’s a difference, apply the changes with an `ALTER` operation. We can use `catalog_transact_with_context()` for this.
+### Potential approach: Syncing roles through the `roles` claim in a JWT
+Based on the `roles` claim, we can synchronize the roles the user belongs to in the catalog. We do this by doing the following:
+
+- First, in our authenticator, save `roles` from the `roles` claim inside the user’s `external_metadata`
+- Next, in `handle_startup_inner()` we diff them with the user’s current roles and if there’s a difference, apply the changes with `GRANT` operations. We can use `catalog_transact_with_context()` for this. Furthermore, the roles would need to exist in the system first.
 - On error (e.g. if the ALTER isn’t allowed), we’ll end the connection with a descriptive error message. This is a similar pattern we use for initializing network policies.
 
-This is similar to how we identify superusers in Frontegg auth, except we also treat it as an operation to update the catalog
-  - We can keep using the session’ metadata as the source of truth to keep parity with Cloud, but eventually we’ll want to use the catalog as the source of truth for all. We can call this **out of scope.**
+For syncing the `SUPERUSER` attribute, we can do something similar to above where we allow the user to configure a keyword that represents the "superuser role". Then in the `roles` claim, we look for that role and sync their superuser status using the same steps above, except we use `ALTER` instead of `GRANT`. This is similar to how we identify superusers in Cloud currently. The difference being in Cloud, we don't update the catalog and use `external_metadata` as the source of truth.
+  - We can keep using the session’ metadata as the source of truth to keep parity with Cloud, but eventually we’ll want to use the catalog as the source of truth for all.
 
 Prototype: [https://github.com/MaterializeInc/materialize/pull/34372/commits](https://github.com/MaterializeInc/materialize/pull/34372/commits)
-
-### Tests
-
-- Authenticating with a varying `admin` claim should reflect when querying the superuser status of adapter
-- Superuser status should reflect in `mz_roles` (Rust unit test)
-
-
-<!--
-What is left unaddressed by this design document that needs to be
-closed out?
-
-When a design document is authored and shared, there might still be
-open questions that need to be explored. Through the design document
-process, you are responsible for getting answers to these open
-questions. All open questions should be answered by the time a design
-document is merged.
--->
