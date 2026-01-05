@@ -132,6 +132,10 @@ An MVP of what this might look like exists here: [https://github.com/Materialize
 - Platform-check simple login check (platform-check framework)
 - JWTs should only be accepted when a valid JWK is set (we do not want to accept JWTs that are not signed with a real, cryptographically sound key)
 
+## Phase 2: Make OIDC configurable on runtime
+
+When solely relying on flags to `environmentd` for OIDC configuation, for an admin to update the OIDC configuration (i.e. rotating the JWKs), they'd need to do an entire rollout of the Materialize instance. To prevent this, we can provide an alternative way of updating the configuration on runtime. By creating system parameter variables for each configuration variable, we can enable users to update this config through SQL or through the system parameter configmap. Orchestratord will use the Materialize CRD spec to populate the default system variables for OIDC configuration.
+
 ## Out of scope: Sync roles and attributes from an IdP to Materialize roles and attributes
 
 This phase is out of scope, but it's still useful to describe how we can implement it.
