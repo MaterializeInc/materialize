@@ -18,14 +18,12 @@
 //! ## Third-party content
 //!
 //! The well-known protobuf type definitions embedded in this file are derived
-//! from Google's Protocol Buffers project and are licensed under the BSD
-//! 3-Clause license. See the LICENSE file in the repository root for the full
-//! license text.
+//! from Google's Protocol Buffers project (copyright 2008 Google Inc.) and are
+//! licensed under the BSD 3-Clause license. See the LICENSE file in the
+//! repository root for the full license text.
 //!
 //! Source: <https://github.com/protocolbuffers/protobuf>
 //! Revision: v29.3 (protocolbuffers/protobuf@v29.3)
-//!
-//! Copyright 2008 Google Inc. All rights reserved.
 
 use std::path::Path;
 use std::pin::Pin;
