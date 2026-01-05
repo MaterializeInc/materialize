@@ -118,7 +118,7 @@ def setup_materialize(c: Composition, num_views: int) -> str:
     c.sql(
         dedent(
             """
-            CREATE CLUSTER beefy SIZE '32';
+            CREATE CLUSTER beefy SIZE 'scale=1,workers=8';
             """
         )
     )
