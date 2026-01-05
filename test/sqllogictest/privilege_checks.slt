@@ -1440,18 +1440,20 @@ GRANT USAGE ON SCHEMA materialize.public TO joe;
 ----
 COMPLETE 0
 
-simple conn=joe,user=joe
+simple multiline,conn=joe,user=joe
 SHOW CREATE CONNECTION csr_conn;
 ----
 materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn
 TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+EOF
 COMPLETE 1
 
-simple conn=child,user=child
+simple multiline,conn=child,user=child
 SHOW CREATE CONNECTION csr_conn;
 ----
 materialize.public.csr_conn,CREATE CONNECTION materialize.public.csr_conn
 TO CONFLUENT SCHEMA REGISTRY (URL = 'https://google.com');
+EOF
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
