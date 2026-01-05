@@ -853,22 +853,27 @@ impl<T: TimestampManipulation> Session<T> {
         self.transaction.try_grant_write_locks(guards)
     }
 
-    /// Drains any external metadata updates and applies the changes from the latest update.
-    pub fn apply_external_metadata_updates(&mut self) {
+    /// Drains any external metadata updates and retrieves the changes from the latest update.
+    pub fn get_external_metadata_updates(&mut self) -> Option<ExternalUserMetadata> {
         // If no sender is registered then there isn't anything to do.
         let Some(rx) = &mut self.external_metadata_rx else {
-            return;
+            return None;
         };
 
         // If the value hasn't changed then return.
         if !rx.has_changed().unwrap_or(false) {
-            return;
+            return None;
         }
 
-        // Update our metadata! Note the short critical section (just a clone) to avoid blocking
+        // Note the short critical section (just a clone) to avoid blocking
         // the sending side of this watch channel.
         let metadata = rx.borrow_and_update().clone();
-        self.vars.set_external_user_metadata(metadata);
+        Some(metadata)
+    }
+
+    /// Applies the external metadata updates to the session.
+    pub fn apply_external_metadata_updates(&mut self, updates: ExternalUserMetadata) {
+        self.vars.set_external_user_metadata(updates);
     }
 
     /// Initializes the session's role metadata.
