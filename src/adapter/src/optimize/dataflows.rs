@@ -240,7 +240,12 @@ impl<'a> DataflowBuilder<'a> {
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
+                        if mview.replacement_target.is_some() {
+                            let expr = mview.optimized_expr.as_ref();
+                            self.import_view_into_dataflow(id, expr, dataflow, features)?;
+                        } else {
+                            dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
+                        }
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);

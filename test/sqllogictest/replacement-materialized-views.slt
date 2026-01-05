@@ -43,6 +43,13 @@ SELECT * FROM mv
 3 4
 5 6
 
+query II
+SELECT * FROM rp
+----
+3  2
+7  4
+11 6
+
 query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
