@@ -185,10 +185,10 @@ DROP MATERIALIZED VIEW mv;
 
 # Test: cannot create an object depending on a replacement
 
-statement error db error: ERROR: rp is a replacement materialized view, which cannot be depended upon
+statement error db error: ERROR: replacement materialized view rp cannot be depended upon
 CREATE VIEW v AS SELECT * FROM rp
 
-statement error db error: ERROR: rp is a replacement materialized view, which cannot be depended upon
+statement error db error: ERROR: replacement materialized view rp cannot be depended upon
 CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM rp
 
 statement error db error: ERROR: index cannot be created on materialize.public.rp because it is a replacement materialized view

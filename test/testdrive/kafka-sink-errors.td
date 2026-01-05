@@ -58,7 +58,7 @@ contains:LEGACY IDs option is not supported
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:s1 is a sink, which cannot be exported as a sink
+contains:sink s1 cannot be exported as a sink
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM v1
 > CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM v1
@@ -69,13 +69,13 @@ contains:s1 is a sink, which cannot be exported as a sink
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains: rp is a replacement materialized view, which cannot be exported as a sink
+contains:replacement materialized view rp cannot be exported as a sink
 
 ! CREATE VIEW v2 AS SELECT * FROM s1
-contains:materialize.public.s1 is a sink, which cannot be depended upon
+contains:sink materialize.public.s1 cannot be depended upon
 
 ! SELECT * FROM s1
-contains:materialize.public.s1 is a sink, which cannot be depended upon
+contains:sink materialize.public.s1 cannot be depended upon
 
 > DROP SINK s1
 
