@@ -114,6 +114,15 @@ def setup_materialize(c: Composition, num_views: int) -> str:
     Returns:
         The name of the final view/source to subscribe to
     """
+    # Create a beefy cluster for all objects
+    c.sql(
+        dedent(
+            """
+            CREATE CLUSTER beefy SIZE '32';
+            """
+        )
+    )
+
     c.sql(
         dedent(
             """
@@ -123,6 +132,7 @@ def setup_materialize(c: Composition, num_views: int) -> str:
             );
 
             CREATE SOURCE data_source
+            IN CLUSTER beefy
             FROM KAFKA CONNECTION kafka_conn (
                 TOPIC 'data'
             )
@@ -135,7 +145,7 @@ def setup_materialize(c: Composition, num_views: int) -> str:
     )
 
     for i in range(1, num_views + 1):
-        c.sql(f"CREATE MATERIALIZED VIEW data_mv{i} AS (SELECT DISTINCT * FROM data_source);")
+        c.sql(f"CREATE MATERIALIZED VIEW data_mv{i} IN CLUSTER beefy AS (SELECT DISTINCT * FROM data_source);")
 
     return "data_mv1"
 
