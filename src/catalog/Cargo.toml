@@ -72,7 +72,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 base64 = "0.22.1"
-insta = "1.44"
+insta = "1.45"
 
 [features]
 default = ["workspace-hack"]
