@@ -223,4 +223,3 @@ statement ok
 DROP MATERIALIZED VIEW mv CASCADE;
 
 # TODO(alter-mv): Test: not more than one replacement allowed per MV
-# TODO(alter-mv): Test: audit log

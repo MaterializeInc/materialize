@@ -789,6 +789,13 @@ pub mod audit_log_event_v1 {
         pub id: String,
         pub cluster_id: String,
         pub name: FullNameV1,
+        pub replacement_target_id: Option<String>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    pub struct AlterApplyReplacementV1 {
+        pub target: IdFullNameV1,
+        pub replacement: IdFullNameV1,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -1018,6 +1025,7 @@ pub mod audit_log_event_v1 {
         CreateSourceSinkV4(CreateSourceSinkV4),
         CreateIndexV1(CreateIndexV1),
         CreateMaterializedViewV1(CreateMaterializedViewV1),
+        AlterApplyReplacementV1(AlterApplyReplacementV1),
     }
 }
 
