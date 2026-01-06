@@ -3017,6 +3017,17 @@ pub fn plan_create_materialized_view(
             );
         }
 
+        for use_id in target.used_by() {
+            let use_item = scx.get_item(use_id);
+            if use_item.replacement_target() == Some(target.id()) {
+                sql_bail!(
+                    "cannot replace {} because it already has a replacement: {}",
+                    scx.catalog.minimal_qualification(target.name()),
+                    scx.catalog.minimal_qualification(use_item.name()),
+                );
+            }
+        }
+
         replacement_target = Some(target.id());
     }
 
