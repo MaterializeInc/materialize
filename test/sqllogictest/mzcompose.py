@@ -416,6 +416,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",
         "test/sqllogictest/returning.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
         "test/sqllogictest/role.slt",
         "test/sqllogictest/role_create.slt",
         "test/sqllogictest/role_membership.slt",
