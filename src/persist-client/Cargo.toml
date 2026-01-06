@@ -38,12 +38,11 @@ clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow = "0.18.0"
 futures = "0.3.31"
 futures-util = "0.3"
-h2 = "0.4.12"
 hex = "0.4.3"
 itertools = "0.14.0"
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
-mz-ore = { path = "../ore", features = ["bytes", "process", "test", "tracing"] }
+mz-ore = { path = "../ore", features = ["bytes", "process", "panic", "test", "tracing"] }
 mz-persist = { path = "../persist" }
 mz-persist-proc = { path = "../persist-proc" }
 mz-persist-types = { path = "../persist-types" }
@@ -55,12 +54,10 @@ prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-sentry-tracing = "0.38.1"
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = "1.0.148"
 timely = "0.25.1"
-thiserror = "2.0.17"
 tokio = { version = "1.48.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.4.6"
 tokio-stream = "0.1.17"
