@@ -216,6 +216,7 @@ pub struct RoleAuthKey {
 )]
 pub struct RoleAuthValue {
     pub password_hash: Option<String>,
+    #[proptest(filter = "Option::is_some")]
     pub updated_at: Option<EpochMillis>,
 }
 
@@ -255,6 +256,7 @@ pub struct ServerConfigurationValue {
     Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
 )]
 pub struct AuditLogKey {
+    #[proptest(filter = "Option::is_some")]
     pub event: Option<audit_log_key::Event>,
 }
 
@@ -328,6 +330,7 @@ pub struct SourceReferencesKey {
 )]
 pub struct SourceReferencesValue {
     pub references: Vec<SourceReference>,
+    #[proptest(filter = "Option::is_some")]
     pub updated_at: Option<EpochMillis>,
 }
 
@@ -672,6 +675,7 @@ pub struct OptimizerFeatureOverride {
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
 )]
 pub struct ClusterScheduleRefreshOptions {
+    #[proptest(filter = "Option::is_some")]
     pub rehydration_time_estimate: Option<Duration>,
 }
 
@@ -728,7 +732,9 @@ pub mod cluster_config {
     Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
 )]
 pub struct ReplicaConfig {
+    #[proptest(filter = "Option::is_some")]
     pub logging: Option<ReplicaLogging>,
+    #[proptest(filter = "Option::is_some")]
     pub location: Option<replica_config::Location>,
 }
 
@@ -917,6 +923,7 @@ pub struct DefaultPrivilegesKey {
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
 )]
 pub struct DefaultPrivilegesValue {
+    #[proptest(filter = "Option::is_some")]
     pub privileges: Option<AclMode>,
 }
 
@@ -932,6 +939,7 @@ pub struct SystemPrivilegesKey {
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
 )]
 pub struct SystemPrivilegesValue {
+    #[proptest(filter = "Option::is_some")]
     pub acl_mode: Option<AclMode>,
 }
 
@@ -940,10 +948,14 @@ pub struct SystemPrivilegesValue {
 )]
 pub struct AuditLogEventV1 {
     pub id: u64,
+    #[proptest(strategy = "0..=6")]
     pub event_type: i32,
+    #[proptest(strategy = "0..=18")]
     pub object_type: i32,
     pub user: Option<StringWrapper>,
+    #[proptest(filter = "Option::is_some")]
     pub occurred_at: Option<EpochMillis>,
+    #[proptest(filter = "Option::is_some")]
     pub details: Option<audit_log_event_v1::Details>,
 }
 
@@ -955,6 +967,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct IdFullNameV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
     }
 
@@ -999,7 +1012,9 @@ pub mod audit_log_event_v1 {
     )]
     pub struct RenameItemV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub old_name: Option<FullNameV1>,
+        #[proptest(filter = "Option::is_some")]
         pub new_name: Option<FullNameV1>,
     }
 
@@ -1029,6 +1044,7 @@ pub mod audit_log_event_v1 {
         pub disk: bool,
         pub billed_as: Option<String>,
         pub internal: bool,
+        #[proptest(filter = "Option::is_some")]
         pub reason: Option<CreateOrDropClusterReplicaReasonV1>,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
     }
@@ -1045,6 +1061,7 @@ pub mod audit_log_event_v1 {
         pub disk: bool,
         pub billed_as: Option<String>,
         pub internal: bool,
+        #[proptest(filter = "Option::is_some")]
         pub reason: Option<CreateOrDropClusterReplicaReasonV1>,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
     }
@@ -1060,6 +1077,7 @@ pub mod audit_log_event_v1 {
         pub logical_size: String,
         pub billed_as: Option<String>,
         pub internal: bool,
+        #[proptest(filter = "Option::is_some")]
         pub reason: Option<CreateOrDropClusterReplicaReasonV1>,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
     }
@@ -1082,6 +1100,7 @@ pub mod audit_log_event_v1 {
         pub cluster_name: String,
         pub replica_id: Option<StringWrapper>,
         pub replica_name: String,
+        #[proptest(filter = "Option::is_some")]
         pub reason: Option<CreateOrDropClusterReplicaReasonV1>,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
     }
@@ -1094,6 +1113,7 @@ pub mod audit_log_event_v1 {
         pub cluster_name: String,
         pub replica_id: Option<StringWrapper>,
         pub replica_name: String,
+        #[proptest(filter = "Option::is_some")]
         pub reason: Option<CreateOrDropClusterReplicaReasonV1>,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
     }
@@ -1112,6 +1132,7 @@ pub mod audit_log_event_v1 {
         Arbitrary,
     )]
     pub struct CreateOrDropClusterReplicaReasonV1 {
+        #[proptest(filter = "Option::is_some")]
         pub reason: Option<create_or_drop_cluster_replica_reason_v1::Reason>,
     }
 
@@ -1132,6 +1153,7 @@ pub mod audit_log_event_v1 {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct SchedulingDecisionsWithReasonsV1 {
+        #[proptest(filter = "Option::is_some")]
         pub on_refresh: Option<RefreshDecisionWithReasonV1>,
     }
 
@@ -1139,6 +1161,7 @@ pub mod audit_log_event_v1 {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct SchedulingDecisionsWithReasonsV2 {
+        #[proptest(filter = "Option::is_some")]
         pub on_refresh: Option<RefreshDecisionWithReasonV2>,
     }
 
@@ -1148,6 +1171,7 @@ pub mod audit_log_event_v1 {
     pub struct RefreshDecisionWithReasonV1 {
         pub objects_needing_refresh: Vec<String>,
         pub rehydration_time_estimate: String,
+        #[proptest(filter = "Option::is_some")]
         pub decision: Option<refresh_decision_with_reason_v1::Decision>,
     }
 
@@ -1170,6 +1194,7 @@ pub mod audit_log_event_v1 {
         pub objects_needing_refresh: Vec<String>,
         pub objects_needing_compaction: Vec<String>,
         pub rehydration_time_estimate: String,
+        #[proptest(filter = "Option::is_some")]
         pub decision: Option<refresh_decision_with_reason_v2::Decision>,
     }
 
@@ -1190,6 +1215,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct CreateSourceSinkV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
         pub size: Option<StringWrapper>,
     }
@@ -1199,6 +1225,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct CreateSourceSinkV2 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
         pub size: Option<StringWrapper>,
         pub external_type: String,
@@ -1209,6 +1236,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct CreateSourceSinkV3 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
         pub external_type: String,
     }
@@ -1219,6 +1247,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateSourceSinkV4 {
         pub id: String,
         pub cluster_id: Option<StringWrapper>,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
         pub external_type: String,
     }
@@ -1229,6 +1258,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateIndexV1 {
         pub id: String,
         pub cluster_id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
     }
 
@@ -1238,6 +1268,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateMaterializedViewV1 {
         pub id: String,
         pub cluster_id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
     }
 
@@ -1246,6 +1277,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct AlterSourceSinkV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
         pub old_size: Option<StringWrapper>,
         pub new_size: Option<StringWrapper>,
@@ -1256,6 +1288,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct AlterSetClusterV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
         pub old_cluster: Option<StringWrapper>,
         pub new_cluster: Option<StringWrapper>,
@@ -1361,6 +1394,7 @@ pub mod audit_log_event_v1 {
     )]
     pub struct UpdateItemV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub name: Option<FullNameV1>,
     }
 
@@ -1369,7 +1403,9 @@ pub mod audit_log_event_v1 {
     )]
     pub struct AlterRetainHistoryV1 {
         pub id: String,
+        #[proptest(filter = "Option::is_some")]
         pub old_history: Option<String>,
+        #[proptest(filter = "Option::is_some")]
         pub new_history: Option<String>,
     }
 
@@ -1521,6 +1557,7 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct AuditLog {
+        #[proptest(filter = "Option::is_some")]
         pub key: Option<AuditLogKey>,
     }
 
@@ -1552,7 +1589,9 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct Config {
+        #[proptest(filter = "Option::is_some")]
         pub key: Option<ConfigKey>,
+        #[proptest(filter = "Option::is_some")]
         pub value: Option<ConfigValue>,
     }
 
@@ -1604,7 +1643,9 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct IdAlloc {
+        #[proptest(filter = "Option::is_some")]
         pub key: Option<IdAllocKey>,
+        #[proptest(filter = "Option::is_some")]
         pub value: Option<IdAllocValue>,
     }
 
@@ -1660,7 +1701,9 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct Setting {
+        #[proptest(filter = "Option::is_some")]
         pub key: Option<SettingKey>,
+        #[proptest(filter = "Option::is_some")]
         pub value: Option<SettingValue>,
     }
 
@@ -1668,7 +1711,9 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct ServerConfiguration {
+        #[proptest(filter = "Option::is_some")]
         pub key: Option<ServerConfigurationKey>,
+        #[proptest(filter = "Option::is_some")]
         pub value: Option<ServerConfigurationValue>,
     }
 
@@ -1718,6 +1763,7 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct UnfinalizedShard {
+        #[proptest(filter = "Option::is_some")]
         pub key: Option<UnfinalizedShardKey>,
     }
 
@@ -1725,6 +1771,7 @@ pub mod state_update_kind {
         Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub struct TxnWalShard {
+        #[proptest(filter = "Option::is_some")]
         pub value: Option<TxnWalShardValue>,
     }
 

@@ -104,7 +104,7 @@ fn test_proto_serialization_stability() {
 /// ```
 fn generate_missing_encodings() {
     let protos: BTreeSet<_> = read_file_names(PROTO_DIRECTORY, PROTO_EXT)
-        .filter(|name| name != "objects")
+        .filter(|name| name.starts_with("objects_v"))
         .collect();
 
     let snapshots: BTreeSet<_> = read_file_names(SNAPSHOT_DIRECTORY, SNAPSHOT_EXT).collect();

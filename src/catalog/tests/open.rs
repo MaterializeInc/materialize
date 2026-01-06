@@ -470,7 +470,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
-        id: Some(role_id.into_proto()),
+        id: role_id.into_proto(),
     });
     assert_eq!(&role.unwrap().name, "joe");
 

@@ -26,24 +26,20 @@ use mz_audit_log::{
     SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
     VersionedEvent,
 };
-use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::objects::Empty;
 
-impl RustType<crate::objects::audit_log_key::Event> for VersionedEvent {
-    fn into_proto(&self) -> crate::objects::audit_log_key::Event {
+impl RustType<crate::objects::AuditLogEvent> for VersionedEvent {
+    fn into_proto(&self) -> crate::objects::AuditLogEvent {
         match self {
-            VersionedEvent::V1(event) => {
-                crate::objects::audit_log_key::Event::V1(event.into_proto())
-            }
+            VersionedEvent::V1(event) => crate::objects::AuditLogEvent::V1(event.into_proto()),
         }
     }
 
-    fn from_proto(proto: crate::objects::audit_log_key::Event) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: crate::objects::AuditLogEvent) -> Result<Self, TryFromProtoError> {
         match proto {
-            crate::objects::audit_log_key::Event::V1(event) => {
-                Ok(VersionedEvent::V1(event.into_rust()?))
-            }
+            crate::objects::AuditLogEvent::V1(event) => Ok(VersionedEvent::V1(event.into_rust()?)),
         }
     }
 }
@@ -196,7 +192,7 @@ impl RustType<crate::objects::audit_log_event_v1::IdFullNameV1> for IdFullNameV1
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::IdFullNameV1 {
         crate::objects::audit_log_event_v1::IdFullNameV1 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
         }
     }
 
@@ -205,7 +201,7 @@ impl RustType<crate::objects::audit_log_event_v1::IdFullNameV1> for IdFullNameV1
     ) -> Result<Self, TryFromProtoError> {
         Ok(IdFullNameV1 {
             id: proto.id,
-            name: proto.name.into_rust_if_some("IdFullNameV1::name")?,
+            name: proto.name.into_rust()?,
         })
     }
 }
@@ -252,8 +248,8 @@ impl RustType<crate::objects::audit_log_event_v1::RenameItemV1> for RenameItemV1
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::RenameItemV1 {
         crate::objects::audit_log_event_v1::RenameItemV1 {
             id: self.id.to_string(),
-            old_name: Some(self.old_name.into_proto()),
-            new_name: Some(self.new_name.into_proto()),
+            old_name: self.old_name.into_proto(),
+            new_name: self.new_name.into_proto(),
         }
     }
 
@@ -262,8 +258,8 @@ impl RustType<crate::objects::audit_log_event_v1::RenameItemV1> for RenameItemV1
     ) -> Result<Self, TryFromProtoError> {
         Ok(RenameItemV1 {
             id: proto.id,
-            old_name: proto.old_name.into_rust_if_some("RenameItemV1::old_name")?,
-            new_name: proto.new_name.into_rust_if_some("RenameItemV1::new_name")?,
+            old_name: proto.old_name.into_rust()?,
+            new_name: proto.new_name.into_rust()?,
         })
     }
 }
@@ -351,7 +347,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV2> for Drop
                     inner: id.to_string(),
                 }),
             replica_name: self.replica_name.to_string(),
-            reason: Some(self.reason.into_proto()),
+            reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
@@ -364,9 +360,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV2> for Drop
             cluster_name: proto.cluster_name,
             replica_id: proto.replica_id.map(|s| s.inner),
             replica_name: proto.replica_name,
-            reason: proto
-                .reason
-                .into_rust_if_some("DropClusterReplicaV2::reason")?,
+            reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
@@ -384,7 +378,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV3> for Drop
                     inner: id.to_string(),
                 }),
             replica_name: self.replica_name.to_string(),
-            reason: Some(self.reason.into_proto()),
+            reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
@@ -397,9 +391,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV3> for Drop
             cluster_name: proto.cluster_name,
             replica_id: proto.replica_id.map(|s| s.inner),
             replica_name: proto.replica_name,
-            reason: proto
-                .reason
-                .into_rust_if_some("DropClusterReplicaV3::reason")?,
+            reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
@@ -460,7 +452,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV2>
             disk: self.disk,
             billed_as: self.billed_as.clone(),
             internal: self.internal,
-            reason: Some(self.reason.into_proto()),
+            reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
@@ -477,9 +469,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV2>
             disk: proto.disk,
             billed_as: proto.billed_as,
             internal: proto.internal,
-            reason: proto
-                .reason
-                .into_rust_if_some("DropClusterReplicaV2::reason")?,
+            reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
@@ -503,7 +493,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV3>
             disk: self.disk,
             billed_as: self.billed_as.clone(),
             internal: self.internal,
-            reason: Some(self.reason.into_proto()),
+            reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
@@ -520,9 +510,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV3>
             disk: proto.disk,
             billed_as: proto.billed_as,
             internal: proto.internal,
-            reason: proto
-                .reason
-                .into_rust_if_some("CreateClusterReplicaV3::reason")?,
+            reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
@@ -545,7 +533,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV4>
             logical_size: self.logical_size.to_string(),
             billed_as: self.billed_as.clone(),
             internal: self.internal,
-            reason: Some(self.reason.into_proto()),
+            reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
         }
     }
@@ -561,9 +549,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV4>
             logical_size: proto.logical_size,
             billed_as: proto.billed_as,
             internal: proto.internal,
-            reason: proto
-                .reason
-                .into_rust_if_some("CreateClusterReplicaV4::reason")?,
+            reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
         })
     }
@@ -575,13 +561,13 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
         match self {
             CreateOrDropClusterReplicaReasonV1::Manual => crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
-                reason: Some(crate::objects::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Manual(Empty {}))
+                reason: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Manual(Empty {})
             },
             CreateOrDropClusterReplicaReasonV1::Schedule => crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
-                reason: Some(crate::objects::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Schedule(Empty {}))
+                reason: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Schedule(Empty {})
             },
             CreateOrDropClusterReplicaReasonV1::System => crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
-                reason: Some(crate::objects::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::System(Empty {}))
+                reason: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::System(Empty {})
             },
         }
     }
@@ -590,10 +576,15 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
         proto: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1,
     ) -> Result<Self, TryFromProtoError> {
         match proto.reason {
-            None => Err(TryFromProtoError::missing_field("CreateOrDropClusterReplicaReasonV1::reason")),
-            Some(crate::objects::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Manual(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
-            Some(crate::objects::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::Schedule(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
-            Some(crate::objects::audit_log_event_v1::create_or_drop_cluster_replica_reason_v1::Reason::System(Empty {})) => Ok(CreateOrDropClusterReplicaReasonV1::System),
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Manual(
+                Empty {},
+            ) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Schedule(
+                Empty {},
+            ) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::System(
+                Empty {},
+            ) => Ok(CreateOrDropClusterReplicaReasonV1::System),
         }
     }
 }
@@ -603,7 +594,7 @@ impl RustType<crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasons
 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
         crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasonsV1 {
-            on_refresh: Some(self.on_refresh.into_proto()),
+            on_refresh: self.on_refresh.into_proto(),
         }
     }
 
@@ -611,9 +602,7 @@ impl RustType<crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasons
         proto: crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasonsV1,
     ) -> Result<Self, TryFromProtoError> {
         Ok(SchedulingDecisionsWithReasonsV1 {
-            on_refresh: proto
-                .on_refresh
-                .into_rust_if_some("SchedulingDecisionsWithReasonsV1::on_refresh")?,
+            on_refresh: proto.on_refresh.into_rust()?,
         })
     }
 }
@@ -623,7 +612,7 @@ impl RustType<crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasons
 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasonsV2 {
         crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasonsV2 {
-            on_refresh: Some(self.on_refresh.into_proto()),
+            on_refresh: self.on_refresh.into_proto(),
         }
     }
 
@@ -631,9 +620,7 @@ impl RustType<crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasons
         proto: crate::objects::audit_log_event_v1::SchedulingDecisionsWithReasonsV2,
     ) -> Result<Self, TryFromProtoError> {
         Ok(SchedulingDecisionsWithReasonsV2 {
-            on_refresh: proto
-                .on_refresh
-                .into_rust_if_some("SchedulingDecisionsWithReasonsV2::on_refresh")?,
+            on_refresh: proto.on_refresh.into_rust()?,
         })
     }
 }
@@ -644,18 +631,14 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1>
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1 {
         let decision = match &self.decision {
             SchedulingDecisionV1::On => {
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::On(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {})
             }
             SchedulingDecisionV1::Off => {
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::Off(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {})
             }
         };
         crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1 {
-            decision: Some(decision),
+            decision,
             objects_needing_refresh: self.objects_needing_refresh.clone(),
             rehydration_time_estimate: self.hydration_time_estimate.clone(),
         }
@@ -665,21 +648,12 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1>
         proto: crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1,
     ) -> Result<Self, TryFromProtoError> {
         let decision = match proto.decision {
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "CreateOrDropClusterReplicaReasonV1::reason",
-                ));
+            crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {}) => {
+                SchedulingDecisionV1::On
             }
-            Some(
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::On(
-                    Empty {},
-                ),
-            ) => SchedulingDecisionV1::On,
-            Some(
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v1::Decision::Off(
-                    Empty {},
-                ),
-            ) => SchedulingDecisionV1::Off,
+            crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {}) => {
+                SchedulingDecisionV1::Off
+            }
         };
         Ok(RefreshDecisionWithReasonV1 {
             decision,
@@ -695,18 +669,14 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2>
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2 {
         let decision = match &self.decision {
             SchedulingDecisionV1::On => {
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v2::Decision::On(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {})
             }
             SchedulingDecisionV1::Off => {
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v2::Decision::Off(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {})
             }
         };
         crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2 {
-            decision: Some(decision),
+            decision,
             objects_needing_refresh: self.objects_needing_refresh.clone(),
             objects_needing_compaction: self.objects_needing_compaction.clone(),
             rehydration_time_estimate: self.hydration_time_estimate.clone(),
@@ -717,21 +687,12 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2>
         proto: crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2,
     ) -> Result<Self, TryFromProtoError> {
         let decision = match proto.decision {
-            None => {
-                return Err(TryFromProtoError::missing_field(
-                    "CreateOrDropClusterReplicaReasonV2::reason",
-                ));
+            crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {}) => {
+                SchedulingDecisionV1::On
             }
-            Some(
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v2::Decision::On(
-                    Empty {},
-                ),
-            ) => SchedulingDecisionV1::On,
-            Some(
-                crate::objects::audit_log_event_v1::refresh_decision_with_reason_v2::Decision::Off(
-                    Empty {},
-                ),
-            ) => SchedulingDecisionV1::Off,
+            crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {}) => {
+                SchedulingDecisionV1::Off
+            }
         };
         Ok(RefreshDecisionWithReasonV2 {
             decision,
@@ -746,7 +707,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV1> for Create
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateSourceSinkV1 {
         crate::objects::audit_log_event_v1::CreateSourceSinkV1 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
             size: self.size.as_ref().map(|s| crate::objects::StringWrapper {
                 inner: s.to_string(),
             }),
@@ -758,7 +719,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV1> for Create
     ) -> Result<Self, TryFromProtoError> {
         Ok(CreateSourceSinkV1 {
             id: proto.id,
-            name: proto.name.into_rust_if_some("CreateSourceSinkV1::name")?,
+            name: proto.name.into_rust()?,
             size: proto.size.map(|s| s.inner),
         })
     }
@@ -768,7 +729,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV2> for Create
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateSourceSinkV2 {
         crate::objects::audit_log_event_v1::CreateSourceSinkV2 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
             size: self.size.as_ref().map(|s| crate::objects::StringWrapper {
                 inner: s.to_string(),
             }),
@@ -781,7 +742,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV2> for Create
     ) -> Result<Self, TryFromProtoError> {
         Ok(CreateSourceSinkV2 {
             id: proto.id,
-            name: proto.name.into_rust_if_some("CreateSourceSinkV2::name")?,
+            name: proto.name.into_rust()?,
             size: proto.size.map(|s| s.inner),
             external_type: proto.external_type,
         })
@@ -792,7 +753,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV3> for Create
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateSourceSinkV3 {
         crate::objects::audit_log_event_v1::CreateSourceSinkV3 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
             external_type: self.external_type.to_string(),
         }
     }
@@ -802,7 +763,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV3> for Create
     ) -> Result<Self, TryFromProtoError> {
         Ok(CreateSourceSinkV3 {
             id: proto.id,
-            name: proto.name.into_rust_if_some("CreateSourceSinkV2::name")?,
+            name: proto.name.into_rust()?,
             external_type: proto.external_type,
         })
     }
@@ -818,7 +779,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV4> for Create
                 .map(|id| crate::objects::StringWrapper {
                     inner: id.to_string(),
                 }),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
             external_type: self.external_type.to_string(),
         }
     }
@@ -829,7 +790,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV4> for Create
         Ok(CreateSourceSinkV4 {
             id: proto.id,
             cluster_id: proto.cluster_id.map(|s| s.inner),
-            name: proto.name.into_rust_if_some("CreateSourceSinkV4::name")?,
+            name: proto.name.into_rust()?,
             external_type: proto.external_type,
         })
     }
@@ -840,7 +801,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateIndexV1> for CreateIndex
         crate::objects::audit_log_event_v1::CreateIndexV1 {
             id: self.id.to_string(),
             cluster_id: self.cluster_id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
         }
     }
 
@@ -850,7 +811,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateIndexV1> for CreateIndex
         Ok(CreateIndexV1 {
             id: proto.id,
             cluster_id: proto.cluster_id,
-            name: proto.name.into_rust_if_some("CreateIndexV1::name")?,
+            name: proto.name.into_rust()?,
         })
     }
 }
@@ -862,7 +823,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateMaterializedViewV1>
         crate::objects::audit_log_event_v1::CreateMaterializedViewV1 {
             id: self.id.to_string(),
             cluster_id: self.cluster_id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
         }
     }
 
@@ -872,9 +833,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateMaterializedViewV1>
         Ok(CreateMaterializedViewV1 {
             id: proto.id,
             cluster_id: proto.cluster_id,
-            name: proto
-                .name
-                .into_rust_if_some("CreateMaterializedViewV1::name")?,
+            name: proto.name.into_rust()?,
         })
     }
 }
@@ -883,7 +842,7 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSourceSinkV1> for AlterSo
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::AlterSourceSinkV1 {
         crate::objects::audit_log_event_v1::AlterSourceSinkV1 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
             old_size: self
                 .old_size
                 .as_ref()
@@ -904,7 +863,7 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSourceSinkV1> for AlterSo
     ) -> Result<Self, TryFromProtoError> {
         Ok(AlterSourceSinkV1 {
             id: proto.id,
-            name: proto.name.into_rust_if_some("AlterSourceSinkV1::name")?,
+            name: proto.name.into_rust()?,
             old_size: proto.old_size.map(|s| s.inner),
             new_size: proto.new_size.map(|s| s.inner),
         })
@@ -915,7 +874,7 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::AlterSetClusterV1 {
         crate::objects::audit_log_event_v1::AlterSetClusterV1 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
             old_cluster: self
                 .old_cluster
                 .as_ref()
@@ -936,7 +895,7 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
     ) -> Result<Self, TryFromProtoError> {
         Ok(Self {
             id: proto.id,
-            name: proto.name.into_rust_if_some("AlterSetClusterV1::name")?,
+            name: proto.name.into_rust()?,
             old_cluster: proto.old_cluster.map(|s| s.inner),
             new_cluster: proto.new_cluster.map(|s| s.inner),
         })
@@ -1174,7 +1133,7 @@ impl RustType<crate::objects::audit_log_event_v1::UpdateItemV1> for UpdateItemV1
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::UpdateItemV1 {
         crate::objects::audit_log_event_v1::UpdateItemV1 {
             id: self.id.to_string(),
-            name: Some(self.name.into_proto()),
+            name: self.name.into_proto(),
         }
     }
 
@@ -1183,7 +1142,7 @@ impl RustType<crate::objects::audit_log_event_v1::UpdateItemV1> for UpdateItemV1
     ) -> Result<Self, TryFromProtoError> {
         Ok(UpdateItemV1 {
             id: proto.id,
-            name: proto.name.into_rust_if_some("UpdateItemV1::name")?,
+            name: proto.name.into_rust()?,
         })
     }
 }
@@ -1428,35 +1387,26 @@ impl RustType<crate::objects::AuditLogEventV1> for EventV1 {
     fn into_proto(&self) -> crate::objects::AuditLogEventV1 {
         crate::objects::AuditLogEventV1 {
             id: self.id,
-            event_type: self.event_type.into_proto().into(),
-            object_type: self.object_type.into_proto().into(),
+            event_type: self.event_type.into_proto(),
+            object_type: self.object_type.into_proto(),
             user: self.user.as_ref().map(|u| crate::objects::StringWrapper {
                 inner: u.to_string(),
             }),
-            occurred_at: Some(crate::objects::EpochMillis {
+            occurred_at: crate::objects::EpochMillis {
                 millis: self.occurred_at,
-            }),
-            details: Some(self.details.into_proto()),
+            },
+            details: self.details.into_proto(),
         }
     }
 
     fn from_proto(proto: crate::objects::AuditLogEventV1) -> Result<Self, TryFromProtoError> {
-        let event_type = crate::objects::audit_log_event_v1::EventType::try_from(proto.event_type)
-            .map_err(|_| TryFromProtoError::unknown_enum_variant("EventType"))?;
-        let object_type =
-            crate::objects::audit_log_event_v1::ObjectType::try_from(proto.object_type)
-                .map_err(|_| TryFromProtoError::unknown_enum_variant("ObjectType"))?;
         Ok(EventV1 {
             id: proto.id,
-            event_type: event_type.into_rust()?,
-            object_type: object_type.into_rust()?,
-            details: proto
-                .details
-                .into_rust_if_some("AuditLogEventV1::details")?,
+            event_type: proto.event_type.into_rust()?,
+            object_type: proto.object_type.into_rust()?,
+            details: proto.details.into_rust()?,
             user: proto.user.map(|u| u.inner),
-            occurred_at: proto
-                .occurred_at
-                .into_rust_if_some("AuditLogEventV1::occurred_at")?,
+            occurred_at: proto.occurred_at.into_rust()?,
         })
     }
 }
