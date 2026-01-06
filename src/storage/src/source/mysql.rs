@@ -61,6 +61,7 @@ use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 
 use mysql_common::Row;
+use mysql_common::proto::MySerialize;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
@@ -438,4 +439,13 @@ async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<()
     ensure_replication_commit_order(conn).await?;
 
     Ok(())
+}
+
+async fn serialize_mysql_rows(
+    row: mysql_async::Row,
+) -> Vec<u8> {
+    let values = row.unwrap();
+    let mut buffer = Vec::new();
+    values.iter().for_each(|val| -> () {val.serialize(&mut buffer);});
+    buffer
 }
