@@ -117,7 +117,7 @@ class Webhook(Check):
                 >[version>=2600700] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT TEXT;"
 
-                >[version>=14000 AND version<2600700] SHOW CREATE SOURCE webhook_json
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_json
                 materialize.public.webhook_json "CREATE SOURCE materialize.public.webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;"
 
                 >[version>=2600700] SHOW CREATE SOURCE webhook_json
