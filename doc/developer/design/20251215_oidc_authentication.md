@@ -128,6 +128,7 @@ An MVP of what this might look like exists here: [https://github.com/Materialize
 - A token should successfully refresh if the access token and refresh token are valid (Rust unit test)
 - Session should error if access token is invalid (Rust unit test)
 - Session should error if refresh token is invalid (Rust unit test)
+- A user shouldn't be able to login as another user (Rust unit test)
 - De-provisioning a user should invalidate the refresh token (e2e mzcompose)
 - Platform-check simple login check (platform-check framework)
 - JWTs should only be accepted when a valid JWK is set (we do not want to accept JWTs that are not signed with a real, cryptographically sound key)
