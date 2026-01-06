@@ -111,3 +111,30 @@ query B
 SELECT DISTINCT(attgenerated = '') FROM pg_attribute
 ----
 true
+
+# Test attndims for various array and list types
+statement ok
+CREATE TABLE attndims_test(
+    c_int4 int4,
+    c_text text,
+    c_int4_array int4[],
+    c_text_array text[],
+    c_int4_list int4 list,
+    c_text_list text list,
+    c_int4_list_list int4 list list,
+    c_int4_list_list_list int4 list list list
+);
+
+query TI
+SELECT attname, attndims FROM pg_attribute
+WHERE attrelid = (SELECT oid FROM mz_tables WHERE name='attndims_test')
+ORDER BY attname
+----
+c_int4  0
+c_int4_array  0
+c_int4_list  1
+c_int4_list_list  2
+c_int4_list_list_list  3
+c_text  0
+c_text_array  0
+c_text_list  1

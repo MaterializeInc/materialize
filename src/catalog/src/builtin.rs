@@ -7416,6 +7416,7 @@ pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
             .with_column("attlen", SqlScalarType::Int16.nullable(true))
             .with_column("attnum", SqlScalarType::Int16.nullable(false))
             .with_column("atttypmod", SqlScalarType::Int32.nullable(false))
+            .with_column("attndims", SqlScalarType::Int32.nullable(false))
             .with_column("attnotnull", SqlScalarType::Bool.nullable(false))
             .with_column("atthasdef", SqlScalarType::Bool.nullable(false))
             .with_column("attidentity", SqlScalarType::PgLegacyChar.nullable(false))
@@ -7427,6 +7428,19 @@ pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
+WITH MUTUALLY RECURSIVE
+    -- Compute the number of dimensions for list types by recursively following element types.
+    type_ndims(id text, ndims int4) AS (
+        -- Base case
+        SELECT id, 0::int4
+        FROM mz_catalog.mz_types
+        WHERE id NOT IN (SELECT id FROM mz_catalog.mz_list_types)
+        UNION
+        -- Lists: 1 + dimensions of element type
+        SELECT l.id, 1 + n.ndims
+        FROM mz_catalog.mz_list_types l
+        JOIN type_ndims n ON l.element_id = n.id
+    )
 SELECT
     class_objects.oid as attrelid,
     mz_columns.name as attname,
@@ -7434,6 +7448,7 @@ SELECT
     pg_type_all_databases.typlen AS attlen,
     position::int8::int2 as attnum,
     mz_columns.type_mod as atttypmod,
+    COALESCE(type_ndims.ndims, 0)::pg_catalog.int4 as attndims,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
@@ -7455,6 +7470,8 @@ FROM (
 ) AS class_objects
 JOIN mz_catalog.mz_columns ON class_objects.id = mz_columns.id
 JOIN mz_internal.pg_type_all_databases ON pg_type_all_databases.oid = mz_columns.type_oid
+JOIN mz_catalog.mz_types ON mz_types.oid = mz_columns.type_oid
+LEFT JOIN type_ndims ON type_ndims.id = mz_types.id
 JOIN mz_catalog.mz_schemas ON mz_schemas.id = class_objects.schema_id
 LEFT JOIN mz_catalog.mz_databases d ON d.id = mz_schemas.database_id",
         // Since this depends on pg_type, its id must be higher due to initialization
@@ -7469,7 +7486,7 @@ pub const PG_ATTRIBUTE_ALL_DATABASES_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_PG_ATTRIBUTE_ALL_DATABASES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.pg_attribute_all_databases (
-    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
+    attrelid, attname, atttypid, attlen, attnum, atttypmod, attndims, attnotnull, atthasdef, attidentity,
     attgenerated, attisdropped, attcollation, database_name, pg_type_database_name
 )",
     is_retained_metrics_object: false,
@@ -7487,6 +7504,7 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("attlen", SqlScalarType::Int16.nullable(true))
             .with_column("attnum", SqlScalarType::Int16.nullable(false))
             .with_column("atttypmod", SqlScalarType::Int32.nullable(false))
+            .with_column("attndims", SqlScalarType::Int32.nullable(false))
             .with_column("attnotnull", SqlScalarType::Bool.nullable(false))
             .with_column("atthasdef", SqlScalarType::Bool.nullable(false))
             .with_column("attidentity", SqlScalarType::PgLegacyChar.nullable(false))
@@ -7497,7 +7515,7 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
         column_comments: BTreeMap::new(),
         sql: "
 SELECT
-    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
+    attrelid, attname, atttypid, attlen, attnum, atttypmod, attndims, attnotnull, atthasdef, attidentity,
     attgenerated, attisdropped, attcollation
 FROM mz_internal.pg_attribute_all_databases
 WHERE
