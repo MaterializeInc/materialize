@@ -111,7 +111,7 @@ class Webhook(Check):
                 \\\\x01
                 \\\\x01\\x02\\x03\\x04
 
-                >[version>=14000 AND version<2600700] SHOW CREATE SOURCE webhook_text
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
 
                 >[version>=2600700] SHOW CREATE SOURCE webhook_text
