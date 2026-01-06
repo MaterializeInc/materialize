@@ -49,6 +49,7 @@ impl DataflowBuilder<'_> {
                     .or_default()
                     .extend(available_indexes);
             } else {
+                // Note that the following match should be kept in sync with `import_into_dataflow`.
                 match self.catalog.get_entry(&id).item() {
                     // Unmaterialized view. Search its dependencies.
                     CatalogItem::View(view) => {

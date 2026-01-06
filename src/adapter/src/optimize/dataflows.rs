@@ -194,6 +194,8 @@ impl<'a> DataflowBuilder<'a> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description. [`OptimizerFeatures`] is used while running
     /// the [`Monotonic`] analysis.
+    ///
+    /// Panics if `id` refers to a non-importable item, such as an index or sink.
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
@@ -228,6 +230,7 @@ impl<'a> DataflowBuilder<'a> {
             } else {
                 drop(valid_indexes);
                 let entry = self.catalog.get_entry(id);
+                // Note that the following match should be kept in sync with `sufficient_collections`.
                 match entry.item() {
                     CatalogItem::Table(table) => {
                         dataflow.import_source(*id, table.desc_for(id).into_typ(), monotonic);
@@ -248,7 +251,15 @@ impl<'a> DataflowBuilder<'a> {
                     CatalogItem::ContinualTask(ct) => {
                         dataflow.import_source(*id, ct.desc.typ().clone(), monotonic);
                     }
-                    _ => unreachable!(),
+                    CatalogItem::Sink(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => {
+                        // Non-importable thing; can't get here.
+                        unreachable!()
+                    }
                 }
             }
             Ok(())
