@@ -23,7 +23,7 @@
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-sink-${testdrive.seed}')
   FORMAT JSON
   ENVELOPE DEBEZIUM
-contains:v is a view, which cannot be exported as a sink
+contains:view v cannot be exported as a sink
 
 > CREATE SINK sink
   FROM t
@@ -32,4 +32,10 @@ contains:v is a view, which cannot be exported as a sink
   ENVELOPE DEBEZIUM
 
 ! ALTER SINK sink SET FROM v
-contains:v is a view, which cannot be exported as a sink
+contains:view v cannot be exported as a sink
+
+> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM t
+
+! ALTER SINK sink SET FROM rp
+contains:replacement materialized view rp cannot be exported as a sink
