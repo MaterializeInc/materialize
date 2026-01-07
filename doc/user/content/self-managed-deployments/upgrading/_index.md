@@ -236,6 +236,7 @@ The behavior of the new version rollout follows your `rolloutStrategy` setting.
 Creates a new generation of pods and automatically cuts over to them as soon as they catch up to the old generation and become `ReadyToPromote`. This strategy temporarily doubles the required resources to run Materialize.
 
 #### *ImmediatelyPromoteCausingDowntime*
+{{< warning >}} Using the `ImmediatelyPromoteCausingDowntime` rollout flag will cause downtime. {{< /warning >}}
 
 Tears down the prior generation before creating and immediately promoting the new generation without waiting for it to hydrate. This causes downtime until the new generation has hydrated. However, it does not require additional resources.
 
@@ -244,6 +245,8 @@ Tears down the prior generation before creating and immediately promoting the ne
 `ManuallyPromote` allows you to choose when to promote the new generation. This means you can time the promotion for periods when load is low, minimizing the impact of potential downtime for any clients connected to Materialize. This strategy temporarily doubles the required resources to run Materialize.
 
 To minimize downtime, wait until the new generation has fully hydrated and caught up to the prior generation before promoting. To check hydration status, inspect the `UpToDate` condition in the Materialize resource status—when hydration completes, the reason will be `ReadyToPromote`. To promote, update the `forcePromote` field to match the `requestRollout` field in the Materialize spec. If you need to promote before hydration completes, you can set `forcePromote` immediately, but clients may experience downtime.
+
+{{< warning >}} Leaving a new generation unpromoted for over 6 hours may cause downtime. {{< /warning >}}
 
 **Do not leave new generations unpromoted indefinitely**. They should either be promoted or canceled. New generations open a read hold on the metadata database that prevents compaction. This hold is only released when the generation is promoted or canceled. If left open too long, promoting or canceling can trigger a spike in deletion load on the metadata database, potentially causing downtime. It is not recommended to leave generations unpromoted for over 6 hours.
 
