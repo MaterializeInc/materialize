@@ -29,8 +29,17 @@ pub fn pack_mysql_row(
     row: MySqlRow,
     table_desc: &MySqlTableDesc,
 ) -> Result<Row, MySqlError> {
-    let mut packer = row_container.packer();
     let row_values = row.unwrap();
+
+    pack_mysql_row_from_values(row_container, row_values, table_desc)
+}
+
+pub fn pack_mysql_row_from_values(
+    row_container: &mut Row,
+    row_values: Vec<Value>,
+    table_desc: &MySqlTableDesc,
+) -> Result<Row, MySqlError> {
+    let mut packer = row_container.packer();
 
     for values in table_desc.columns.iter().zip_longest(row_values) {
         let (col_desc, value) = match values {

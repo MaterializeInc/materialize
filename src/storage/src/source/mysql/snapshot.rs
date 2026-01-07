@@ -93,8 +93,9 @@ use futures::TryStreamExt;
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
+use mz_mysql_util::decoding::pack_mysql_row_from_values;
 use mz_mysql_util::{
-    ER_NO_SUCH_TABLE, MySqlError, pack_mysql_row, query_sys_var, quote_identifier,
+    ER_NO_SUCH_TABLE, MySqlError, query_sys_var, quote_identifier,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
@@ -106,7 +107,6 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::core::Map;
@@ -117,13 +117,14 @@ use tracing::{error, trace};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
+use crate::source::mysql::deserialize_mysql_row;
 use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
 use super::{
     DefiniteError, MySqlTableName, ReplicationError, RewindRequest, SourceOutputInfo,
-    TransientError, return_definite_error_rows, validate_mysql_repl_settings,
+    TransientError, return_definite_error_rows, validate_mysql_repl_settings, serialize_mysql_row
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -408,8 +409,6 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 }
 
                 // Read the snapshot data from the tables
-                let mut final_row = Row::default();
-
                 let mut snapshot_staged_total = 0;
                 for (table, outputs) in &reader_snapshot_table_info {
                     let mut snapshot_staged = 0;
@@ -418,9 +417,11 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     let mut results = tx.exec_stream(query, ()).await?;
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
+                        let mut row_bytes = Vec::new();
+                        serialize_mysql_row(&mut row_bytes, row).await;
                         snapshot_staged += 1;
-                        for (output, row_val) in outputs.iter().repeat_clone(row) {
-                            let mut update = (output.output_index, Ok((row_val, output.desc.clone())));
+                        for (output, row_buf) in outputs.iter().repeat_clone(row_bytes) {
+                            let update = (output.output_index, Ok((row_buf, output.desc.clone())));
                             // let raw_handle: () = raw_handle;
                             raw_handle
                                 .give(
@@ -523,8 +524,12 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                         let event = event
                             // .as_ref()
                             .map_err(|e: DataflowError| e.clone())
-                            .and_then(|(row_val, output_desc)| {
-                                match pack_mysql_row(&mut final_row, row_val, &output_desc) {
+                            .and_then(|(row_bytes, output_desc)| {
+                                let row_val = match deserialize_mysql_row(&row_bytes, &output_desc) {
+                                    Ok(vals) => vals,
+                                    Err(err) => panic!("Failed to deserialize row: {}", err),
+                                };
+                                match pack_mysql_row_from_values(&mut final_row, row_val, &output_desc) {
                                     Ok(row) => Ok(SourceMessage {
                                         key: Row::default(),
                                         value: row,
@@ -536,7 +541,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                             err.to_string(),
                                         )))
                                     }
-                                    Err(err) => Err(err.into())?,
+                                    Err(err) => Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                                        err.to_string(),
+                                    ))),
                                 }
                             });
 

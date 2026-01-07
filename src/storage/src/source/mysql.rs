@@ -54,13 +54,15 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
+use std::io::Error;
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 
-use mysql_common::Row;
+use mysql_common::io::ParseBuf;
+use mysql_common::proto::MyDeserialize;
 use mysql_common::proto::MySerialize;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
@@ -409,7 +411,7 @@ async fn return_definite_error_rows(
     outputs: &[usize],
     data_handle: &AsyncOutputHandle<
         GtidPartition,
-        CapacityContainerBuilder<Vec<((usize, Result<(Row, MySqlTableDesc), DataflowError>), GtidPartition, Diff)>>,
+        CapacityContainerBuilder<Vec<((usize, Result<(Vec<u8>, MySqlTableDesc), DataflowError>), GtidPartition, Diff)>>,
     >,
     data_cap_set: &CapabilitySet<GtidPartition>,
     definite_error_handle: &AsyncOutputHandle<
@@ -441,11 +443,28 @@ async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<()
     Ok(())
 }
 
-async fn serialize_mysql_rows(
+async fn serialize_mysql_row(
+    buffer: &mut Vec<u8>,
     row: mysql_async::Row,
-) -> Vec<u8> {
-    let values = row.unwrap();
-    let mut buffer = Vec::new();
-    values.iter().for_each(|val| -> () {val.serialize(&mut buffer);});
-    buffer
+) {
+    row.columns_ref().iter().for_each(|col| {col.serialize(buffer);});
+    row.unwrap().iter().for_each(|val| -> () {val.serialize(buffer);});
+}
+
+fn deserialize_mysql_row(
+    buffer: &[u8],
+    desc: &MySqlTableDesc,
+) -> Result<Vec<mysql_async::Value>, Error> {
+    let mut buf = ParseBuf(buffer);
+    let mut columns = Vec::with_capacity(desc.columns.len());
+    for _ in 0..desc.columns.len() {
+        let col = mysql_common::packets::Column::deserialize((), &mut buf)?;
+        columns.push(col);
+    }
+    let mut values = Vec::with_capacity(desc.columns.len());
+    for _column in &columns {
+        let val = mysql_common::value::ValueDeserializer::<mysql_common::value::BinValue>::deserialize((_column.column_type(), _column.flags()), &mut buf)?.0;
+        values.push(val);
+    }
+    Ok(values)
 }
