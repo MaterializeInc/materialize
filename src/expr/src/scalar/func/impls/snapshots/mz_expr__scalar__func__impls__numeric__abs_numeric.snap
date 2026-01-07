@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-expression: "#[sqlfunc(\n    sqlname = \"abs\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn abs_numeric<'a>(a: Numeric) -> Numeric {\n    {\n        let mut a = a;\n        {\n            numeric::cx_datum().abs(&mut a);\n            a\n        }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"abs\")]\nfn abs_numeric(mut a: Numeric) -> Numeric {\n    numeric::cx_datum().abs(&mut a);\n    a\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,28 +29,13 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for AbsNumeric {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for AbsNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("abs")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn abs_numeric<'a>(a: Numeric) -> Numeric {
-    {
-        let mut a = a;
-        {
-            numeric::cx_datum().abs(&mut a);
-            a
-        }
-    }
+fn abs_numeric(mut a: Numeric) -> Numeric {
+    numeric::cx_datum().abs(&mut a);
+    a
 }

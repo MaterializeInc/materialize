@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(\n    sqlname = \"bit_length\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {\n    {\n        let val = a.len() * 8;\n        i32::try_from(val)\n            .or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"bit_length\")]\nfn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {\n    let val = a.len() * 8;\n    i32::try_from(val)\n        .or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,26 +29,14 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for BitLengthBytes {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for BitLengthBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("bit_length")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
-    {
-        let val = a.len() * 8;
-        i32::try_from(val)
-            .or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
-    }
+fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
+    let val = a.len() * 8;
+    i32::try_from(val)
+        .or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
 }

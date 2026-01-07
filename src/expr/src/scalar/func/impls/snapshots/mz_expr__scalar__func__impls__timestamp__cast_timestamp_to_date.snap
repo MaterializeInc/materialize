@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/timestamp.rs
-expression: "#[sqlfunc(\n    sqlname = \"timestamp_to_date\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastDateToTimestamp(None)),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_timestamp_to_date<'a>(\n    a: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Date, EvalError> {\n    { Ok(a.date().try_into()?) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"timestamp_to_date\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastDateToTimestamp(None)),\n    is_monotone = true\n)]\nfn cast_timestamp_to_date(\n    a: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Date, EvalError> {\n    Ok(a.date().try_into()?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,9 +44,8 @@ impl std::fmt::Display for CastTimestampToDate {
         f.write_str("timestamp_to_date")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_to_date<'a>(
+fn cast_timestamp_to_date(
     a: CheckedTimestamp<NaiveDateTime>,
 ) -> Result<Date, EvalError> {
-    { Ok(a.date().try_into()?) }
+    Ok(a.date().try_into()?)
 }

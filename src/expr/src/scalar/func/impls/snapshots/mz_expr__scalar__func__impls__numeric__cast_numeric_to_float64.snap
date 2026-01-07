@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-expression: "#[sqlfunc(\n    sqlname = \"numeric_to_double\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastFloat64ToNumeric(None)),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_numeric_to_float64<'a>(a: Numeric) -> Result<f64, EvalError> {\n    {\n        let i = a.to_string().parse::<f64>().unwrap();\n        if i.is_infinite() {\n            Err(EvalError::Float64OutOfRange(i.to_string().into()))\n        } else {\n            Ok(i)\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"numeric_to_double\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastFloat64ToNumeric(None)),\n    is_monotone = true\n)]\npub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {\n    let i = a.to_string().parse::<f64>().unwrap();\n    if i.is_infinite() {\n        Err(EvalError::Float64OutOfRange(i.to_string().into()))\n    } else {\n        Ok(i)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,14 +44,11 @@ impl std::fmt::Display for CastNumericToFloat64 {
         f.write_str("numeric_to_double")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_numeric_to_float64<'a>(a: Numeric) -> Result<f64, EvalError> {
-    {
-        let i = a.to_string().parse::<f64>().unwrap();
-        if i.is_infinite() {
-            Err(EvalError::Float64OutOfRange(i.to_string().into()))
-        } else {
-            Ok(i)
-        }
+pub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
+    let i = a.to_string().parse::<f64>().unwrap();
+    if i.is_infinite() {
+        Err(EvalError::Float64OutOfRange(i.to_string().into()))
+    } else {
+        Ok(i)
     }
 }

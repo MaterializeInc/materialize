@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int32.rs
-expression: "#[sqlfunc(\n    sqlname = \"integer_to_\\\"char\\\"\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastPgLegacyCharToInt32),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_int32_to_pg_legacy_char<'a>(a: i32) -> Result<PgLegacyChar, EvalError> {\n    {\n        let a = i8::try_from(a).map_err(|_| EvalError::CharOutOfRange)?;\n        Ok(PgLegacyChar(u8::reinterpret_cast(a)))\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"integer_to_\\\"char\\\"\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastPgLegacyCharToInt32)\n)]\nfn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {\n    let a = i8::try_from(a).map_err(|_| EvalError::CharOutOfRange)?;\n    Ok(PgLegacyChar(u8::reinterpret_cast(a)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt32ToPgLegacyChar {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastPgLegacyCharToInt32)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -44,10 +41,7 @@ impl std::fmt::Display for CastInt32ToPgLegacyChar {
         f.write_str("integer_to_\"char\"")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int32_to_pg_legacy_char<'a>(a: i32) -> Result<PgLegacyChar, EvalError> {
-    {
-        let a = i8::try_from(a).map_err(|_| EvalError::CharOutOfRange)?;
-        Ok(PgLegacyChar(u8::reinterpret_cast(a)))
-    }
+fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
+    let a = i8::try_from(a).map_err(|_| EvalError::CharOutOfRange)?;
+    Ok(PgLegacyChar(u8::reinterpret_cast(a)))
 }

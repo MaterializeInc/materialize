@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/regproc.rs
-expression: "#[sqlfunc(\n    sqlname = \"regtypetooid\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastOidToRegType),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_reg_type_to_oid<'a>(a: RegType) -> Oid {\n    { Oid(a.0) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"regtypetooid\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastOidToRegType)\n)]\nfn cast_reg_type_to_oid(a: RegType) -> Oid {\n    Oid(a.0)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastRegTypeToOid {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastOidToRegType)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -44,7 +41,6 @@ impl std::fmt::Display for CastRegTypeToOid {
         f.write_str("regtypetooid")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_reg_type_to_oid<'a>(a: RegType) -> Oid {
-    { Oid(a.0) }
+fn cast_reg_type_to_oid(a: RegType) -> Oid {
+    Oid(a.0)
 }

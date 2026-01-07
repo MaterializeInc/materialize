@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int64.rs
-expression: "#[sqlfunc(\n    sqlname = \"bigint_to_uint2\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastUint16ToInt64),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_int64_to_uint16<'a>(a: i64) -> Result<u16, EvalError> {\n    {\n        u16::try_from(a)\n            .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"bigint_to_uint2\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastUint16ToInt64),\n    is_monotone = true\n)]\nfn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {\n    u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,10 +44,6 @@ impl std::fmt::Display for CastInt64ToUint16 {
         f.write_str("bigint_to_uint2")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int64_to_uint16<'a>(a: i64) -> Result<u16, EvalError> {
-    {
-        u16::try_from(a)
-            .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
-    }
+fn cast_int64_to_uint16(a: i64) -> Result<u16, EvalError> {
+    u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
 }

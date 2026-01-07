@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float64.rs
-expression: "#[sqlfunc(\n    sqlname = \"expf64\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn exp<'a>(a: f64) -> Result<f64, EvalError> {\n    {\n        let r = a.exp();\n        if r.is_infinite() {\n            return Err(EvalError::FloatOverflow);\n        }\n        if r == 0.0 {\n            return Err(EvalError::FloatUnderflow);\n        }\n        Ok(r)\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"expf64\")]\nfn exp(a: f64) -> Result<f64, EvalError> {\n    let r = a.exp();\n    if r.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if r == 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(r)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,31 +29,19 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Exp {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for Exp {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("expf64")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn exp<'a>(a: f64) -> Result<f64, EvalError> {
-    {
-        let r = a.exp();
-        if r.is_infinite() {
-            return Err(EvalError::FloatOverflow);
-        }
-        if r == 0.0 {
-            return Err(EvalError::FloatUnderflow);
-        }
-        Ok(r)
+fn exp(a: f64) -> Result<f64, EvalError> {
+    let r = a.exp();
+    if r.is_infinite() {
+        return Err(EvalError::FloatOverflow);
     }
+    if r == 0.0 {
+        return Err(EvalError::FloatUnderflow);
+    }
+    Ok(r)
 }

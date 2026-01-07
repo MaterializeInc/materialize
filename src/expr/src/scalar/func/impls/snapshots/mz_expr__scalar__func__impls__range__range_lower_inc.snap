@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/range.rs
-expression: "#[sqlfunc(\n    sqlname = \"range_lower_inc\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {\n    {\n        match a.inner {\n            None => false,\n            Some(inner) => inner.lower.inclusive,\n        }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"range_lower_inc\")]\nfn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {\n    match a.inner {\n        None => false,\n        Some(inner) => inner.lower.inclusive,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,27 +29,15 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for RangeLowerInc {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for RangeLowerInc {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("range_lower_inc")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
-    {
-        match a.inner {
-            None => false,
-            Some(inner) => inner.lower.inclusive,
-        }
+fn range_lower_inc<'a>(a: Range<Datum<'a>>) -> bool {
+    match a.inner {
+        None => false,
+        Some(inner) => inner.lower.inclusive,
     }
 }

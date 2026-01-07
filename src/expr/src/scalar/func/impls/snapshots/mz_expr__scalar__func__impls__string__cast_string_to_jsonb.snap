@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-expression: "#[sqlfunc(\n    sqlname = \"text_to_jsonb\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastJsonbToString),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {\n    { Ok(strconv::parse_jsonb(a)?) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"text_to_jsonb\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastJsonbToString)\n)]\nfn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {\n    Ok(strconv::parse_jsonb(a)?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToJsonb {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastJsonbToString)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         false
     }
@@ -44,7 +41,6 @@ impl std::fmt::Display for CastStringToJsonb {
         f.write_str("text_to_jsonb")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
-    { Ok(strconv::parse_jsonb(a)?) }
+fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    Ok(strconv::parse_jsonb(a)?)
 }

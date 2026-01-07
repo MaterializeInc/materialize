@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int32.rs
-expression: "#[sqlfunc(\n    sqlname = \"~\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(BitNotInt32),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn bit_not_int32<'a>(a: i32) -> i32 {\n    { !a }\n}\n"
+expression: "#[sqlfunc(sqlname = \"~\", preserves_uniqueness = true, inverse = to_unary!(BitNotInt32))]\nfn bit_not_int32(a: i32) -> i32 {\n    !a\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for BitNotInt32 {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(BitNotInt32)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -44,7 +41,6 @@ impl std::fmt::Display for BitNotInt32 {
         f.write_str("~")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn bit_not_int32<'a>(a: i32) -> i32 {
-    { !a }
+fn bit_not_int32(a: i32) -> i32 {
+    !a
 }

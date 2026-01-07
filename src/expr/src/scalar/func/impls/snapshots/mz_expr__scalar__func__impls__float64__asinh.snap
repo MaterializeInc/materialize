@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float64.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(asinh),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn asinh<'a>(a: f64) -> f64 {\n    { a.asinh() }\n}\n"
+expression: "#[sqlfunc()]\nfn asinh(a: f64) -> f64 {\n    a.asinh()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,22 +29,12 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Asinh {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for Asinh {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(asinh))
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn asinh<'a>(a: f64) -> f64 {
-    { a.asinh() }
+fn asinh(a: f64) -> f64 {
+    a.asinh()
 }
