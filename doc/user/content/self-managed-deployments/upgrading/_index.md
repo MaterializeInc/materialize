@@ -213,7 +213,7 @@ kubectl patch materialize <instance-name> \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
-### `requestRollout` with `forcedRollouts`
+#### `requestRollout` with `forcedRollouts`
 
 Specify a new `UUID` value for `forcedRollout` to roll out even when there are
 no changes to the instance. Use `forcedRollout` with `requestRollout`.
