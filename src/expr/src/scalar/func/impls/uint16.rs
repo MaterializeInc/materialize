@@ -17,94 +17,94 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
-sqlfunc!(
-    #[sqlname = "~"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::BitNotUint16)]
-    fn bit_not_uint16(a: u16) -> u16 {
+#[sqlfunc(
+    sqlname = "~",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::BitNotUint16)
+)]
+fn bit_not_uint16(a: u16) -> u16 {
         !a
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_real"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastFloat32ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_float32(a: u16) -> f32 {
+#[sqlfunc(
+    sqlname = "uint2_to_real",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastFloat32ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_float32(a: u16) -> f32 {
         f32::from(a)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_double"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastFloat64ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_float64(a: u16) -> f64 {
+#[sqlfunc(
+    sqlname = "uint2_to_double",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastFloat64ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_float64(a: u16) -> f64 {
         f64::from(a)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_uint4"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastUint32ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_uint32(a: u16) -> u32 {
+#[sqlfunc(
+    sqlname = "uint2_to_uint4",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastUint32ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_uint32(a: u16) -> u32 {
         u32::from(a)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_uint8"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastUint64ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_uint64(a: u16) -> u64 {
+#[sqlfunc(
+    sqlname = "uint2_to_uint8",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastUint64ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_uint64(a: u16) -> u64 {
         u64::from(a)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_smallint"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastInt16ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_int16(a: u16) -> Result<i16, EvalError> {
+#[sqlfunc(
+    sqlname = "uint2_to_smallint",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastInt16ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_int16(a: u16) -> Result<i16, EvalError> {
         i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_integer"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastInt32ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_int32(a: u16) -> i32 {
+#[sqlfunc(
+    sqlname = "uint2_to_integer",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastInt32ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_int32(a: u16) -> i32 {
         i32::from(a)
     }
-);
-sqlfunc!(
-    #[sqlname = "uint2_to_bigint"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastInt64ToUint16)]
-    #[is_monotone = true]
-    fn cast_uint16_to_int64(a: u16) -> i64 {
+#[sqlfunc(
+    sqlname = "uint2_to_bigint",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastInt64ToUint16),
+    is_monotone = true
+)]
+fn cast_uint16_to_int64(a: u16) -> i64 {
         i64::from(a)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "uint2_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToUint16)]
-    fn cast_uint16_to_string(a: u16) -> String {
+#[sqlfunc(
+    sqlname = "uint2_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToUint16)
+)]
+fn cast_uint16_to_string(a: u16) -> String {
         let mut buf = String::new();
         strconv::format_uint16(&mut buf, a);
         buf
     }
-);
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastUint16ToNumeric(pub Option<NumericMaxScale>);

@@ -11,30 +11,30 @@ use mz_repr::{Datum, DatumList};
 
 use crate::EvalError;
 
-sqlfunc!(
-    #[sqlname = "isnull"]
-    #[is_monotone = true]
-    fn is_null<'a>(a: Datum<'a>) -> bool {
+#[sqlfunc(
+    sqlname = "isnull",
+    is_monotone = true
+)]
+fn is_null<'a>(a: Datum<'a>) -> bool {
         a.is_null()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "istrue"]
-    fn is_true<'a>(a: Datum<'a>) -> bool {
+#[sqlfunc(
+    sqlname = "istrue"
+)]
+fn is_true<'a>(a: Datum<'a>) -> bool {
         a == Datum::True
     }
-);
 
-sqlfunc!(
-    #[sqlname = "isfalse"]
-    fn is_false<'a>(a: Datum<'a>) -> bool {
+#[sqlfunc(
+    sqlname = "isfalse"
+)]
+fn is_false<'a>(a: Datum<'a>) -> bool {
         a == Datum::False
     }
-);
 
-sqlfunc!(
-    fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {
+#[sqlfunc]
+fn pg_column_size<'a>(a: Datum<'a>) -> Result<Option<i32>, EvalError> {
         match a {
             Datum::Null => Ok(None),
             datum => {
@@ -45,13 +45,11 @@ sqlfunc!(
             }
         }
     }
-);
 
-sqlfunc!(
-    // TODO[btv] - if we plan to keep changing row format,
-    // should we make this unmaterializable?
-    fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
+#[sqlfunc]
+// TODO[btv] - if we plan to keep changing row format,
+// should we make this unmaterializable?
+fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
         let sz = mz_repr::row_size(a.iter());
         i32::try_from(sz).or_else(|_| Err(EvalError::Int32OutOfRange(sz.to_string().into())))
     }
-);

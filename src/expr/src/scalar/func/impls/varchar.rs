@@ -10,14 +10,14 @@
 use mz_repr::adt::varchar::VarChar;
 
 // This function simply allows the expression of changing a's type from varchar to string
-sqlfunc!(
-    #[sqlname = "varchar_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToVarChar {
+#[sqlfunc(
+    sqlname = "varchar_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToVarChar {
         length: None,
         fail_on_len: false,
-    })]
-    fn cast_var_char_to_string<'a>(a: VarChar<&'a str>) -> &'a str {
+    })
+)]
+fn cast_var_char_to_string<'a>(a: VarChar<&'a str>) -> &'a str {
         a.0
     }
-);

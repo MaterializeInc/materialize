@@ -36,128 +36,128 @@ use crate::scalar::func::{
 };
 use crate::{EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 
-sqlfunc!(
-    #[sqlname = "text_to_boolean"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastBoolToString)]
-    fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_boolean",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastBoolToString)
+)]
+fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
         strconv::parse_bool(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_\"char\""]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastPgLegacyCharToString)]
-    fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
+#[sqlfunc(
+    sqlname = "text_to_\"char\"",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastPgLegacyCharToString)
+)]
+fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
         PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_name"]
-    #[preserves_uniqueness = true]
-    fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
+#[sqlfunc(
+    sqlname = "text_to_name",
+    preserves_uniqueness = true
+)]
+fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
         PgLegacyName(strconv::parse_pg_legacy_name(a))
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_bytea"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastBytesToString)]
-    fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_bytea",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastBytesToString)
+)]
+fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
         strconv::parse_bytes(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_smallint"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt16ToString)]
-    fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_smallint",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastInt16ToString)
+)]
+fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
         strconv::parse_int16(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_integer"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt32ToString)]
-    fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_integer",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastInt32ToString)
+)]
+fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
         strconv::parse_int32(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_bigint"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastInt64ToString)]
-    fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_bigint",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastInt64ToString)
+)]
+fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
         strconv::parse_int64(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_real"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastFloat32ToString)]
-    fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_real",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastFloat32ToString)
+)]
+fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
         strconv::parse_float32(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_double"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastFloat64ToString)]
-    fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_double",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastFloat64ToString)
+)]
+fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
         strconv::parse_float64(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_oid"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastOidToString)]
-    fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_oid",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastOidToString)
+)]
+fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
         Ok(Oid(strconv::parse_oid(a)?))
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_uint2"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint16ToString)]
-    fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_uint2",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUint16ToString)
+)]
+fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
         strconv::parse_uint16(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_uint4"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint32ToString)]
-    fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_uint4",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUint32ToString)
+)]
+fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
         strconv::parse_uint32(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_uint8"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUint64ToString)]
-    fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_uint8",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUint64ToString)
+)]
+fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
         strconv::parse_uint64(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "reverse"]
-    fn reverse<'a>(a: &'a str) -> String {
+#[sqlfunc(
+    sqlname = "reverse"
+)]
+fn reverse<'a>(a: &'a str) -> String {
         a.chars().rev().collect()
     }
-);
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
@@ -191,23 +191,23 @@ impl fmt::Display for CastStringToNumeric {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "text_to_date"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastDateToString)]
-    fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_date",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastDateToString)
+)]
+fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
         strconv::parse_date(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_time"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastTimeToString)]
-    fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_time",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastTimeToString)
+)]
+fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
         strconv::parse_time(a).err_into()
     }
-);
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
@@ -237,14 +237,15 @@ impl fmt::Display for CastStringToTimestamp {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "try_parse_monotonic_iso8601_timestamp"]
-    // TODO: Pretty sure this preserves uniqueness, but not 100%.
-    //
-    // Ironically, even though this has "monotonic" in the name, it's not quite
-    // eligible for `#[is_monotone = true]` because any input could also be
-    // mapped to null. So, handle it via SpecialUnary in the interpreter.
-    fn try_parse_monotonic_iso8601_timestamp<'a>(
+#[sqlfunc(
+    sqlname = "try_parse_monotonic_iso8601_timestamp"
+)]
+// TODO: Pretty sure this preserves uniqueness, but not 100%.
+//
+// Ironically, even though this has "monotonic" in the name, it's not quite
+// eligible for `#[is_monotone = true]` because any input could also be
+// mapped to null. So, handle it via SpecialUnary in the interpreter.
+fn try_parse_monotonic_iso8601_timestamp<'a>(
         a: &'a str,
     ) -> Option<CheckedTimestamp<NaiveDateTime>> {
         let ts = mz_persist_types::timestamp::try_parse_monotonic_iso8601_timestamp(a)?;
@@ -252,7 +253,6 @@ sqlfunc!(
             .expect("monotonic_iso8601 range is a subset of CheckedTimestamp domain");
         Some(ts)
     }
-);
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
@@ -282,23 +282,23 @@ impl fmt::Display for CastStringToTimestampTz {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "text_to_interval"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastIntervalToString)]
-    fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_interval",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastIntervalToString)
+)]
+fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
         strconv::parse_interval(a).err_into()
     }
-);
 
-sqlfunc!(
-    #[sqlname = "text_to_uuid"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastUuidToString)]
-    fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_uuid",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastUuidToString)
+)]
+fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
         strconv::parse_uuid(a).err_into()
     }
-);
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToArray {
@@ -794,40 +794,41 @@ impl fmt::Display for CastStringToInt2Vector {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "text_to_jsonb"]
-    #[preserves_uniqueness = false]
-    #[inverse = to_unary!(super::CastJsonbToString)]
-    // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
-    fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+#[sqlfunc(
+    sqlname = "text_to_jsonb",
+    preserves_uniqueness = false,
+    inverse = to_unary!(super::CastJsonbToString)
+)]
+// TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
+fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         Ok(strconv::parse_jsonb(a)?)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "btrim"]
-    fn trim_whitespace<'a>(a: &'a str) -> &'a str {
+#[sqlfunc(
+    sqlname = "btrim"
+)]
+fn trim_whitespace<'a>(a: &'a str) -> &'a str {
         a.trim_matches(' ')
     }
-);
 
-sqlfunc!(
-    #[sqlname = "ltrim"]
-    fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
+#[sqlfunc(
+    sqlname = "ltrim"
+)]
+fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
         a.trim_start_matches(' ')
     }
-);
 
-sqlfunc!(
-    #[sqlname = "rtrim"]
-    fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
+#[sqlfunc(
+    sqlname = "rtrim"
+)]
+fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
         a.trim_end_matches(' ')
     }
-);
 
-sqlfunc!(
-    #[sqlname = "initcap"]
-    fn initcap<'a>(a: &'a str) -> String {
+#[sqlfunc(
+    sqlname = "initcap"
+)]
+fn initcap<'a>(a: &'a str) -> String {
         let mut out = String::new();
         let mut capitalize_next = true;
         for ch in a.chars() {
@@ -840,56 +841,53 @@ sqlfunc!(
         }
         out
     }
-);
 
-sqlfunc!(
-    #[sqlname = "ascii"]
-    fn ascii<'a>(a: &'a str) -> i32 {
+#[sqlfunc(
+    sqlname = "ascii"
+)]
+fn ascii<'a>(a: &'a str) -> i32 {
         a.chars()
             .next()
             .and_then(|c| i32::try_from(u32::from(c)).ok())
             .unwrap_or(0)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "char_length"]
-    fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
+#[sqlfunc(
+    sqlname = "char_length"
+)]
+fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.chars().count();
         i32::try_from(length)
             .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
-);
 
-sqlfunc!(
-    #[sqlname = "bit_length"]
-    fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
+#[sqlfunc(
+    sqlname = "bit_length"
+)]
+fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len() * 8;
         i32::try_from(length)
             .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
-);
 
-sqlfunc!(
-    #[sqlname = "octet_length"]
-    fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
+#[sqlfunc(
+    sqlname = "octet_length"
+)]
+fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
         let length = a.as_bytes().len();
         i32::try_from(length)
             .or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
     }
-);
 
-sqlfunc!(
-    fn upper<'a>(a: &'a str) -> String {
+#[sqlfunc]
+fn upper<'a>(a: &'a str) -> String {
         a.to_uppercase()
     }
-);
 
-sqlfunc!(
-    fn lower<'a>(a: &'a str) -> String {
+#[sqlfunc]
+fn lower<'a>(a: &'a str) -> String {
         a.to_lowercase()
     }
-);
 
 pub fn normalize_with_form<'a>(
     text: Datum<'a>,
@@ -1085,13 +1083,13 @@ impl fmt::Display for RegexpSplitToArray {
     }
 }
 
-sqlfunc!(
-    #[sqlname = "mz_panic"]
-    fn panic<'a>(a: &'a str) -> String {
+#[sqlfunc(
+    sqlname = "mz_panic"
+)]
+fn panic<'a>(a: &'a str) -> String {
         print!("{}", a);
         panic!("{}", a)
     }
-);
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct QuoteIdent;

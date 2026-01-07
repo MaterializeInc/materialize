@@ -9,29 +9,29 @@
 
 use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 
-sqlfunc!(
-    #[sqlname = "regclasstooid"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastOidToRegClass)]
-    fn cast_reg_class_to_oid(a: RegClass) -> Oid {
+#[sqlfunc(
+    sqlname = "regclasstooid",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastOidToRegClass)
+)]
+fn cast_reg_class_to_oid(a: RegClass) -> Oid {
         Oid(a.0)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "regproctooid"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastOidToRegProc)]
-    fn cast_reg_proc_to_oid(a: RegProc) -> Oid {
+#[sqlfunc(
+    sqlname = "regproctooid",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastOidToRegProc)
+)]
+fn cast_reg_proc_to_oid(a: RegProc) -> Oid {
         Oid(a.0)
     }
-);
 
-sqlfunc!(
-    #[sqlname = "regtypetooid"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastOidToRegType)]
-    fn cast_reg_type_to_oid(a: RegType) -> Oid {
+#[sqlfunc(
+    sqlname = "regtypetooid",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastOidToRegType)
+)]
+fn cast_reg_type_to_oid(a: RegType) -> Oid {
         Oid(a.0)
     }
-);
