@@ -16,7 +16,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, assert_ok};
+use mz_ore::{assert_none, assert_ok, soft_assert_eq_or_log};
 use mz_persist_types::schema::SchemaId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use proptest::prelude::*;
@@ -235,6 +235,32 @@ impl SqlRelationType {
     /// Returns all the [`SqlColumnType`]s, in order, for this relation.
     pub fn columns(&self) -> &[SqlColumnType] {
         &self.column_types
+    }
+
+    /// Adopts the nullability and keys from another `SqlRelationType`.
+    ///
+    /// Panics if the number of columns does not match (or, in CI, if the
+    /// scalar types do not have the same repr types).
+    pub fn backport_nullability_and_keys(&mut self, backport_typ: &SqlRelationType) {
+        assert_eq!(
+            backport_typ.column_types.len(),
+            self.column_types.len(),
+            "SQL and repr types should have the same number of columns"
+        );
+        for (backport_col, sql_col) in backport_typ
+            .column_types
+            .iter()
+            .zip_eq(self.column_types.iter_mut())
+        {
+            soft_assert_eq_or_log!(
+                ReprScalarType::from(&backport_col.scalar_type),
+                ReprScalarType::from(&sql_col.scalar_type),
+                "MIR and HIR types should have the same underlying scalar types"
+            );
+            sql_col.nullable = backport_col.nullable;
+        }
+
+        self.keys = backport_typ.keys.clone();
     }
 }
 

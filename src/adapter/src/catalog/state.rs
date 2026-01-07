@@ -98,7 +98,7 @@ use tracing::{debug, warn};
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
 use crate::catalog::{Catalog, ConnCatalog};
-use crate::coord::ConnMeta;
+use crate::coord::{ConnMeta, infer_sql_type_for_catalog};
 use crate::optimize::{self, Optimize, OptimizerCatalog};
 use crate::session::Session;
 
@@ -1306,7 +1306,7 @@ impl CatalogState {
                     .map(|gid| self.get_entry_by_global_id(&gid).id())
                     .collect();
 
-                let typ = raw_expr.top_level_typ();
+                let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     global_id,
@@ -1369,7 +1369,8 @@ impl CatalogState {
                         (Arc::new(raw_expr), Arc::new(optimized_expr))
                     }
                 };
-                let mut typ = raw_expr.top_level_typ();
+                let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
+
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
                 }
