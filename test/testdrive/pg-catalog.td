@@ -85,6 +85,7 @@ name         nullable  type      comment
 ----------------------------------------
 attrelid     false     oid       ""
 attname      false     text      ""
+attndims     false     smallint  ""
 atttypid     false     oid       ""
 attlen       true      smallint  ""
 attnum       false     smallint  ""
