@@ -11,9 +11,12 @@
 //!
 //! # Snapshot reading
 //!
-//! Depending on the resumption LSNs the table reader decides which tables need to be snapshotted
-//! and performs a simple `COPY` query on them in order to get a snapshot. There are a few subtle
-//! points about this operation, described in the following sections.
+//! Depending on the resumption LSNs the table reader decides which tables need to be snapshotted.
+//! Each table is partitioned across all workers using PostgreSQL's `ctid` (tuple identifier)
+//! column, which identifies the physical location of each row. This allows parallel snapshotting
+//! of large tables across all available workers.
+//!
+//! There are a few subtle points about this operation, described in the following sections.
 //!
 //! ## Consistent LSN point for snapshot transactions
 //!
@@ -104,19 +107,46 @@
 //! with the diffs taken at `t_snapshot` that were also emitted at LSN 0 (by convention) and we end
 //! up with a TVC that at LSN 0 contains the snapshot at `t_slot`.
 //!
+//! # Parallel table snapshotting with ctid ranges
+//!
+//! Each table is partitioned across workers using PostgreSQL's `ctid` column. The `ctid` is a
+//! tuple identifier of the form `(block_number, tuple_index)` that represents the physical
+//! location of a row on disk. By partitioning the ctid range, each worker can independently
+//! fetch a portion of the table.
+//!
+//! The partitioning works as follows:
+//! 1. The snapshot leader queries `pg_class.relpages` to estimate the number of blocks for each
+//!    table. This is much faster than querying `max(ctid)` which would require a sequential scan.
+//! 2. The leader broadcasts the block count estimates along with the snapshot transaction ID
+//!    to all workers, ensuring all workers use consistent estimates for partitioning.
+//! 3. Each worker calculates its assigned block range and fetches rows using a `COPY` query
+//!    with a `SELECT` that filters by `ctid >= start AND ctid < end`.
+//! 4. The last worker uses an open-ended range (`ctid >= start`) to capture any rows beyond
+//!    the estimated block count (handles cases where statistics are stale or table has grown).
+//!
+//! This approach efficiently parallelizes large table snapshots while maintaining the benefits
+//! of the `COPY` protocol for bulk data transfer.
+//!
+//! ## PostgreSQL version requirements
+//!
+//! Ctid range scans are only efficient on PostgreSQL >= 14 due to TID range scan optimizations
+//! introduced in that version. For older PostgreSQL versions, the snapshot falls back to the
+//! single-worker-per-table mode where each table is assigned to one worker based on consistent
+//! hashing. This is implemented by having the leader broadcast all-zero block counts when
+//! PostgreSQL version < 14.
+//!
 //! # Snapshot decoding
 //!
-//! The expectation is that tables will most likely be skewed on the number of rows they contain so
-//! while a `COPY` query for any given table runs on a single worker the decoding of the COPY
-//! stream is distributed to all workers.
-//!
+//! Each worker fetches its ctid range directly and decodes the COPY stream locally. The raw
+//! COPY data is then distributed to all workers for decoding using round-robin distribution.
 //!
 //! ```text
 //!                 ╭──────────────────╮
 //!    ┏━━━━━━━━━━━━v━┓                │ exported
 //!    ┃    table     ┃   ╭─────────╮  │ snapshot id
-//!    ┃    reader    ┠─>─┤broadcast├──╯
-//!    ┗━┯━━━━━━━━━━┯━┛   ╰─────────╯
+//!    ┃   readers    ┠─>─┤broadcast├──╯
+//!    ┃  (parallel)  ┃   ╰─────────╯
+//!    ┗━┯━━━━━━━━━━┯━┛
 //!   raw│          │
 //!  COPY│          │
 //!  data│          │
@@ -146,6 +176,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
+use mz_postgres_util::schemas::get_pg_major_version;
 use mz_postgres_util::{Client, Config, PostgresError, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
@@ -176,6 +207,137 @@ use crate::source::postgres::{
 };
 use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
+
+/// Information broadcasted from the snapshot leader to all workers.
+/// This includes the transaction snapshot ID, LSN, and estimated block counts for each table.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SnapshotInfo {
+    /// The exported transaction snapshot identifier.
+    snapshot_id: String,
+    /// The LSN at which the snapshot was taken.
+    snapshot_lsn: MzOffset,
+    /// Estimated number of blocks (pages) for each table, keyed by OID.
+    /// This is derived from `pg_class.relpages` and used to partition ctid ranges.
+    table_block_counts: BTreeMap<u32, u64>,
+}
+
+/// Represents a ctid range that a worker should snapshot.
+/// The range is [start_block, end_block) where end_block is optional (None means unbounded).
+#[derive(Debug)]
+struct CtidRange {
+    /// The starting block number (inclusive).
+    start_block: u64,
+    /// The ending block number (exclusive). None means unbounded (open-ended range).
+    end_block: Option<u64>,
+}
+
+/// Calculate the ctid range for a given worker based on estimated block count.
+///
+/// The table is partitioned by block number across all workers. Each worker gets a contiguous
+/// range of blocks. The last worker gets an open-ended range to handle any rows beyond the
+/// estimated block count.
+///
+/// When `estimated_blocks` is 0 (either because statistics are unavailable, the table appears
+/// empty, or PostgreSQL version < 14 doesn't support ctid range scans), the table is assigned
+/// to a single worker determined by `config.responsible_for(oid)` and that worker scans the
+/// full table.
+///
+/// Returns None if this worker has no work to do.
+fn worker_ctid_range(
+    config: &RawSourceCreationConfig,
+    estimated_blocks: u64,
+    oid: u32,
+) -> Option<CtidRange> {
+    // If estimated_blocks is 0, fall back to single-worker mode for this table.
+    // This handles:
+    // - PostgreSQL < 14 (ctid range scans not supported)
+    // - Tables that appear empty in statistics
+    // - Tables with stale/missing statistics
+    // The responsible worker scans the full table with an open-ended range.
+    if estimated_blocks == 0 {
+        let fallback = if config.responsible_for(oid) {
+            Some(CtidRange {
+                start_block: 0,
+                end_block: None,
+            })
+        } else {
+            None
+        };
+        return fallback;
+    }
+
+    let worker_id = u64::cast_from(config.worker_id);
+    let worker_count = u64::cast_from(config.worker_count);
+
+    // If there are more workers than blocks, only assign work to workers with id < estimated_blocks
+    // The last assigned worker still gets an open range.
+    let effective_worker_count = std::cmp::min(worker_count, estimated_blocks);
+
+    if worker_id >= effective_worker_count {
+        // This worker has no work to do
+        return None;
+    }
+
+    // Calculate start block for this worker (integer division distributes blocks evenly)
+    let start_block = worker_id * estimated_blocks / effective_worker_count;
+
+    // The last effective worker gets an open-ended range
+    let is_last_effective_worker = worker_id == effective_worker_count - 1;
+    if is_last_effective_worker {
+        Some(CtidRange {
+            start_block,
+            end_block: None,
+        })
+    } else {
+        let end_block = (worker_id + 1) * estimated_blocks / effective_worker_count;
+        Some(CtidRange {
+            start_block,
+            end_block: Some(end_block),
+        })
+    }
+}
+
+/// Estimate the number of blocks for each table from pg_class statistics.
+/// This is used to partition ctid ranges across workers.
+async fn estimate_table_block_counts(
+    client: &Client,
+    table_oids: &[u32],
+) -> Result<BTreeMap<u32, u64>, TransientError> {
+    if table_oids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    // Query relpages for all tables at once
+    let oid_list = table_oids
+        .iter()
+        .map(|oid| oid.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!(
+        "SELECT oid, relpages FROM pg_class WHERE oid IN ({})",
+        oid_list
+    );
+
+    let mut block_counts = BTreeMap::new();
+    // Initialize all tables with 0 blocks (in case they're not in pg_class)
+    for &oid in table_oids {
+        block_counts.insert(oid, 0);
+    }
+
+    // Execute the query and collect results
+    let rows = client.simple_query(&query).await?;
+    for msg in rows {
+        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
+            let oid: u32 = row.get("oid").unwrap().parse().unwrap();
+            let relpages: i64 = row.get("relpages").unwrap().parse().unwrap_or(0);
+            // relpages can be -1 if never analyzed, treat as 0
+            let relpages = std::cmp::max(0, relpages).try_into().unwrap();
+            block_counts.insert(oid, relpages);
+        }
+    }
+
+    Ok(block_counts)
+}
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
 pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
@@ -220,9 +382,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
-    // A filtered table info containing only the tables that this worker should snapshot.
-    let mut worker_table_info = BTreeMap::new();
-    // A collecction of `SourceStatistics` to update for a given Oid. Same info exists in reader_table_info,
+    // Table info for tables that need snapshotting. All workers will snapshot all tables,
+    // but each worker will handle a different ctid range within each table.
+    let mut tables_to_snapshot = BTreeMap::new();
+    // A collection of `SourceStatistics` to update for a given Oid. Same info exists in table_info,
     // but this avoids having to iterate + map each time the statistics are needed.
     let mut export_statistics = BTreeMap::new();
     for (table, outputs) in table_info.iter() {
@@ -232,12 +395,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 continue;
             }
             all_outputs.push(output_index);
-            if config.responsible_for(*table) {
-                worker_table_info
-                    .entry(*table)
-                    .or_insert_with(BTreeMap::new)
-                    .insert(output_index, output.clone());
-            }
+            tables_to_snapshot
+                .entry(*table)
+                .or_insert_with(BTreeMap::new)
+                .insert(output_index, output.clone());
             let statistics = config
                 .statistics
                 .get(&output.export_id)
@@ -264,7 +425,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 %id,
                 "timely-{worker_id} initializing table reader \
                     with {} tables to snapshot",
-                    worker_table_info.len()
+                    tables_to_snapshot.len()
             );
 
             let connection_config = connection
@@ -313,11 +474,42 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 statistics.set_snapshot_records_staged(0);
             }
 
+            // Collect table OIDs for block count estimation
+            let table_oids: Vec<u32> = tables_to_snapshot.keys().copied().collect();
+
             // replication client is only set if this worker is the snapshot leader
             let client = match replication_client {
                 Some(client) => {
                     let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
-                    let snapshot_info = export_snapshot(&client, &tmp_slot, true).await?;
+                    let (snapshot_id, snapshot_lsn) = export_snapshot(&client, &tmp_slot, true).await?;
+
+                    // Check PostgreSQL version. Ctid range scans are only efficient on PG >= 14
+                    // due to improvements in TID range scan support.
+                    let pg_version = get_pg_major_version(&client).await?;
+
+                    // Estimate block counts for all tables from pg_class statistics.
+                    // This must be done by the leader and broadcasted to ensure all workers
+                    // use the same estimates for ctid range partitioning.
+                    //
+                    // For PostgreSQL < 14, we set all block counts to 0 to fall back to
+                    // single-worker-per-table mode, as ctid range scans are not well supported.
+                    let table_block_counts = if pg_version >= 14 {
+                        estimate_table_block_counts(&client, &table_oids).await?
+                    } else {
+                        trace!(
+                            %id,
+                            "timely-{worker_id} PostgreSQL version {pg_version} < 14, \
+                             falling back to single-worker-per-table snapshot mode"
+                        );
+                        // Return all zeros to trigger fallback mode
+                        table_oids.iter().map(|&oid| (oid, 0u64)).collect()
+                    };
+
+                    let snapshot_info = SnapshotInfo {
+                        snapshot_id,
+                        snapshot_lsn,
+                        table_block_counts,
+                    };
                     trace!(
                         %id,
                         "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
@@ -349,7 +541,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             )
             .await?;
 
-            let (snapshot, snapshot_lsn) = loop {
+            let snapshot_info = loop {
                 match snapshot_input.next().await {
                     Some(AsyncEvent::Data(_, mut data)) => {
                         break data.pop().expect("snapshot sent above")
@@ -361,15 +553,21 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     ),
                 }
             };
+            let SnapshotInfo {
+                snapshot_id,
+                snapshot_lsn,
+                table_block_counts,
+            } = snapshot_info;
+
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
-                trace!(%id, "timely-{worker_id} using snapshot id {snapshot:?}");
-                use_snapshot(&client, &snapshot).await?;
+                trace!(%id, "timely-{worker_id} using snapshot id {snapshot_id:?}");
+                use_snapshot(&client, &snapshot_id).await?;
             }
 
 
             let upstream_info = {
-                let table_oids = worker_table_info.keys().copied().collect::<Vec<_>>();
+                let table_oids = tables_to_snapshot.keys().copied().collect::<Vec<_>>();
                 // As part of retrieving the schema info, RLS policies are checked to ensure the
                 // snapshot can successfully read the tables. RLS policy errors are treated as
                 // transient, as the customer can simply add the BYPASSRLS to the PG account
@@ -385,7 +583,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // nothing else to do. These errors are not retractable.
                     Err(PostgresError::PublicationMissing(publication)) => {
                         let err = DefiniteError::PublicationDropped(publication);
-                        for (oid, outputs) in worker_table_info.iter() {
+                        for (oid, outputs) in tables_to_snapshot.iter() {
                             // Produce a definite error here and then exit to ensure
                             // a missing publication doesn't generate a transient
                             // error and restart this dataflow indefinitely.
@@ -414,9 +612,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 }
             };
 
-            report_snapshot_size(&client, &worker_table_info, metrics, &config, &export_statistics).await?;
+            // Only the snapshot leader reports table sizes to avoid duplicate statistics.
+            if is_snapshot_leader {
+                report_snapshot_size(&client, &tables_to_snapshot, metrics, &config, &export_statistics).await?;
+            }
 
-            for (&oid, outputs) in worker_table_info.iter() {
+            for (&oid, outputs) in tables_to_snapshot.iter() {
                 for (&output_index, info) in outputs.iter() {
                     if let Err(err) = verify_schema(oid, info, &upstream_info) {
                         raw_handle
@@ -432,10 +633,28 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         continue;
                     }
 
+                    // Get estimated block count from the broadcasted table statistics
+                    let block_count = table_block_counts.get(&oid).copied().unwrap_or(0);
+
+                    // Calculate this worker's ctid range based on estimated blocks.
+                    // When estimated_blocks is 0 (PG < 14 or empty table), fall back to
+                    // single-worker mode using responsible_for to pick the worker.
+                    let Some(ctid_range) = worker_ctid_range(&config, block_count, oid) else {
+                        // This worker has no work for this table (more workers than blocks)
+                        trace!(
+                            %id,
+                            "timely-{worker_id} no ctid range assigned for table {:?}({oid})",
+                            info.desc.name
+                        );
+                        continue;
+                    };
+
                     trace!(
                         %id,
-                        "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}",
-                        info.desc.name
+                        "timely-{worker_id} snapshotting table {:?}({oid}) output {output_index} \
+                         @ {snapshot_lsn} with ctid range {:?}",
+                        info.desc.name,
+                        ctid_range
                     );
 
                     // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
@@ -448,8 +667,19 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         .iter()
                         .map(|c| Ident::new_unchecked(&c.name).to_ast_string_stable())
                         .join(",");
-                    let query = format!("COPY {namespace}.{table} ({column_list}) \
-                        TO STDOUT (FORMAT TEXT, DELIMITER '\t')");
+
+
+                    let ctid_filter = match ctid_range.end_block {
+                        Some(end) => format!(
+                            "WHERE ctid >= '({},0)'::tid AND ctid < '({},0)'::tid",
+                            ctid_range.start_block, end
+                        ),
+                        None => format!("WHERE ctid >= '({},0)'::tid", ctid_range.start_block),
+                    };
+                    let query = format!(
+                        "COPY (SELECT {column_list} FROM {namespace}.{table} {ctid_filter}) \
+                         TO STDOUT (FORMAT TEXT, DELIMITER '\t')"
+                    );
                     let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                     let mut snapshot_staged = 0;
@@ -474,10 +704,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // that this happens after the snapshot has finished because this is what unblocks the
             // replication operator and we want this to happen serially. It might seem like a good
             // idea to read the replication stream concurrently with the snapshot but it actually
-            // leads to a lot of data being staged for the future, which needlesly consumed memory
+            // leads to a lot of data being staged for the future, which needlessly consumed memory
             // in the cluster.
-            for output in worker_table_info.values() {
+            //
+            // Since all workers now snapshot all tables (each with different ctid ranges), we only
+            // emit rewind requests from the worker responsible for each output to avoid duplicates.
+            for (&oid, output) in tables_to_snapshot.iter() {
                 for (output_index, info) in output {
+                    // Only emit rewind request from one worker per output
+                    if !config.responsible_for((oid, *output_index)) {
+                        continue;
+                    }
                     trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
                     let req = RewindRequest { output_index: *output_index, snapshot_lsn };
                     rewinds_handle.give(&rewind_cap_set[0], req);
@@ -662,7 +899,7 @@ fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), Def
 /// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics` and emit snapshot statistics for each export.
 async fn report_snapshot_size(
     client: &Client,
-    worker_table_info: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    tables_to_snapshot: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
     config: &RawSourceCreationConfig,
     export_statistics: &BTreeMap<(u32, usize), SourceStatistics>,
@@ -670,7 +907,7 @@ async fn report_snapshot_size(
     // TODO(guswynn): delete unused configs
     let snapshot_config = config.config.parameters.pg_snapshot_config;
 
-    for (&oid, outputs) in worker_table_info {
+    for (&oid, outputs) in tables_to_snapshot {
         // Use the first output's desc to make the table name since it is the same for all outputs
         let Some((_, info)) = outputs.first_key_value() else {
             continue;
