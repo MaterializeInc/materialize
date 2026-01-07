@@ -176,7 +176,9 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let typ = expr.top_level_typ();
+        // we would call infer_sql_type_for_catalog here, but we don't want to bother cloning `expr`.
+        // we explicitly call `backport_nullability_and_keys` below.
+        let mut typ = expr.top_level_typ();
         let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
@@ -189,6 +191,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
             Some(self.select_id),
         );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+        typ.backport_nullability_and_keys(&expr.typ());
 
         self.duration += time.elapsed();
 
