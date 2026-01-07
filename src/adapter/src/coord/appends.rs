@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use derivative::Derivative;
 use futures::future::{BoxFuture, FutureExt};
@@ -452,11 +452,15 @@ impl Coordinator {
         //
         // TODO: Remove this after both (either?) of the above features are on
         // for good and no possibility of running the old code.
+        let confirm_leadership_start = Instant::now();
         let () = self
             .catalog
             .confirm_leadership()
             .await
             .unwrap_or_terminate("unable to confirm leadership");
+        self.metrics
+            .group_commit_confirm_leadership_seconds
+            .observe(confirm_leadership_start.elapsed().as_secs_f64());
 
         let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());
@@ -506,9 +510,13 @@ impl Coordinator {
         }
 
         // Add table advancements for all tables.
+        let table_advancement_start = Instant::now();
         for table in self.catalog().entries().filter(|entry| entry.is_table()) {
             appends.entry(table.id()).or_default();
         }
+        self.metrics
+            .group_commit_table_advancement_seconds
+            .observe(table_advancement_start.elapsed().as_secs_f64());
 
         // Consolidate all Rows for a given table. We do not consolidate the
         // staged batches, that's up to whoever staged them.
