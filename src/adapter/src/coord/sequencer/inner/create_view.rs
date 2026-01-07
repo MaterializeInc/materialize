@@ -27,7 +27,8 @@ use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
-    ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged, infer_sql_type_for_catalog,
+    ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
+    infer_sql_type_for_catalog,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_plan;
