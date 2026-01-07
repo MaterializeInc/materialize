@@ -249,7 +249,12 @@ impl std::fmt::Debug for TracingHandle {
 ///
 /// Note: folks should feel free to add more crates here if we find more
 /// with long lived Spans.
-pub const LOGGING_DEFAULTS_STR: [&str; 1] = ["kube_client::client::builder=off"];
+pub const LOGGING_DEFAULTS_STR: [&str; 2] = [
+    "kube_client::client::builder=off",
+    // aws_config is very noisy at the INFO level by default.
+    // It logs every time it successfully loads credentials.
+    "aws_config::profile::credentials=off",
+];
 /// Same as [`LOGGING_DEFAULTS_STR`], but structured as [`Directive`]s.
 pub static LOGGING_DEFAULTS: LazyLock<Vec<Directive>> = LazyLock::new(|| {
     LOGGING_DEFAULTS_STR
