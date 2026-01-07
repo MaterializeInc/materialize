@@ -1041,7 +1041,7 @@ pub fn eval_copy_to_uri(
         session,
         catalog_state,
     };
-    let mut to = to.lower_uncorrelated()?;
+    let mut to = to.lower_uncorrelated(catalog_state.system_config())?;
     style.prep_scalar_expr(&mut to)?;
     let temp_storage = RowArena::new();
     let evaled = to.eval(&[], &temp_storage)?;

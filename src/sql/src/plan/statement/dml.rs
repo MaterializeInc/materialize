@@ -111,7 +111,7 @@ pub fn plan_insert(
         .into_iter()
         .map(|mut expr| {
             expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-            expr.lower_uncorrelated()
+            expr.lower_uncorrelated(scx.catalog.system_vars())
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -171,7 +171,7 @@ pub fn plan_read_then_write(
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-        let set = set.lower_uncorrelated()?;
+        let set = set.lower_uncorrelated(scx.catalog.system_vars())?;
         assignments_outer.insert(idx, set);
     }
 
@@ -638,6 +638,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_dequadratic_eqprop_map: Default::default(),
                 enable_eq_classes_withholding_errors: Default::default(),
                 enable_fast_path_plan_insights: Default::default(),
+                enable_cast_elimination: Default::default(),
             },
         })
     }
