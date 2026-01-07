@@ -12,7 +12,7 @@ Our goal is to enable single sign on (SSO) for our self managed product
 ## Success Criteria
 
 - Creating a user & adding roles: An admin gives a user access to Materialize
-- The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
+- When the user is removed from the upstream IDP they are no longer able to login to Materialize but their role will persist in its current state.
 - The end user is able to create a token to connect to materialize via psql / postgres clients
 
 ## Non-goals
@@ -34,7 +34,7 @@ spec:
   ...
   authenticatorKind: Oidc
   oidcAuthenticationSettings:
-  # Must match the OIDC client ID. Optional.
+    # Must match the OIDC client ID. Optional, but we should recommend setting this such that users can't authenticate with JWTs intended for other apps.
     audience: 060a4f3d-1cac-46e4-b5a5-6b9c66cd9431
     # The claim that represents the user's name in Materialize.
     # Usually either "sub" or "email". Required.
@@ -80,11 +80,11 @@ If an admin wants to forbid JWTs issued for other applications (e.g., Slack, int
 
 When a user first logs in with a valid token, we create a role for them if one does not already exist.
 
-### Solution proposal: The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
+### Solution proposal: The user should be disabled from logging in when a user is removed from the upstream IDP. However, the database level role should still exist.
 
 When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. This would require users to have their IdP client generate `refresh` tokens. For token expiration checking, in a task, we'll repeatedly wait for `(expiration - now) * 0.8` and see if it's less than a minute. This is also how we check token expiration in the Frontegg authenticator. We'll also implement a config variable to turn off this mechanism and have it default to true.
 
-By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on de-provisioning of a user. When admins de-provision a user, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
+By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on removal of a user from an IDP. When admins remove a user from an IDP, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
 
 **Alternative: Use SASL Authentication using the OAUTHBEARER mechanism rather than a cleartext password**
 
@@ -129,7 +129,7 @@ An MVP of what this might look like exists here: [https://github.com/Materialize
 - Session should error if access token is invalid (Rust unit test)
 - Session should error if refresh token is invalid (Rust unit test)
 - A user shouldn't be able to login as another user (Rust unit test)
-- De-provisioning a user should invalidate the refresh token (e2e mzcompose)
+- Removing a user from the upstream IDP should invalidate the refresh token (e2e mzcompose)
 - Platform-check simple login check (platform-check framework)
 - JWTs should only be accepted when a valid JWK is set (we do not want to accept JWTs that are not signed with a real, cryptographically sound key)
 
