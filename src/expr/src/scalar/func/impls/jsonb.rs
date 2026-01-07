@@ -25,7 +25,7 @@ use crate::scalar::func::impls::numeric::*;
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToJsonb)
 )]
-fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
+pub fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();
     strconv::format_jsonb(&mut buf, a);
     buf

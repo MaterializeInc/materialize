@@ -154,7 +154,7 @@ fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
     inverse = to_unary!(super::CastInt16ToNumeric(None)),
     is_monotone = true
 )]
-fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
+pub fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
     let mut cx = numeric::cx_datum();
     cx.round(&mut a);
     cx.clear_status();
@@ -170,7 +170,7 @@ fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
     inverse = to_unary!(super::CastInt32ToNumeric(None)),
     is_monotone = true
 )]
-fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
+pub fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
     let mut cx = numeric::cx_datum();
     cx.round(&mut a);
     cx.clear_status();
@@ -184,7 +184,7 @@ fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
     inverse = to_unary!(super::CastInt64ToNumeric(None)),
     is_monotone = true
 )]
-fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
+pub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
     let mut cx = numeric::cx_datum();
     cx.round(&mut a);
     cx.clear_status();
@@ -198,7 +198,7 @@ fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
     inverse = to_unary!(super::CastFloat32ToNumeric(None)),
     is_monotone = true
 )]
-fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
+pub fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
     let i = a.to_string().parse::<f32>().unwrap();
     if i.is_infinite() {
         Err(EvalError::Float32OutOfRange(i.to_string().into()))
@@ -213,7 +213,7 @@ fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
     inverse = to_unary!(super::CastFloat64ToNumeric(None)),
     is_monotone = true
 )]
-fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
+pub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
     let i = a.to_string().parse::<f64>().unwrap();
     if i.is_infinite() {
         Err(EvalError::Float64OutOfRange(i.to_string().into()))
