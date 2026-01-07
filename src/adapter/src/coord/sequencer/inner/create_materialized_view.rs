@@ -580,7 +580,6 @@ impl Coordinator {
         } = stage;
 
         // Validate the replacement target, if one is given.
-        // TODO(alter-mv): Could we do this already in planning?
         if let Some(target_id) = replacement_target {
             let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
                 return Err(AdapterError::internal(
@@ -590,8 +589,9 @@ impl Coordinator {
             };
 
             // For now, we don't support schema evolution for materialized views.
-            if &target.desc.latest() != global_lir_plan.desc() {
-                return Err(AdapterError::Unstructured(anyhow!("incompatible schemas")));
+            let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
+            if !schema_diff.is_empty() {
+                return Err(AdapterError::ReplacementSchemaMismatch(schema_diff));
             }
         }
 

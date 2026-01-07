@@ -1057,6 +1057,99 @@ impl RelationDesc {
         }
     }
 
+    /// Computes the differences between two [`RelationDesc`]s.
+    ///
+    /// Returns a rich diff describing which columns differ, and in what way.
+    ///
+    /// # Panics
+    ///
+    /// Panics if either `self` or `other` have columns that were added at a
+    /// [`RelationVersion`] other than [`RelationVersion::root`] or if any
+    /// columns were dropped.
+    ///
+    /// This simplifies things by allowing us to assume that `ColumnIndex`es are
+    /// dense and that they match the indexes of `typ.columns()`. Without this
+    /// we would, e.g., struggle comparing keys as those are in terms of
+    /// `typ.columns()` indexes.
+    pub fn diff(&self, other: &RelationDesc) -> RelationDescDiff {
+        assert_eq!(self.metadata.len(), self.typ.columns().len());
+        assert_eq!(other.metadata.len(), other.typ.columns().len());
+        for (idx, meta) in self.metadata.iter().chain(other.metadata.iter()) {
+            assert_eq!(meta.typ_idx, idx.0);
+            assert_eq!(meta.added, RelationVersion::root());
+            assert_none!(meta.dropped);
+        }
+
+        let mut column_diffs = BTreeMap::new();
+        let mut key_diff = None;
+
+        let left_arity = self.arity();
+        let right_arity = other.arity();
+        let common_arity = std::cmp::min(left_arity, right_arity);
+
+        for idx in 0..common_arity {
+            let left_name = self.get_name(idx);
+            let right_name = other.get_name(idx);
+            let left_type = &self.typ.column_types[idx];
+            let right_type = &other.typ.column_types[idx];
+
+            if left_name != right_name {
+                let diff = ColumnDiff::NameMismatch {
+                    left: left_name.clone(),
+                    right: right_name.clone(),
+                };
+                column_diffs.insert(idx, diff);
+            } else if left_type.scalar_type != right_type.scalar_type {
+                let diff = ColumnDiff::TypeMismatch {
+                    name: left_name.clone(),
+                    left: left_type.scalar_type.clone(),
+                    right: right_type.scalar_type.clone(),
+                };
+                column_diffs.insert(idx, diff);
+            } else if left_type.nullable != right_type.nullable {
+                let diff = ColumnDiff::NullabilityMismatch {
+                    name: left_name.clone(),
+                    left: left_type.nullable,
+                    right: right_type.nullable,
+                };
+                column_diffs.insert(idx, diff);
+            }
+        }
+
+        for idx in common_arity..left_arity {
+            let diff = ColumnDiff::Missing {
+                name: self.get_name(idx).clone(),
+            };
+            column_diffs.insert(idx, diff);
+        }
+
+        for idx in common_arity..right_arity {
+            let diff = ColumnDiff::Extra {
+                name: other.get_name(idx).clone(),
+            };
+            column_diffs.insert(idx, diff);
+        }
+
+        let left_keys: BTreeSet<_> = self.typ.keys.iter().collect();
+        let right_keys: BTreeSet<_> = other.typ.keys.iter().collect();
+        if left_keys != right_keys {
+            let column_names = |desc: &RelationDesc, keys: BTreeSet<&Vec<usize>>| {
+                keys.iter()
+                    .map(|key| key.iter().map(|&idx| desc.get_name(idx).clone()).collect())
+                    .collect()
+            };
+            key_diff = Some(KeyDiff {
+                left: column_names(self, left_keys),
+                right: column_names(other, right_keys),
+            });
+        }
+
+        RelationDescDiff {
+            column_diffs,
+            key_diff,
+        }
+    }
+
     /// Creates a new [`RelationDesc`] retaining only the columns specified in `demands`.
     pub fn apply_demand(&self, demands: &BTreeSet<usize>) -> RelationDesc {
         let mut new_desc = self.clone();
@@ -1163,6 +1256,54 @@ impl fmt::Display for NotNullViolation {
             self.0.quoted()
         )
     }
+}
+
+/// The result of comparing two [`RelationDesc`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationDescDiff {
+    /// Column differences, keyed by column index.
+    pub column_diffs: BTreeMap<usize, ColumnDiff>,
+    /// Key differences, if any.
+    pub key_diff: Option<KeyDiff>,
+}
+
+impl RelationDescDiff {
+    /// Returns whether the diff contains any differences.
+    pub fn is_empty(&self) -> bool {
+        self.column_diffs.is_empty() && self.key_diff.is_none()
+    }
+}
+
+/// A difference in a column between two [`RelationDesc`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColumnDiff {
+    /// Column exists only in the left relation.
+    Missing { name: ColumnName },
+    /// Column exists only in the right relation.
+    Extra { name: ColumnName },
+    /// Columns have different types.
+    TypeMismatch {
+        name: ColumnName,
+        left: SqlScalarType,
+        right: SqlScalarType,
+    },
+    /// Columns have different nullability.
+    NullabilityMismatch {
+        name: ColumnName,
+        left: bool,
+        right: bool,
+    },
+    /// Columns have different names.
+    NameMismatch { left: ColumnName, right: ColumnName },
+}
+
+/// A difference in the keys of two [`RelationDesc`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyDiff {
+    /// Keys of the left relation.
+    pub left: BTreeSet<Vec<ColumnName>>,
+    /// Keys of the right relation.
+    pub right: BTreeSet<Vec<ColumnName>>,
 }
 
 /// A builder for a [`RelationDesc`].

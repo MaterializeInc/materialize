@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::num::TryFromIntError;
@@ -26,7 +26,7 @@ use mz_ore::str::StrExt;
 use mz_pgwire_common::{ErrorResponse, Severity};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::explain::ExplainError;
-use mz_repr::{NotNullViolation, Timestamp};
+use mz_repr::{ColumnDiff, ColumnName, KeyDiff, NotNullViolation, RelationDescDiff, Timestamp};
 use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
@@ -255,6 +255,8 @@ pub enum AdapterError {
     AlterClusterTimeout,
     AlterClusterWhilePendingReplicas,
     AuthenticationError(AuthenticationError),
+    /// Schema of a replacement is incompatible with the target.
+    ReplacementSchemaMismatch(RelationDescDiff),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -380,6 +382,57 @@ impl AdapterError {
             AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
             AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
             AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
+            AdapterError::ReplacementSchemaMismatch(diff) => {
+                let mut lines: Vec<_> = diff.column_diffs.iter().map(|(idx, diff)| {
+                    let pos = idx + 1;
+                    match diff {
+                        ColumnDiff::Missing { name } => {
+                            let name = name.as_str().quoted();
+                            format!("missing column {name} at position {pos}")
+                        }
+                        ColumnDiff::Extra { name } => {
+                            let name = name.as_str().quoted();
+                            format!("extra column {name} at position {pos}")
+                        }
+                        ColumnDiff::TypeMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            format!("column {name} at position {pos}: type mismatch (target: {left:?}, replacement: {right:?})")
+                        }
+                        ColumnDiff::NullabilityMismatch { name, left, right } => {
+                            let name = name.as_str().quoted();
+                            let left = if *left { "NULL" } else { "NOT NULL" };
+                            let right = if *right { "NULL" } else { "NOT NULL" };
+                            format!("column {name} at position {pos}: nullability mismatch (target: {left}, replacement: {right})")
+                        }
+                        ColumnDiff::NameMismatch { left, right } => {
+                            let left = left.as_str().quoted();
+                            let right = right.as_str().quoted();
+                            format!("column at position {pos}: name mismatch (target: {left}, replacement: {right})")
+                        }
+                    }
+                }).collect();
+
+                if let Some(KeyDiff { left, right }) = &diff.key_diff {
+                    let format_keys = |keys: &BTreeSet<Vec<ColumnName>>| {
+                        if keys.is_empty() {
+                            "(none)".to_string()
+                        } else {
+                           keys.iter()
+                                .map(|key| {
+                                    let cols = key.iter().map(|c| c.as_str()).join(", ");
+                                    format!("{{{cols}}}")
+                                })
+                                .join(", ")
+                        }
+                    };
+                    lines.push(format!(
+                        "keys differ (target: {}, replacement: {})",
+                        format_keys(left),
+                        format_keys(right)
+                    ));
+                }
+                Some(lines.join("\n"))
+            }
             _ => None,
         }
     }
@@ -614,6 +667,7 @@ impl AdapterError {
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
             AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
+            AdapterError::ReplacementSchemaMismatch(_) => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::AuthenticationError(AuthenticationError::InvalidCredentials) => {
                 SqlState::INVALID_PASSWORD
             }
@@ -956,6 +1010,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::AlterClusterWhilePendingReplicas => {
                 write!(f, "cannot alter clusters with pending updates")
+            }
+            AdapterError::ReplacementSchemaMismatch(_) => {
+                write!(f, "replacement schema differs from target schema")
             }
         }
     }
