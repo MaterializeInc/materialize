@@ -23,8 +23,8 @@ use crate::scalar::func::EagerUnaryFunc;
     inverse = to_unary!(super::BitNotUint32)
 )]
 fn bit_not_uint32(a: u32) -> u32 {
-        !a
-    }
+    !a
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_real",
@@ -33,12 +33,12 @@ fn bit_not_uint32(a: u32) -> u32 {
     is_monotone = true
 )]
 fn cast_uint32_to_float32(a: u32) -> f32 {
-        // TODO(benesch): remove potentially dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        {
-            a as f32
-        }
+    // TODO(benesch): remove potentially dangerous usage of `as`.
+    #[allow(clippy::as_conversions)]
+    {
+        a as f32
     }
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_double",
@@ -47,8 +47,8 @@ fn cast_uint32_to_float32(a: u32) -> f32 {
     is_monotone = true
 )]
 fn cast_uint32_to_float64(a: u32) -> f64 {
-        f64::from(a)
-    }
+    f64::from(a)
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_uint2",
@@ -57,8 +57,8 @@ fn cast_uint32_to_float64(a: u32) -> f64 {
     is_monotone = true
 )]
 fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
-        u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
-    }
+    u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_uint8",
@@ -67,8 +67,8 @@ fn cast_uint32_to_uint16(a: u32) -> Result<u16, EvalError> {
     is_monotone = true
 )]
 fn cast_uint32_to_uint64(a: u32) -> u64 {
-        u64::from(a)
-    }
+    u64::from(a)
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_smallint",
@@ -77,8 +77,8 @@ fn cast_uint32_to_uint64(a: u32) -> u64 {
     is_monotone = true
 )]
 fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
-        i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
-    }
+    i16::try_from(a).or_else(|_| Err(EvalError::Int16OutOfRange(a.to_string().into())))
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_integer",
@@ -87,8 +87,8 @@ fn cast_uint32_to_int16(a: u32) -> Result<i16, EvalError> {
     is_monotone = true
 )]
 fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
-        i32::try_from(a).or_else(|_| Err(EvalError::Int32OutOfRange(a.to_string().into())))
-    }
+    i32::try_from(a).or_else(|_| Err(EvalError::Int32OutOfRange(a.to_string().into())))
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_bigint",
@@ -97,8 +97,8 @@ fn cast_uint32_to_int32(a: u32) -> Result<i32, EvalError> {
     is_monotone = true
 )]
 fn cast_uint32_to_int64(a: u32) -> i64 {
-        i64::from(a)
-    }
+    i64::from(a)
+}
 
 #[sqlfunc(
     sqlname = "uint4_to_text",
@@ -106,10 +106,10 @@ fn cast_uint32_to_int64(a: u32) -> i64 {
     inverse = to_unary!(super::CastStringToUint32)
 )]
 fn cast_uint32_to_string(a: u32) -> String {
-        let mut buf = String::new();
-        strconv::format_uint32(&mut buf, a);
-        buf
-    }
+    let mut buf = String::new();
+    strconv::format_uint32(&mut buf, a);
+    buf
+}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastUint32ToNumeric(pub Option<NumericMaxScale>);

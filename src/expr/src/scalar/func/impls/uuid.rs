@@ -16,7 +16,7 @@ use uuid::Uuid;
     inverse = to_unary!(super::CastStringToUuid)
 )]
 fn cast_uuid_to_string(u: Uuid) -> String {
-        let mut buf = String::with_capacity(36);
-        strconv::format_uuid(&mut buf, u);
-        buf
-    }
+    let mut buf = String::with_capacity(36);
+    strconv::format_uuid(&mut buf, u);
+    buf
+}

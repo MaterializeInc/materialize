@@ -24,9 +24,9 @@ use crate::scalar::func::EagerUnaryFunc;
     is_monotone = true
 )]
 fn neg_int16(a: i16) -> Result<i16, EvalError> {
-        a.checked_neg()
-            .ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into()))
-    }
+    a.checked_neg()
+        .ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into()))
+}
 
 #[sqlfunc(
     sqlname = "~",
@@ -34,16 +34,14 @@ fn neg_int16(a: i16) -> Result<i16, EvalError> {
     inverse = to_unary!(BitNotInt16)
 )]
 fn bit_not_int16(a: i16) -> i16 {
-        !a
-    }
+    !a
+}
 
-#[sqlfunc(
-    sqlname = "abs"
-)]
+#[sqlfunc(sqlname = "abs")]
 fn abs_int16(a: i16) -> Result<i16, EvalError> {
-        a.checked_abs()
-            .ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into()))
-    }
+    a.checked_abs()
+        .ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into()))
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_real",
@@ -52,8 +50,8 @@ fn abs_int16(a: i16) -> Result<i16, EvalError> {
     is_monotone = true
 )]
 fn cast_int16_to_float32(a: i16) -> f32 {
-        f32::from(a)
-    }
+    f32::from(a)
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_double",
@@ -62,8 +60,8 @@ fn cast_int16_to_float32(a: i16) -> f32 {
     is_monotone = true
 )]
 fn cast_int16_to_float64(a: i16) -> f64 {
-        f64::from(a)
-    }
+    f64::from(a)
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_integer",
@@ -72,8 +70,8 @@ fn cast_int16_to_float64(a: i16) -> f64 {
     is_monotone = true
 )]
 fn cast_int16_to_int32(a: i16) -> i32 {
-        i32::from(a)
-    }
+    i32::from(a)
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_bigint",
@@ -82,8 +80,8 @@ fn cast_int16_to_int32(a: i16) -> i32 {
     is_monotone = true
 )]
 fn cast_int16_to_int64(a: i16) -> i64 {
-        i64::from(a)
-    }
+    i64::from(a)
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_text",
@@ -91,10 +89,10 @@ fn cast_int16_to_int64(a: i16) -> i64 {
     inverse = to_unary!(super::CastStringToInt16)
 )]
 fn cast_int16_to_string(a: i16) -> String {
-        let mut buf = String::new();
-        strconv::format_int16(&mut buf, a);
-        buf
-    }
+    let mut buf = String::new();
+    strconv::format_int16(&mut buf, a);
+    buf
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_uint2",
@@ -103,8 +101,8 @@ fn cast_int16_to_string(a: i16) -> String {
     is_monotone = true
 )]
 fn cast_int16_to_uint16(a: i16) -> Result<u16, EvalError> {
-        u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
-    }
+    u16::try_from(a).or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_uint4",
@@ -113,8 +111,8 @@ fn cast_int16_to_uint16(a: i16) -> Result<u16, EvalError> {
     is_monotone = true
 )]
 fn cast_int16_to_uint32(a: i16) -> Result<u32, EvalError> {
-        u32::try_from(a).or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
-    }
+    u32::try_from(a).or_else(|_| Err(EvalError::UInt32OutOfRange(a.to_string().into())))
+}
 
 #[sqlfunc(
     sqlname = "smallint_to_uint8",
@@ -123,8 +121,8 @@ fn cast_int16_to_uint32(a: i16) -> Result<u32, EvalError> {
     is_monotone = true
 )]
 fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
-        u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
-    }
+    u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
+}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt16ToNumeric(pub Option<NumericMaxScale>);

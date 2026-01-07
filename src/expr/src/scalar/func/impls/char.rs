@@ -57,5 +57,5 @@ impl fmt::Display for PadChar {
     })
 )]
 fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
-        a.0
-    }
+    a.0
+}

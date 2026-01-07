@@ -18,73 +18,55 @@ use crate::EvalError;
     inverse = to_unary!(super::CastStringToBytes)
 )]
 fn cast_bytes_to_string(a: &'a [u8]) -> String {
-        let mut buf = String::new();
-        strconv::format_bytes(&mut buf, a);
-        buf
-    }
+    let mut buf = String::new();
+    strconv::format_bytes(&mut buf, a);
+    buf
+}
 
-#[sqlfunc(
-    sqlname = "crc32_bytes"
-)]
+#[sqlfunc(sqlname = "crc32_bytes")]
 fn crc32_bytes<'a>(a: &'a [u8]) -> u32 {
-        crc32fast::hash(a)
-    }
+    crc32fast::hash(a)
+}
 
-#[sqlfunc(
-    sqlname = "crc32_string"
-)]
+#[sqlfunc(sqlname = "crc32_string")]
 fn crc32_string<'a>(a: &'a str) -> u32 {
-        crc32_bytes(a.as_bytes())
-    }
+    crc32_bytes(a.as_bytes())
+}
 
-#[sqlfunc(
-    sqlname = "kafka_murmur2_bytes"
-)]
+#[sqlfunc(sqlname = "kafka_murmur2_bytes")]
 fn kafka_murmur2_bytes<'a>(a: &'a [u8]) -> i32 {
-        i32::from_ne_bytes((murmur2::murmur2(a, murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes())
-    }
+    i32::from_ne_bytes((murmur2::murmur2(a, murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes())
+}
 
-#[sqlfunc(
-    sqlname = "kafka_murmur2_string"
-)]
+#[sqlfunc(sqlname = "kafka_murmur2_string")]
 fn kafka_murmur2_string<'a>(a: &'a str) -> i32 {
-        kafka_murmur2_bytes(a.as_bytes())
-    }
+    kafka_murmur2_bytes(a.as_bytes())
+}
 
-#[sqlfunc(
-    sqlname = "seahash_bytes"
-)]
+#[sqlfunc(sqlname = "seahash_bytes")]
 fn seahash_bytes<'a>(a: &'a [u8]) -> u64 {
-        seahash::hash(a)
-    }
+    seahash::hash(a)
+}
 
-#[sqlfunc(
-    sqlname = "seahash_string"
-)]
+#[sqlfunc(sqlname = "seahash_string")]
 fn seahash_string<'a>(a: &'a str) -> u64 {
-        seahash_bytes(a.as_bytes())
-    }
+    seahash_bytes(a.as_bytes())
+}
 
-#[sqlfunc(
-    sqlname = "bit_count"
-)]
+#[sqlfunc(sqlname = "bit_count")]
 fn bit_count_bytes<'a>(a: &'a [u8]) -> Result<i64, EvalError> {
-        let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();
-        i64::try_from(count).or_else(|_| Err(EvalError::Int64OutOfRange(count.to_string().into())))
-    }
+    let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();
+    i64::try_from(count).or_else(|_| Err(EvalError::Int64OutOfRange(count.to_string().into())))
+}
 
-#[sqlfunc(
-    sqlname = "bit_length"
-)]
+#[sqlfunc(sqlname = "bit_length")]
 fn bit_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
-        let val = a.len() * 8;
-        i32::try_from(val).or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
-    }
+    let val = a.len() * 8;
+    i32::try_from(val).or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
+}
 
-#[sqlfunc(
-    sqlname = "octet_length"
-)]
+#[sqlfunc(sqlname = "octet_length")]
 fn byte_length_bytes<'a>(a: &'a [u8]) -> Result<i32, EvalError> {
-        let val = a.len();
-        i32::try_from(val).or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
-    }
+    let val = a.len();
+    i32::try_from(val).or_else(|_| Err(EvalError::Int32OutOfRange(val.to_string().into())))
+}

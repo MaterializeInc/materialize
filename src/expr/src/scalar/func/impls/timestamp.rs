@@ -33,10 +33,10 @@ use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
     inverse = to_unary!(super::CastStringToTimestamp(None))
 )]
 fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
-        let mut buf = String::new();
-        strconv::format_timestamp(&mut buf, &a);
-        buf
-    }
+    let mut buf = String::new();
+    strconv::format_timestamp(&mut buf, &a);
+    buf
+}
 
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_text",
@@ -44,10 +44,10 @@ fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
     inverse = to_unary!(super::CastStringToTimestampTz(None))
 )]
 fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
-        let mut buf = String::new();
-        strconv::format_timestamptz(&mut buf, &a);
-        buf
-    }
+    let mut buf = String::new();
+    strconv::format_timestamptz(&mut buf, &a);
+    buf
+}
 
 #[sqlfunc(
     sqlname = "timestamp_to_date",
@@ -56,8 +56,8 @@ fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
     is_monotone = true
 )]
 fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, EvalError> {
-        Ok(a.date().try_into()?)
-    }
+    Ok(a.date().try_into()?)
+}
 
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_date",
@@ -66,8 +66,8 @@ fn cast_timestamp_to_date(a: CheckedTimestamp<NaiveDateTime>) -> Result<Date, Ev
     is_monotone = true
 )]
 fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date, EvalError> {
-        Ok(a.naive_utc().date().try_into()?)
-    }
+    Ok(a.naive_utc().date().try_into()?)
+}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastTimestampToTimestampTz {
@@ -262,21 +262,18 @@ impl fmt::Display for AdjustTimestampTzPrecision {
     }
 }
 
-#[sqlfunc(
-    sqlname = "timestamp_to_time",
-    preserves_uniqueness = false
-)]
+#[sqlfunc(sqlname = "timestamp_to_time", preserves_uniqueness = false)]
 fn cast_timestamp_to_time(a: CheckedTimestamp<NaiveDateTime>) -> NaiveTime {
-        a.time()
-    }
+    a.time()
+}
 
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_time",
     preserves_uniqueness = false
 )]
 fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
-        a.naive_utc().time()
-    }
+    a.naive_utc().time()
+}
 
 pub fn date_part_interval_inner<D>(units: DateTimeUnits, interval: Interval) -> Result<D, EvalError>
 where

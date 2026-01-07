@@ -15,8 +15,8 @@ use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
     inverse = to_unary!(super::CastOidToRegClass)
 )]
 fn cast_reg_class_to_oid(a: RegClass) -> Oid {
-        Oid(a.0)
-    }
+    Oid(a.0)
+}
 
 #[sqlfunc(
     sqlname = "regproctooid",
@@ -24,8 +24,8 @@ fn cast_reg_class_to_oid(a: RegClass) -> Oid {
     inverse = to_unary!(super::CastOidToRegProc)
 )]
 fn cast_reg_proc_to_oid(a: RegProc) -> Oid {
-        Oid(a.0)
-    }
+    Oid(a.0)
+}
 
 #[sqlfunc(
     sqlname = "regtypetooid",
@@ -33,5 +33,5 @@ fn cast_reg_proc_to_oid(a: RegProc) -> Oid {
     inverse = to_unary!(super::CastOidToRegType)
 )]
 fn cast_reg_type_to_oid(a: RegType) -> Oid {
-        Oid(a.0)
-    }
+    Oid(a.0)
+}

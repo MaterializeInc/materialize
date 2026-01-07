@@ -19,5 +19,5 @@ use mz_repr::adt::varchar::VarChar;
     })
 )]
 fn cast_var_char_to_string<'a>(a: VarChar<&'a str>) -> &'a str {
-        a.0
-    }
+    a.0
+}

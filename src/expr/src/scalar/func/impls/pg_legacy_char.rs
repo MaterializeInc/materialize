@@ -40,10 +40,10 @@ where
     inverse = to_unary!(super::CastStringToPgLegacyChar)
 )]
 fn cast_pg_legacy_char_to_string(a: PgLegacyChar) -> Result<String, EvalError> {
-        let mut buf = String::new();
-        format_pg_legacy_char(&mut buf, a.0)?;
-        Ok(buf)
-    }
+    let mut buf = String::new();
+    format_pg_legacy_char(&mut buf, a.0)?;
+    Ok(buf)
+}
 
 #[sqlfunc(
     sqlname = "\"char\"_to_char",
@@ -51,10 +51,10 @@ fn cast_pg_legacy_char_to_string(a: PgLegacyChar) -> Result<String, EvalError> {
     inverse = to_unary!(super::CastStringToPgLegacyChar)
 )]
 fn cast_pg_legacy_char_to_char(a: PgLegacyChar) -> Result<Char<String>, EvalError> {
-        let mut buf = String::new();
-        format_pg_legacy_char(&mut buf, a.0)?;
-        Ok(Char(buf))
-    }
+    let mut buf = String::new();
+    format_pg_legacy_char(&mut buf, a.0)?;
+    Ok(Char(buf))
+}
 
 #[sqlfunc(
     sqlname = "\"char\"_to_varchar",
@@ -62,10 +62,10 @@ fn cast_pg_legacy_char_to_char(a: PgLegacyChar) -> Result<Char<String>, EvalErro
     inverse = to_unary!(super::CastStringToVarChar{fail_on_len: false, length: Some(VarCharMaxLength::try_from(1).unwrap())})
 )]
 fn cast_pg_legacy_char_to_var_char(a: PgLegacyChar) -> Result<VarChar<String>, EvalError> {
-        let mut buf = String::new();
-        format_pg_legacy_char(&mut buf, a.0)?;
-        Ok(VarChar(buf))
-    }
+    let mut buf = String::new();
+    format_pg_legacy_char(&mut buf, a.0)?;
+    Ok(VarChar(buf))
+}
 
 #[sqlfunc(
     sqlname = "\"char\"_to_integer",
@@ -73,8 +73,8 @@ fn cast_pg_legacy_char_to_var_char(a: PgLegacyChar) -> Result<VarChar<String>, E
     inverse = to_unary!(super::CastInt32ToPgLegacyChar)
 )]
 fn cast_pg_legacy_char_to_int32(a: PgLegacyChar) -> i32 {
-        // Per PostgreSQL, casts to `i32` are performed as if `PgLegacyChar` is
-        // signed.
-        // See: https://github.com/postgres/postgres/blob/791b1b71da35d9d4264f72a87e4078b85a2fcfb4/src/backend/utils/adt/char.c#L91-L96
-        i32::from(i8::from_ne_bytes([a.0]))
-    }
+    // Per PostgreSQL, casts to `i32` are performed as if `PgLegacyChar` is
+    // signed.
+    // See: https://github.com/postgres/postgres/blob/791b1b71da35d9d4264f72a87e4078b85a2fcfb4/src/backend/utils/adt/char.c#L91-L96
+    i32::from(i8::from_ne_bytes([a.0]))
+}

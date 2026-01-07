@@ -28,10 +28,10 @@ use crate::scalar::func::EagerUnaryFunc;
     inverse = to_unary!(super::CastStringToDate)
 )]
 fn cast_date_to_string(a: Date) -> String {
-        let mut buf = String::new();
-        strconv::format_date(&mut buf, a);
-        buf
-    }
+    let mut buf = String::new();
+    strconv::format_date(&mut buf, a);
+    buf
+}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
