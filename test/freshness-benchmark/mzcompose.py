@@ -43,8 +43,10 @@ from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
@@ -66,6 +68,8 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(),
+    Cockroach(setup_materialize=True, in_memory=False),
+    PostgresMetadata(),
     Materialized(),
 ]
 
@@ -144,9 +148,11 @@ def setup_materialize(c: Composition, num_views: int) -> str:
         )
     )
 
-    for i in range(1, num_views + 1):
-        c.sql(f"CREATE MATERIALIZED VIEW data_mv{i} IN CLUSTER beefy AS (SELECT DISTINCT * FROM data_source);")
+    c.sql(f"CREATE MATERIALIZED VIEW max_data IN CLUSTER beefy AS (SELECT key, MAX(text) FROM data_source GROUP BY key);")
+    for i in range(2, num_views + 1):
+        c.sql(f"CREATE MATERIALIZED VIEW dummy_mv{i} IN CLUSTER beefy AS (SELECT * FROM max_data);")
 
+    c.sql(f"CREATE MATERIALIZED VIEW data_mv1 IN CLUSTER beefy AS (SELECT DISTINCT * FROM data_source);")
     return "data_mv1"
 
 
@@ -409,10 +415,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Path to the output CSV file for latency measurements (default: freshness_results.csv)",
     )
 
+    parser.add_argument(
+        "--consensus-backend",
+        type=str,
+        choices=["postgres", "cockroach"],
+        default="postgres",
+        help="Consensus backend to use: 'postgres' (default) or 'cockroach'",
+    )
+
     args = parser.parse_args()
 
     view_counts = parse_view_counts(args.view_counts)
     print(f"Will run benchmarks for view counts: {view_counts}")
+
+    # Determine consensus backend configuration
+    if args.consensus_backend == "cockroach":
+        metadata_store = "cockroach"
+    else:
+        metadata_store = "postgres-metadata"
+
+    print(f"Using consensus backend: {args.consensus_backend} (metadata_store={metadata_store})")
 
     # Use the fixed external port for Kafka
     kafka_addr = f"127.0.0.1:{KAFKA_EXTERNAL_PORT}"
@@ -428,7 +450,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         # Start fresh for each experiment
         print("--- Starting services")
         c.down(destroy_volumes=True)
-        c.up("zookeeper", "kafka", "schema-registry", "materialized")
+
+        with c.override(
+            Materialized(
+                external_metadata_store=True,
+                metadata_store=metadata_store,
+            )
+        ):
+            c.up("zookeeper", "kafka", "schema-registry", metadata_store, "materialized")
 
         print(f"Kafka address: {kafka_addr}")
 
