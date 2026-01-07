@@ -164,27 +164,22 @@ impl fmt::Display for CastInt64ToNumeric {
     inverse = to_unary!(super::CastFloat32ToInt64),
     is_monotone = true
 )]
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn cast_int64_to_float32(a: i64) -> f32 {
-    // TODO(benesch): remove potentially dangerous usage of `as`.
-    #[allow(clippy::as_conversions)]
-    {
-        a as f32
-    }
+    a as f32
 }
 
 #[sqlfunc(
     sqlname = "bigint_to_double",
-    preserves_uniqueness = false,
+    preserves_uniqueness = false, // Witness: (1111111111111111111, 1111111111111111112).
     inverse = to_unary!(super::CastFloat64ToInt64),
     is_monotone = true
 )]
-// Witness: (1111111111111111111, 1111111111111111112).
+// TODO(benesch): remove potentially dangerous usage of `as`.
+#[allow(clippy::as_conversions)]
 fn cast_int64_to_float64(a: i64) -> f64 {
-    // TODO(benesch): remove potentially dangerous usage of `as`.
-    #[allow(clippy::as_conversions)]
-    {
-        a as f64
-    }
+    a as f64
 }
 
 #[sqlfunc(
