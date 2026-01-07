@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::range::Range;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};

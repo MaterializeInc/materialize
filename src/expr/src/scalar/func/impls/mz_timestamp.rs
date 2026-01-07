@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use mz_expr_derive::sqlfunc;
 use mz_ore::result::ResultExt;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::numeric::Numeric;

@@ -12,6 +12,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::result::ResultExt;

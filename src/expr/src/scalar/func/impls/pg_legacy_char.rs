@@ -9,6 +9,7 @@
 
 use std::str;
 
+use mz_expr_derive::sqlfunc;
 use mz_ore::fmt::FormatBuffer;
 use mz_repr::adt::char::Char;
 use mz_repr::adt::system::PgLegacyChar;

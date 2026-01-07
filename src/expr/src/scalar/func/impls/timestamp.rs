@@ -12,6 +12,7 @@ use std::fmt;
 use chrono::{
     DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
 };
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_pgtz::timezone::Timezone;

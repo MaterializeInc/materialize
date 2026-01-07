@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use chrono::NaiveTime;
+use mz_expr_derive::sqlfunc;
 use mz_ore::cast::CastLossy;
 use mz_repr::adt::interval::{Interval, USECS_PER_DAY};
 use mz_repr::strconv;

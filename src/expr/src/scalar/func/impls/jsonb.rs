@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};

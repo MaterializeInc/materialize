@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_expr_derive::sqlfunc;
 use mz_repr::adt::system::{Oid, RegClass, RegProc, RegType};
 
 #[sqlfunc(

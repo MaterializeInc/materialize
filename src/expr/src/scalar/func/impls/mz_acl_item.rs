@@ -9,11 +9,13 @@
 
 use std::str::FromStr;
 
-use crate::EvalError;
+use mz_expr_derive::sqlfunc;
 use mz_ore::str::StrExt;
 use mz_repr::ArrayRustType;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::system::Oid;
+
+use crate::EvalError;
 
 #[sqlfunc(sqlname = "mz_aclitem_grantor")]
 fn mz_acl_item_grantor(mz_acl_item: MzAclItem) -> String {

@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
