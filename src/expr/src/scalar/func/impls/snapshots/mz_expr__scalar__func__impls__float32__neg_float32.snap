@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float32.rs
-expression: "#[sqlfunc(\n    sqlname = \"-\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(NegFloat32),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn neg_float32<'a>(a: f32) -> f32 {\n    { -a }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"-\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(NegFloat32),\n    is_monotone = true\n)]\nfn neg_float32(a: f32) -> f32 {\n    -a\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for NegFloat32 {
         f.write_str("-")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn neg_float32<'a>(a: f32) -> f32 {
-    { -a }
+fn neg_float32(a: f32) -> f32 {
+    -a
 }

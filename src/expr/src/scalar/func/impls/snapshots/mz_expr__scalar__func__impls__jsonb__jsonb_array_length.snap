@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/jsonb.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(jsonb_array_length),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {\n    {\n        match a.into_datum() {\n            Datum::List(list) => {\n                let count = list.iter().count();\n                match i32::try_from(count) {\n                    Ok(len) => Ok(Some(len)),\n                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),\n                }\n            }\n            _ => Ok(None),\n        }\n    }\n}\n"
+expression: "#[sqlfunc()]\nfn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {\n    match a.into_datum() {\n        Datum::List(list) => {\n            let count = list.iter().count();\n            match i32::try_from(count) {\n                Ok(len) => Ok(Some(len)),\n                Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),\n            }\n        }\n        _ => Ok(None),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,33 +29,21 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for JsonbArrayLength {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for JsonbArrayLength {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(jsonb_array_length))
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
-    {
-        match a.into_datum() {
-            Datum::List(list) => {
-                let count = list.iter().count();
-                match i32::try_from(count) {
-                    Ok(len) => Ok(Some(len)),
-                    Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-                }
+fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
+    match a.into_datum() {
+        Datum::List(list) => {
+            let count = list.iter().count();
+            match i32::try_from(count) {
+                Ok(len) => Ok(Some(len)),
+                Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
             }
-            _ => Ok(None),
         }
+        _ => Ok(None),
     }
 }

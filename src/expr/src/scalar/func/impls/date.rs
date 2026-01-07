@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, Utc};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
@@ -22,16 +23,16 @@ use crate::EvalError;
 use crate::func::most_significant_unit;
 use crate::scalar::func::EagerUnaryFunc;
 
-sqlfunc!(
-    #[sqlname = "date_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToDate)]
-    fn cast_date_to_string(a: Date) -> String {
-        let mut buf = String::new();
-        strconv::format_date(&mut buf, a);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "date_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToDate)
+)]
+fn cast_date_to_string(a: Date) -> String {
+    let mut buf = String::new();
+    strconv::format_date(&mut buf, a);
+    buf
+}
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);

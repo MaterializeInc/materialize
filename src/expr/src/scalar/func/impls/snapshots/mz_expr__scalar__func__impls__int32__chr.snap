@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int32.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(chr),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn chr<'a>(a: i32) -> Result<String, EvalError> {\n    {\n        let codepoint = u32::try_from(a)\n            .map_err(|_| EvalError::CharacterTooLargeForEncoding(a))?;\n        if codepoint == 0 {\n            Err(EvalError::NullCharacterNotPermitted)\n        } else if 0xd800 <= codepoint && codepoint < 0xe000 {\n            Err(EvalError::CharacterNotValidForEncoding(a))\n        } else {\n            char::from_u32(codepoint)\n                .map(|u| u.to_string())\n                .ok_or(EvalError::CharacterTooLargeForEncoding(a))\n        }\n    }\n}\n"
+expression: "#[sqlfunc()]\nfn chr(a: i32) -> Result<String, EvalError> {\n    let codepoint = u32::try_from(a)\n        .map_err(|_| EvalError::CharacterTooLargeForEncoding(a))?;\n    if codepoint == 0 {\n        Err(EvalError::NullCharacterNotPermitted)\n    } else if 0xd800 <= codepoint && codepoint < 0xe000 {\n        Err(EvalError::CharacterNotValidForEncoding(a))\n    } else {\n        char::from_u32(codepoint)\n            .map(|u| u.to_string())\n            .ok_or(EvalError::CharacterTooLargeForEncoding(a))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,34 +29,22 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Chr {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for Chr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(chr))
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn chr<'a>(a: i32) -> Result<String, EvalError> {
-    {
-        let codepoint = u32::try_from(a)
-            .map_err(|_| EvalError::CharacterTooLargeForEncoding(a))?;
-        if codepoint == 0 {
-            Err(EvalError::NullCharacterNotPermitted)
-        } else if 0xd800 <= codepoint && codepoint < 0xe000 {
-            Err(EvalError::CharacterNotValidForEncoding(a))
-        } else {
-            char::from_u32(codepoint)
-                .map(|u| u.to_string())
-                .ok_or(EvalError::CharacterTooLargeForEncoding(a))
-        }
+fn chr(a: i32) -> Result<String, EvalError> {
+    let codepoint = u32::try_from(a)
+        .map_err(|_| EvalError::CharacterTooLargeForEncoding(a))?;
+    if codepoint == 0 {
+        Err(EvalError::NullCharacterNotPermitted)
+    } else if 0xd800 <= codepoint && codepoint < 0xe000 {
+        Err(EvalError::CharacterNotValidForEncoding(a))
+    } else {
+        char::from_u32(codepoint)
+            .map(|u| u.to_string())
+            .ok_or(EvalError::CharacterTooLargeForEncoding(a))
     }
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/timestamp.rs
-expression: "#[sqlfunc(\n    sqlname = \"timestamp_with_time_zone_to_time\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_timestamp_tz_to_time<'a>(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {\n    { a.naive_utc().time() }\n}\n"
+expression: "#[sqlfunc(sqlname = \"timestamp_with_time_zone_to_time\", preserves_uniqueness = false)]\nfn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {\n    a.naive_utc().time()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,12 +29,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampTzToTime {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         false
     }
@@ -44,7 +38,6 @@ impl std::fmt::Display for CastTimestampTzToTime {
         f.write_str("timestamp_with_time_zone_to_time")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_tz_to_time<'a>(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
-    { a.naive_utc().time() }
+fn cast_timestamp_tz_to_time(a: CheckedTimestamp<DateTime<Utc>>) -> NaiveTime {
+    a.naive_utc().time()
 }

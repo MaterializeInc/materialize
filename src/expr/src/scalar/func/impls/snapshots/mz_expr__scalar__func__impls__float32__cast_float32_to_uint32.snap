@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float32.rs
-expression: "#[sqlfunc(\n    sqlname = \"real_to_uint4\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastUint32ToFloat32),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_float32_to_uint32<'a>(a: f32) -> Result<u32, EvalError> {\n    {\n        let f = round_float32(a);\n        #[allow(clippy::as_conversions)]\n        if (f >= 0.0) && (f <= (u32::MAX as f32)) {\n            Ok(f as u32)\n        } else {\n            Err(EvalError::UInt32OutOfRange(f.to_string().into()))\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"real_to_uint4\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastUint32ToFloat32),\n    is_monotone = true\n)]\nfn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {\n    let f = round_float32(a);\n    #[allow(clippy::as_conversions)]\n    if (f >= 0.0) && (f <= (u32::MAX as f32)) {\n        Ok(f as u32)\n    } else {\n        Err(EvalError::UInt32OutOfRange(f.to_string().into()))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,15 +44,12 @@ impl std::fmt::Display for CastFloat32ToUint32 {
         f.write_str("real_to_uint4")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_float32_to_uint32<'a>(a: f32) -> Result<u32, EvalError> {
-    {
-        let f = round_float32(a);
-        #[allow(clippy::as_conversions)]
-        if (f >= 0.0) && (f <= (u32::MAX as f32)) {
-            Ok(f as u32)
-        } else {
-            Err(EvalError::UInt32OutOfRange(f.to_string().into()))
-        }
+fn cast_float32_to_uint32(a: f32) -> Result<u32, EvalError> {
+    let f = round_float32(a);
+    #[allow(clippy::as_conversions)]
+    if (f >= 0.0) && (f <= (u32::MAX as f32)) {
+        Ok(f as u32)
+    } else {
+        Err(EvalError::UInt32OutOfRange(f.to_string().into()))
     }
 }

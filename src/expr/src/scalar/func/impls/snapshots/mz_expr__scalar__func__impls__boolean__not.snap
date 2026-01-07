@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/boolean.rs
-expression: "#[sqlfunc(\n    sqlname = \"NOT\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(Not),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn not<'a>(a: bool) -> bool {\n    { !a }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"NOT\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(Not),\n    is_monotone = true\n)]\nfn not(a: bool) -> bool {\n    !a\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for Not {
         f.write_str("NOT")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn not<'a>(a: bool) -> bool {
-    { !a }
+fn not(a: bool) -> bool {
+    !a
 }

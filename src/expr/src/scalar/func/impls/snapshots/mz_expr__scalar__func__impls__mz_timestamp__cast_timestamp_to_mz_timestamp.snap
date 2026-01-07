@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/mz_timestamp.rs
-expression: "#[sqlfunc(\n    sqlname = \"timestamp_to_mz_timestamp\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_timestamp_to_mz_timestamp<'a>(\n    a: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Timestamp, EvalError> {\n    {\n        a.and_utc()\n            .timestamp_millis()\n            .try_into()\n            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"timestamp_to_mz_timestamp\", is_monotone = true)]\nfn cast_timestamp_to_mz_timestamp(\n    a: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Timestamp, EvalError> {\n    a.and_utc()\n        .timestamp_millis()\n        .try_into()\n        .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,14 +29,8 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToMzTimestamp {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
     fn is_monotone(&self) -> bool {
         true
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
     }
 }
 impl std::fmt::Display for CastTimestampToMzTimestamp {
@@ -44,14 +38,11 @@ impl std::fmt::Display for CastTimestampToMzTimestamp {
         f.write_str("timestamp_to_mz_timestamp")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_to_mz_timestamp<'a>(
+fn cast_timestamp_to_mz_timestamp(
     a: CheckedTimestamp<NaiveDateTime>,
 ) -> Result<Timestamp, EvalError> {
-    {
-        a.and_utc()
-            .timestamp_millis()
-            .try_into()
-            .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
-    }
+    a.and_utc()
+        .timestamp_millis()
+        .try_into()
+        .map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
 }

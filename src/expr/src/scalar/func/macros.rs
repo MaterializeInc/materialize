@@ -14,230 +14,28 @@ macro_rules! to_unary {
     };
 }
 
-macro_rules! sqlfunc {
-    // Expand the function name into an attribute if it was omitted
-    (
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = stringify!($fn_name)]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add both uniqueness + inverse attributes if they were omitted
-    (
-        #[sqlname = $name:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = false]
-            #[inverse = None]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    (
-        #[sqlname = $name:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = false]
-            #[is_monotone = $is_monotone]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add the inverse attribute if it was omitted
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = None]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = None]
-            #[is_monotone = $is_monotone]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add the monotone attribute if it was omitted
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        fn $fn_name:ident $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = $inverse]
-            #[is_monotone = false]
-            fn $fn_name $($tail)*
-        );
-    };
-
-    // Add lifetime parameter if it was omitted
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident ($($params:tt)*) $($tail:tt)*
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = $inverse]
-            #[is_monotone = $is_monotone]
-            fn $fn_name<'a>($($params)*) $($tail)*
-        );
-    };
-
-    // Normalize mut arguments to non-mut ones
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident<$lt:lifetime>(mut $param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
-            $body:block
-    ) => {
-        sqlfunc!(
-            #[sqlname = $name]
-            #[preserves_uniqueness = $preserves_uniqueness]
-            #[inverse = $inverse]
-            #[is_monotone = $is_monotone]
-            fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
-                let mut $param_name = $param_name;
-                $body
-            }
-        );
-    };
-
-    (
-        #[sqlname = $name:expr]
-        #[preserves_uniqueness = $preserves_uniqueness:expr]
-        #[inverse = $inverse:expr]
-        #[is_monotone = $is_monotone:expr]
-        fn $fn_name:ident<$lt:lifetime>($param_name:ident: $input_ty:ty $(,)?) -> $output_ty:ty
-            $body:block
-    ) => {
-        paste::paste! {
-            #[mz_expr_derive::sqlfunc(
-                sqlname = $name,
-                preserves_uniqueness = $preserves_uniqueness,
-                inverse = $inverse,
-                is_monotone = $is_monotone,
-            )]
-            #[allow(clippy::extra_unused_lifetimes)]
-            pub fn $fn_name<$lt>($param_name: $input_ty) -> $output_ty {
-                $body
-            }
-
-            mod $fn_name {
-                #[cfg(test)]
-                #[mz_ore::test]
-                // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
-                #[cfg_attr(miri, ignore)]
-                fn test_sqlfunc_macro() {
-                    use crate::func::EagerUnaryFunc;
-                    let f = super::[<$fn_name:camel>];
-                    let input_type = mz_repr::SqlColumnType {
-                        scalar_type: mz_repr::SqlScalarType::Float32,
-                        nullable: true,
-                    };
-                    let output_type_nullable = f.output_type(input_type);
-
-                    let input_type = mz_repr::SqlColumnType {
-                        scalar_type: mz_repr::SqlScalarType::Float32,
-                        nullable: false,
-                    };
-                    let output_type_nonnullable = f.output_type(input_type);
-
-                    let preserves_uniqueness = f.preserves_uniqueness();
-                    let inverse = f.inverse();
-                    let is_monotone = f.is_monotone();
-                    let propagates_nulls = f.propagates_nulls();
-                    let introduces_nulls = f.introduces_nulls();
-                    let could_error = f.could_error();
-
-                    #[derive(Debug)]
-                    #[allow(unused)]
-                    struct Info {
-                        output_type_nullable: mz_repr::SqlColumnType,
-                        output_type_nonnullable: mz_repr::SqlColumnType,
-                        preserves_uniqueness: bool,
-                        inverse: Option<crate::UnaryFunc>,
-                        is_monotone: bool,
-                        propagates_nulls: bool,
-                        introduces_nulls: bool,
-                        could_error: bool,
-                    }
-
-                    let info = Info {
-                        output_type_nullable,
-                        output_type_nonnullable,
-                        preserves_uniqueness,
-                        inverse,
-                        is_monotone,
-                        propagates_nulls,
-                        introduces_nulls,
-                        could_error,
-                    };
-
-                    insta::assert_debug_snapshot!(info);
-                }
-
-            }
-        }
-    };
-}
-
 #[cfg(test)]
 mod test {
+    use mz_expr_derive::sqlfunc;
     use mz_repr::SqlScalarType;
 
     use crate::EvalError;
     use crate::scalar::func::LazyUnaryFunc;
 
-    sqlfunc!(
-        #[sqlname = "INFALLIBLE"]
-        fn infallible1(a: f32) -> f32 {
-            a
-        }
-    );
+    #[sqlfunc(sqlname = "INFALLIBLE")]
+    fn infallible1(a: f32) -> f32 {
+        a
+    }
 
-    sqlfunc!(
-        fn infallible2(a: Option<f32>) -> f32 {
-            a.unwrap_or_default()
-        }
-    );
+    #[sqlfunc]
+    fn infallible2(a: Option<f32>) -> f32 {
+        a.unwrap_or_default()
+    }
 
-    sqlfunc!(
-        fn infallible3(a: f32) -> Option<f32> {
-            Some(a)
-        }
-    );
+    #[sqlfunc]
+    fn infallible3(a: f32) -> Option<f32> {
+        Some(a)
+    }
 
     #[mz_ore::test]
     fn elision_rules_infallible() {
@@ -282,23 +80,20 @@ mod test {
         );
     }
 
-    sqlfunc!(
-        fn fallible1(a: f32) -> Result<f32, EvalError> {
-            Ok(a)
-        }
-    );
+    #[sqlfunc]
+    fn fallible1(a: f32) -> Result<f32, EvalError> {
+        Ok(a)
+    }
 
-    sqlfunc!(
-        fn fallible2(a: Option<f32>) -> Result<f32, EvalError> {
-            Ok(a.unwrap_or_default())
-        }
-    );
+    #[sqlfunc]
+    fn fallible2(a: Option<f32>) -> Result<f32, EvalError> {
+        Ok(a.unwrap_or_default())
+    }
 
-    sqlfunc!(
-        fn fallible3(a: f32) -> Result<Option<f32>, EvalError> {
-            Ok(Some(a))
-        }
-    );
+    #[sqlfunc]
+    fn fallible3(a: f32) -> Result<Option<f32>, EvalError> {
+        Ok(Some(a))
+    }
 
     #[mz_ore::test]
     fn elision_rules_fallible() {

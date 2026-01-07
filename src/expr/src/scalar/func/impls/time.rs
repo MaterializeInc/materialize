@@ -10,6 +10,7 @@
 use std::fmt;
 
 use chrono::{NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike};
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_pgtz::timezone::Timezone;
 use mz_repr::adt::datetime::{DateTimeField, DateTimeUnits};
@@ -22,34 +23,34 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
-sqlfunc!(
-    #[sqlname = "time_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToTime)]
-    fn cast_time_to_string(a: NaiveTime) -> String {
-        let mut buf = String::new();
-        strconv::format_time(&mut buf, a);
-        buf
-    }
-);
+#[sqlfunc(
+    sqlname = "time_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToTime)
+)]
+fn cast_time_to_string(a: NaiveTime) -> String {
+    let mut buf = String::new();
+    strconv::format_time(&mut buf, a);
+    buf
+}
 
-sqlfunc!(
-    #[sqlname = "time_to_interval"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastIntervalToTime)]
-    fn cast_time_to_interval<'a>(t: NaiveTime) -> Interval {
-        // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
-        let micros: i64 = Interval::convert_date_time_unit(
-            DateTimeField::Second,
-            DateTimeField::Microseconds,
-            i64::from(t.num_seconds_from_midnight()),
-        )
-        .unwrap()
-            + i64::from(t.nanosecond()) / i64::from(Interval::NANOSECOND_PER_MICROSECOND);
+#[sqlfunc(
+    sqlname = "time_to_interval",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastIntervalToTime)
+)]
+fn cast_time_to_interval(t: NaiveTime) -> Interval {
+    // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
+    let micros: i64 = Interval::convert_date_time_unit(
+        DateTimeField::Second,
+        DateTimeField::Microseconds,
+        i64::from(t.num_seconds_from_midnight()),
+    )
+    .unwrap()
+        + i64::from(t.nanosecond()) / i64::from(Interval::NANOSECOND_PER_MICROSECOND);
 
-        Interval::new(0, 0, micros)
-    }
-);
+    Interval::new(0, 0, micros)
+}
 
 pub fn date_part_time_inner<D>(units: DateTimeUnits, time: NaiveTime) -> Result<D, EvalError>
 where

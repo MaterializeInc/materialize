@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-expression: "#[sqlfunc(\n    sqlname = \"numeric_to_bigint\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastInt64ToNumeric(None)),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_numeric_to_int64<'a>(a: Numeric) -> Result<i64, EvalError> {\n    {\n        let mut a = a;\n        {\n            let mut cx = numeric::cx_datum();\n            cx.round(&mut a);\n            cx.clear_status();\n            cx.try_into_i64(a)\n                .or_else(|_| Err(EvalError::Int64OutOfRange(a.to_string().into())))\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"numeric_to_bigint\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastInt64ToNumeric(None)),\n    is_monotone = true\n)]\npub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {\n    let mut cx = numeric::cx_datum();\n    cx.round(&mut a);\n    cx.clear_status();\n    cx.try_into_i64(a).or_else(|_| Err(EvalError::Int64OutOfRange(a.to_string().into())))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,16 +44,9 @@ impl std::fmt::Display for CastNumericToInt64 {
         f.write_str("numeric_to_bigint")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_numeric_to_int64<'a>(a: Numeric) -> Result<i64, EvalError> {
-    {
-        let mut a = a;
-        {
-            let mut cx = numeric::cx_datum();
-            cx.round(&mut a);
-            cx.clear_status();
-            cx.try_into_i64(a)
-                .or_else(|_| Err(EvalError::Int64OutOfRange(a.to_string().into())))
-        }
-    }
+pub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
+    let mut cx = numeric::cx_datum();
+    cx.round(&mut a);
+    cx.clear_status();
+    cx.try_into_i64(a).or_else(|_| Err(EvalError::Int64OutOfRange(a.to_string().into())))
 }

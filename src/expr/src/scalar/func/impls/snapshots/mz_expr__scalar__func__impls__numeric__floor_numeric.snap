@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-expression: "#[sqlfunc(\n    sqlname = \"floornumeric\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn floor_numeric<'a>(a: Numeric) -> Numeric {\n    {\n        let mut a = a;\n        {\n            if a.exponent() >= 0 {\n                return a;\n            }\n            let mut cx = numeric::cx_datum();\n            cx.set_rounding(Rounding::Floor);\n            cx.round(&mut a);\n            numeric::munge_numeric(&mut a).unwrap();\n            a\n        }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"floornumeric\", is_monotone = true)]\nfn floor_numeric(mut a: Numeric) -> Numeric {\n    if a.exponent() >= 0 {\n        return a;\n    }\n    let mut cx = numeric::cx_datum();\n    cx.set_rounding(Rounding::Floor);\n    cx.round(&mut a);\n    numeric::munge_numeric(&mut a).unwrap();\n    a\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,14 +29,8 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for FloorNumeric {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
     fn is_monotone(&self) -> bool {
         true
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
     }
 }
 impl std::fmt::Display for FloorNumeric {
@@ -44,19 +38,13 @@ impl std::fmt::Display for FloorNumeric {
         f.write_str("floornumeric")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn floor_numeric<'a>(a: Numeric) -> Numeric {
-    {
-        let mut a = a;
-        {
-            if a.exponent() >= 0 {
-                return a;
-            }
-            let mut cx = numeric::cx_datum();
-            cx.set_rounding(Rounding::Floor);
-            cx.round(&mut a);
-            numeric::munge_numeric(&mut a).unwrap();
-            a
-        }
+fn floor_numeric(mut a: Numeric) -> Numeric {
+    if a.exponent() >= 0 {
+        return a;
     }
+    let mut cx = numeric::cx_datum();
+    cx.set_rounding(Rounding::Floor);
+    cx.round(&mut a);
+    numeric::munge_numeric(&mut a).unwrap();
+    a
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float64.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(cos),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cos<'a>(a: f64) -> Result<f64, EvalError> {\n    {\n        if a.is_infinite() {\n            return Err(EvalError::InfinityOutOfDomain(\"cos\".into()));\n        }\n        Ok(a.cos())\n    }\n}\n"
+expression: "#[sqlfunc()]\nfn cos(a: f64) -> Result<f64, EvalError> {\n    if a.is_infinite() {\n        return Err(EvalError::InfinityOutOfDomain(\"cos\".into()));\n    }\n    Ok(a.cos())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,27 +29,15 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for Cos {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for Cos {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(cos))
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cos<'a>(a: f64) -> Result<f64, EvalError> {
-    {
-        if a.is_infinite() {
-            return Err(EvalError::InfinityOutOfDomain("cos".into()));
-        }
-        Ok(a.cos())
+fn cos(a: f64) -> Result<f64, EvalError> {
+    if a.is_infinite() {
+        return Err(EvalError::InfinityOutOfDomain("cos".into()));
     }
+    Ok(a.cos())
 }

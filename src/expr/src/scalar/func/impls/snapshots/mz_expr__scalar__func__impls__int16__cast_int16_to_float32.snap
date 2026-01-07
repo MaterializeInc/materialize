@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int16.rs
-expression: "#[sqlfunc(\n    sqlname = \"smallint_to_real\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastFloat32ToInt16),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_int16_to_float32<'a>(a: i16) -> f32 {\n    { f32::from(a) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"smallint_to_real\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastFloat32ToInt16),\n    is_monotone = true\n)]\nfn cast_int16_to_float32(a: i16) -> f32 {\n    f32::from(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for CastInt16ToFloat32 {
         f.write_str("smallint_to_real")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int16_to_float32<'a>(a: i16) -> f32 {
-    { f32::from(a) }
+fn cast_int16_to_float32(a: i16) -> f32 {
+    f32::from(a)
 }

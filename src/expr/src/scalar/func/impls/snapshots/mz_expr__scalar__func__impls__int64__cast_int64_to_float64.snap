@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int64.rs
-expression: "#[sqlfunc(\n    sqlname = \"bigint_to_double\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastFloat64ToInt64),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_int64_to_float64<'a>(a: i64) -> f64 {\n    { #[allow(clippy::as_conversions)] { a as f64 } }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"bigint_to_double\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastFloat64ToInt64),\n    is_monotone = true\n)]\n#[allow(clippy::as_conversions)]\nfn cast_int64_to_float64(a: i64) -> f64 {\n    a as f64\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,7 @@ impl std::fmt::Display for CastInt64ToFloat64 {
         f.write_str("bigint_to_double")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int64_to_float64<'a>(a: i64) -> f64 {
-    { #[allow(clippy::as_conversions)] { a as f64 } }
+#[allow(clippy::as_conversions)]
+fn cast_int64_to_float64(a: i64) -> f64 {
+    a as f64
 }

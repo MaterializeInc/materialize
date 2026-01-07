@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/uint32.rs
-expression: "#[sqlfunc(\n    sqlname = \"uint4_to_bigint\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastInt64ToUint32),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_uint32_to_int64<'a>(a: u32) -> i64 {\n    { i64::from(a) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"uint4_to_bigint\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastInt64ToUint32),\n    is_monotone = true\n)]\nfn cast_uint32_to_int64(a: u32) -> i64 {\n    i64::from(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for CastUint32ToInt64 {
         f.write_str("uint4_to_bigint")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_uint32_to_int64<'a>(a: u32) -> i64 {
-    { i64::from(a) }
+fn cast_uint32_to_int64(a: u32) -> i64 {
+    i64::from(a)
 }

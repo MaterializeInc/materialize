@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/boolean.rs
-expression: "#[sqlfunc(\n    sqlname = \"boolean_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToBool),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_bool_to_string<'a>(a: bool) -> &'a str {\n    {\n        match a {\n            true => \"true\",\n            false => \"false\",\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"boolean_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToBool),\n    is_monotone = true\n)]\nfn cast_bool_to_string<'a>(a: bool) -> &'a str {\n    match a {\n        true => \"true\",\n        false => \"false\",\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,12 +44,9 @@ impl std::fmt::Display for CastBoolToString {
         f.write_str("boolean_to_text")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_bool_to_string<'a>(a: bool) -> &'a str {
-    {
-        match a {
-            true => "true",
-            false => "false",
-        }
+fn cast_bool_to_string<'a>(a: bool) -> &'a str {
+    match a {
+        true => "true",
+        false => "false",
     }
 }

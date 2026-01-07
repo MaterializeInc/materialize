@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/oid.rs
-expression: "#[sqlfunc(\n    sqlname = \"oid_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToOid),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_oid_to_string<'a>(a: Oid) -> String {\n    {\n        let mut buf = String::new();\n        strconv::format_uint32(&mut buf, a.0);\n        buf\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"oid_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToOid)\n)]\nfn cast_oid_to_string(a: Oid) -> String {\n    let mut buf = String::new();\n    strconv::format_uint32(&mut buf, a.0);\n    buf\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastOidToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToOid)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -44,11 +41,8 @@ impl std::fmt::Display for CastOidToString {
         f.write_str("oid_to_text")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_oid_to_string<'a>(a: Oid) -> String {
-    {
-        let mut buf = String::new();
-        strconv::format_uint32(&mut buf, a.0);
-        buf
-    }
+fn cast_oid_to_string(a: Oid) -> String {
+    let mut buf = String::new();
+    strconv::format_uint32(&mut buf, a.0);
+    buf
 }

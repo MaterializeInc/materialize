@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-expression: "#[sqlfunc(\n    sqlname = \"-\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(NegNumeric),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn neg_numeric<'a>(a: Numeric) -> Numeric {\n    {\n        let mut a = a;\n        {\n            numeric::cx_datum().neg(&mut a);\n            numeric::munge_numeric(&mut a).unwrap();\n            a\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"-\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(NegNumeric),\n    is_monotone = true\n)]\nfn neg_numeric(mut a: Numeric) -> Numeric {\n    numeric::cx_datum().neg(&mut a);\n    numeric::munge_numeric(&mut a).unwrap();\n    a\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,14 +44,8 @@ impl std::fmt::Display for NegNumeric {
         f.write_str("-")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn neg_numeric<'a>(a: Numeric) -> Numeric {
-    {
-        let mut a = a;
-        {
-            numeric::cx_datum().neg(&mut a);
-            numeric::munge_numeric(&mut a).unwrap();
-            a
-        }
-    }
+fn neg_numeric(mut a: Numeric) -> Numeric {
+    numeric::cx_datum().neg(&mut a);
+    numeric::munge_numeric(&mut a).unwrap();
+    a
 }

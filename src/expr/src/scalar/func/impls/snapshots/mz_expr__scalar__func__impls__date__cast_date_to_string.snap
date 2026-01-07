@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/date.rs
-expression: "#[sqlfunc(\n    sqlname = \"date_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToDate),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_date_to_string<'a>(a: Date) -> String {\n    {\n        let mut buf = String::new();\n        strconv::format_date(&mut buf, a);\n        buf\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"date_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToDate)\n)]\nfn cast_date_to_string(a: Date) -> String {\n    let mut buf = String::new();\n    strconv::format_date(&mut buf, a);\n    buf\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastDateToString {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastStringToDate)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -44,11 +41,8 @@ impl std::fmt::Display for CastDateToString {
         f.write_str("date_to_text")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_date_to_string<'a>(a: Date) -> String {
-    {
-        let mut buf = String::new();
-        strconv::format_date(&mut buf, a);
-        buf
-    }
+fn cast_date_to_string(a: Date) -> String {
+    let mut buf = String::new();
+    strconv::format_date(&mut buf, a);
+    buf
 }

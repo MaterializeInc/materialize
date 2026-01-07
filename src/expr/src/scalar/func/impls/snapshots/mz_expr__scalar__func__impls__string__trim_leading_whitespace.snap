@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-expression: "#[sqlfunc(\n    sqlname = \"ltrim\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {\n    { a.trim_start_matches(' ') }\n}\n"
+expression: "#[sqlfunc(sqlname = \"ltrim\")]\nfn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {\n    a.trim_start_matches(' ')\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,22 +29,12 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for TrimLeadingWhitespace {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for TrimLeadingWhitespace {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("ltrim")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
-    { a.trim_start_matches(' ') }
+fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
+    a.trim_start_matches(' ')
 }

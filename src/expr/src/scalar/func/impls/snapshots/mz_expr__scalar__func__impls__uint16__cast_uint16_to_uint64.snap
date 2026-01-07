@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/uint16.rs
-expression: "#[sqlfunc(\n    sqlname = \"uint2_to_uint8\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastUint64ToUint16),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_uint16_to_uint64<'a>(a: u16) -> u64 {\n    { u64::from(a) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"uint2_to_uint8\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastUint64ToUint16),\n    is_monotone = true\n)]\nfn cast_uint16_to_uint64(a: u16) -> u64 {\n    u64::from(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for CastUint16ToUint64 {
         f.write_str("uint2_to_uint8")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_uint16_to_uint64<'a>(a: u16) -> u64 {
-    { u64::from(a) }
+fn cast_uint16_to_uint64(a: u16) -> u64 {
+    u64::from(a)
 }
