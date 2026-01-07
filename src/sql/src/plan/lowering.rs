@@ -132,7 +132,7 @@ struct CteDesc {
     outer_relation: MirRelationExpr,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Config {
     /// Enable outer join lowering implemented in database-issues#6747.
     pub enable_new_outer_join_lowering: bool,
@@ -140,6 +140,17 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     pub enable_guard_subquery_tablefunc: bool,
     pub enable_cast_elimination: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            enable_new_outer_join_lowering: false,
+            enable_variadic_left_join_lowering: false,
+            enable_guard_subquery_tablefunc: false,
+            enable_cast_elimination: false,
+        }
+    }
 }
 
 impl From<&SystemVars> for Config {
@@ -1667,10 +1678,12 @@ impl HirScalarExpr {
     /// Should succeed if [`HirScalarExpr::is_constant`] would return true on `self`.
     ///
     /// Set `enable_cast_elimination` to remove casts that are noops in MIR.
-    pub fn lower_uncorrelated(
+    pub fn lower_uncorrelated<C: Into<Config>>(
         self,
-        enable_cast_elimination: bool,
+        config: C,
     ) -> Result<MirScalarExpr, PlanError> {
+        let config = config.into();
+
         use MirScalarExpr as SS;
 
         use HirScalarExpr::*;
@@ -1683,14 +1696,14 @@ impl HirScalarExpr {
                 func: func::UnaryFunc::CastVarCharToString(_),
                 expr,
                 name: _,
-            } if enable_cast_elimination => expr.lower_uncorrelated(enable_cast_elimination)?,
+            } if config.enable_cast_elimination => expr.lower_uncorrelated(config)?,
             CallUnary {
                 func,
                 expr,
                 name: _,
             } => SS::CallUnary {
                 func,
-                expr: Box::new(expr.lower_uncorrelated(enable_cast_elimination)?),
+                expr: Box::new(expr.lower_uncorrelated(config)?),
             },
             CallBinary {
                 func,
@@ -1699,8 +1712,8 @@ impl HirScalarExpr {
                 name: _,
             } => SS::CallBinary {
                 func,
-                expr1: Box::new(expr1.lower_uncorrelated(enable_cast_elimination)?),
-                expr2: Box::new(expr2.lower_uncorrelated(enable_cast_elimination)?),
+                expr1: Box::new(expr1.lower_uncorrelated(config)?),
+                expr2: Box::new(expr2.lower_uncorrelated(config)?),
             },
             CallVariadic {
                 func,
@@ -1710,7 +1723,7 @@ impl HirScalarExpr {
                 func,
                 exprs: exprs
                     .into_iter()
-                    .map(|expr| expr.lower_uncorrelated(enable_cast_elimination))
+                    .map(|expr| expr.lower_uncorrelated(config))
                     .collect::<Result<_, _>>()?,
             },
             If {
@@ -1719,9 +1732,9 @@ impl HirScalarExpr {
                 els,
                 name: _,
             } => SS::If {
-                cond: Box::new(cond.lower_uncorrelated(enable_cast_elimination)?),
-                then: Box::new(then.lower_uncorrelated(enable_cast_elimination)?),
-                els: Box::new(els.lower_uncorrelated(enable_cast_elimination)?),
+                cond: Box::new(cond.lower_uncorrelated(config)?),
+                then: Box::new(then.lower_uncorrelated(config)?),
+                els: Box::new(els.lower_uncorrelated(config)?),
             },
             Select { .. } | Exists { .. } | Parameter(..) | Column(..) | Windowing(..) => {
                 sql_bail!(

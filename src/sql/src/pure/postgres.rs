@@ -622,7 +622,7 @@ pub(crate) fn generate_column_casts(
                                 ),
                             ],
                         )
-                        .lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())
+                        .lower_uncorrelated(scx.catalog.system_vars())
                         .expect("no correlation"),
                     ));
                     continue;
@@ -671,7 +671,7 @@ pub(crate) fn generate_column_casts(
         // an external PG source to be unilaterally usable in
         // resolving item names in MZ.
         let mir_cast = cast
-            .lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())
+            .lower_uncorrelated(scx.catalog.system_vars())
             .map_err(|_e| {
                 tracing::info!(
                     "cannot ingest {:?} data from PG source because cast is correlated",

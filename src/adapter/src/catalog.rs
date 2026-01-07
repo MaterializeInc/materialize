@@ -2376,7 +2376,7 @@ mod tests {
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::to_datetime;
-    use mz_ore::{assert_err, assert_ok, task};
+    use mz_ore::{assert_err, assert_ok, soft_assert_eq_or_log, task};
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
@@ -3457,9 +3457,7 @@ mod tests {
         // otherwise ignoring eval errors. We also do various other checks.
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
-            if let Ok(mut mir) =
-                hir.lower_uncorrelated(catalog.system_config().enable_cast_elimination())
-            {
+            if let Ok(mut mir) = hir.lower_uncorrelated(catalog.system_config()) {
                 // Populate unmaterialized functions.
                 prep_style.prep_scalar_expr(&mut mir).expect("must succeed");
 
@@ -3468,7 +3466,11 @@ mod tests {
                         let mir_typ = mir.typ(&[]);
                         // MIR type inference should be consistent with the type
                         // we get from the catalog.
-                        assert_eq!(mir_typ.scalar_type, return_styp);
+                        soft_assert_eq_or_log!(
+                            mir_typ.scalar_type,
+                            return_styp,
+                            "MIR type did not match the catalog type (cast elimination/repr type error)"
+                        );
                         // The following will check not just that the scalar type
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".

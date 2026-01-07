@@ -104,7 +104,7 @@ pub fn plan_select_if_side_effecting(
     let mut args = vec![];
     for mut arg in sef_call.args {
         arg.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-        let arg = arg.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
+        let arg = arg.lower_uncorrelated(scx.catalog.system_vars())?;
         args.push(arg);
     }
     let mut datums = vec![];

@@ -3480,7 +3480,9 @@ impl HirScalarExpr {
     /// - a parameter
     /// - a window function call
     fn simplify_to_literal(self) -> Option<Row> {
-        let mut expr = self.lower_uncorrelated(false).ok()?;
+        let mut expr = self
+            .lower_uncorrelated(crate::plan::lowering::Config::default())
+            .ok()?;
         expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
@@ -3501,9 +3503,11 @@ impl HirScalarExpr {
     /// TODO: use this everywhere instead of `simplify_to_literal`, so that we don't hide the error
     /// msg.
     fn simplify_to_literal_with_result(self) -> Result<Row, PlanError> {
-        let mut expr = self.lower_uncorrelated(false).map_err(|err| {
-            PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
-        })?;
+        let mut expr = self
+            .lower_uncorrelated(crate::plan::lowering::Config::default())
+            .map_err(|err| {
+                PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
+            })?;
         expr.reduce(&[]);
         match expr {
             mz_expr::MirScalarExpr::Literal(Ok(row), _) => Ok(row),
