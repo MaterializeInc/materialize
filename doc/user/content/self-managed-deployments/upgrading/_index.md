@@ -226,46 +226,30 @@ kubectl patch materialize <instance-name> \
 ```
 
 ### Rollout strategies
-The behavior of the new version rollout follows your `rolloutStrategy` setting:
 
-#### *WaitUntilReady* - ***Default***.
-Creates a new generation of pods and automatically cuts over to them as soon as they catch up to the old generation and become `ReadyToPromote`.
+Rollout strategies control how Materialize transitions from the current generation to a new generation during an upgrade.
 
-{{<note>}}
-This strategy temporarily doubles the required hardware capacity.
-{{</note>}}
+The behavior of the new version rollout follows your `rolloutStrategy` setting.
+
+#### *WaitUntilReady* - ***Default***
+
+Creates a new generation of pods and automatically cuts over to them as soon as they catch up to the old generation and become `ReadyToPromote`. This strategy temporarily doubles the required resources to run Materialize.
 
 #### *ImmediatelyPromoteCausingDowntime*
-Tears down the prior generation before creating and immediately promoting the new generation without waiting for it to hydrate.
-This causes downtime equal to the duration it takes for dataflows to hydrate, but does not require additional resources.
 
-#### *ManuallyPromote* - ***Public Preview***
-Creates a new generation of pods, cuts over to them, only when  the user
-manually promotes the new generation by updating the `forcePromote` field to
-match the `requestRollout` field. This allows the user to stage an upgrade and
-cut over to it at a precise time.
+Tears down the prior generation before creating and immediately promoting the new generation without waiting for it to hydrate. This causes downtime until the new generation has hydrated. However, it does not require additional resources.
 
-In order to minimize downtime, it is recommended to wait until all dataflows are
-caught up. This can be determined by checking for the `ReadyToPromote` reason in
-the `UpToDate` status condition in the Materialize Kubernetes custom resource.
+#### *ManuallyPromote* 
 
-{{<note>}}
-This strategy temporarily doubles the required hardware capacity.
-{{</note>}}
+`ManuallyPromote` allows you to choose when to promote the new generation. This means you can time the promotion for periods when load is low, minimizing the impact of potential downtime for any clients connected to Materialize. This strategy temporarily doubles the required resources to run Materialize.
 
-{{<warning>}}
-It is not recommended to leave generations unpromoted for over 6 hours.
+To minimize downtime, wait until the new generation has fully hydrated and caught up to the prior generation before promoting. To check hydration status, inspect the `UpToDate` condition in the Materialize resource status—when hydration completes, the reason will be `ReadyToPromote`. To promote, update the `forcePromote` field to match the `requestRollout` field in the Materialize spec. If you need to promote before hydration completes, you can set `forcePromote` immediately, but clients may experience downtime.
 
-Unpromoted generations keeps read holds open, preventing compaction until they
-are promoted or cancelled. If left unpromoted for an extended period, this data
-can build up and cause significant load on the metadata backend database
-resulting in service degradation.
-{{</warning>}}
+**Do not leave new generations unpromoted indefinitely**. They should either be promoted or canceled. New generations open a read hold on the metadata database that prevents compaction. This hold is only released when the generation is promoted or canceled. If left open too long, promoting or canceling can trigger a spike in deletion load on the metadata database, potentially causing downtime. It is not recommended to leave generations unpromoted for over 6 hours.
 
 #### *inPlaceRollout* - ***Deprecated***
+
 The setting is ignored.
-
-
 
 ## Verifying the Upgrade
 
