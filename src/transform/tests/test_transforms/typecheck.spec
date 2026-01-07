@@ -69,9 +69,9 @@ bad constant row
 expected row of type (Int64, Int64)
 
       column #0:
-        got datum of kind String, expected Int64
+        got datum String("oh"), expected representation type Int64
       column #1:
-        got datum of kind String, expected Int64
+        got datum String("no"), expected representation type Int64
 ----
 ----
 
@@ -295,7 +295,7 @@ bad constant row
 expected row of type (Int64, Int64)
 
       column #1:
-        got datum of kind String, expected Int64
+        got datum String("uh oh"), expected representation type Int64
 ----
 ----
 

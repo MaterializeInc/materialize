@@ -24,8 +24,8 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::adt::range::Range;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{
-    ColumnName, Datum, DatumKind, ReprColumnType, ReprRelationType, ReprScalarBaseType,
-    ReprScalarType, SqlColumnType,
+    ColumnName, Datum, ReprColumnType, ReprRelationType, ReprScalarBaseType, ReprScalarType,
+    SqlColumnType,
 };
 
 /// Typechecking contexts as shared by various typechecking passes.
@@ -102,11 +102,12 @@ pub enum TypeError<'a> {
     BadConstantRow {
         /// Expression with the bug
         source: &'a MirRelationExpr,
-        /// The columns that mismatched, with the DatumKind and the expected type
+        /// The columns that mismatched, with a debug rendering of the datum we got and the expected type
         mismatches: Vec<(usize, DatumTypeDifference)>,
         /// The expected type (which that row does not have)
         expected: Vec<ReprColumnType>,
-        // TODO(mgree) with a good way to get the type of a Datum, we could give a diff here
+        // TODO(mgree) with a good way to get the type of a Datum, we could give a detailed diff here
+        // this is difficult for empty structures where we may not know the element type
     },
     /// Projection of a non-existent column
     BadProject {
@@ -540,8 +541,9 @@ pub enum DatumTypeDifference {
     Null,
     /// Datum's kind doesn't match the expected ReprScalarType
     Mismatch {
-        /// The kind of the datum that we got
-        got: DatumKind,
+        /// The debug rendering of the Datum that we got (we don't store the Datum itself to avoid borrowing issues)
+        /// This debug rendering includes the DatumKind.
+        got_debug: String,
         /// The representation scalar type that we expected
         expected: ReprScalarType,
     },
@@ -576,6 +578,14 @@ fn datum_difference_with_column_type(
         datum: &Datum<'_>,
         scalar_type: &ReprScalarType,
     ) -> Result<(), DatumTypeDifference> {
+        fn mismatch(got: &Datum<'_>, expected: &ReprScalarType) -> Result<(), DatumTypeDifference> {
+            Err(DatumTypeDifference::Mismatch {
+                // this will be redacted as appropriate
+                got_debug: format!("{got:?}"),
+                expected: expected.clone(),
+            })
+        }
+
         if let ReprScalarType::Jsonb = scalar_type {
             // json type checking
             match datum {
@@ -598,21 +608,9 @@ fn datum_difference_with_column_type(
                     }
                     Ok(())
                 }
-                _ => Err(DatumTypeDifference::Mismatch {
-                    got: DatumKind::from(datum),
-                    expected: scalar_type.clone(),
-                }),
+                _ => mismatch(datum, scalar_type),
             }
         } else {
-            fn mismatch(
-                got: &Datum<'_>,
-                expected: &ReprScalarType,
-            ) -> Result<(), DatumTypeDifference> {
-                Err(DatumTypeDifference::Mismatch {
-                    got: DatumKind::from(got),
-                    expected: expected.clone(),
-                })
-            }
             fn element_type_difference(
                 ctor: &str,
                 element_type: DatumTypeDifference,
@@ -1777,9 +1775,16 @@ impl DatumTypeDifference {
 
         match self {
             DatumTypeDifference::Null => writeln!(f, "unexpected null")?,
-            DatumTypeDifference::Mismatch { got, expected } => {
+            DatumTypeDifference::Mismatch {
+                got_debug,
+                expected,
+            } => {
                 let expected = h.humanize_scalar_type_repr(expected, false);
-                writeln!(f, "got datum of kind {got:?}, expected {expected}")?;
+                // NB `got_debug` will be redacted as appropriate
+                writeln!(
+                    f,
+                    "got datum {got_debug}, expected representation type {expected}"
+                )?;
             }
             DatumTypeDifference::MismatchDimensions {
                 ctor,
@@ -1788,7 +1793,7 @@ impl DatumTypeDifference {
             } => {
                 writeln!(
                     f,
-                    "{ctor} dimensions differ: got datum with dimension {got}, expected {expected}"
+                    "{ctor} dimensions differ: got datum with dimension {got}, expected dimension {expected}"
                 )?;
             }
             DatumTypeDifference::ElementType { ctor, element_type } => {
