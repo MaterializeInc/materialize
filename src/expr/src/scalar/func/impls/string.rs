@@ -128,7 +128,7 @@ fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint16ToString)
 )]
-fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
+fn cast_string_to_uint16(a: &str) -> Result<u16, EvalError> {
     strconv::parse_uint16(a).err_into()
 }
 
@@ -137,7 +137,7 @@ fn cast_string_to_uint16(a: &'a str) -> Result<u16, EvalError> {
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint32ToString)
 )]
-fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
+fn cast_string_to_uint32(a: &str) -> Result<u32, EvalError> {
     strconv::parse_uint32(a).err_into()
 }
 
@@ -146,7 +146,7 @@ fn cast_string_to_uint32(a: &'a str) -> Result<u32, EvalError> {
     preserves_uniqueness = false,
     inverse = to_unary!(super::CastUint64ToString)
 )]
-fn cast_string_to_uint64(a: &'a str) -> Result<u64, EvalError> {
+fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
     strconv::parse_uint64(a).err_into()
 }
 

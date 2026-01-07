@@ -39,7 +39,7 @@ fn cast_time_to_string(a: NaiveTime) -> String {
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastIntervalToTime)
 )]
-fn cast_time_to_interval<'a>(t: NaiveTime) -> Interval {
+fn cast_time_to_interval(t: NaiveTime) -> Interval {
     // wont overflow because value can't exceed 24 hrs + 1_000_000 ns = 86_400 seconds + 1_000_000 ns = 86_400_001_000 us
     let micros: i64 = Interval::convert_date_time_unit(
         DateTimeField::Second,

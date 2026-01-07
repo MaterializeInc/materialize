@@ -76,7 +76,7 @@ fn cast_oid_to_reg_type(a: Oid) -> RegType {
 }
 
 #[sqlfunc]
-fn mz_type_name<'a>(oid: Oid) -> Option<String> {
+fn mz_type_name(oid: Oid) -> Option<String> {
     if let Ok(t) = Type::from_oid(oid.0) {
         Some(t.name().to_string())
     } else {
