@@ -233,12 +233,12 @@ The behavior of the new version rollout follows your `rolloutStrategy` setting.
 
 #### *WaitUntilReady* - ***Default***
 
-Creates a new generation of pods and automatically cuts over to them as soon as they catch up to the old generation and become `ReadyToPromote`. This strategy temporarily doubles the required resources to run Materialize.
+`WaitUntilReady` creates a new generation of pods and automatically cuts over to them as soon as they catch up to the old generation and become `ReadyToPromote`. This strategy temporarily doubles the required resources to run Materialize.
 
 #### *ImmediatelyPromoteCausingDowntime*
 {{< warning >}} Using the `ImmediatelyPromoteCausingDowntime` rollout flag will cause downtime. {{< /warning >}}
 
-Tears down the prior generation before creating and immediately promoting the new generation without waiting for it to hydrate. This causes downtime until the new generation has hydrated. However, it does not require additional resources.
+`ImmediatelyPromoteCausingDowntime` tears down the prior generation, and immediately promotes the new generation without waiting for it to hydrate. This causes downtime until the new generation has hydrated. However, it does not require additional resources.
 
 #### *ManuallyPromote* 
 
