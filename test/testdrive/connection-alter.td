@@ -76,17 +76,27 @@ first second
 1     2
 2     3
 
-> SHOW CREATE CONNECTION conn
+>[version<2600700] SHOW CREATE CONNECTION conn
 name   create_sql
 ---------------------------------
 materialize.public.conn   "CREATE CONNECTION materialize.public.conn TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
 
+>[version>=2600700] SHOW CREATE CONNECTION conn
+name   create_sql
+---------------------------------
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+
 > ALTER CONNECTION conn SET (BROKERS ['${testdrive.kafka-addr}'])
 
-> SHOW CREATE CONNECTION conn
+>[version<2600700] SHOW CREATE CONNECTION conn
 name   create_sql
 ---------------------------------
 materialize.public.conn   "CREATE CONNECTION materialize.public.conn TO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = plaintext);"
+
+>[version>=2600700] SHOW CREATE CONNECTION conn
+name   create_sql
+---------------------------------
+materialize.public.conn   "CREATE CONNECTION materialize.public.conn\nTO KAFKA (BROKERS = ('${testdrive.kafka-addr}'), SECURITY PROTOCOL = plaintext);"
 
 ! ALTER CONNECTION conn DROP (SECURITY PROTOCOL);
 contains:Broker does not support SSL connections

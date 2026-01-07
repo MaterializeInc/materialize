@@ -94,8 +94,11 @@ regex:.*FOR SCHEMAS.*unsupported
 > SHOW CREATE SOURCE auction_house
 "materialize.public.auction_house" "CREATE SOURCE materialize.public.auction_house\nIN CLUSTER ${arg.single-replica-cluster}\nFROM LOAD GENERATOR AUCTION (AS OF = 300, UP TO = 301);"
 
-> SHOW CREATE TABLE accounts
+>[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (DETAILS = '1a040a021002');"
+
+>[version>=2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (DETAILS = '1a040a021002');"
 
 > SHOW SOURCES
 auction_house           load-generator ${arg.single-replica-cluster}    ""
@@ -151,8 +154,11 @@ users                   ""
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE accounts
+>[version<2600700] SHOW CREATE TABLE accounts
 materialize.public.accounts "CREATE TABLE materialize.public.accounts (id pg_catalog.int8 NOT NULL, org_id pg_catalog.int8 NOT NULL, balance pg_catalog.int8 NOT NULL, UNIQUE (id)) FROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts) WITH (<DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE accounts
+materialize.public.accounts "CREATE TABLE\n    materialize.public.accounts\n        (\n            id pg_catalog.int8 NOT NULL,\n            org_id pg_catalog.int8 NOT NULL,\n            balance pg_catalog.int8 NOT NULL,\n            UNIQUE (id)\n        )\nFROM SOURCE materialize.public.auction_house (REFERENCE = mz_load_generators.auction.accounts)\nWITH (<DETAILS>);"
 
 # CLOCK load generator source
 
