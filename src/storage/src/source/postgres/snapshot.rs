@@ -137,8 +137,7 @@
 //!
 //! # Snapshot decoding
 //!
-//! Each worker fetches its ctid range directly and decodes the COPY stream locally. The raw
-//! COPY data is then distributed to all workers for decoding using round-robin distribution.
+//! Each worker fetches its ctid range directly and decodes the COPY stream locally.
 //!
 //! ```text
 //!                 ╭──────────────────╮
@@ -150,9 +149,6 @@
 //!   raw│          │
 //!  COPY│          │
 //!  data│          │
-//! ╭────┴─────╮    │
-//! │distribute│    │
-//! ╰────┬─────╯    │
 //! ┏━━━━┷━━━━┓     │
 //! ┃  COPY   ┃     │
 //! ┃ decoder ┃     │
@@ -188,7 +184,8 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::container::DrainContainer;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{
     Broadcast, CapabilitySet, Concat, ConnectLoop, Feedback, Operator,
@@ -749,20 +746,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let mut text_row = Row::default();
     let mut final_row = Row::default();
     let mut datum_vec = DatumVec::new();
-    let mut next_worker = (0..u64::cast_from(scope.peers()))
-        // Round robin on 1000-records basis to avoid creating tiny containers when there are a
-        // small number of updates and a large number of workers.
-        .flat_map(|w| std::iter::repeat_n(w, 1000))
-        .cycle();
-    let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
     let snapshot_updates = raw_data
-        .map::<Vec<_>, _, _>(Clone::clone)
-        .unary(round_robin, "PgCastSnapshotRows", |_, _| {
+        .unary(Pipeline, "PgCastSnapshotRows", |_, _| {
             move |input, output| {
                 input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
                     for ((oid, output_index, event), time, diff) in
-                        data.flat_map(|data| data.drain(..))
+                        data.flat_map(|data| data.drain())
                     {
                         let output = &table_info
                             .get(&oid)
@@ -783,7 +773,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 })
                             });
 
-                        session.give(((output_index, event), time, diff));
+                        session.give(((*output_index, event), *time, *diff));
                     }
                 });
             }
