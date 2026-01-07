@@ -240,7 +240,7 @@ The behavior of the new version rollout follows your `rolloutStrategy` setting.
 
 `ImmediatelyPromoteCausingDowntime` tears down the prior generation, and immediately promotes the new generation without waiting for it to hydrate. This causes downtime until the new generation has hydrated. However, it does not require additional resources.
 
-#### *ManuallyPromote* 
+#### *ManuallyPromote*
 
 `ManuallyPromote` allows you to choose when to promote the new generation. This means you can time the promotion for periods when load is low, minimizing the impact of potential downtime for any clients connected to Materialize. This strategy temporarily doubles the required resources to run Materialize.
 
