@@ -222,5 +222,31 @@ statement error db error: ERROR: index cannot be created on materialize.public.r
 CREATE DEFAULT INDEX ON rp
 
 
+# Test: comments on replacements
+
+statement ok
+COMMENT ON MATERIALIZED VIEW rp IS 'comment:rp'
+
+statement ok
+COMMENT ON COLUMN rp.a IS 'comment:rp.a'
+
+query TT rowsort
+SELECT object_sub_id, comment
+FROM mz_internal.mz_comments
+WHERE object_type = 'materialized-view'
+----
+NULL  comment:rp
+1     comment:rp.a
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query TT rowsort
+SELECT object_sub_id, comment
+FROM mz_internal.mz_comments
+WHERE object_type = 'materialized-view'
+----
+
+
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE;

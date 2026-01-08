@@ -853,6 +853,9 @@ impl Catalog {
                 tx.remove_item(replacement_id)?;
                 tx.update_item(id, new_entry.into())?;
 
+                let comment_id = CommentObjectId::MaterializedView(replacement_id);
+                tx.drop_comments(&[comment_id].into())?;
+
                 for (event_type, details) in new_audit_events {
                     CatalogState::add_to_audit_log(
                         &state.system_configuration,
