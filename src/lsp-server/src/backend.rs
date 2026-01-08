@@ -17,7 +17,7 @@
 // of which can be found in the LICENSE file at the root of this repository.
 
 use ::serde::Deserialize;
-use mz_ore::collections::HashMap;
+use mz_ore::collections::{HashMap, HashSet};
 use mz_sql_lexer::keywords::Keyword;
 use mz_sql_lexer::lexer::{self, Token};
 use mz_sql_parser::ast::display::FormatMode;
@@ -610,57 +610,50 @@ impl Backend {
     /// and avoid having to rebuild on every [LanguageServer::completion] call.
     fn build_completion_items(&self, schema: Schema) -> Completions {
         // Build SELECT completion items:
+        let mut select_set: HashSet<&String> = HashSet::new();
+        let mut from_set: HashSet<&String> = HashSet::new();
         let mut select_completions = Vec::new();
         let mut from_completions = Vec::new();
 
         schema.objects.iter().for_each(|object| {
             // Columns
             object.columns.iter().for_each(|column| {
-                select_completions.push(CompletionItem {
-                    label: column.name.to_string(),
+                if !select_set.contains(&column.name) {
+                    select_set.insert(&column.name);
+                    select_completions.push(CompletionItem {
+                        label: column.name.to_string(),
+                        label_details: None,
+                        kind: Some(CompletionItemKind::FIELD),
+                        detail: None,
+                        documentation: None,
+                        deprecated: Some(false),
+                        ..Default::default()
+                    });
+                }
+            });
+
+            // Objects
+            if !from_set.contains(&object.name) {
+                from_set.insert(&object.name);
+                from_completions.push(CompletionItem {
+                    label: object.name.to_string(),
                     label_details: Some(CompletionItemLabelDetails {
-                        detail: Some(column.typ.to_string()),
+                        detail: Some(object.typ.to_string()),
                         description: None,
                     }),
-                    kind: Some(CompletionItemKind::FIELD),
-                    detail: Some(
-                        format!(
-                            "From {}.{}.{} ({:?})",
-                            schema.database, schema.schema, object.name, object.typ
-                        )
-                        .to_string(),
-                    ),
+                    kind: match object.typ {
+                        ObjectType::View => Some(CompletionItemKind::ENUM_MEMBER),
+                        ObjectType::MaterializedView => Some(CompletionItemKind::ENUM),
+                        ObjectType::Source => Some(CompletionItemKind::CLASS),
+                        ObjectType::Sink => Some(CompletionItemKind::CLASS),
+                        ObjectType::Table => Some(CompletionItemKind::CONSTANT),
+                    },
+                    detail: None,
                     documentation: None,
                     deprecated: Some(false),
                     ..Default::default()
                 });
-            });
-
-            // Objects
-            from_completions.push(CompletionItem {
-                label: object.name.to_string(),
-                label_details: Some(CompletionItemLabelDetails {
-                    detail: Some(object.typ.to_string()),
-                    description: None,
-                }),
-                kind: match object.typ {
-                    ObjectType::View => Some(CompletionItemKind::ENUM_MEMBER),
-                    ObjectType::MaterializedView => Some(CompletionItemKind::ENUM),
-                    ObjectType::Source => Some(CompletionItemKind::CLASS),
-                    ObjectType::Sink => Some(CompletionItemKind::CLASS),
-                    ObjectType::Table => Some(CompletionItemKind::CONSTANT),
-                },
-                detail: Some(
-                    format!(
-                        "Represents {}.{}.{} ({:?})",
-                        schema.database, schema.schema, object.name, object.typ
-                    )
-                    .to_string(),
-                ),
-                documentation: None,
-                deprecated: Some(false),
-                ..Default::default()
-            });
+            }
         });
 
         Completions {
