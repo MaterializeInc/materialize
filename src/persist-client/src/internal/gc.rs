@@ -400,7 +400,11 @@ where
         // a rollup to the earliest state we fetched. this invariant isn't affected
         // by the GC work we just performed, but it is a property of GC correctness
         // overall / is a convenient place to run the assertion.
-        let valid_pre_gc_state = gc_rollups.contains_seqno(&initial_seqno);
+        let valid_pre_gc_state = states
+            .state()
+            .collections
+            .rollups
+            .contains_key(&initial_seqno);
 
         // this should never be true in the steady-state, but may be true the
         // first time GC runs after fixing any correctness bugs related to our
