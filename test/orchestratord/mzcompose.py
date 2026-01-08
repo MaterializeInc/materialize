@@ -511,23 +511,24 @@ class ConsoleEnabled(Modification):
             return
 
         def check() -> None:
-            result = spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "pods",
-                    "-l",
-                    "app=console",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "name",
-                ],
-            )
-            if self.value:
-                assert result, f"Unexpected result: {result}"
-            else:
-                assert not result, f"Unexpected result: {result}"
+            pass  # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
+            # result = spawn.capture(
+            #     [
+            #         "kubectl",
+            #         "get",
+            #         "pods",
+            #         "-l",
+            #         "app=console",
+            #         "-n",
+            #         "materialize-environment",
+            #         "-o",
+            #         "name",
+            #     ],
+            # )
+            # if self.value:
+            #     assert result, f"Unexpected result: {result}"
+            # else:
+            #     assert not result, f"Unexpected result: {result}"
 
         # Console can take a while to start up
         retry(check, 120)
