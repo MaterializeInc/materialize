@@ -481,8 +481,8 @@ pub struct AlterSetClusterV1 {
     pub id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
-    pub old_cluster: Option<String>,
-    pub new_cluster: Option<String>,
+    pub old_cluster_id: String,
+    pub new_cluster_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]

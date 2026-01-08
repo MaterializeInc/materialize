@@ -13,6 +13,10 @@ use crate::durable::upgrade::objects_v80 as v80;
 
 /// No-op migration. All types are JSON-compatible between v79 and v80.
 /// The only change is adding new audit log event types and fields.
+///
+/// There is one exception, `AlterSetClusterV1`, which was changed in an
+/// incompatible way. We can do this only because we know this audit event has
+/// never been written before.
 pub fn upgrade(
     _snapshot: Vec<v79::StateUpdateKind>,
 ) -> Vec<MigrationAction<v79::StateUpdateKind, v80::StateUpdateKind>> {

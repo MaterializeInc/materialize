@@ -2603,14 +2603,17 @@ fn apply_replacement_audit_events(
             }),
         ));
 
-        if target.cluster_id() != replacement.cluster_id() {
+        if let Some(old_cluster_id) = target.cluster_id()
+            && let Some(new_cluster_id) = replacement.cluster_id()
+            && old_cluster_id != new_cluster_id
+        {
             events.push((
                 EventType::Alter,
                 EventDetails::AlterSetClusterV1(mz_audit_log::AlterSetClusterV1 {
                     id: target.id().to_string(),
                     name: target_id_name.name,
-                    old_cluster: target.cluster_id().map(|id| id.to_string()),
-                    new_cluster: replacement.cluster_id().map(|id| id.to_string()),
+                    old_cluster_id: old_cluster_id.to_string(),
+                    new_cluster_id: new_cluster_id.to_string(),
                 }),
             ));
         }

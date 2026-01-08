@@ -897,18 +897,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
         crate::objects::audit_log_event_v1::AlterSetClusterV1 {
             id: self.id.to_string(),
             name: self.name.into_proto(),
-            old_cluster: self
-                .old_cluster
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
-            new_cluster: self
-                .new_cluster
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
+            old_cluster_id: self.old_cluster_id.into_proto(),
+            new_cluster_id: self.new_cluster_id.into_proto(),
         }
     }
 
@@ -918,8 +908,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
         Ok(Self {
             id: proto.id,
             name: proto.name.into_rust()?,
-            old_cluster: proto.old_cluster.map(|s| s.inner),
-            new_cluster: proto.new_cluster.map(|s| s.inner),
+            old_cluster_id: proto.old_cluster_id,
+            new_cluster_id: proto.new_cluster_id,
         })
     }
 }

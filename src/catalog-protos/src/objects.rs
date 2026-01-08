@@ -810,8 +810,8 @@ pub mod audit_log_event_v1 {
     pub struct AlterSetClusterV1 {
         pub id: String,
         pub name: FullNameV1,
-        pub old_cluster: Option<StringWrapper>,
-        pub new_cluster: Option<StringWrapper>,
+        pub old_cluster_id: String,
+        pub new_cluster_id: String,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
