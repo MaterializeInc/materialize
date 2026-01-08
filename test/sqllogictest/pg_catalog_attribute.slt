@@ -111,3 +111,67 @@ query B
 SELECT DISTINCT(attgenerated = '') FROM pg_attribute
 ----
 true
+
+# Let's check go-jet's `getColumnsMetaData` query:
+# https://github.com/go-jet/jet/blob/master/generator/postgres/query_set.go#L69
+# In particular, the `greatest(1, attr.attndims)` workaround should work also in Materialize.
+
+statement ok
+CREATE TABLE attndims_test(
+    c_int4 int4,
+    c_text text,
+    c_int4_array int4[],
+    c_text_array text[],
+    c_int4_list int4 list,
+    c_text_list text list,
+    c_int4_list_list int4 list list,
+    c_int4_list_list_list int4 list list list
+);
+
+query TTTTTTTTTT
+select
+    attr.attname as "column.Name",
+    col_description(attr.attrelid, attr.attnum) as "column.Comment",
+    exists(
+        select 1
+        from pg_catalog.pg_index indx
+        where attr.attrelid = indx.indrelid and attr.attnum = any(indx.indkey) and indx.indisprimary
+    ) as "column.IsPrimaryKey",
+    not attr.attnotnull as "column.isNullable",
+    attr.attgenerated = 's' as "column.isGenerated",
+    attr.atthasdef as "column.hasDefault",
+    (case when tp.typcategory = 'A' then greatest(1, attr.attndims) --cockroach num dims fix
+          else 0
+        end) as "dataType.dimensions",
+    (case coalesce(elem.typtype, tp.typtype)
+         when 'b' then 'base'
+         when 'd' then 'base'
+         when 'e' then 'enum'
+         when 'r' then 'range'
+        end) as "dataType.Kind",
+    (case when tp.typtype = 'd' then (select pg_type.typname from pg_catalog.pg_type where pg_type.oid = tp.typbasetype)
+          when tp.typcategory = 'A' then elem.typname
+          else tp.typname
+        end) as "dataType.Name",
+    false as "dataType.isUnsigned"
+from pg_catalog.pg_attribute as attr
+     join pg_catalog.pg_class as cls on cls.oid = attr.attrelid
+     join pg_catalog.pg_namespace as ns on ns.oid = cls.relnamespace
+     join pg_catalog.pg_type as tp on tp.oid = attr.atttypid
+	 left join pg_catalog.pg_type elem ON tp.typelem = elem.oid -- only for arrays
+where
+    ns.nspname = 'public' and
+    cls.relname = 'attndims_test' and
+    not attr.attisdropped and
+    attr.attnum > 0
+order by
+    attr.attnum;
+----
+c_int4  NULL  false  true  false  true  0  base  int4  false
+c_text  NULL  false  true  false  true  0  base  text  false
+c_int4_array  NULL  false  true  false  true  1  base  int4  false
+c_text_array  NULL  false  true  false  true  1  base  text  false
+c_int4_list  NULL  false  true  false  true  0  NULL  list  false
+c_text_list  NULL  false  true  false  true  0  NULL  list  false
+c_int4_list_list  NULL  false  true  false  true  0  NULL  list  false
+c_int4_list_list_list  NULL  false  true  false  true  0  NULL  list  false

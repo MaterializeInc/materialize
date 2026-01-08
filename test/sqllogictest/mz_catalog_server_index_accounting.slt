@@ -853,6 +853,7 @@ pg_attribute_all_databases  attidentity
 pg_attribute_all_databases  attisdropped
 pg_attribute_all_databases  attlen
 pg_attribute_all_databases  attname
+pg_attribute_all_databases  attndims
 pg_attribute_all_databases  attnotnull
 pg_attribute_all_databases  attnum
 pg_attribute_all_databases  attrelid
