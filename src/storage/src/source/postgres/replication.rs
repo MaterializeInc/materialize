@@ -90,7 +90,6 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_postgres_util::PG_FIRST_TIMELINE_ID;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::replication::MzPgTimelineHistory;
 use mz_postgres_util::replication::MzPgTimelineHistoryEntry;
@@ -1214,17 +1213,14 @@ async fn ensure_replication_timeline_id(
         .collect::<Result<MzPgTimelineHistory, _>>()
         .map_err(|e| TransientError::Generic(anyhow::anyhow!("persist error: {e:?}")))?;
 
-    tracing::trace!("mz timeline history = {mz_timeline_history:?}");
+    tracing::info!("mz timeline history = {mz_timeline_history:?}");
 
-    let upstream_timeline_history = if timeline_id == PG_FIRST_TIMELINE_ID {
-        MzPgTimelineHistory::initial_timeline()
-    } else {
-        mz_postgres_util::get_timeline_history(replication_client, timeline_id).await?
-    };
+    let upstream_timeline_history =
+        mz_postgres_util::get_timeline_history(replication_client, timeline_id).await?;
 
-    tracing::trace!("upstream timeline history = {upstream_timeline_history:?}");
+    tracing::info!("upstream timeline history = {upstream_timeline_history:?}");
 
-    let result = is_it_valid(
+    let result = validate_timeline_history(
         &mz_timeline_history,
         &upstream_timeline_history,
         &resume_lsn.offset.into(),
@@ -1307,18 +1303,18 @@ fn encode_timeline_entry(
     Ok(row.clone())
 }
 
-fn is_it_valid(
+fn validate_timeline_history(
     mz_timeline_history: &MzPgTimelineHistory,
     upstream_timeline_history: &MzPgTimelineHistory,
     resume_lsn: &PgLsn,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
+    // Source has not yet recorded a timeline history
     if mz_timeline_history.is_empty() {
-        // there is no existing history, so we have no checks to perform
         return Ok(Ok(()));
     }
 
-    if !mz_timeline_history.is_prefix_of(upstream_timeline_history) {
-        return Ok(Err(DefiniteError::TimelineHistoryMismatch));
+    if let Err(e) = timeline_prefix_check(mz_timeline_history, upstream_timeline_history) {
+        return Ok(Err(e));
     }
 
     // which timeline is the resume_lsn from, i.e. the resume_timeline
@@ -1327,10 +1323,14 @@ fn is_it_valid(
         .expect("read from a valid timeline");
 
     // validate the resume_timeline and resume_lsn against the timeline history
-    // at this point, the failure condition should be that MZ was consuming event from some
+    // at this point, the failure condition should be that MZ was consuming events from some
     // timeline, lets say 3.  The upstream timeline ID changed, and when MZ reconnected,
     // timeline 3 in the new history shows a switchpoint LSN that is less than the resume_lsn.
     let resolved_upstream_timeline = upstream_timeline_history.timeline_of_resume_lsn(resume_lsn);
+
+    tracing::info!(
+        "resume_lsn = {resume_lsn} resume_timeline = {resume_timeline} upstream_timeline_for_lsn = {resolved_upstream_timeline:?}"
+    );
 
     if resolved_upstream_timeline.is_none_or(|actual_timeline| resume_timeline != actual_timeline) {
         return Ok(Err(DefiniteError::TimelineLsnMismatch {
@@ -1341,6 +1341,45 @@ fn is_it_valid(
     }
 
     Ok(Ok(()))
+}
+
+/// Validates the first timeline history is a prefix of the second. Histories are expected to be
+/// in ascending order by entry.
+///
+/// An entry is considered a match if both histories have an entry for the same timeline in the
+/// same order and
+/// - the switchpoint LSN matches between the 2 timelines
+/// - the switchpoint LSN of the first is None (i.e. only the timeline ids match)
+fn timeline_prefix_check(
+    mz_history: &MzPgTimelineHistory,
+    pg_history: &MzPgTimelineHistory,
+) -> Result<(), DefiniteError> {
+    // there is no additional check for mz.switchpoint_lsn being None because that will be the
+    // last entry in the history
+    for (i, mz) in mz_history.history.iter().enumerate() {
+        if let Some(pg) = pg_history.history.get(i) {
+            if mz.timeline_id != pg.timeline_id
+                || mz
+                    .switchpoint_lsn
+                    .is_some_and(|sp_a| pg.switchpoint_lsn.is_none_or(|sp_b| sp_a != sp_b))
+            {
+                return Err(DefiniteError::TimelineHistoryMismatch {
+                    expected_timeline: mz.timeline_id,
+                    expected_lsn: mz.switchpoint_lsn.map(u64::from),
+                    actual_timeline: Some(pg.timeline_id),
+                    actual_lsn: pg.switchpoint_lsn.map(u64::from),
+                });
+            }
+        } else {
+            return Err(DefiniteError::TimelineHistoryMismatch {
+                expected_timeline: mz.timeline_id,
+                expected_lsn: mz.switchpoint_lsn.map(u64::from),
+                actual_timeline: None,
+                actual_lsn: None,
+            });
+        }
+    }
+    Ok(())
 }
 
 enum SchemaValidationError {
