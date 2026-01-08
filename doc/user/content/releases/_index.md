@@ -16,7 +16,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.6.0
-*Released to Materialize Cloud & Materialize Self-Managed: 2026-01-09*<br>
+*Released to Materialize Cloud: 2026-01-08*<br>
+*Released to Materialize Self-Managed: 2026-01-09*<br>
 
 v26.6.0 includes bug fixes for Kafka sinks and Self-Managed deployments.
 
