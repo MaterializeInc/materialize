@@ -16,22 +16,17 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.6.0
+*Released to Materialize Cloud & Materialize Self-Managed: 2026-01-09*<br>
 
-v26.6.0 includes bug fixes for Kafka sinks, Iceberg sources, and Self-Managed deployments.
-
-### Self-Managed
-
-- Fixed an issue where console and balancer deployments could fail to upgrade to the correct version during Self-Managed environment upgrades.
+v26.6.0 includes bug fixes for Kafka sinks and Self-Managed deployments.
 
 ### Bug Fixes
-
+- Fixed an issue where console and balancer deployments could fail to upgrade to the correct version during Self-Managed environment upgrades.
 - Fixed an issue where `ALTER SINK ... SET FROM` on Kafka sinks could incorrectly restart in snapshot mode even when the sink had already made progress, causing unnecessary resource consumption and potential out-of-memory errors.
-
-- Fixed an issue with Iceberg sources where out-of-order schema metadata files could cause schema loading failures.
 
 ## v26.5.1
 *Released to Materialize Self-Managed: 2025-12-23* <br>
-*Scheduled for release to Materialize Cloud: 2026-01-08* <br>
+*Released to Materialize Cloud: 2026-01-08* <br>
 
 v26.5.1 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
 
@@ -70,8 +65,7 @@ v26.4.0 introduces several performance improvements and bugfixes.
 
 ## v26.3.0
 
-*Released Cloud: 2025-12-12*<br>
-*Released Self-Managed: 2025-12-12*
+*Released to Materialize Cloud & Materialize Self-Managed: 2025-12-12*<br>
 
 ### Improvements
 - For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.
