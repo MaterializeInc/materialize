@@ -1387,7 +1387,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
-    pub replacing: Option<T::ItemName>,
+    pub replacement_for: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
     pub as_of: Option<u64>,
@@ -1399,6 +1399,9 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         f.write_str("CREATE");
         if self.if_exists == IfExistsBehavior::Replace {
             f.write_str(" OR REPLACE");
+        }
+        if self.replacement_for.is_some() {
+            f.write_str(" REPLACEMENT");
         }
 
         f.write_str(" MATERIALIZED VIEW");
@@ -1416,8 +1419,8 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_str(")");
         }
 
-        if let Some(target) = &self.replacing {
-            f.write_str(" REPLACING ");
+        if let Some(target) = &self.replacement_for {
+            f.write_str(" FOR ");
             f.write_node(target);
         }
 

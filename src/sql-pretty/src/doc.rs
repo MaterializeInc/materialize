@@ -703,9 +703,14 @@ impl Pretty {
     ) -> RcDoc<'a> {
         let mut docs = vec![];
         docs.push(RcDoc::text(format!(
-            "CREATE{} MATERIALIZED VIEW{} {}",
+            "CREATE{}{} MATERIALIZED VIEW{} {}",
             if v.if_exists == IfExistsBehavior::Replace {
                 " OR REPLACE"
+            } else {
+                ""
+            },
+            if v.replacement_for.is_some() {
+                " REPLACEMENT"
             } else {
                 ""
             },
@@ -723,9 +728,9 @@ impl Pretty {
                 ")",
             ));
         }
-        if let Some(target) = &v.replacing {
+        if let Some(target) = &v.replacement_for {
             docs.push(RcDoc::text(format!(
-                "REPLACING {}",
+                "FOR {}",
                 target.to_ast_string_simple()
             )));
         }

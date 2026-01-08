@@ -1474,7 +1474,7 @@ impl MaterializedView {
             if_exists: old_stmt.if_exists,
             name: old_stmt.name,
             columns: rpl_stmt.columns,
-            replacing: None,
+            replacement_for: None,
             in_cluster: rpl_stmt.in_cluster,
             query: rpl_stmt.query,
             as_of: rpl_stmt.as_of,

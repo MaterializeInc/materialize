@@ -2991,7 +2991,7 @@ pub fn plan_create_materialized_view(
 
     // Validate the replacement target, if one is given.
     let mut replacement_target = None;
-    if let Some(target_name) = &stmt.replacing {
+    if let Some(target_name) = &stmt.replacement_for {
         scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
 
         let target = scx.get_item_by_resolved_name(target_name)?;
