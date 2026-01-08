@@ -14,17 +14,17 @@
 //! because of Rust's orphan rules.
 
 use mz_audit_log::{
-    AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1, AlterSourceSinkV1,
-    CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3, CreateClusterReplicaV4,
-    CreateIndexV1, CreateMaterializedViewV1, CreateOrDropClusterReplicaReasonV1,
-    CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3, CreateSourceSinkV4,
-    DropClusterReplicaV1, DropClusterReplicaV2, DropClusterReplicaV3, EventDetails, EventType,
-    EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1,
-    RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2, RenameClusterReplicaV1,
-    RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1,
-    SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2,
-    SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1,
-    VersionedEvent,
+    AlterApplyReplacementV1, AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1,
+    AlterSourceSinkV1, CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3,
+    CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
+    CreateOrDropClusterReplicaReasonV1, CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3,
+    CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2, DropClusterReplicaV3,
+    EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2,
+    IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2,
+    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
+    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1,
+    SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
+    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
@@ -824,6 +824,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateMaterializedViewV1>
             id: self.id.to_string(),
             cluster_id: self.cluster_id.to_string(),
             name: self.name.into_proto(),
+            replacement_target_id: self.replacement_target_id.into_proto(),
         }
     }
 
@@ -834,6 +835,27 @@ impl RustType<crate::objects::audit_log_event_v1::CreateMaterializedViewV1>
             id: proto.id,
             cluster_id: proto.cluster_id,
             name: proto.name.into_rust()?,
+            replacement_target_id: proto.replacement_target_id,
+        })
+    }
+}
+
+impl RustType<crate::objects::audit_log_event_v1::AlterApplyReplacementV1>
+    for AlterApplyReplacementV1
+{
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::AlterApplyReplacementV1 {
+        crate::objects::audit_log_event_v1::AlterApplyReplacementV1 {
+            target: self.target.into_proto(),
+            replacement: self.replacement.into_proto(),
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::AlterApplyReplacementV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(AlterApplyReplacementV1 {
+            target: proto.target.into_rust()?,
+            replacement: proto.replacement.into_rust()?,
         })
     }
 }
@@ -875,18 +897,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
         crate::objects::audit_log_event_v1::AlterSetClusterV1 {
             id: self.id.to_string(),
             name: self.name.into_proto(),
-            old_cluster: self
-                .old_cluster
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
-            new_cluster: self
-                .new_cluster
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
+            old_cluster_id: self.old_cluster_id.into_proto(),
+            new_cluster_id: self.new_cluster_id.into_proto(),
         }
     }
 
@@ -896,8 +908,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
         Ok(Self {
             id: proto.id,
             name: proto.name.into_rust()?,
-            old_cluster: proto.old_cluster.map(|s| s.inner),
-            new_cluster: proto.new_cluster.map(|s| s.inner),
+            old_cluster_id: proto.old_cluster_id,
+            new_cluster_id: proto.new_cluster_id,
         })
     }
 }
@@ -1273,6 +1285,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::CreateMaterializedViewV1(details) => {
                 CreateMaterializedViewV1(details.into_proto())
             }
+            EventDetails::AlterApplyReplacementV1(details) => {
+                AlterApplyReplacementV1(details.into_proto())
+            }
             EventDetails::AlterSourceSinkV1(details) => AlterSourceSinkV1(details.into_proto()),
             EventDetails::AlterSetClusterV1(details) => AlterSetClusterV1(details.into_proto()),
             EventDetails::GrantRoleV1(details) => GrantRoleV1(details.into_proto()),
@@ -1348,6 +1363,9 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             CreateIndexV1(details) => Ok(EventDetails::CreateIndexV1(details.into_rust()?)),
             CreateMaterializedViewV1(details) => {
                 Ok(EventDetails::CreateMaterializedViewV1(details.into_rust()?))
+            }
+            AlterApplyReplacementV1(details) => {
+                Ok(EventDetails::AlterApplyReplacementV1(details.into_rust()?))
             }
             AlterSourceSinkV1(details) => Ok(EventDetails::AlterSourceSinkV1(details.into_rust()?)),
             AlterSetClusterV1(details) => Ok(EventDetails::AlterSetClusterV1(details.into_rust()?)),
