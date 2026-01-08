@@ -15,7 +15,7 @@ use tokio_postgres::{
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::{Config, PostgresError, simple_query_opt};
+use crate::{Config, PG_FIRST_TIMELINE_ID, PostgresError, simple_query_opt};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WalLevel {
@@ -226,17 +226,9 @@ pub struct MzPgTimelineHistoryEntry {
     pub switchpoint_lsn: Option<PgLsn>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MzPgTimelineHistory {
     pub history: Vec<MzPgTimelineHistoryEntry>,
-}
-
-impl Default for MzPgTimelineHistory {
-    fn default() -> Self {
-        Self {
-            history: Default::default(),
-        }
-    }
 }
 
 impl MzPgTimelineHistory {
@@ -272,6 +264,15 @@ impl MzPgTimelineHistory {
 
     pub fn is_empty(&self) -> bool {
         self.history.is_empty()
+    }
+
+    pub fn initial_timeline() -> Self {
+        MzPgTimelineHistory {
+            history: vec![MzPgTimelineHistoryEntry {
+                timeline_id: PG_FIRST_TIMELINE_ID,
+                switchpoint_lsn: None,
+            }],
+        }
     }
 }
 

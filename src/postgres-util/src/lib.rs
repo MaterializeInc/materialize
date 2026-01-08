@@ -30,6 +30,8 @@ pub use tunnel::{Client, Config, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, TunnelConfi
 pub mod query;
 pub use query::simple_query_opt;
 
+pub const PG_FIRST_TIMELINE_ID: u64 = 1;
+
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]
 pub enum PostgresError {
