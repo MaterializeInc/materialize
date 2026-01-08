@@ -117,6 +117,9 @@ true
 # In particular, the `greatest(1, attr.attndims)` workaround should work also in Materialize.
 
 statement ok
+CREATE TYPE int4_named_list AS LIST (ELEMENT TYPE = int4);
+
+statement ok
 CREATE TABLE attndims_test(
     c_int4 int4,
     c_text text,
@@ -125,7 +128,8 @@ CREATE TABLE attndims_test(
     c_int4_list int4 list,
     c_text_list text list,
     c_int4_list_list int4 list list,
-    c_int4_list_list_list int4 list list list
+    c_int4_list_list_list int4 list list list,
+    c_int4_named_list int4_named_list
 );
 
 query TTTTTTTTTT
@@ -175,3 +179,40 @@ c_int4_list  NULL  false  true  false  true  0  NULL  list  false
 c_text_list  NULL  false  true  false  true  0  NULL  list  false
 c_int4_list_list  NULL  false  true  false  true  0  NULL  list  false
 c_int4_list_list_list  NULL  false  true  false  true  0  NULL  list  false
+c_int4_named_list  NULL  false  true  false  true  0  base  int4_named_list  false
+
+# Test that pg_type.typelem is correctly populated for named list types.
+# Named list types (created via CREATE TYPE) should have typelem pointing to their element type.
+
+statement ok
+CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4);
+
+statement ok
+CREATE TYPE text_list AS LIST (ELEMENT TYPE = text);
+
+query TTI
+SELECT typname, (SELECT typname FROM pg_type WHERE oid = t.typelem) as elem_name, typelem
+FROM pg_type t
+WHERE typname IN ('int4_list', 'text_list')
+ORDER BY typname;
+----
+int4_list  int4  23
+text_list  text  25
+
+# Also verify the same for arrays
+query TTI
+SELECT typname, (SELECT typname FROM pg_type WHERE oid = t.typelem) as elem_name, typelem
+FROM pg_type t
+WHERE typname IN ('_int4', '_text')
+ORDER BY typname;
+----
+_int4  int4  23
+_text  text  25
+
+# Verify that the anonymous list pseudo-type has typelem = 0
+query TI
+SELECT typname, typelem
+FROM pg_type t
+WHERE typname = 'list';
+----
+list  0

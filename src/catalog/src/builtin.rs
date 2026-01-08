@@ -7313,6 +7313,12 @@ SELECT
             JOIN mz_catalog.mz_types t ON a.element_id = t.id
             WHERE a.id = mz_types.id
         ),
+        (
+            SELECT t.oid
+            FROM mz_catalog.mz_list_types l
+            JOIN mz_catalog.mz_types t ON l.element_id = t.id
+            WHERE l.id = mz_types.id
+        ),
         0
     ) AS typelem,
     coalesce(
