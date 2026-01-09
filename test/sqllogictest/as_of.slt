@@ -113,6 +113,10 @@ SELECT * FROM data AS OF NULL::numeric;
 query error db error: ERROR: AS OF or UP TO should be castable to a \(non\-null\) mz_timestamp value
 SUBSCRIBE (SELECT 1) AS OF NULL::timestamptz;
 
+# TODO: correct the error message once database-issues#10009 is fixed
+query error db error: ERROR: subscription lower bound \(`AS OF`\) is greater than its upper bound \(`UP TO`\): 18446744073709551615 > 5
+SUBSCRIBE (SELECT 1) AS OF 10 UP TO 5;
+
 # Test that timestamps are used for constant queries with temporal filters
 
 statement ok
