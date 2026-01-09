@@ -52,11 +52,12 @@ pub use crate::datum_vec::{DatumVec, DatumVecBorrow};
 pub use crate::diff::Diff;
 pub use crate::global_id::GlobalId;
 pub use crate::relation::{
-    ColumnIndex, ColumnName, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
-    ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationVersion, RelationVersionSelector, ReprColumnType, ReprRelationType, SqlColumnType,
-    SqlRelationType, UNKNOWN_COLUMN_NAME, VersionedRelationDesc, arb_relation_desc_diff,
-    arb_relation_desc_projection, arb_row_for_relation,
+    ColumnDiff, ColumnIndex, ColumnName, KeyDiff, NotNullViolation, PropRelationDescDiff,
+    ProtoColumnName, ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc,
+    RelationDescBuilder, RelationDescDiff, RelationVersion, RelationVersionSelector,
+    ReprColumnType, ReprRelationType, SqlColumnType, SqlRelationType, UNKNOWN_COLUMN_NAME,
+    VersionedRelationDesc, arb_relation_desc_diff, arb_relation_desc_projection,
+    arb_row_for_relation,
 };
 pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
