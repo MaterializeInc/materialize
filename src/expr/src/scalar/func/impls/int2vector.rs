@@ -24,7 +24,7 @@ pub struct CastInt2VectorToArray;
 impl LazyUnaryFunc for CastInt2VectorToArray {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -72,7 +72,7 @@ pub struct CastInt2VectorToString;
 impl LazyUnaryFunc for CastInt2VectorToString {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {

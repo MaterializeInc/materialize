@@ -23,7 +23,7 @@ pub struct CastArrayToListOneDim;
 impl LazyUnaryFunc for CastArrayToListOneDim {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -95,7 +95,7 @@ pub struct CastArrayToString {
 impl LazyUnaryFunc for CastArrayToString {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -149,7 +149,7 @@ pub struct CastArrayToJsonb {
 impl LazyUnaryFunc for CastArrayToJsonb {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -245,7 +245,7 @@ pub struct CastArrayToArray {
 impl LazyUnaryFunc for CastArrayToArray {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {

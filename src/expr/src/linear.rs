@@ -1871,7 +1871,7 @@ pub mod plan {
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
-                match l.eval(datums, arena) {
+                match l.eval(&datums[..], arena) {
                     Err(e) => {
                         return Some(Err((e.into(), time, diff)))
                             .into_iter()
@@ -1899,7 +1899,7 @@ pub mod plan {
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
                 if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, arena) {
+                    match u.eval(&datums[..], arena) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
                                 .into_iter()

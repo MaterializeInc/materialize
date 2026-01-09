@@ -31,7 +31,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, DatumVecBorrow, Row, RowArena, SqlColumnType, SqlScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,36 @@ impl std::fmt::Debug for MirScalarExpr {
                 write!(f, "If({cond:?}, {then:?}, {els:?})")
             }
         }
+    }
+}
+
+/// A type you can look up column references in.
+/// This should generally be implemented on reference types directly... hence the [Copy] bound.
+pub trait Columns<'a>: Copy {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError>;
+}
+
+impl<'a> Columns<'a> for &[Datum<'a>] {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError> {
+        Ok(self[i])
+    }
+}
+
+impl<'a, const N: usize> Columns<'a> for &[Datum<'a>; N] {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError> {
+        Ok(self[i])
+    }
+}
+
+impl<'a> Columns<'a> for &Vec<Datum<'a>> {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError> {
+        Ok(self[i])
+    }
+}
+
+impl<'a> Columns<'a> for &DatumVecBorrow<'a> {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError> {
+        Ok(self[i])
     }
 }
 
@@ -1976,11 +2006,11 @@ impl MirScalarExpr {
 
     pub fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl Columns<'a>,
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
         match self {
-            MirScalarExpr::Column(index, _name) => Ok(datums[*index].clone()),
+            MirScalarExpr::Column(index, _name) => datums.get(*index),
             MirScalarExpr::Literal(res, _column_type) => match res {
                 Ok(row) => Ok(row.unpack_first()),
                 Err(e) => Err(e.clone()),

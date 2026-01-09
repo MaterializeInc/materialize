@@ -75,7 +75,7 @@ impl JoinClosure {
             // Each list of expressions should be equal to the same value.
             let val = exprs[0].eval(&datums[..], temp_storage)?;
             for expr in exprs[1..].iter() {
-                if expr.eval(datums, temp_storage)? != val {
+                if expr.eval(&datums[..], temp_storage)? != val {
                     return Ok(None);
                 }
             }

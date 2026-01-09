@@ -25,7 +25,7 @@ pub struct CastListToString {
 impl LazyUnaryFunc for CastListToString {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -78,7 +78,7 @@ pub struct CastListToJsonb {
 impl LazyUnaryFunc for CastListToJsonb {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -146,7 +146,7 @@ pub struct CastList1ToList2 {
 impl LazyUnaryFunc for CastList1ToList2 {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -205,7 +205,7 @@ pub struct ListLength;
 impl LazyUnaryFunc for ListLength {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {

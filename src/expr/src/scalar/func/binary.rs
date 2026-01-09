@@ -19,7 +19,7 @@ use crate::{EvalError, MirScalarExpr};
 pub(crate) trait LazyBinaryFunc {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
         b: &'a MirScalarExpr,
@@ -114,7 +114,7 @@ pub(crate) trait EagerBinaryFunc<'a> {
 impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
         b: &'a MirScalarExpr,
