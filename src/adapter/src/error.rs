@@ -89,6 +89,8 @@ pub enum AdapterError {
     InvalidSetIsolationLevel,
     /// SET cluster was called in the middle of a transaction.
     InvalidSetCluster,
+    /// SELECT ... IN CLUSTER was used in an invalid context.
+    InvalidSelectInCluster,
     /// No such storage instance size has been configured.
     InvalidStorageClusterSize {
         size: String,
@@ -618,6 +620,7 @@ impl AdapterError {
                 SqlState::INVALID_PASSWORD
             }
             AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::InvalidSelectInCluster => SqlState::FEATURE_NOT_SUPPORTED,
         }
     }
 
@@ -957,6 +960,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::AlterClusterWhilePendingReplicas => {
                 write!(f, "cannot alter clusters with pending updates")
+            }
+            AdapterError::InvalidSelectInCluster => {
+                write!(f, "invalid select in cluster")
             }
         }
     }
