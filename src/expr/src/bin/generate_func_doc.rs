@@ -11,7 +11,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::func::{BinaryFuncKind, UnaryFuncKind};
+use itertools::Itertools;
+use mz_expr::func::{BinaryFuncKind, FuncDoc, UnaryFuncKind};
 use serde::Serialize;
 
 fn main() {
@@ -22,6 +23,7 @@ fn main() {
         .filter_map(|f| f.func_doc())
         .chain(UnaryFuncKind::kinds().into_iter().map(|f| f.func_doc()))
     {
+        lint_function(&function);
         categories
             .entry(function.category.to_string())
             .or_insert_with(|| Category {
@@ -34,12 +36,34 @@ fn main() {
 
     for category in categories.values_mut() {
         category.functions.sort();
+        lint_category(category);
     }
 
     let categories = categories.into_values().collect::<Vec<_>>();
 
     let json = serde_json::to_string_pretty(&categories).expect("can serialize");
     println!("{json}\n");
+}
+
+fn lint_category(category: &Category<FuncDoc>) {
+    for (a, b) in category.functions.iter().tuple_windows() {
+        assert_ne!(a.unique_name, b.unique_name, "Duplicate function name");
+    }
+}
+
+fn lint_function(function: &FuncDoc) {
+    if function.category.is_empty() {
+        panic!("Uncategorized function: {:?}", function.unique_name);
+    }
+    if function.category == "Uncategorized" {
+        eprintln!(
+            "Function categorized as Uncategorized: {:?}",
+            function.unique_name
+        );
+    }
+    if function.description.is_empty() {
+        eprintln!("Function missing description: {:?}", function.unique_name);
+    }
 }
 
 #[derive(Debug, Serialize, Ord, PartialOrd, Eq, PartialEq)]
