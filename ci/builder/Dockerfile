@@ -109,6 +109,9 @@ RUN \
 # https://bugs.launchpad.net/cloud-images/+bug/2005129
 RUN userdel -r ubuntu
 
+# Remove dialout group because it collides with staff group on macOS
+RUN groupdel dialout
+
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
 # Stage 2: Build a full CI Builder image that can be used for any CI job.
