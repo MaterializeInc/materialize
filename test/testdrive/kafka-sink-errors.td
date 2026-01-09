@@ -61,7 +61,7 @@ contains:LEGACY IDs option is not supported
 contains:sink s1 cannot be exported as a sink
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM v1
-> CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM v1
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM v1
 
 ! CREATE SINK s2
   IN CLUSTER ${arg.single-replica-cluster}

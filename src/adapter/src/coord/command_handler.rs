@@ -1381,7 +1381,7 @@ impl Coordinator {
                         if_exists: cmvs.if_exists,
                         name: cmvs.name,
                         columns: cmvs.columns,
-                        replacing: cmvs.replacing,
+                        replacement_for: cmvs.replacement_for,
                         in_cluster: cmvs.in_cluster,
                         query: cmvs.query,
                         with_options: cmvs.with_options,

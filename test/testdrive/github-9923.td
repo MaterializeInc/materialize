@@ -35,7 +35,7 @@ contains:view v cannot be exported as a sink
 contains:view v cannot be exported as a sink
 
 > CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
-> CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM t
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t
 
 ! ALTER SINK sink SET FROM rp
 contains:replacement materialized view rp cannot be exported as a sink

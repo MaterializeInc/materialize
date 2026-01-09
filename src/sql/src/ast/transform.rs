@@ -206,11 +206,11 @@ pub fn create_stmt_rename_refs(
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateMaterializedView(CreateMaterializedViewStatement {
-            replacing,
+            replacement_for,
             query,
             ..
         }) => {
-            if let Some(target) = replacing {
+            if let Some(target) = replacement_for {
                 maybe_update_item_name(target.name_mut());
             }
             rewrite_query(from_name, to_item_name, query)?;
