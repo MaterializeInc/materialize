@@ -70,7 +70,7 @@ mod unmaterializable;
 mod variadic;
 
 pub use impls::*;
-pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
+pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc, UnaryFuncKind};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;
 
@@ -343,14 +343,20 @@ fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeri
     }
 }
 
+/// Convert data `a` from original encoding specified by `src_encoding` into `text`.
+///
+/// Only supports `utf-8` for now.
 #[sqlfunc(sqlname = "convert_from")]
-fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
+fn convert_from<'a>(a: &'a [u8], src_encoding: &str) -> Result<&'a str, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
+    let encoding_name = src_encoding
+        .to_lowercase()
+        .replace('_', "-")
+        .into_boxed_str();
 
     // Supporting other encodings is tracked by database-issues#797.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
@@ -377,6 +383,8 @@ fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
 /// Decode `text` using the specified textual representation. Errors if the
 /// text is not a valid representation in the specified format, or if the
 /// format is not recognized.
+///
+/// The maximum size of the result is 100 MiB.
 #[sqlfunc(category = "String", url = "/sql/functions/decode")]
 fn decode(text: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
@@ -388,14 +396,18 @@ fn decode(text: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     }
 }
 
-#[sqlfunc(sqlname = "length")]
-fn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {
+/// Number of code points in `a` after encoding.
+#[sqlfunc(sqlname = "length", category = "String")]
+fn encoded_bytes_char_length(a: &[u8], encoding_name: &str) -> Result<i32, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
+    let encoding_name = encoding_name
+        .to_lowercase()
+        .replace('_', "-")
+        .into_boxed_str();
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
@@ -1219,6 +1231,9 @@ fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     }
 }
 
+/// Return the `index`th bit from `bytes`, where the left-most bit in `bytes` is at the 0th position.
+///
+/// Returns an error if the index is out of range.
 #[sqlfunc]
 fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
@@ -1239,6 +1254,9 @@ fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     Ok(i32::from(i))
 }
 
+/// Return the `index`th byte from `bytes`, where the left-most byte in `bytes` is at the 0th position.
+///
+/// Returns an error if the index is out of range.
 #[sqlfunc]
 fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
@@ -1251,12 +1269,18 @@ fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     Ok(i32::from(*i))
 }
 
-#[sqlfunc(sqlname = "constant_time_compare_bytes")]
+/// Returns `true` if the arrays are identical, otherwise returns `false`.
+/// The implementation mitigates timing attacks by making a best-effort attempt to
+/// execute in constant time if the arrays have the same length, regardless of their contents.
+#[sqlfunc(sqlname = "constant_time_eq")]
 pub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
     bool::from(a.ct_eq(b))
 }
 
-#[sqlfunc(sqlname = "constant_time_compare_strings")]
+/// Returns `true` if the strings are identical, otherwise returns `false`.
+/// The implementation mitigates timing attacks by making a best-effort attempt to
+/// execute in constant time if the strings have the same length, regardless of their contents.
+#[sqlfunc(sqlname = "constant_time_eq")]
 pub fn constant_time_eq_string(a: &str, b: &str) -> bool {
     bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }
@@ -2052,7 +2076,11 @@ fn mz_acl_item_contains_privilege(
     Ok(contains)
 }
 
-#[sqlfunc]
+/// Given a qualified identifier like `a."b".c`, splits into an array of the
+/// constituent identifiers with quoting removed and escape sequences decoded.
+/// Extra characters after the last identifier are ignored unless the
+/// `strict_mode` parameter is `true` (defaults to `false`).
+#[sqlfunc(category = "String")]
 // transliterated from postgres/src/backend/utils/adt/misc.c
 fn parse_ident<'a>(ident: &'a str, strict: bool) -> Result<ArrayRustType<Cow<'a, str>>, EvalError> {
     fn is_ident_start(c: char) -> bool {
@@ -4737,7 +4765,8 @@ where
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
+/// The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
+#[sqlfunc(category = "String", signature = "position(sub: str IN s: str) -> int")]
 fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     let char_index = string.find(substring);
 
@@ -4755,14 +4784,16 @@ fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     }
 }
 
+/// The first `n` characters of `string`.
+/// If `n` is negative, all but the last `|n|` characters of `string`.
 #[sqlfunc(
     propagates_nulls = true,
     // `left` is unfortunately not monotonic (at least for negative second arguments),
     // because 'aa' < 'z', but `left(_, -1)` makes 'a' > ''.
     is_monotone = (false, false)
 )]
-fn left<'a>(string: &'a str, b: i32) -> Result<&'a str, EvalError> {
-    let n = i64::from(b);
+fn left<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
+    let n = i64::from(n);
 
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
 
@@ -4812,22 +4843,26 @@ fn right<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     Ok(&string[start_in_bytes..])
 }
 
-#[sqlfunc(sqlname = "btrim")]
-fn trim<'a>(a: &'a str, trim_chars: &str) -> &'a str {
-    a.trim_matches(|c| trim_chars.contains(c))
+/// Trim any character in `trim_chars` from both sides of `s`.
+#[sqlfunc(sqlname = "btrim", category = "String")]
+fn trim<'a>(s: &'a str, trim_chars: &str) -> &'a str {
+    s.trim_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(sqlname = "ltrim")]
+/// Trim any character in `trim_chars` from the left side of `a`.
+#[sqlfunc(sqlname = "ltrim", category = "String")]
 fn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_start_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(sqlname = "rtrim")]
+/// Trim any character in `trim_chars` from the right side of `a`.
+#[sqlfunc(sqlname = "rtrim", category = "String")]
 fn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_end_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc]
+/// Returns the length of the specified dimension of the array `a`.
+#[sqlfunc(category = "Array")]
 fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     let i = match usize::try_from(b) {
         Ok(0) | Err(_) => return Ok(None),
@@ -4843,7 +4878,8 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     })
 }
 
-#[sqlfunc]
+/// Returns the lower bound of the specified dimension of the array `a`.
+#[sqlfunc(category = "Array")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
@@ -4856,11 +4892,13 @@ fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
     }
 }
 
+/// Removes all elements equal to `b` from one-dimensional array `arr`.
 #[sqlfunc(
     output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
     sqlname = "array_remove",
     propagates_nulls = false,
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "Array"
 )]
 fn array_remove<'a>(
     arr: Array<'a>,

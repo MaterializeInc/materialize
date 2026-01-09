@@ -109,6 +109,19 @@ impl fmt::Display for ExtractTime {
     }
 }
 
+impl ExtractTime {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "extract_time",
+            category: "Time",
+            signature: "",
+            description: "",
+            url: Some("/sql/functions/extract/"),
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DatePartTime(pub DateTimeUnits);
 
@@ -128,6 +141,18 @@ impl<'a> EagerUnaryFunc<'a> for DatePartTime {
 impl fmt::Display for DatePartTime {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "date_part_{}_t", self.0)
+    }
+}
+
+impl DatePartTime {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_part_time",
+            category: "Time",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -163,5 +188,17 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTime {
 impl fmt::Display for TimezoneTime {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "timezone_{}_t", self.tz)
+    }
+}
+
+impl TimezoneTime {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "timezone_time",
+            category: "Time",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

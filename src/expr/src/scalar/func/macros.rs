@@ -201,11 +201,18 @@ macro_rules! derive_unary {
         }
 
         impl UnaryFuncKind {
-            // fn func_doc(&self) -> &'static crate::func::FuncDoc {
-            //     match self {
-            //         // $(Self::$name => $name::func_doc(),)*
-            //     }
-            // }
+            pub fn func_doc(&self) -> crate::func::FuncDoc {
+                match self {
+                    $(Self::$name => $name::func_doc(),)*
+                }
+            }
+
+            /// Returns all known kinds.
+            pub fn kinds() -> &'static [Self] {
+                &[
+                    $(Self::$name,)*
+                ]
+            }
         }
 
         impl fmt::Display for UnaryFunc {

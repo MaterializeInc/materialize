@@ -71,6 +71,18 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
+impl CastRangeToString {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "rangetostr",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RangeLower;
 
@@ -126,6 +138,18 @@ impl fmt::Display for RangeLower {
     }
 }
 
+impl RangeLower {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "rangelower",
+            category: "Range",
+            signature: "",
+            description: "Returns the lower bound of the range, or NULL if the range is empty or has no lower bound.",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RangeUpper;
 
@@ -178,6 +202,18 @@ impl LazyUnaryFunc for RangeUpper {
 impl fmt::Display for RangeUpper {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("rangeupper")
+    }
+}
+
+impl RangeUpper {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "rangeupper",
+            category: "Range",
+            signature: "",
+            description: "Returns the upper bound of the range, or NULL if the range is empty or has no lower bound.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 

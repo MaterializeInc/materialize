@@ -150,7 +150,8 @@ fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
     strconv::parse_uint64(a).err_into()
 }
 
-#[sqlfunc(sqlname = "reverse")]
+/// Reverse the characters in s.
+#[sqlfunc(sqlname = "reverse", category = "String")]
 fn reverse<'a>(a: &'a str) -> String {
     a.chars().rev().collect()
 }
@@ -184,6 +185,18 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
 impl fmt::Display for CastStringToNumeric {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("text_to_numeric")
+    }
+}
+
+impl CastStringToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "text_to_numeric",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -233,7 +246,21 @@ impl fmt::Display for CastStringToTimestamp {
     }
 }
 
-#[sqlfunc(sqlname = "try_parse_monotonic_iso8601_timestamp")]
+impl CastStringToTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "text_to_timestamp",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
+/// Parses a specific subset of ISO8601 timestamps, returning `NULL` instead of
+/// error on failure: `YYYY-MM-DDThh:mm:ss.sssZ`
+#[sqlfunc(sqlname = "try_parse_monotonic_iso8601_timestamp", category = "String")]
 // TODO: Pretty sure this preserves uniqueness, but not 100%.
 //
 // Ironically, even though this has "monotonic" in the name, it's not quite
@@ -273,6 +300,18 @@ impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
 impl fmt::Display for CastStringToTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("text_to_timestamp_with_time_zone")
+    }
+}
+
+impl CastStringToTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "text_to_timestamp_with_time_zone",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -367,6 +406,18 @@ impl fmt::Display for CastStringToArray {
     }
 }
 
+impl CastStringToArray {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "strtoarray",
+            category: "Cast",
+            signature: "CAST(s: str AS arrayany) -> arrayany",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToList {
     // Target list's type
@@ -443,6 +494,18 @@ impl LazyUnaryFunc for CastStringToList {
 impl fmt::Display for CastStringToList {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("strtolist")
+    }
+}
+
+impl CastStringToList {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "strtolist",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -531,6 +594,18 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
+impl CastStringToMap {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "strtomap",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToChar {
     pub length: Option<mz_repr::adt::char::CharLength>,
@@ -581,6 +656,18 @@ impl fmt::Display for CastStringToChar {
                 )
             }
             None => f.write_str("text_to_char[len=unbounded]"),
+        }
+    }
+}
+
+impl CastStringToChar {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "text_to_char",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
         }
     }
 }
@@ -662,6 +749,18 @@ impl fmt::Display for CastStringToRange {
     }
 }
 
+impl CastStringToRange {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "strtorange",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToVarChar {
     pub length: Option<VarCharMaxLength>,
@@ -717,6 +816,18 @@ impl fmt::Display for CastStringToVarChar {
                 )
             }
             None => f.write_str("text_to_varchar[len=unbounded]"),
+        }
+    }
+}
+
+impl CastStringToVarChar {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "text_to_varchar",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
         }
     }
 }
@@ -788,6 +899,18 @@ impl fmt::Display for CastStringToInt2Vector {
     }
 }
 
+impl CastStringToInt2Vector {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "strtoint2vector",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[sqlfunc(
     sqlname = "text_to_jsonb",
     preserves_uniqueness = false,
@@ -798,22 +921,28 @@ fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(strconv::parse_jsonb(a)?)
 }
 
-#[sqlfunc(sqlname = "btrim")]
-fn trim_whitespace<'a>(a: &'a str) -> &'a str {
-    a.trim_matches(' ')
+/// Trim all spaces from both sides of `s`.
+#[sqlfunc(sqlname = "btrim", category = "String")]
+fn trim_whitespace<'a>(s: &'a str) -> &'a str {
+    s.trim_matches(' ')
 }
 
-#[sqlfunc(sqlname = "ltrim")]
-fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
-    a.trim_start_matches(' ')
+/// Trim all spaces from the left side of `s`.
+#[sqlfunc(sqlname = "ltrim", category = "String")]
+fn trim_leading_whitespace<'a>(s: &'a str) -> &'a str {
+    s.trim_start_matches(' ')
 }
 
-#[sqlfunc(sqlname = "rtrim")]
+/// Trim all spaces from the right side of s.
+#[sqlfunc(sqlname = "rtrim", category = "String")]
 fn trim_trailing_whitespace<'a>(a: &'a str) -> &'a str {
     a.trim_end_matches(' ')
 }
 
-#[sqlfunc(sqlname = "initcap")]
+/// Returns `a` with the first character of every word in upper case and all
+/// other characters in lower case. Words are separated by non-alphanumeric
+/// characters.
+#[sqlfunc(sqlname = "initcap", category = "String")]
 fn initcap<'a>(a: &'a str) -> String {
     let mut out = String::new();
     let mut capitalize_next = true;
@@ -828,40 +957,51 @@ fn initcap<'a>(a: &'a str) -> String {
     out
 }
 
-#[sqlfunc(sqlname = "ascii")]
-fn ascii<'a>(a: &'a str) -> i32 {
-    a.chars()
+/// The ASCII value of `s`'s left-most character.
+#[sqlfunc(sqlname = "ascii", category = "String")]
+fn ascii<'a>(s: &'a str) -> i32 {
+    s.chars()
         .next()
         .and_then(|c| i32::try_from(u32::from(c)).ok())
         .unwrap_or(0)
 }
 
-#[sqlfunc(sqlname = "char_length")]
+/// Number of code points in `a`.
+#[sqlfunc(
+    sqlname = "char_length",
+    category = "String",
+    alias = "length",
+    url = "/sql/functions/length"
+)]
 fn char_length<'a>(a: &'a str) -> Result<i32, EvalError> {
     let length = a.chars().count();
     i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
 }
 
-#[sqlfunc(sqlname = "bit_length")]
+/// Number of bits in `a`.
+#[sqlfunc(sqlname = "bit_length", category = "String")]
 fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
     let length = a.as_bytes().len() * 8;
     i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
 }
 
-#[sqlfunc(sqlname = "octet_length")]
-fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
+/// Number of bytes in `a`.
+#[sqlfunc(sqlname = "octet_length", category = "String")]
+fn byte_length_string(a: &str) -> Result<i32, EvalError> {
     let length = a.as_bytes().len();
     i32::try_from(length).or_else(|_| Err(EvalError::Int32OutOfRange(length.to_string().into())))
 }
 
-#[sqlfunc]
+/// Convert s to uppercase.
+#[sqlfunc(category = "String")]
 fn upper<'a>(a: &'a str) -> String {
     a.to_uppercase()
 }
 
-#[sqlfunc]
-fn lower<'a>(a: &'a str) -> String {
-    a.to_lowercase()
+/// Convert `s` to lowercase.
+#[sqlfunc(category = "String")]
+fn lower(s: &str) -> String {
+    s.to_lowercase()
 }
 
 pub fn normalize_with_form<'a>(
@@ -916,6 +1056,18 @@ impl fmt::Display for IsLikeMatch {
     }
 }
 
+impl IsLikeMatch {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "is_like_match",
+            category: "String",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct IsRegexpMatch(pub Regex);
 
@@ -940,6 +1092,18 @@ impl fmt::Display for IsRegexpMatch {
             self.0.pattern().escaped(),
             self.0.case_insensitive
         )
+    }
+}
+
+impl IsRegexpMatch {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "is_regexp_match",
+            category: "String",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -1001,6 +1165,21 @@ impl fmt::Display for RegexpMatch {
     }
 }
 
+impl RegexpMatch {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "regexp_match",
+            category: "String",
+            signature: "regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]",
+            description: "Matches the regular expression `needle` against haystack, returning a \
+                string array that contains the value of each capture group specified in \
+                `needle`, in order. If `flags` is set to the string `i` matches \
+                case-insensitively.",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RegexpSplitToArray(pub Regex);
 
@@ -1055,6 +1234,19 @@ impl fmt::Display for RegexpSplitToArray {
             self.0.pattern().escaped(),
             self.0.case_insensitive
         )
+    }
+}
+
+impl RegexpSplitToArray {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "regexp_split_to_array",
+            category: "String",
+            signature: "regexp_split_to_array(text: str, pattern: str [, flags: str]]) -> str[]",
+            description: "Splits `text` by the regular expression `pattern` into an array.
+      If `flags` is set to `i`, matches case-insensitively.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -1120,5 +1312,17 @@ impl LazyUnaryFunc for QuoteIdent {
 impl fmt::Display for QuoteIdent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "quote_ident")
+    }
+}
+
+impl QuoteIdent {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "quote_ident",
+            category: "String",
+            signature: "quote_ident(s: String) -> String",
+            description: "Quotes the given string as an SQL identifier.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

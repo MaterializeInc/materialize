@@ -164,3 +164,14 @@ impl fmt::Display for CastInt16ToNumeric {
         f.write_str("smallint_to_numeric")
     }
 }
+impl CastInt16ToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "smallint_to_numeric",
+            category: "Cast",
+            signature: "smallint_to_numeric(x: int16)",
+            description: "Casts the smallint `x` to a numeric value.",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

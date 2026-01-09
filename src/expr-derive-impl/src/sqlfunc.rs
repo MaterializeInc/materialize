@@ -44,6 +44,9 @@ pub(crate) struct Modifiers {
     introduces_nulls: Option<Expr>,
     /// Function category for documentation purposes.
     category: Option<String>,
+    /// Signature of the function if different from the derived signature.
+    /// Used for documentation purposes.
+    signature: Option<String>,
     /// Optional URL to link in the documentation.
     url: Option<String>,
     /// Optional string describing the version the function was added.
@@ -312,6 +315,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         propagates_nulls,
         introduces_nulls,
         category: _,
+        signature: _,
         url: _,
         version_added: _,
         unmaterializable: _,
@@ -474,6 +478,7 @@ fn binary_func(
         propagates_nulls,
         introduces_nulls,
         category: _,
+        signature: _,
         url: _,
         version_added: _,
         unmaterializable: _,
@@ -785,7 +790,9 @@ fn generate_function_doc(
 
     let return_type = type_to_sqldoc(&return_type);
 
-    let signature = if modifiers.is_infix_op.is_some() {
+    let signature = if let Some(signature) = modifiers.signature.as_ref() {
+        signature.clone()
+    } else if modifiers.is_infix_op.is_some() {
         let args: Vec<String> = arg_types.iter().copied().map(type_to_sqldoc).collect();
         format!("{} {sqlname} {} -> {return_type}", args[0], args[1],)
     } else {

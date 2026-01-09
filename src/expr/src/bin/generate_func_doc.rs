@@ -11,16 +11,17 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::func::BinaryFuncKind;
+use mz_expr::func::{BinaryFuncKind, UnaryFuncKind};
 use serde::Serialize;
 
 fn main() {
     let mut categories: BTreeMap<String, Category<_>> = BTreeMap::default();
 
-    for func in [BinaryFuncKind::kinds()].into_iter().flatten() {
-        let Some(function) = func.func_doc() else {
-            continue;
-        };
+    for function in BinaryFuncKind::kinds()
+        .into_iter()
+        .filter_map(|f| f.func_doc())
+        .chain(UnaryFuncKind::kinds().into_iter().map(|f| f.func_doc()))
+    {
         categories
             .entry(function.category.to_string())
             .or_insert_with(|| Category {

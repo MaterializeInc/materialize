@@ -71,6 +71,18 @@ impl fmt::Display for CastListToString {
     }
 }
 
+impl CastListToString {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "listtostr",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastListToJsonb {
     pub cast_element: Box<MirScalarExpr>,
@@ -131,6 +143,18 @@ impl LazyUnaryFunc for CastListToJsonb {
 impl fmt::Display for CastListToJsonb {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("listtojsonb")
+    }
+}
+
+impl CastListToJsonb {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "listtojsonb",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -200,6 +224,18 @@ impl fmt::Display for CastList1ToList2 {
     }
 }
 
+impl CastList1ToList2 {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "list1tolist2",
+            category: "Cast",
+            signature: "",
+            description: "Casts between two list types by casting each element of `a` (\"list1\") using `cast_expr` and collecting the results into a new list (\"list2\").",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ListLength;
 
@@ -253,13 +289,13 @@ impl fmt::Display for ListLength {
 }
 
 impl ListLength {
-    fn func_doc() -> crate::func::FuncDoc {
-        crate::func::FuncDoc {
+    pub(crate) fn func_doc() -> FuncDoc {
+        FuncDoc {
             unique_name: "list_length",
             category: "List",
             signature: "list_length(l: listany)",
             description: "Returns the number of elements in `l`.",
-            ..crate::func::FuncDoc::default()
+            ..FuncDoc::default()
         }
     }
 }

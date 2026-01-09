@@ -70,6 +70,18 @@ impl fmt::Display for CastMapToString {
     }
 }
 
+impl CastMapToString {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "maptostr",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct MapLength;
 
@@ -123,7 +135,7 @@ impl fmt::Display for MapLength {
 }
 
 impl MapLength {
-    fn func_doc() -> crate::func::FuncDoc {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
         crate::func::FuncDoc {
             unique_name: "map_length",
             category: "Map",
@@ -202,5 +214,17 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
 impl fmt::Display for MapBuildFromRecordList {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("map_build")
+    }
+}
+
+impl MapBuildFromRecordList {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "map_build",
+            category: "Map",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
