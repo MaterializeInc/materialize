@@ -674,6 +674,19 @@ CREATE SOURCE avro_source
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE avro_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
+
 {{< /tab >}}
 {{< tab "JSON">}}
 
@@ -696,6 +709,32 @@ JSON-formatted messages are ingested as a JSON blob. We recommend creating a
 parsing view on top of your Kafka source that maps the individual fields to
 columns with the required data types. To avoid doing this tedious task
 manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
+
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE json_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT JSON
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
+
+When using separate key and value formats:
+
+```mzsql
+CREATE SOURCE json_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  INCLUDE KEY AS message_key,
+          TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
 
 {{< /tab >}}
 {{< tab "Protobuf">}}
