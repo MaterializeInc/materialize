@@ -9,11 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, DatumVec, DatumVecBorrow, Row, RowRef};
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::Columns;
 use crate::visit::Visit;
-use crate::{MirRelationExpr, MirScalarExpr};
+use crate::{EvalError, MirRelationExpr, MirScalarExpr};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -1572,6 +1573,119 @@ pub mod util {
                 (i, location)
             })
             .collect()
+    }
+}
+
+/// A re-useable vector of `Datum` with no particular lifetime.
+#[derive(Debug, Default, Clone)]
+pub struct ResultVec {
+    datums: DatumVec,
+    errors: Vec<Option<EvalError>>,
+}
+
+impl ResultVec {
+    /// Allocate a new instance.
+    pub fn new() -> Self {
+        Self {
+            datums: DatumVec::new(),
+            errors: vec![],
+        }
+    }
+    /// Borrow an instance with a specific lifetime.
+    ///
+    /// When the result is dropped, its allocation will be returned to `self`.
+    pub fn borrow<'b>(&'b mut self) -> ResultVecBorrow<'b> {
+        ResultVecBorrow {
+            datums: self.datums.borrow(),
+            errors: &mut self.errors,
+        }
+    }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
+    pub fn borrow_with<'a>(&'a mut self, row: &'a RowRef) -> ResultVecBorrow<'a> {
+        let mut borrow = self.borrow();
+        borrow.datums.extend(row.iter());
+        borrow
+    }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row` with up to
+    /// `limit` elements. If `limit` is greater than the number of elements in `row`, the borrow
+    /// will contain all elements of `row`.
+    pub fn borrow_with_limit<'a>(
+        &'a mut self,
+        row: &'a RowRef,
+        limit: usize,
+    ) -> ResultVecBorrow<'a> {
+        let mut borrow = self.borrow();
+        borrow.datums.extend(row.iter().take(limit));
+        borrow
+    }
+}
+
+/// A borrowed allocation of `Result<Datum, EvalError>` with a specific lifetime.
+#[derive(Debug)]
+pub struct ResultVecBorrow<'a> {
+    datums: DatumVecBorrow<'a>,
+    errors: &'a mut Vec<Option<EvalError>>,
+}
+
+impl<'borrow> ResultVecBorrow<'borrow> {
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = Datum<'borrow>>) {
+        self.datums.extend(iter);
+    }
+
+    pub fn push(&mut self, datum: Datum<'borrow>) {
+        self.datums.push(datum);
+    }
+
+    pub fn push_result(&mut self, result: Result<Datum<'borrow>, EvalError>) {
+        match result {
+            Ok(datum) => self.datums.push(datum),
+            Err(e) => {
+                // To avoid unnecessary allocations, we only push to the error collection
+                // when we have an error... but that means that we need to resize it explicitly
+                // here to keep things in sync.
+                self.errors.resize(self.datums.len(), None);
+                self.datums.push(Datum::Dummy);
+                self.errors.push(Some(e))
+            }
+        }
+    }
+
+    pub fn datums(&self) -> Result<&[Datum<'borrow>], &EvalError> {
+        if self.errors.is_empty() {
+            return Ok(&self.datums);
+        }
+        if let Some(err) = self.errors.iter().find_map(|e| e.as_ref()) {
+            Err(err)
+        } else {
+            Ok(&self.datums)
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.datums.len()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.datums.truncate(len);
+        self.errors.truncate(len); // TODO: strip nones?
+    }
+}
+
+impl<'a> Columns<'a> for &ResultVecBorrow<'a> {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError> {
+        if let Some(Some(err)) = self.errors.get(i) {
+            Err(err.clone())
+        } else {
+            Ok(self.datums[i].clone())
+        }
+    }
+}
+
+impl<'a> Drop for ResultVecBorrow<'a> {
+    fn drop(&mut self) {
+        self.errors.clear();
     }
 }
 
