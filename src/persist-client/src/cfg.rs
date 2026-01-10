@@ -272,6 +272,10 @@ impl PersistConfig {
         let mut cfg = Self::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
         cfg.hostname = "tests".into();
         cfg.isolated_runtime_worker_threads = async_runtime::TEST_THREADS;
+
+        // This marks configs as synced, which some things block on currently...
+        cfg.apply_from(&ConfigUpdates::default());
+
         cfg
     }
 }
@@ -330,6 +334,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::cache::BLOB_CACHE_SCALE_FACTOR_BYTES)
         .add(&crate::internal::compact::COMPACTION_MINIMUM_TIMEOUT)
         .add(&crate::internal::compact::COMPACTION_CHECK_PROCESS_FLAG)
+        .add(&crate::internal::gc::GC_GLOBAL_CONCURRENCY)
         .add(&crate::internal::machine::CLAIM_UNCLAIMED_COMPACTIONS)
         .add(&crate::internal::machine::CLAIM_COMPACTION_PERCENT)
         .add(&crate::internal::machine::CLAIM_COMPACTION_MIN_VERSION)
