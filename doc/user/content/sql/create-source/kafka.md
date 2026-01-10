@@ -787,6 +787,19 @@ schema with the message, so before creating a source you must:
   For more details about Protobuf message names and descriptors, check the
   [Protobuf format](../#protobuf) documentation.
 
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE proto_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
+
 {{< /tab >}}
 {{< tab "Text/bytes">}}
 
@@ -797,6 +810,20 @@ CREATE SOURCE text_source
   ENVELOPE UPSERT;
 ```
 
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE text_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT TEXT
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition
+  ENVELOPE UPSERT;
+```
+
 {{< /tab >}}
 {{< tab "CSV">}}
 
@@ -804,6 +831,19 @@ CREATE SOURCE text_source
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;
+```
+
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT CSV WITH 3 COLUMNS
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
 ```
 
 {{< /tab >}}
