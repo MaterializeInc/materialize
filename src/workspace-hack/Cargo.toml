@@ -81,7 +81,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
-libc = { version = "0.2.178", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
 log = { version = "0.4.29", default-features = false, features = ["std"] }
@@ -227,7 +227,7 @@ hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
-libc = { version = "0.2.178", features = ["extra_traits", "use_std"] }
+libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
 log = { version = "0.4.29", default-features = false, features = ["std"] }
