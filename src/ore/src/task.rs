@@ -205,28 +205,6 @@ where
 ///
 /// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
 /// information.
-#[cfg(not(tokio_unstable))]
-#[track_caller]
-#[allow(clippy::disallowed_methods)]
-pub fn spawn_blocking<Function, Output, Name, NameClosure>(
-    _nc: NameClosure,
-    function: Function,
-) -> JoinHandle<Output>
-where
-    Name: AsRef<str>,
-    NameClosure: FnOnce() -> Name,
-    Function: FnOnce() -> Output + Send + 'static,
-    Output: Send + 'static,
-{
-    JoinHandle::new(task::spawn_blocking(function))
-}
-
-/// Runs the provided closure with a name on a thread where blocking is
-/// acceptable.
-///
-/// See [`tokio::task::spawn_blocking`] and the [module][`self`] docs for more
-/// information.
-#[cfg(tokio_unstable)]
 #[track_caller]
 #[allow(clippy::disallowed_methods)]
 pub fn spawn_blocking<Function, Output, Name, NameClosure>(
@@ -239,12 +217,20 @@ where
     Function: FnOnce() -> Output + Send + 'static,
     Output: Send + 'static,
 {
-    JoinHandle::new(
-        task::Builder::new()
-            .name(&format!("{}:{}", Handle::current().id(), nc().as_ref()))
-            .spawn_blocking(function)
-            .expect("task spawning cannot fail"),
-    )
+    let builder = task::Builder::new();
+
+    if cfg!(tokio_unstable) {
+        builder.name(&format!("{}:{}", Handle::current().id(), nc().as_ref()));
+    }
+
+    let result = if cfg!(simulation) {
+        builder.spawn(async { function() })
+    } else {
+        builder.spawn_blocking(function)
+    };
+
+    let handle = result.expect("task spawning cannot fail");
+    JoinHandle::new(handle)
 }
 
 /// Extension methods for [`Runtime`] and [`Handle`].

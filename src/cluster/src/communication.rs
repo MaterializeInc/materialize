@@ -541,10 +541,7 @@ mod turmoil_tests {
             .build();
 
         let processes: Vec<_> = (0..NUM_PROCESSES).map(|i| format!("process-{i}")).collect();
-        let addresses: Vec<_> = processes
-            .iter()
-            .map(|n| format!("turmoil:{n}:7777"))
-            .collect();
+        let addresses: Vec<_> = processes.iter().map(|n| format!("{n}:7777")).collect();
 
         // Channel for processes to report successful connection.
         let (ready_tx, mut ready_rx) = mpsc::unbounded_channel();

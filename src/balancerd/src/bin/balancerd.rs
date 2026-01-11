@@ -32,6 +32,7 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::netio;
 use mz_ore::tracing::TracingHandle;
 use mz_server_core::TlsCliArgs;
 use tracing::{Instrument, info_span, warn};
@@ -275,7 +276,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
             // As a typo-check, verify that the passed address resolves to at least one IP. This
             // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
             // Here only to cause startup to crash if mistyped.
-            let mut addrs = tokio::net::lookup_host(&addr)
+            let mut addrs = netio::lookup_host(&addr)
                 .await
                 .unwrap_or_else(|_| panic!("could not resolve {addr}"));
             let Some(_resolved) = addrs.next() else {

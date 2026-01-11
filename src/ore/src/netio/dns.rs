@@ -15,9 +15,31 @@
 
 use std::collections::BTreeSet;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
-use tokio::net::lookup_host;
+use crate::netio::tcp::ToSocketAddrs;
+
+use super::turmoil_override;
+
+/// Performs a DNS resolution.
+///
+/// The returned set may not actually contain any values, depending on the outcome of any
+/// resolution performed.
+pub async fn lookup_host<A>(host: A) -> io::Result<impl Iterator<Item = SocketAddr>>
+where
+    A: ToSocketAddrs,
+{
+    let addrs: Vec<_> = turmoil_override! {
+        tokio => {
+            tokio::net::lookup_host(host).await?.collect()
+        }
+        turmoil => {
+            turmoil::net::lookup_host(host).await?.collect()
+        }
+    };
+
+    Ok(addrs.into_iter())
+}
 
 /// An error returned by `resolve_address`.
 #[derive(thiserror::Error, Debug)]
