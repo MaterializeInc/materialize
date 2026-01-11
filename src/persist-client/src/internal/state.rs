@@ -1877,7 +1877,7 @@ where
         &mut self,
         reader_id: &LeasedReaderId,
         seqno: SeqNo,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
@@ -1905,18 +1905,15 @@ where
             reader_state.last_heartbeat_timestamp_ms,
         );
 
-        let seqno = match outstanding_seqno {
-            Some(outstanding_seqno) => {
-                assert!(
-                    outstanding_seqno >= reader_state.seqno,
-                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+        let seqno = {
+            assert!(
+                outstanding_seqno >= reader_state.seqno,
+                "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
                     is behind current reader_state ({:?})",
-                    outstanding_seqno,
-                    reader_state.seqno,
-                );
-                std::cmp::min(outstanding_seqno, seqno)
-            }
-            None => seqno,
+                outstanding_seqno,
+                reader_state.seqno,
+            );
+            std::cmp::min(outstanding_seqno, seqno)
         };
 
         reader_state.seqno = seqno;
@@ -1976,33 +1973,6 @@ where
             // advanced. we may someday need to revisit this branch when it's possible
             // for two `since` frontiers to be incomparable.
             Continue(Ok(Since(reader_state.since.clone())))
-        }
-    }
-
-    pub fn heartbeat_leased_reader(
-        &mut self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all readers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.leased_readers.get_mut(reader_id) {
-            Some(reader_state) => {
-                reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    reader_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
         }
     }
 
@@ -3231,7 +3201,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3243,7 +3213,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3255,7 +3225,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(1),
                 now()
             ),
@@ -3280,7 +3250,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader2,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(3),
                 now()
             ),
@@ -3292,7 +3262,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(5),
                 now()
             ),
@@ -3324,7 +3294,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader3,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(10),
                 now()
             ),
@@ -3624,7 +3594,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
-                None,
+                SeqNo::minimum(),
                 &Antichain::from_elem(2),
                 now()
             ),

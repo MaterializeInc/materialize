@@ -9,10 +9,10 @@
 
 //! Notifications for state changes.
 
-use std::sync::Arc;
-
 use mz_persist::location::SeqNo;
-use tokio::sync::broadcast;
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, RwLock};
+use tokio::sync::{Notify, broadcast};
 use tracing::debug;
 
 use crate::cache::LockingTypedState;
@@ -132,6 +132,83 @@ impl<K, V, T, D> StateWatch<K, V, T, D> {
     }
 }
 
+/// A concurrent state - one which allows reading, writing, and waiting for changes made by
+/// another concurrent writer.
+///
+/// This is morally similar to a mutex with a condvar, but allowing asynchronous waits and with
+/// access methods that make it a little trickier to accidentally hold a lock across a yield point.
+pub(crate) struct AwaitableState<T> {
+    state: Arc<RwLock<T>>,
+    /// NB: we can't wrap the [Notify] in the lock since the signature of [Notify::notified]
+    /// doesn't allow it, but this is only accessed while holding the lock.
+    notify: Arc<Notify>,
+}
+
+impl<T: Debug> Debug for AwaitableState<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.state.read().fmt(f)
+    }
+}
+
+impl<T> Clone for AwaitableState<T> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            notify: Arc::clone(&self.notify),
+        }
+    }
+}
+
+impl<T> AwaitableState<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(value)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn read<A>(&self, read_fn: impl FnOnce(&T) -> A) -> A {
+        let guard = self.state.read().expect("not poisoned");
+        let state = &*guard;
+        read_fn(state)
+    }
+
+    pub fn modify<A>(&self, write_fn: impl FnOnce(&mut T) -> A) -> A {
+        let mut guard = self.state.write().expect("not poisoned");
+        let state = &mut *guard;
+        let result = write_fn(state);
+        // Notify everyone while holding the guard. This guarantees that all waiters will observe
+        // the just-updated state.
+        self.notify.notify_waiters();
+        drop(guard);
+        result
+    }
+
+    pub async fn wait_for<A>(&self, mut wait_fn: impl FnMut(&T) -> Option<A>) -> A {
+        loop {
+            let notified = {
+                let guard = self.state.read().expect("not poisoned");
+                let state = &*guard;
+                if let Some(result) = wait_fn(state) {
+                    return result;
+                }
+                // Grab the notified future while holding the guard. This ensures that we will see any
+                // future modifications to this state, even if they happen before the first poll.
+                let notified = self.notify.notified();
+                drop(guard);
+                notified
+            };
+
+            notified.await;
+        }
+    }
+
+    pub async fn wait_while(&self, mut wait_fn: impl FnMut(&T) -> bool) {
+        self.wait_for(|s| (!wait_fn(s)).then_some(())).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -141,12 +218,15 @@ mod tests {
 
     use futures::FutureExt;
     use futures_task::noop_waker;
+    use itertools::Itertools;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::assert_none;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
+    use rand::prelude::SliceRandom;
     use timely::progress::Antichain;
+    use tokio::task::JoinSet;
 
     use crate::cache::StateCache;
     use crate::cfg::PersistConfig;
@@ -325,5 +405,30 @@ mod tests {
         // For good measure, also resolve the snapshot, though we haven't broken
         // the polling on this.
         let _ = snapshot.await;
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[allow(clippy::disallowed_methods)] // For JoinSet.
+    #[cfg_attr(miri, ignore)]
+    async fn wait_on_awaitable_state() {
+        const TASKS: usize = 1000;
+        // Launch a bunch of tasks, have them all wait for a specific number, then increment it
+        // by one. Lost notifications would cause this test to time out.
+        let mut set = JoinSet::new();
+        let state = AwaitableState::new(0);
+        let mut tasks = (0..TASKS).collect_vec();
+        let mut rng = rand::rng();
+        tasks.shuffle(&mut rng);
+        for i in (0..TASKS).rev() {
+            set.spawn({
+                let state = state.clone();
+                async move {
+                    state.wait_while(|v| *v != i).await;
+                    state.modify(|v| *v += 1);
+                }
+            });
+        }
+        set.join_all().await;
+        assert_eq!(state.read(|i| *i), TASKS);
     }
 }
