@@ -129,6 +129,9 @@ impl<S: ExprPrep> Optimize<HirRelationExpr> for Optimizer<S> {
             metrics.observe_e2e_optimization_time("view", time.elapsed());
         }
 
+        // TODO: Handle the `optimizer_notices` in `df_meta`.
+        // https://github.com/MaterializeInc/database-issues/issues/10012
+
         // Return the resulting OptimizedMirRelationExpr.
         Ok(expr)
     }

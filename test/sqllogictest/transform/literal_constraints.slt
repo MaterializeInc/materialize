@@ -226,6 +226,10 @@ Used Indexes:
 
 Target cluster: quickstart
 
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
 EOF
 
 query IT rowsort
