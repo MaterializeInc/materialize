@@ -28,6 +28,7 @@ use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
     Coordinator, CreateViewExplain, CreateViewFinish, CreateViewOptimize, CreateViewStage,
     ExplainContext, ExplainPlanContext, Message, PlanValidity, StageResult, Staged,
+    infer_sql_type_for_catalog,
 };
 use crate::error::AdapterError;
 use crate::explain::explain_plan;
@@ -391,6 +392,7 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -405,7 +407,7 @@ impl Coordinator {
                     create_sql: create_sql.clone(),
                     global_id,
                     raw_expr: raw_expr.into(),
-                    desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
+                    desc: RelationDesc::new(typ, column_names.clone()),
                     optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
