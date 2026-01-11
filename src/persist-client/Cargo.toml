@@ -56,11 +56,11 @@ proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 timely = "0.25.1"
 tokio = { version = "1.48.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.4.6"
-tokio-stream = "0.1.17"
+tokio-stream = "0.1.18"
 tonic = "0.12.1"
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
