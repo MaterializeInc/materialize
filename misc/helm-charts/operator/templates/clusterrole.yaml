@@ -88,6 +88,8 @@ rules:
   resources:
   - materializes
   - materializes/status
+  - environments
+  - environments/status
   - balancers
   - balancers/status
   - consoles
