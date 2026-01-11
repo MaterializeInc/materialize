@@ -24,7 +24,7 @@ find coverage -name '*.zst' -exec zstd -d {} \;
 ci_uncollapsed_heading "Uncovered Lines in Pull Request"
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec bin/ci-coverage-pr-report --unittests=coverage/cargotest.lcov {} +
 buildkite-agent artifact upload junit_coverage*.xml
-bin/ci-annotate-errors junit_coverage*.xml
+bin/ci-annotate-errors junit_coverage*.xml || true
 
 ci_unimportant_heading "Create coverage report"
 REPORT=coverage_without_unittests_"$BUILDKITE_BUILD_ID"
@@ -32,7 +32,19 @@ REPORT_UNITTESTS=coverage_with_unittests_"$BUILDKITE_BUILD_ID"
 find coverage -name '*.lcov' -exec sed -i "s#SF:/var/lib/buildkite-agent/builds/buildkite-[^/]*/materialize/[^/]*/#SF:#" {} +
 find coverage -name '*.lcov' -not -name 'cargotest.lcov' -exec genhtml -o "$REPORT" {} +
 find coverage -name '*.lcov' -exec genhtml -o "$REPORT_UNITTESTS" {} +
+
+mapfile -d '' files < <(
+  find coverage -name '*.lcov' -not -name 'cargotest.lcov' -print0
+)
+args=()
+for f in "${files[@]}"; do
+  args+=(-a "$f")
+done
+lcov "${args[@]}" -o coverage/merged.lcov
+
 tar -I zstd -cf "$REPORT".tar.zst "$REPORT"
 tar -I zstd -cf "$REPORT_UNITTESTS".tar.zst "$REPORT_UNITTESTS"
 buildkite-agent artifact upload "$REPORT".tar.zst
 buildkite-agent artifact upload "$REPORT_UNITTESTS".tar.zst
+buildkite-agent artifact upload coverage/merged.lcov
+buildkite-agent artifact upload coverage/cargotest.lcov
