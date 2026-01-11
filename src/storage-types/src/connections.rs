@@ -15,10 +15,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
-use aws_sdk_sts::config::ProvideCredentials;
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    S3_ACCESS_KEY_ID, S3_ASSUME_ROLE_ARN, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_EC2_METADATA,
+    S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
 };
@@ -56,7 +58,7 @@ use url::Url;
 use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
-    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
@@ -522,6 +524,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let secret_reader = &storage_configuration.connection_context.secrets_reader;
         let aws_ref = &s3tables.aws_connection;
         let aws_config = aws_ref
             .connection
@@ -532,31 +535,15 @@ impl IcebergCatalogConnection<InlinedConnection> {
             )
             .await?;
 
-        let provider = aws_config
-            .credentials_provider()
-            .context("No credentials provider in AWS config")?;
+        let aws_region = aws_ref
+            .connection
+            .region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string());
 
-        let creds = provider
-            .provide_credentials()
-            .await
-            .context("Failed to get AWS credentials")?;
-
-        let access_key_id = creds.access_key_id();
-        let secret_access_key = creds.secret_access_key();
-
-        let aws_region = aws_config
-            .region()
-            .map(|r| r.as_ref())
-            .unwrap_or("us-east-1");
-
-        let props = vec![
+        let mut props = vec![
             (S3_REGION.to_string(), aws_region.to_string()),
             (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
-            (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
-            (
-                S3_SECRET_ACCESS_KEY.to_string(),
-                secret_access_key.to_string(),
-            ),
             (
                 REST_CATALOG_PROP_WAREHOUSE.to_string(),
                 s3tables.warehouse.clone(),
@@ -566,6 +553,29 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 self.uri.to_string().clone(),
             ),
         ];
+
+        let aws_auth = aws_ref.connection.auth.clone();
+        match aws_auth {
+            AwsAuth::Credentials(creds) => {
+                props.push((
+                    S3_ACCESS_KEY_ID.to_string(),
+                    creds
+                        .access_key_id
+                        .get_string(in_task, secret_reader)
+                        .await?,
+                ));
+                props.push((
+                    S3_SECRET_ACCESS_KEY.to_string(),
+                    secret_reader.read_string(creds.secret_access_key).await?,
+                ));
+            }
+            AwsAuth::AssumeRole(role) => {
+                props.push((S3_ASSUME_ROLE_ARN.to_string(), role.arn.clone()));
+                if let Some(session_name) = role.session_name {
+                    props.push((S3_ASSUME_ROLE_SESSION_NAME.to_string(), session_name));
+                }
+            }
+        }
 
         let catalog = RestCatalogBuilder::default()
             .with_aws_config(aws_config)
