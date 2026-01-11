@@ -13,8 +13,9 @@
 //! # Snapshot
 //!
 //! One part of the dataflow deals with snapshotting the tables involved in the ingestion. Each
-//! table that needs a snapshot is assigned to a specific worker which performs a `COPY` query
-//! and distributes the raw COPY bytes to all workers to decode the text encoded rows.
+//! table is partitioned across all workers using PostgreSQL's `ctid` column to identify row
+//! ranges. Each worker fetches its assigned range using a `COPY` query with ctid filtering,
+//! enabling parallel snapshotting of large tables.
 //!
 //! For all tables that ended up being snapshotted the snapshot reader also emits a rewind request
 //! to the replication reader which will ensure that the requested portion of the replication
