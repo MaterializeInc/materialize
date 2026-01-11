@@ -1,0 +1,921 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Protobuf utilities for SQL purification.
+//!
+//! This module provides embedded well-known protobuf types that are required
+//! when compiling protobuf schemas fetched from Confluent Schema Registry.
+//! These types are typically bundled with protoc but are not registered in
+//! the schema registry, so we embed them here to make them available during
+//! schema compilation.
+//!
+//! ## Third-party content
+//!
+//! The well-known protobuf type definitions embedded in this file are derived
+//! from Google's Protocol Buffers project (copyright 2008 Google Inc.) and are
+//! licensed under the BSD 3-Clause license. See the LICENSE file in the
+//! repository root for the full license text.
+//!
+//! Source: <https://github.com/protocolbuffers/protobuf>
+//! Revision: v29.3 (protocolbuffers/protobuf@v29.3)
+
+use std::path::Path;
+use std::pin::Pin;
+
+use protobuf_native::compiler::VirtualSourceTree;
+
+/// Well-known protobuf types that are implicitly available to protoc.
+///
+/// These are the standard types from the `google.protobuf` package that are
+/// commonly imported by user schemas (e.g., `google/protobuf/timestamp.proto`).
+static WELL_KNOWN_TYPES: &[(&str, &str)] = &[
+    ("google/protobuf/any.proto", ANY_PROTO),
+    ("google/protobuf/api.proto", API_PROTO),
+    ("google/protobuf/descriptor.proto", DESCRIPTOR_PROTO),
+    ("google/protobuf/duration.proto", DURATION_PROTO),
+    ("google/protobuf/empty.proto", EMPTY_PROTO),
+    ("google/protobuf/field_mask.proto", FIELD_MASK_PROTO),
+    ("google/protobuf/source_context.proto", SOURCE_CONTEXT_PROTO),
+    ("google/protobuf/struct.proto", STRUCT_PROTO),
+    ("google/protobuf/timestamp.proto", TIMESTAMP_PROTO),
+    ("google/protobuf/type.proto", TYPE_PROTO),
+    ("google/protobuf/wrappers.proto", WRAPPERS_PROTO),
+];
+
+/// Adds all well-known protobuf types to the given source tree.
+///
+/// This should be called before compiling protobuf schemas that may import
+/// well-known types like `google/protobuf/timestamp.proto`.
+pub fn add_well_known_types(mut source_tree: Pin<&mut VirtualSourceTree>) {
+    for (path, content) in WELL_KNOWN_TYPES {
+        source_tree
+            .as_mut()
+            .add_file(Path::new(path), content.as_bytes().to_vec());
+    }
+}
+
+// Well-known type definitions from Google's protobuf repository.
+// See the module-level documentation for licensing information.
+
+static ANY_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option go_package = "google.golang.org/protobuf/types/known/anypb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "AnyProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+
+message Any {
+  string type_url = 1;
+  bytes value = 2;
+}
+"#;
+
+static API_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+import "google/protobuf/source_context.proto";
+import "google/protobuf/type.proto";
+
+option java_package = "com.google.protobuf";
+option java_outer_classname = "ApiProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+option go_package = "google.golang.org/protobuf/types/known/apipb";
+
+message Api {
+  string name = 1;
+  repeated Method methods = 2;
+  repeated Option options = 3;
+  string version = 4;
+  SourceContext source_context = 5;
+  repeated Mixin mixins = 6;
+  Syntax syntax = 7;
+}
+
+message Method {
+  string name = 1;
+  string request_type_url = 2;
+  bool request_streaming = 3;
+  string response_type_url = 4;
+  bool response_streaming = 5;
+  repeated Option options = 6;
+  Syntax syntax = 7;
+}
+
+message Mixin {
+  string name = 1;
+  string root = 2;
+}
+"#;
+
+static DESCRIPTOR_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto2";
+
+package google.protobuf;
+
+option go_package = "google.golang.org/protobuf/types/descriptorpb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "DescriptorProtos";
+option csharp_namespace = "Google.Protobuf.Reflection";
+option objc_class_prefix = "GPB";
+option cc_enable_arenas = true;
+option optimize_for = SPEED;
+
+message FileDescriptorSet {
+  repeated FileDescriptorProto file = 1;
+}
+
+message FileDescriptorProto {
+  optional string name = 1;
+  optional string package = 2;
+  repeated string dependency = 3;
+  repeated int32 public_dependency = 10;
+  repeated int32 weak_dependency = 11;
+  repeated DescriptorProto message_type = 4;
+  repeated EnumDescriptorProto enum_type = 5;
+  repeated ServiceDescriptorProto service = 6;
+  repeated FieldDescriptorProto extension = 7;
+  optional FileOptions options = 8;
+  optional SourceCodeInfo source_code_info = 9;
+  optional string syntax = 12;
+  optional Edition edition = 14;
+}
+
+message DescriptorProto {
+  optional string name = 1;
+  repeated FieldDescriptorProto field = 2;
+  repeated FieldDescriptorProto extension = 6;
+  repeated DescriptorProto nested_type = 3;
+  repeated EnumDescriptorProto enum_type = 4;
+
+  message ExtensionRange {
+    optional int32 start = 1;
+    optional int32 end = 2;
+    optional ExtensionRangeOptions options = 3;
+  }
+  repeated ExtensionRange extension_range = 5;
+  repeated OneofDescriptorProto oneof_decl = 8;
+  optional MessageOptions options = 7;
+
+  message ReservedRange {
+    optional int32 start = 1;
+    optional int32 end = 2;
+  }
+  repeated ReservedRange reserved_range = 9;
+  repeated string reserved_name = 10;
+}
+
+message ExtensionRangeOptions {
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  message Declaration {
+    optional int32 number = 1;
+    optional string full_name = 2;
+    optional string type = 3;
+    optional bool reserved = 5;
+    optional bool repeated = 6;
+  }
+  repeated Declaration declaration = 2 [retention = RETENTION_SOURCE];
+
+  enum VerificationState {
+    DECLARATION = 0;
+    UNVERIFIED = 1;
+  }
+  optional VerificationState verification = 3
+      [default = UNVERIFIED, retention = RETENTION_SOURCE];
+
+  extensions 1000 to max;
+}
+
+message FieldDescriptorProto {
+  enum Type {
+    TYPE_DOUBLE = 1;
+    TYPE_FLOAT = 2;
+    TYPE_INT64 = 3;
+    TYPE_UINT64 = 4;
+    TYPE_INT32 = 5;
+    TYPE_FIXED64 = 6;
+    TYPE_FIXED32 = 7;
+    TYPE_BOOL = 8;
+    TYPE_STRING = 9;
+    TYPE_GROUP = 10;
+    TYPE_MESSAGE = 11;
+    TYPE_BYTES = 12;
+    TYPE_UINT32 = 13;
+    TYPE_ENUM = 14;
+    TYPE_SFIXED32 = 15;
+    TYPE_SFIXED64 = 16;
+    TYPE_SINT32 = 17;
+    TYPE_SINT64 = 18;
+  }
+
+  enum Label {
+    LABEL_OPTIONAL = 1;
+    LABEL_REPEATED = 3;
+    LABEL_REQUIRED = 2;
+  }
+
+  optional string name = 1;
+  optional int32 number = 3;
+  optional Label label = 4;
+  optional Type type = 5;
+  optional string type_name = 6;
+  optional string extendee = 2;
+  optional string default_value = 7;
+  optional int32 oneof_index = 9;
+  optional string json_name = 10;
+  optional FieldOptions options = 8;
+  optional bool proto3_optional = 17;
+}
+
+message OneofDescriptorProto {
+  optional string name = 1;
+  optional OneofOptions options = 2;
+}
+
+message EnumDescriptorProto {
+  optional string name = 1;
+  repeated EnumValueDescriptorProto value = 2;
+  optional EnumOptions options = 3;
+
+  message EnumReservedRange {
+    optional int32 start = 1;
+    optional int32 end = 2;
+  }
+  repeated EnumReservedRange reserved_range = 4;
+  repeated string reserved_name = 5;
+}
+
+message EnumValueDescriptorProto {
+  optional string name = 1;
+  optional int32 number = 2;
+  optional EnumValueOptions options = 3;
+}
+
+message ServiceDescriptorProto {
+  optional string name = 1;
+  repeated MethodDescriptorProto method = 2;
+  optional ServiceOptions options = 3;
+}
+
+message MethodDescriptorProto {
+  optional string name = 1;
+  optional string input_type = 2;
+  optional string output_type = 3;
+  optional MethodOptions options = 4;
+  optional bool client_streaming = 5 [default = false];
+  optional bool server_streaming = 6 [default = false];
+}
+
+message FileOptions {
+  optional string java_package = 1;
+  optional string java_outer_classname = 8;
+  optional bool java_multiple_files = 10 [default = false];
+  optional bool java_generate_equals_and_hash = 20 [deprecated = true];
+  optional bool java_string_check_utf8 = 27 [default = false];
+
+  enum OptimizeMode {
+    SPEED = 1;
+    CODE_SIZE = 2;
+    LITE_RUNTIME = 3;
+  }
+  optional OptimizeMode optimize_for = 9 [default = SPEED];
+
+  optional string go_package = 11;
+  optional bool cc_generic_services = 16 [default = false];
+  optional bool java_generic_services = 17 [default = false];
+  optional bool py_generic_services = 18 [default = false];
+  optional bool deprecated = 23 [default = false];
+  optional bool cc_enable_arenas = 31 [default = true];
+  optional string objc_class_prefix = 36;
+  optional string csharp_namespace = 37;
+  optional string swift_prefix = 39;
+  optional string php_class_prefix = 40;
+  optional string php_namespace = 41;
+  optional string php_metadata_namespace = 44;
+  optional string ruby_package = 45;
+  optional FeatureSet features = 50;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+
+  reserved 38, 42;
+}
+
+message MessageOptions {
+  optional bool message_set_wire_format = 1 [default = false];
+  optional bool no_standard_descriptor_accessor = 2 [default = false];
+  optional bool deprecated = 3 [default = false];
+  optional bool map_entry = 7;
+  optional bool deprecated_legacy_json_field_conflicts = 11 [deprecated = true];
+  optional FeatureSet features = 12;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+
+  reserved 4, 5, 6, 8, 9;
+}
+
+message FieldOptions {
+  optional CType ctype = 1 [default = STRING];
+  enum CType {
+    STRING = 0;
+    CORD = 1;
+    STRING_PIECE = 2;
+  }
+  optional bool packed = 2;
+  optional JSType jstype = 6 [default = JS_NORMAL];
+  enum JSType {
+    JS_NORMAL = 0;
+    JS_STRING = 1;
+    JS_NUMBER = 2;
+  }
+  optional bool lazy = 5 [default = false];
+  optional bool unverified_lazy = 15 [default = false];
+  optional bool deprecated = 3 [default = false];
+  optional bool weak = 10 [default = false];
+  optional bool debug_redact = 16 [default = false];
+
+  enum OptionRetention {
+    RETENTION_UNKNOWN = 0;
+    RETENTION_RUNTIME = 1;
+    RETENTION_SOURCE = 2;
+  }
+  optional OptionRetention retention = 17;
+
+  enum OptionTargetType {
+    TARGET_TYPE_UNKNOWN = 0;
+    TARGET_TYPE_FILE = 1;
+    TARGET_TYPE_EXTENSION_RANGE = 2;
+    TARGET_TYPE_MESSAGE = 3;
+    TARGET_TYPE_FIELD = 4;
+    TARGET_TYPE_ONEOF = 5;
+    TARGET_TYPE_ENUM = 6;
+    TARGET_TYPE_ENUM_ENTRY = 7;
+    TARGET_TYPE_SERVICE = 8;
+    TARGET_TYPE_METHOD = 9;
+  }
+  repeated OptionTargetType targets = 19;
+
+  message EditionDefault {
+    optional Edition edition = 3;
+    optional string value = 2;
+  }
+  repeated EditionDefault edition_defaults = 20;
+
+  optional FeatureSet features = 21;
+  optional FeatureSupport feature_support = 22;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+
+  reserved 4, 18;
+}
+
+message OneofOptions {
+  optional FeatureSet features = 1;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+}
+
+message EnumOptions {
+  optional bool allow_alias = 2;
+  optional bool deprecated = 3 [default = false];
+  optional bool deprecated_legacy_json_field_conflicts = 6 [deprecated = true];
+  optional FeatureSet features = 7;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+
+  reserved 5;
+}
+
+message EnumValueOptions {
+  optional bool deprecated = 1 [default = false];
+  optional FeatureSet features = 2;
+  optional bool debug_redact = 3 [default = false];
+  optional FeatureSupport feature_support = 4;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+}
+
+message ServiceOptions {
+  optional FeatureSet features = 34;
+  optional bool deprecated = 33 [default = false];
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+}
+
+message MethodOptions {
+  optional bool deprecated = 33 [default = false];
+
+  enum IdempotencyLevel {
+    IDEMPOTENCY_UNKNOWN = 0;
+    NO_SIDE_EFFECTS = 1;
+    IDEMPOTENT = 2;
+  }
+  optional IdempotencyLevel idempotency_level = 34 [default = IDEMPOTENCY_UNKNOWN];
+  optional FeatureSet features = 35;
+  repeated UninterpretedOption uninterpreted_option = 999;
+
+  extensions 1000 to max;
+}
+
+message UninterpretedOption {
+  message NamePart {
+    required string name_part = 1;
+    required bool is_extension = 2;
+  }
+  repeated NamePart name = 2;
+  optional string identifier_value = 3;
+  optional uint64 positive_int_value = 4;
+  optional int64 negative_int_value = 5;
+  optional double double_value = 6;
+  optional bytes string_value = 7;
+  optional string aggregate_value = 8;
+}
+
+message FeatureSet {
+  enum FieldPresence {
+    FIELD_PRESENCE_UNKNOWN = 0;
+    EXPLICIT = 1;
+    IMPLICIT = 2;
+    LEGACY_REQUIRED = 3;
+  }
+  optional FieldPresence field_presence = 1 [
+    retention = RETENTION_RUNTIME,
+    targets = TARGET_TYPE_FIELD,
+    targets = TARGET_TYPE_FILE,
+    edition_defaults = { edition: EDITION_PROTO2, value: "EXPLICIT" },
+    edition_defaults = { edition: EDITION_PROTO3, value: "IMPLICIT" },
+    edition_defaults = { edition: EDITION_2023, value: "EXPLICIT" }
+  ];
+
+  enum EnumType {
+    ENUM_TYPE_UNKNOWN = 0;
+    OPEN = 1;
+    CLOSED = 2;
+  }
+  optional EnumType enum_type = 2 [
+    retention = RETENTION_RUNTIME,
+    targets = TARGET_TYPE_ENUM,
+    targets = TARGET_TYPE_FILE,
+    edition_defaults = { edition: EDITION_PROTO2, value: "CLOSED" },
+    edition_defaults = { edition: EDITION_PROTO3, value: "OPEN" },
+    edition_defaults = { edition: EDITION_2023, value: "OPEN" }
+  ];
+
+  enum RepeatedFieldEncoding {
+    REPEATED_FIELD_ENCODING_UNKNOWN = 0;
+    PACKED = 1;
+    EXPANDED = 2;
+  }
+  optional RepeatedFieldEncoding repeated_field_encoding = 3 [
+    retention = RETENTION_RUNTIME,
+    targets = TARGET_TYPE_FIELD,
+    targets = TARGET_TYPE_FILE,
+    edition_defaults = { edition: EDITION_PROTO2, value: "EXPANDED" },
+    edition_defaults = { edition: EDITION_PROTO3, value: "PACKED" },
+    edition_defaults = { edition: EDITION_2023, value: "PACKED" }
+  ];
+
+  enum Utf8Validation {
+    UTF8_VALIDATION_UNKNOWN = 0;
+    VERIFY = 2;
+    NONE = 3;
+  }
+  optional Utf8Validation utf8_validation = 4 [
+    retention = RETENTION_RUNTIME,
+    targets = TARGET_TYPE_FIELD,
+    targets = TARGET_TYPE_FILE,
+    edition_defaults = { edition: EDITION_PROTO2, value: "NONE" },
+    edition_defaults = { edition: EDITION_PROTO3, value: "VERIFY" },
+    edition_defaults = { edition: EDITION_2023, value: "VERIFY" }
+  ];
+
+  enum MessageEncoding {
+    MESSAGE_ENCODING_UNKNOWN = 0;
+    LENGTH_PREFIXED = 1;
+    DELIMITED = 2;
+  }
+  optional MessageEncoding message_encoding = 5 [
+    retention = RETENTION_RUNTIME,
+    targets = TARGET_TYPE_FIELD,
+    targets = TARGET_TYPE_FILE,
+    edition_defaults = { edition: EDITION_PROTO2, value: "LENGTH_PREFIXED" },
+    edition_defaults = { edition: EDITION_2023, value: "LENGTH_PREFIXED" }
+  ];
+
+  enum JsonFormat {
+    JSON_FORMAT_UNKNOWN = 0;
+    ALLOW = 1;
+    LEGACY_BEST_EFFORT = 2;
+  }
+  optional JsonFormat json_format = 6 [
+    retention = RETENTION_RUNTIME,
+    targets = TARGET_TYPE_MESSAGE,
+    targets = TARGET_TYPE_ENUM,
+    targets = TARGET_TYPE_FILE,
+    edition_defaults = { edition: EDITION_PROTO2, value: "LEGACY_BEST_EFFORT" },
+    edition_defaults = { edition: EDITION_PROTO3, value: "ALLOW" },
+    edition_defaults = { edition: EDITION_2023, value: "ALLOW" }
+  ];
+
+  reserved 999;
+
+  extensions 1000 to 9994 [
+    declaration = {
+      number: 1000,
+      full_name: ".pb.cpp",
+      type: ".pb.CppFeatures"
+    },
+    declaration = {
+      number: 1001,
+      full_name: ".pb.java",
+      type: ".pb.JavaFeatures"
+    },
+    declaration = {
+      number: 1002,
+      full_name: ".pb.go",
+      type: ".pb.GoFeatures"
+    },
+    declaration = { number: 9990, full_name: ".pb.proto1" }
+  ];
+
+  extensions 9995 to 9999;
+  extensions 10000 to max;
+}
+
+message FeatureSetDefaults {
+  message FeatureSetEditionDefault {
+    optional Edition edition = 3;
+    optional FeatureSet overridable_features = 4;
+    optional FeatureSet fixed_features = 5;
+  }
+  repeated FeatureSetEditionDefault defaults = 1;
+  optional Edition minimum_edition = 4;
+  optional Edition maximum_edition = 5;
+}
+
+message SourceCodeInfo {
+  repeated Location location = 1;
+
+  message Location {
+    repeated int32 path = 1 [packed = true];
+    repeated int32 span = 2 [packed = true];
+    optional string leading_comments = 3;
+    optional string trailing_comments = 4;
+    repeated string leading_detached_comments = 6;
+  }
+}
+
+message GeneratedCodeInfo {
+  repeated Annotation annotation = 1;
+
+  message Annotation {
+    repeated int32 path = 1 [packed = true];
+    optional string source_file = 2;
+    optional int32 begin = 3;
+    optional int32 end = 4;
+
+    enum Semantic {
+      NONE = 0;
+      SET = 1;
+      ALIAS = 2;
+    }
+    optional Semantic semantic = 5;
+  }
+}
+
+enum Edition {
+  EDITION_UNKNOWN = 0;
+  EDITION_LEGACY = 900;
+  EDITION_PROTO2 = 998;
+  EDITION_PROTO3 = 999;
+  EDITION_2023 = 1000;
+  EDITION_2024 = 1001;
+  EDITION_1_TEST_ONLY = 1;
+  EDITION_2_TEST_ONLY = 2;
+  EDITION_99997_TEST_ONLY = 99997;
+  EDITION_99998_TEST_ONLY = 99998;
+  EDITION_99999_TEST_ONLY = 99999;
+  EDITION_MAX = 2147483647;
+}
+
+message FeatureSupport {
+  optional Edition edition_introduced = 1;
+  optional Edition edition_deprecated = 2;
+  optional string deprecation_warning = 3;
+  optional Edition edition_removed = 4;
+}
+"#;
+
+static DURATION_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option cc_enable_arenas = true;
+option go_package = "google.golang.org/protobuf/types/known/durationpb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "DurationProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+
+message Duration {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+"#;
+
+static EMPTY_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option go_package = "google.golang.org/protobuf/types/known/emptypb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "EmptyProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+option cc_enable_arenas = true;
+
+message Empty {}
+"#;
+
+static FIELD_MASK_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option java_package = "com.google.protobuf";
+option java_outer_classname = "FieldMaskProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+option go_package = "google.golang.org/protobuf/types/known/fieldmaskpb";
+option cc_enable_arenas = true;
+
+message FieldMask {
+  repeated string paths = 1;
+}
+"#;
+
+static SOURCE_CONTEXT_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option java_package = "com.google.protobuf";
+option java_outer_classname = "SourceContextProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+option go_package = "google.golang.org/protobuf/types/known/sourcecontextpb";
+
+message SourceContext {
+  string file_name = 1;
+}
+"#;
+
+static STRUCT_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option cc_enable_arenas = true;
+option go_package = "google.golang.org/protobuf/types/known/structpb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "StructProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+
+message Struct {
+  map<string, Value> fields = 1;
+}
+
+message Value {
+  oneof kind {
+    NullValue null_value = 1;
+    double number_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    Struct struct_value = 5;
+    ListValue list_value = 6;
+  }
+}
+
+enum NullValue {
+  NULL_VALUE = 0;
+}
+
+message ListValue {
+  repeated Value values = 1;
+}
+"#;
+
+static TIMESTAMP_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option cc_enable_arenas = true;
+option go_package = "google.golang.org/protobuf/types/known/timestamppb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "TimestampProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+
+message Timestamp {
+  int64 seconds = 1;
+  int32 nanos = 2;
+}
+"#;
+
+static TYPE_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/source_context.proto";
+
+option cc_enable_arenas = true;
+option java_package = "com.google.protobuf";
+option java_outer_classname = "TypeProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+option go_package = "google.golang.org/protobuf/types/known/typepb";
+
+message Type {
+  string name = 1;
+  repeated Field fields = 2;
+  repeated string oneofs = 3;
+  repeated Option options = 4;
+  SourceContext source_context = 5;
+  Syntax syntax = 6;
+  string edition = 7;
+}
+
+message Field {
+  enum Kind {
+    TYPE_UNKNOWN = 0;
+    TYPE_DOUBLE = 1;
+    TYPE_FLOAT = 2;
+    TYPE_INT64 = 3;
+    TYPE_UINT64 = 4;
+    TYPE_INT32 = 5;
+    TYPE_FIXED64 = 6;
+    TYPE_FIXED32 = 7;
+    TYPE_BOOL = 8;
+    TYPE_STRING = 9;
+    TYPE_GROUP = 10;
+    TYPE_MESSAGE = 11;
+    TYPE_BYTES = 12;
+    TYPE_UINT32 = 13;
+    TYPE_ENUM = 14;
+    TYPE_SFIXED32 = 15;
+    TYPE_SFIXED64 = 16;
+    TYPE_SINT32 = 17;
+    TYPE_SINT64 = 18;
+  }
+
+  enum Cardinality {
+    CARDINALITY_UNKNOWN = 0;
+    CARDINALITY_OPTIONAL = 1;
+    CARDINALITY_REQUIRED = 2;
+    CARDINALITY_REPEATED = 3;
+  }
+
+  Kind kind = 1;
+  Cardinality cardinality = 2;
+  int32 number = 3;
+  string name = 4;
+  string type_url = 6;
+  int32 oneof_index = 7;
+  bool packed = 8;
+  repeated Option options = 9;
+  string json_name = 10;
+  string default_value = 11;
+}
+
+message Enum {
+  string name = 1;
+  repeated EnumValue enumvalue = 2;
+  repeated Option options = 3;
+  SourceContext source_context = 4;
+  Syntax syntax = 5;
+  string edition = 6;
+}
+
+message EnumValue {
+  string name = 1;
+  int32 number = 2;
+  repeated Option options = 3;
+}
+
+message Option {
+  string name = 1;
+  Any value = 2;
+}
+
+enum Syntax {
+  SYNTAX_PROTO2 = 0;
+  SYNTAX_PROTO3 = 1;
+  SYNTAX_EDITIONS = 2;
+}
+"#;
+
+static WRAPPERS_PROTO: &str = r#"// Protocol Buffers - Google's data interchange format
+// Copyright 2008 Google Inc.  All rights reserved.
+
+syntax = "proto3";
+
+package google.protobuf;
+
+option cc_enable_arenas = true;
+option go_package = "google.golang.org/protobuf/types/known/wrapperspb";
+option java_package = "com.google.protobuf";
+option java_outer_classname = "WrappersProto";
+option java_multiple_files = true;
+option objc_class_prefix = "GPB";
+option csharp_namespace = "Google.Protobuf.WellKnownTypes";
+
+message DoubleValue {
+  double value = 1;
+}
+
+message FloatValue {
+  float value = 1;
+}
+
+message Int64Value {
+  int64 value = 1;
+}
+
+message UInt64Value {
+  uint64 value = 1;
+}
+
+message Int32Value {
+  int32 value = 1;
+}
+
+message UInt32Value {
+  uint32 value = 1;
+}
+
+message BoolValue {
+  bool value = 1;
+}
+
+message StringValue {
+  string value = 1;
+}
+
+message BytesValue {
+  bytes value = 1;
+}
+"#;

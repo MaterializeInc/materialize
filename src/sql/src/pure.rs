@@ -95,6 +95,7 @@ mod references;
 
 pub mod mysql;
 pub mod postgres;
+mod protobuf;
 pub mod sql_server;
 
 pub(crate) struct RequestedSourceExport<T> {
@@ -2513,6 +2514,12 @@ async fn compile_proto(
 
     // Compile .proto files into a file descriptor set.
     let mut source_tree = VirtualSourceTree::new();
+
+    // Add well-known types (e.g., google/protobuf/timestamp.proto) to the source
+    // tree. These are implicitly available to protoc but are typically not
+    // registered in the schema registry.
+    protobuf::add_well_known_types(source_tree.as_mut());
+
     for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
         source_tree.as_mut().add_file(
             Path::new(&subject.name),
