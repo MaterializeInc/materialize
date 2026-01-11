@@ -1,0 +1,256 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the EqualsNull optimizer notice.
+# This notice is generated when a query contains `= NULL` or `<> NULL` comparisons,
+# which almost always indicate a mistake (should use `IS NULL` instead).
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mz_notices TO true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t1(x int, y text);
+
+# Basic `= NULL` in WHERE clause should generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x = NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# `NULL = column` should also generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE NULL = x;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# `= NULL` in SELECT expression should generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT x = NULL FROM t1;
+----
+Explained Query:
+  Project (#2)
+    Map (null)
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# `<> NULL` in WHERE clause should generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x <> NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# `!= NULL` (alternative syntax) should also generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x != NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# `IS NULL` should NOT generate a notice (correct usage)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x IS NULL;
+----
+Explained Query:
+  Filter (#0{x}) IS NULL
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+  filter=((#0{x}) IS NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# `IS NOT NULL` should NOT generate a notice (correct usage)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x IS NOT NULL;
+----
+Explained Query:
+  Filter (#0{x}) IS NOT NULL
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+  filter=((#0{x}) IS NOT NULL)
+
+Target cluster: quickstart
+
+EOF
+
+# Regular equality comparison should NOT generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x = 5;
+----
+Explained Query:
+  Filter (#0{x} = 5)
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+  filter=((#0{x} = 5))
+
+Target cluster: quickstart
+
+EOF
+
+# Regular inequality comparison should NOT generate a notice
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x <> 5;
+----
+Explained Query:
+  Filter (#0{x} != 5)
+    ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+  filter=((#0{x} != 5))
+
+Target cluster: quickstart
+
+EOF
+
+# Multiple `= NULL` comparisons should only generate one notice (dedup)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x = NULL AND y = NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# Mixed `= NULL` and `<> NULL` should only generate one notice (dedup)
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM t1 WHERE x = NULL OR x <> NULL;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# Test various other SQL constructs that plan as equality comparisons
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT NULL IN (1,2,3);
+----
+Explained Query (fast path):
+  Constant
+    - (null)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT NULL NOT IN (1,2,3);
+----
+Explained Query (fast path):
+  Constant
+    - (null)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT NULLIF(NULL,7);
+----
+Explained Query (fast path):
+  Constant
+    - (null)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+    Hint: Use `IS NULL` or `IS NOT NULL` instead.
+
+EOF
+
+# Cleanup
+statement ok
+DROP TABLE t1;

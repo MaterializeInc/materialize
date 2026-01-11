@@ -29,14 +29,15 @@ use std::{fmt, iter};
 
 use mz_expr::{MirRelationExpr, MirScalarExpr};
 use mz_ore::id_gen::IdGen;
+use mz_ore::soft_panic_or_log;
 use mz_ore::stack::RecursionLimitError;
-use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use tracing::error;
 
 use crate::canonicalize_mfp::CanonicalizeMfp;
+use crate::collect_notices::CollectNotices;
 use crate::column_knowledge::ColumnKnowledge;
 use crate::dataflow::DataflowMetainfo;
 use crate::demand::Demand;
@@ -65,6 +66,7 @@ pub use dataflow::optimize_dataflow;
 pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
+pub mod collect_notices;
 pub mod column_knowledge;
 pub mod compound;
 pub mod cse;
@@ -733,7 +735,9 @@ impl Optimizer {
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = transforms![
+            // 0. `Transform`s that don't actually change the plan.
             Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()),
+            Box::new(CollectNotices),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(NonNullRequirements::default()),
@@ -974,15 +978,6 @@ impl Optimizer {
         ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
         let transform_result = self.transform(&mut relation, ctx);
-
-        // Make sure we are not swallowing any notice.
-        // TODO: we should actually wire up notices that come from here. This is not urgent, because
-        // currently notices can only come from the physical MIR optimizer (specifically,
-        // `LiteralConstraints`), and callers of this method are running the logical MIR optimizer.
-        soft_assert_or_log!(
-            ctx.df_meta.optimizer_notices.is_empty(),
-            "logical MIR optimization unexpectedly produced notices"
-        );
 
         match transform_result {
             Ok(_) => {

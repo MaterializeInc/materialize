@@ -1972,6 +1972,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_notices_for_equals_null,
+        desc: "emitting notices for `= NULL` and `<> NULL` comparisons (doesn't affect EXPLAIN)",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,

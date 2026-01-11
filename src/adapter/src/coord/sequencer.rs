@@ -1003,6 +1003,7 @@ pub(crate) fn emit_optimizer_notices(
     for notice in notices {
         let kind = OptimizerNoticeKind::from(notice);
         let notice_enabled = match kind {
+            OptimizerNoticeKind::EqualsNull => system_vars.enable_notices_for_equals_null(),
             OptimizerNoticeKind::IndexAlreadyExists => {
                 system_vars.enable_notices_for_index_already_exists()
             }
