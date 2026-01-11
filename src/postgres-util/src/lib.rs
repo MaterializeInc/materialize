@@ -14,7 +14,7 @@ pub mod replication;
 #[cfg(feature = "replication")]
 pub use replication::{
     available_replication_slots, drop_replication_slots, get_current_wal_lsn, get_max_wal_senders,
-    get_timeline_id, get_wal_level, validate_no_rls_policies,
+    get_timeline_history, get_timeline_id, get_wal_level, validate_no_rls_policies,
 };
 #[cfg(feature = "schemas")]
 pub mod desc;
@@ -29,6 +29,8 @@ pub use tunnel::{Client, Config, DEFAULT_SNAPSHOT_STATEMENT_TIMEOUT, TunnelConfi
 
 pub mod query;
 pub use query::simple_query_opt;
+
+pub const PG_FIRST_TIMELINE_ID: u64 = 1;
 
 /// An error representing pg, ssh, ssl, and other failures.
 #[derive(Debug, thiserror::Error)]
