@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"extractts\", propagates_nulls = true)]\nfn date_part_timestamp_timestamp_numeric(\n    units: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Numeric, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"extractts\")]\nfn date_part_timestamp_timestamp_numeric(\n    units: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Numeric, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,13 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartTimestampTimestamp
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for DatePartTimestampTimestampNumeric {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("extractts")
+    }
+}
+impl DatePartTimestampTimestampNumeric {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(date_part_timestamp_timestamp_numeric),
+            category: "Uncategorized",
+            signature: "extractts(units text, ts timestamp) -> numeric",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn date_part_timestamp_timestamp_numeric(

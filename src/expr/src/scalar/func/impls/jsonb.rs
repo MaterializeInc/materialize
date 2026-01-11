@@ -126,6 +126,18 @@ impl fmt::Display for CastJsonbToNumeric {
     }
 }
 
+impl CastJsonbToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "jsonb_to_numeric",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[sqlfunc(sqlname = "jsonb_to_boolean", is_monotone = true)]
 fn cast_jsonb_to_bool<'a>(a: JsonbRef<'a>) -> Result<bool, EvalError> {
     match a.into_datum() {

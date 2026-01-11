@@ -55,6 +55,17 @@ impl std::fmt::Display for ListContainsListRev {
         f.write_str("<@")
     }
 }
+impl ListContainsListRev {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(list_contains_list_rev),
+            category: "Uncategorized",
+            signature: "anylist <@ anylist -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn list_contains_list_rev<'a>(
     a: ExcludeNull<DatumList<'a>>,
     b: ExcludeNull<DatumList<'a>>,

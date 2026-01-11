@@ -22,6 +22,7 @@ use ::encoding::label::encoding_from_whatwg_label;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::{OffsetComponents, OffsetName, Tz};
 use dec::OrderedDecimal;
+use enum_kinds::EnumKind;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use mz_expr_derive::sqlfunc;
@@ -69,9 +70,56 @@ mod unmaterializable;
 mod variadic;
 
 pub use impls::*;
-pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
+pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc, UnaryFuncKind};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;
+
+/// Documentation for a function.
+#[derive(Debug, Serialize, Ord, PartialOrd, Clone, PartialEq, Eq, Hash)]
+pub struct FuncDoc {
+    /// A unique name of the function, not intended to be used by end users.
+    pub unique_name: &'static str,
+    /// The category of the function. Used to group functions for documentation purposes.
+    pub category: &'static str,
+    /// The signature of the function. Should follow the `func(arg type, ...) -> type)` pattern,
+    /// or `type operator type -> type` pattern for infix operators.
+    pub signature: &'static str,
+    /// Human-readable description of the function's behavior.
+    pub description: &'static str,
+    /// `true` if the function is unmaterializable, i.e., not usable in maintained objects.
+    pub unmaterializable: bool,
+    /// Optional URL relative to the documentation for further details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<&'static str>,
+    /// Human-readable version identifier when this function was added.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_added: Option<&'static str>,
+    /// Whether explicit time zone casts are necessary.
+    pub known_time_zone_limitation_cast: bool,
+    /// Whether the function has side effects.
+    pub side_effects: bool,
+    /// Alternative function name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<&'static str>,
+}
+
+impl FuncDoc {
+    /// Default, but without the trait to enable `const`.
+    const fn default() -> Self {
+        Self {
+            unique_name: "",
+            category: "",
+            signature: "",
+            description: "",
+            alias: None,
+            unmaterializable: false,
+            url: None,
+            version_added: None,
+            known_time_zone_limitation_cast: false,
+            side_effects: false,
+        }
+    }
+}
 
 /// The maximum size of the result strings of certain string functions, such as `repeat` and `lpad`.
 /// Chosen to be the smallest number to keep our tests passing without changing. 100MiB is probably
@@ -92,75 +140,46 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&
     }
 }
 
+/// Adds two int2 values and returns a int2 value. Errors on overflow.
 #[sqlfunc(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
+    category = "Numbers"
 )]
 fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -170,12 +189,7 @@ fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -271,7 +285,6 @@ fn add_date_interval(
     is_monotone = "(false, false)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
 )]
 fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
@@ -281,8 +294,7 @@ fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::Nai
 #[sqlfunc(
     is_monotone = "(true, false)",
     output_type = "Numeric",
-    sqlname = "round",
-    propagates_nulls = true
+    sqlname = "round"
 )]
 fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeric, EvalError> {
     let mut a = a.0;
@@ -331,14 +343,20 @@ fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeri
     }
 }
 
-#[sqlfunc(sqlname = "convert_from", propagates_nulls = true)]
-fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
+/// Convert data `a` from original encoding specified by `src_encoding` into `text`.
+///
+/// Only supports `utf-8` for now.
+#[sqlfunc(sqlname = "convert_from")]
+fn convert_from<'a>(a: &'a [u8], src_encoding: &str) -> Result<&'a str, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
+    let encoding_name = src_encoding
+        .to_lowercase()
+        .replace('_', "-")
+        .into_boxed_str();
 
     // Supporting other encodings is tracked by database-issues#797.
     if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some("utf-8") {
@@ -354,16 +372,23 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     }
 }
 
-#[sqlfunc]
+/// Encode `bytes` using the specified textual representation. Errors if the
+/// format is not recognized.
+#[sqlfunc(category = "String", url = "/sql/functions/encode")]
 fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
     let format = encoding::lookup_format(format)?;
     Ok(format.encode(bytes))
 }
 
-#[sqlfunc]
-fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
+/// Decode `text` using the specified textual representation. Errors if the
+/// text is not a valid representation in the specified format, or if the
+/// format is not recognized.
+///
+/// The maximum size of the result is 100 MiB.
+#[sqlfunc(category = "String", url = "/sql/functions/decode")]
+fn decode(text: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
-    let out = format.decode(string)?;
+    let out = format.decode(text)?;
     if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
         Err(EvalError::LengthTooLarge)
     } else {
@@ -371,14 +396,18 @@ fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     }
 }
 
-#[sqlfunc(sqlname = "length", propagates_nulls = true)]
-fn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {
+/// Number of code points in `a` after encoding.
+#[sqlfunc(sqlname = "length", category = "String")]
+fn encoded_bytes_char_length(a: &[u8], encoding_name: &str) -> Result<i32, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
     // [2]: https://encoding.spec.whatwg.org/
     // [3]: https://github.com/lifthrasiir/rust-encoding/blob/4e79c35ab6a351881a86dbff565c4db0085cc113/src/label.rs
-    let encoding_name = b.to_lowercase().replace('_', "-").into_boxed_str();
+    let encoding_name = encoding_name
+        .to_lowercase()
+        .replace('_', "-")
+        .into_boxed_str();
 
     let enc = match encoding_from_whatwg_label(&encoding_name) {
         Some(enc) => enc,
@@ -450,12 +479,7 @@ pub fn add_timestamp_months<T: TimestampLike>(
     Ok(CheckedTimestamp::from_timestamplike(new_dt)?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_numeric(
     a: OrderedDecimal<Numeric>,
     b: OrderedDecimal<Numeric>,
@@ -470,108 +494,103 @@ fn add_numeric(
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
     a.checked_add(&b)
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_int16(a: i16, b: i16) -> i16 {
     a & b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_int32(a: i32, b: i32) -> i32 {
     a & b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_int64(a: i64, b: i64) -> i64 {
     a & b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_uint16(a: u16, b: u16) -> u16 {
     a & b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_uint32(a: u32, b: u32) -> u32 {
     a & b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_uint64(a: u64, b: u64) -> u64 {
     a & b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "|")]
 fn bit_or_int16(a: i16, b: i16) -> i16 {
     a | b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "|")]
 fn bit_or_int32(a: i32, b: i32) -> i32 {
     a | b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "|")]
 fn bit_or_int64(a: i64, b: i64) -> i64 {
     a | b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "|")]
 fn bit_or_uint16(a: u16, b: u16) -> u16 {
     a | b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "|")]
 fn bit_or_uint32(a: u32, b: u32) -> u32 {
     a | b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "|")]
 fn bit_or_uint64(a: u64, b: u64) -> u64 {
     a | b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "#")]
 fn bit_xor_int16(a: i16, b: i16) -> i16 {
     a ^ b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "#")]
 fn bit_xor_int32(a: i32, b: i32) -> i32 {
     a ^ b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "#")]
 fn bit_xor_int64(a: i64, b: i64) -> i64 {
     a ^ b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "#")]
 fn bit_xor_uint16(a: u16, b: u16) -> u16 {
     a ^ b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "#")]
 fn bit_xor_uint32(a: u32, b: u32) -> u32 {
     a ^ b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "#", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "#")]
 fn bit_xor_uint64(a: u64, b: u64) -> u64 {
     a ^ b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_left_int16(a: i16, b: i32) -> i16 {
@@ -583,7 +602,7 @@ fn bit_shift_left_int16(a: i16, b: i32) -> i16 {
     lhs.wrapping_shl(rhs) as i16
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_left_int32(lhs: i32, rhs: i32) -> i32 {
@@ -591,7 +610,7 @@ fn bit_shift_left_int32(lhs: i32, rhs: i32) -> i32 {
     lhs.wrapping_shl(rhs)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_left_int64(lhs: i64, rhs: i32) -> i64 {
@@ -599,7 +618,7 @@ fn bit_shift_left_int64(lhs: i64, rhs: i32) -> i64 {
     lhs.wrapping_shl(rhs)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_left_uint16(a: u16, b: u32) -> u16 {
@@ -611,24 +630,19 @@ fn bit_shift_left_uint16(a: u16, b: u32) -> u16 {
     lhs.wrapping_shl(rhs) as u16
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<<", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<<")]
 fn bit_shift_left_uint32(a: u32, b: u32) -> u32 {
     let lhs = a;
     let rhs = b;
     lhs.wrapping_shl(rhs)
 }
 
-#[sqlfunc(
-    output_type = "u64",
-    is_infix_op = true,
-    sqlname = "<<",
-    propagates_nulls = true
-)]
+#[sqlfunc(output_type = "u64", is_infix_op = true, sqlname = "<<")]
 fn bit_shift_left_uint64(lhs: u64, rhs: u32) -> u64 {
     lhs.wrapping_shl(rhs)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = ">>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = ">>")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_right_int16(lhs: i16, rhs: i32) -> i16 {
@@ -640,21 +654,21 @@ fn bit_shift_right_int16(lhs: i16, rhs: i32) -> i16 {
     lhs.wrapping_shr(rhs) as i16
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = ">>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = ">>")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_right_int32(lhs: i32, rhs: i32) -> i32 {
     lhs.wrapping_shr(rhs as u32)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = ">>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = ">>")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_right_int64(lhs: i64, rhs: i32) -> i64 {
     lhs.wrapping_shr(rhs as u32)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = ">>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = ">>")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn bit_shift_right_uint16(lhs: u16, rhs: u32) -> u16 {
@@ -665,85 +679,50 @@ fn bit_shift_right_uint16(lhs: u16, rhs: u32) -> u16 {
     lhs.wrapping_shr(rhs) as u16
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = ">>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = ">>")]
 fn bit_shift_right_uint32(lhs: u32, rhs: u32) -> u32 {
     lhs.wrapping_shr(rhs)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = ">>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = ">>")]
 fn bit_shift_right_uint64(lhs: u64, rhs: u32) -> u64 {
     lhs.wrapping_shr(rhs)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_sub(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_sub(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_sub(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     a.checked_sub(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} - {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     a.checked_sub(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} - {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     a.checked_sub(b)
         .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} - {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let difference = a - b;
     if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -753,12 +732,7 @@ fn sub_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     let difference = a - b;
     if difference.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -768,12 +742,7 @@ fn sub_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_numeric(
     a: OrderedDecimal<Numeric>,
     b: OrderedDecimal<Numeric>,
@@ -791,8 +760,7 @@ fn sub_numeric(
 #[sqlfunc(
     is_monotone = "(true, true)",
     output_type = "Interval",
-    sqlname = "age",
-    propagates_nulls = true
+    sqlname = "age"
 )]
 fn age_timestamp(
     a: CheckedTimestamp<chrono::NaiveDateTime>,
@@ -801,7 +769,7 @@ fn age_timestamp(
     Ok(a.age(&b)?)
 }
 
-#[sqlfunc(is_monotone = "(true, true)", sqlname = "age", propagates_nulls = true)]
+#[sqlfunc(is_monotone = "(true, true)", sqlname = "age")]
 fn age_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
@@ -827,12 +795,7 @@ fn sub_timestamp_tz(
         .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_date(a: Date, b: Date) -> i32 {
     a - b
 }
@@ -843,25 +806,14 @@ fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Result<Interval, Eval
         .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "Interval",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
     b.checked_neg()
         .and_then(|b| b.checked_add(&a))
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} - {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_date_interval(
     date: Date,
     interval: Interval,
@@ -878,75 +830,40 @@ fn sub_date_interval(
     Ok(dt.try_into()?)
 }
 
-#[sqlfunc(
-    is_monotone = "(false, false)",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "-")]
 fn sub_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_sub_signed(interval.duration_as_chrono());
     t
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_mul(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_mul(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_mul(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     a.checked_mul(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} * {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     a.checked_mul(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} * {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     a.checked_mul(b)
         .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} * {b}").into()))
@@ -956,7 +873,6 @@ fn mul_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     is_monotone = (true, true),
     is_infix_op = true,
     sqlname = "*",
-    propagates_nulls = true
 )]
 fn mul_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let product = a * b;
@@ -969,12 +885,7 @@ fn mul_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     let product = a * b;
     if product.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -986,12 +897,7 @@ fn mul_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "*")]
 fn mul_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     let mut cx = numeric::cx_datum();
     cx.mul(&mut a, &b);
@@ -1006,23 +912,13 @@ fn mul_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(false, false)",
-    is_infix_op = true,
-    sqlname = "*",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "*")]
 fn mul_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {
     a.checked_mul(b)
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} * {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1032,12 +928,7 @@ fn div_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1047,12 +938,7 @@ fn div_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1062,12 +948,7 @@ fn div_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1076,12 +957,7 @@ fn div_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1090,12 +966,7 @@ fn div_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1104,12 +975,7 @@ fn div_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     if b == 0.0f32 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
@@ -1125,12 +991,7 @@ fn div_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     if b == 0.0f64 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
@@ -1146,12 +1007,7 @@ fn div_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, false)", is_infix_op = true, sqlname = "/")]
 fn div_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     let mut cx = numeric::cx_datum();
 
@@ -1172,12 +1028,7 @@ fn div_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(false, false)",
-    is_infix_op = true,
-    sqlname = "/",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(false, false)", is_infix_op = true, sqlname = "/")]
 fn div_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {
     if b == 0.0 {
         Err(EvalError::DivisionByZero)
@@ -1187,7 +1038,7 @@ fn div_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1196,7 +1047,7 @@ fn mod_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1205,7 +1056,7 @@ fn mod_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1214,7 +1065,7 @@ fn mod_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1223,7 +1074,7 @@ fn mod_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1232,7 +1083,7 @@ fn mod_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     if b == 0 {
         Err(EvalError::DivisionByZero)
@@ -1241,7 +1092,7 @@ fn mod_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     if b == 0.0 {
         Err(EvalError::DivisionByZero)
@@ -1250,7 +1101,7 @@ fn mod_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     if b == 0.0 {
         Err(EvalError::DivisionByZero)
@@ -1259,7 +1110,7 @@ fn mod_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "%", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "%")]
 fn mod_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     if b.is_zero() {
         return Err(EvalError::DivisionByZero);
@@ -1286,7 +1137,7 @@ fn log_guard_numeric(val: &Numeric, function_name: &str) -> Result<(), EvalError
     Ok(())
 }
 
-#[sqlfunc(sqlname = "log", propagates_nulls = true)]
+#[sqlfunc(sqlname = "log")]
 fn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError> {
     log_guard_numeric(&a, "log")?;
     log_guard_numeric(&b, "log")?;
@@ -1323,7 +1174,7 @@ fn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
+#[sqlfunc]
 fn power(a: f64, b: f64) -> Result<f64, EvalError> {
     if a == 0.0 && b.is_sign_negative() {
         return Err(EvalError::Undefined(
@@ -1345,12 +1196,12 @@ fn power(a: f64, b: f64) -> Result<f64, EvalError> {
     Ok(res)
 }
 
-#[sqlfunc(propagates_nulls = true)]
+#[sqlfunc]
 fn uuid_generate_v5(a: uuid::Uuid, b: &str) -> uuid::Uuid {
     uuid::Uuid::new_v5(&a, b.as_bytes())
 }
 
-#[sqlfunc(output_type = "Numeric", propagates_nulls = true)]
+#[sqlfunc]
 fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     if a.is_zero() {
         if b.is_zero() {
@@ -1380,7 +1231,10 @@ fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
+/// Return the `index`th bit from `bytes`, where the left-most bit in `bytes` is at the 0th position.
+///
+/// Returns an error if the index is out of range.
+#[sqlfunc]
 fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
@@ -1400,7 +1254,10 @@ fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     Ok(i32::from(i))
 }
 
-#[sqlfunc(propagates_nulls = true)]
+/// Return the `index`th byte from `bytes`, where the left-most byte in `bytes` is at the 0th position.
+///
+/// Returns an error if the index is out of range.
+#[sqlfunc]
 fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
@@ -1412,12 +1269,18 @@ fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
     Ok(i32::from(*i))
 }
 
-#[sqlfunc(sqlname = "constant_time_compare_bytes", propagates_nulls = true)]
+/// Returns `true` if the arrays are identical, otherwise returns `false`.
+/// The implementation mitigates timing attacks by making a best-effort attempt to
+/// execute in constant time if the arrays have the same length, regardless of their contents.
+#[sqlfunc(sqlname = "constant_time_eq")]
 pub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
     bool::from(a.ct_eq(b))
 }
 
-#[sqlfunc(sqlname = "constant_time_compare_strings", propagates_nulls = true)]
+/// Returns `true` if the strings are identical, otherwise returns `false`.
+/// The implementation mitigates timing attacks by making a best-effort attempt to
+/// execute in constant time if the strings have the same length, regardless of their contents.
+#[sqlfunc(sqlname = "constant_time_eq")]
 pub fn constant_time_eq_string(a: &str, b: &str) -> bool {
     bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }
@@ -1431,27 +1294,27 @@ where
     Datum::from(range.contains_elem(&elem))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn range_contains_i32<'a>(a: Range<Datum<'a>>, b: i32) -> bool {
     a.contains_elem(&b)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn range_contains_i64<'a>(a: Range<Datum<'a>>, elem: i64) -> bool {
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn range_contains_date<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn range_contains_numeric<'a>(a: Range<Datum<'a>>, elem: OrderedDecimal<Numeric>) -> bool {
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn range_contains_timestamp<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<NaiveDateTime>,
@@ -1459,7 +1322,7 @@ fn range_contains_timestamp<'a>(
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn range_contains_timestamp_tz<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<DateTime<Utc>>,
@@ -1467,27 +1330,27 @@ fn range_contains_timestamp_tz<'a>(
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
 fn range_contains_i32_rev<'a>(a: Range<Datum<'a>>, b: i32) -> bool {
     a.contains_elem(&b)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
 fn range_contains_i64_rev<'a>(a: Range<Datum<'a>>, elem: i64) -> bool {
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
 fn range_contains_date_rev<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
 fn range_contains_numeric_rev<'a>(a: Range<Datum<'a>>, elem: OrderedDecimal<Numeric>) -> bool {
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
 fn range_contains_timestamp_rev<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<NaiveDateTime>,
@@ -1495,7 +1358,7 @@ fn range_contains_timestamp_rev<'a>(
     a.contains_elem(&elem)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "<@", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
 fn range_contains_timestamp_tz_rev<'a>(
     a: Range<Datum<'a>>,
     elem: CheckedTimestamp<DateTime<Utc>>,
@@ -1513,17 +1376,12 @@ macro_rules! range_fn {
         paste::paste! {
 
             #[sqlfunc(
-                output_type = "bool",
                 is_infix_op = true,
                 sqlname = $sqlname,
-                propagates_nulls = true
             )]
-            fn [< range_ $fn >]<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
+            fn [< range_ $fn >]<'a>(l: Range<Datum<'a>>, r: Range<Datum<'a>>) -> bool
             {
-                if a.is_null() || b.is_null() { return Datum::Null }
-                let l = a.unwrap_range();
-                let r = b.unwrap_range();
-                Datum::from(Range::<Datum<'a>>::$range_fn(&l, &r))
+                Range::<Datum<'a>>::$range_fn(&l, &r)
             }
         }
     };
@@ -1638,13 +1496,14 @@ fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a >= b
 }
 
-#[sqlfunc(sqlname = "tocharts", propagates_nulls = true)]
+/// Converts a timestamp into a string using the specified format
+#[sqlfunc(sqlname = "tocharts")]
 fn to_char_timestamp_format(ts: CheckedTimestamp<chrono::NaiveDateTime>, format: &str) -> String {
     let fmt = DateTimeFormat::compile(format);
     fmt.render(&*ts)
 }
 
-#[sqlfunc(sqlname = "tochartstz", propagates_nulls = true)]
+#[sqlfunc(sqlname = "tochartstz")]
 fn to_char_timestamp_tz_format(
     ts: CheckedTimestamp<chrono::DateTime<Utc>>,
     format: &str,
@@ -1744,10 +1603,10 @@ fn jsonb_get_path_stringify<'a>(
     jsonb_stringify(json.into_datum(), temp_storage)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "?", propagates_nulls = true)]
-fn jsonb_contains_string<'a>(a: Datum<'a>, k: &str) -> bool {
+#[sqlfunc(is_infix_op = true, sqlname = "?")]
+fn jsonb_contains_string<'a>(a: ExcludeNull<Datum<'a>>, k: &str) -> bool {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
-    match a {
+    match *a {
         Datum::List(list) => list.iter().any(|k2| Datum::from(k) == k2),
         Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2),
         Datum::String(string) => string == k,
@@ -1755,7 +1614,7 @@ fn jsonb_contains_string<'a>(a: Datum<'a>, k: &str) -> bool {
     }
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "?", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "?")]
 // Map keys are always text.
 fn map_contains_key<'a>(map: DatumMap<'a>, k: &str) -> bool {
     map.iter().any(|(k2, _v)| k == k2)
@@ -1768,14 +1627,14 @@ fn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {
         .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "?|", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "?|")]
 fn map_contains_any_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {
     keys.elements()
         .iter()
         .any(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
 fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
     b.iter().all(|(b_key, b_val)| {
         map_a
@@ -1927,11 +1786,7 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, k: &str, temp_storage: &'a RowArena) ->
     }
 }
 
-#[sqlfunc(
-    sqlname = "extractiv",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "extractiv")]
 fn date_part_interval_numeric(units: &str, b: Interval) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<Numeric>(units, b)?),
@@ -1939,11 +1794,7 @@ fn date_part_interval_numeric(units: &str, b: Interval) -> Result<Numeric, EvalE
     }
 }
 
-#[sqlfunc(
-    sqlname = "date_partiv",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "date_partiv")]
 fn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<f64>(units, b)?),
@@ -1951,11 +1802,7 @@ fn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    sqlname = "extractt",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "extractt")]
 fn date_part_time_numeric(units: &str, b: chrono::NaiveTime) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<Numeric>(units, b)?),
@@ -1963,11 +1810,7 @@ fn date_part_time_numeric(units: &str, b: chrono::NaiveTime) -> Result<Numeric, 
     }
 }
 
-#[sqlfunc(
-    sqlname = "date_partt",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "date_partt")]
 fn date_part_time_f64(units: &str, b: chrono::NaiveTime) -> Result<f64, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<f64>(units, b)?),
@@ -1975,7 +1818,7 @@ fn date_part_time_f64(units: &str, b: chrono::NaiveTime) -> Result<f64, EvalErro
     }
 }
 
-#[sqlfunc(sqlname = "extractts", propagates_nulls = true)]
+#[sqlfunc(sqlname = "extractts")]
 fn date_part_timestamp_timestamp_numeric(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -1986,7 +1829,7 @@ fn date_part_timestamp_timestamp_numeric(
     }
 }
 
-#[sqlfunc(sqlname = "extracttstz", propagates_nulls = true)]
+#[sqlfunc(sqlname = "extracttstz")]
 fn date_part_timestamp_timestamp_tz_numeric(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -1997,7 +1840,7 @@ fn date_part_timestamp_timestamp_tz_numeric(
     }
 }
 
-#[sqlfunc(sqlname = "date_partts", propagates_nulls = true)]
+#[sqlfunc(sqlname = "date_partts")]
 fn date_part_timestamp_timestamp_f64(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2008,7 +1851,7 @@ fn date_part_timestamp_timestamp_f64(
     }
 }
 
-#[sqlfunc(sqlname = "date_parttstz", propagates_nulls = true)]
+#[sqlfunc(sqlname = "date_parttstz")]
 fn date_part_timestamp_timestamp_tz_f64(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2019,7 +1862,7 @@ fn date_part_timestamp_timestamp_tz_f64(
     }
 }
 
-#[sqlfunc(sqlname = "extractd", propagates_nulls = true)]
+#[sqlfunc(sqlname = "extractd")]
 fn extract_date_units(units: &str, b: Date) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(extract_date_inner(units, b.into())?),
@@ -2095,7 +1938,7 @@ fn date_bin_timestamp_tz(
     date_bin(stride, source, origin)
 }
 
-#[sqlfunc(sqlname = "date_truncts", propagates_nulls = true)]
+#[sqlfunc(sqlname = "date_truncts")]
 fn date_trunc_units_timestamp(
     units: &str,
     ts: CheckedTimestamp<NaiveDateTime>,
@@ -2106,7 +1949,7 @@ fn date_trunc_units_timestamp(
     }
 }
 
-#[sqlfunc(sqlname = "date_trunctstz", propagates_nulls = true)]
+#[sqlfunc(sqlname = "date_trunctstz")]
 fn date_trunc_units_timestamp_tz(
     units: &str,
     ts: CheckedTimestamp<DateTime<Utc>>,
@@ -2117,7 +1960,7 @@ fn date_trunc_units_timestamp_tz(
     }
 }
 
-#[sqlfunc(sqlname = "date_trunciv", propagates_nulls = true)]
+#[sqlfunc(sqlname = "date_trunciv")]
 fn date_trunc_interval(units: &str, mut interval: Interval) -> Result<Interval, EvalError> {
     let dtf = units
         .parse()
@@ -2199,7 +2042,6 @@ fn timezone_interval_timestamptz(a: Datum<'_>, b: Datum<'_>) -> Result<Datum<'st
                 ].into(),
                 custom_id: None,
             }.nullable(true)"#,
-    propagates_nulls = true,
     introduces_nulls = false
 )]
 fn timezone_offset<'a>(
@@ -2223,11 +2065,7 @@ fn timezone_offset<'a>(
 
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if
 /// any of the listed privileges are contained in the mz_aclitem.
-#[sqlfunc(
-    sqlname = "mz_aclitem_contains_privilege",
-    output_type = "bool",
-    propagates_nulls = true
-)]
+#[sqlfunc(sqlname = "mz_aclitem_contains_privilege", output_type = "bool")]
 fn mz_acl_item_contains_privilege(
     mz_acl_item: MzAclItem,
     privileges: &str,
@@ -2238,7 +2076,11 @@ fn mz_acl_item_contains_privilege(
     Ok(contains)
 }
 
-#[sqlfunc]
+/// Given a qualified identifier like `a."b".c`, splits into an array of the
+/// constituent identifiers with quoting removed and escape sequences decoded.
+/// Extra characters after the last identifier are ignored unless the
+/// `strict_mode` parameter is `true` (defaults to `false`).
+#[sqlfunc(category = "String")]
 // transliterated from postgres/src/backend/utils/adt/misc.c
 fn parse_ident<'a>(ident: &'a str, strict: bool) -> Result<ArrayRustType<Cow<'a, str>>, EvalError> {
     fn is_ident_start(c: char) -> bool {
@@ -2337,28 +2179,26 @@ fn regexp_split_to_array_re<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
-#[sqlfunc(propagates_nulls = true)]
-fn pretty_sql<'a>(sql: &str, width: i32, temp_storage: &'a RowArena) -> Result<&'a str, EvalError> {
+#[sqlfunc]
+fn pretty_sql(sql: &str, width: i32) -> Result<String, EvalError> {
     let width =
         usize::try_from(width).map_err(|_| EvalError::PrettyError("invalid width".into()))?;
-    let pretty = pretty_str(
-        sql,
-        PrettyConfig {
-            width,
-            format_mode: FormatMode::Simple,
-        },
-    )
-    .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
-    let pretty = temp_storage.push_string(pretty);
-    Ok(pretty)
+    let config = PrettyConfig {
+        width,
+        format_mode: FormatMode::Simple,
+    };
+    pretty_str(sql, config).map_err(|e| EvalError::PrettyError(e.to_string().into()))
 }
 
-#[sqlfunc(propagates_nulls = true)]
+#[sqlfunc]
 fn starts_with(a: &str, b: &str) -> bool {
     a.starts_with(b)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, EnumKind,
+)]
+#[enum_kind(BinaryFuncKind)]
 pub enum BinaryFunc {
     AddInt16(AddInt16),
     AddInt32(AddInt32),
@@ -4925,7 +4765,8 @@ where
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
+/// The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
+#[sqlfunc(category = "String", signature = "position(sub: str IN s: str) -> int")]
 fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     let char_index = string.find(substring);
 
@@ -4943,14 +4784,16 @@ fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     }
 }
 
+/// The first `n` characters of `string`.
+/// If `n` is negative, all but the last `|n|` characters of `string`.
 #[sqlfunc(
     propagates_nulls = true,
     // `left` is unfortunately not monotonic (at least for negative second arguments),
     // because 'aa' < 'z', but `left(_, -1)` makes 'a' > ''.
     is_monotone = (false, false)
 )]
-fn left<'a>(string: &'a str, b: i32) -> Result<&'a str, EvalError> {
-    let n = i64::from(b);
+fn left<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
+    let n = i64::from(n);
 
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
 
@@ -5000,26 +4843,26 @@ fn right<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     Ok(&string[start_in_bytes..])
 }
 
-#[sqlfunc(sqlname = "btrim", propagates_nulls = true)]
-fn trim<'a>(a: &'a str, trim_chars: &str) -> &'a str {
-    a.trim_matches(|c| trim_chars.contains(c))
+/// Trim any character in `trim_chars` from both sides of `s`.
+#[sqlfunc(sqlname = "btrim", category = "String")]
+fn trim<'a>(s: &'a str, trim_chars: &str) -> &'a str {
+    s.trim_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(sqlname = "ltrim", propagates_nulls = true)]
+/// Trim any character in `trim_chars` from the left side of `a`.
+#[sqlfunc(sqlname = "ltrim", category = "String")]
 fn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_start_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(sqlname = "rtrim", propagates_nulls = true)]
+/// Trim any character in `trim_chars` from the right side of `a`.
+#[sqlfunc(sqlname = "rtrim", category = "String")]
 fn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_end_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(
-    sqlname = "array_length",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+/// Returns the length of the specified dimension of the array `a`.
+#[sqlfunc(category = "Array")]
 fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     let i = match usize::try_from(b) {
         Ok(0) | Err(_) => return Ok(None),
@@ -5035,13 +4878,8 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     })
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_lower",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+/// Returns the lower bound of the specified dimension of the array `a`.
+#[sqlfunc(category = "Array")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
@@ -5054,11 +4892,13 @@ fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
     }
 }
 
+/// Removes all elements equal to `b` from one-dimensional array `arr`.
 #[sqlfunc(
     output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
     sqlname = "array_remove",
     propagates_nulls = false,
-    introduces_nulls = false
+    introduces_nulls = false,
+    category = "Array"
 )]
 fn array_remove<'a>(
     arr: Array<'a>,
@@ -5086,13 +4926,7 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_upper",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
@@ -5250,59 +5084,82 @@ fn array_array_concat<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
+/// Concatenates `a` and `b`. Returns the other argument if either is NULL, and NULL if both
+/// arguments are NULL.
 #[sqlfunc(
     output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
-    introduces_nulls = false
+    introduces_nulls = false,
+    alias = "list_cat",
+    category = "List"
 )]
-fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    if a.is_null() {
-        return b;
-    } else if b.is_null() {
-        return a;
+fn list_list_concat<'a>(
+    a: Option<DatumList<'a>>,
+    b: Option<DatumList<'a>>,
+    temp_storage: &'a RowArena,
+) -> Option<DatumList<'a>> {
+    match (a, b) {
+        (None, b) => b,
+        (a, None) => a,
+        (Some(a), Some(b)) => {
+            let a = a.iter();
+            let b = b.iter();
+
+            let datum = temp_storage.make_datum(|packer| packer.push_list(a.chain(b)));
+            Some(datum.unwrap_list())
+        }
     }
-
-    let a = a.unwrap_list().iter();
-    let b = b.unwrap_list().iter();
-
-    temp_storage.make_datum(|packer| packer.push_list(a.chain(b)))
 }
 
+/// Appends `e` to `list`.
 #[sqlfunc(
     output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
-    introduces_nulls = false
+    introduces_nulls = false,
+    alias = "list_append",
+    category = "List"
 )]
-fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn list_element_concat<'a>(
+    list: Option<DatumList<'a>>,
+    e: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
-            if !a.is_null() {
-                for elem in a.unwrap_list().iter() {
+            if let Some(a) = list {
+                for elem in a.iter() {
                     packer.push(elem);
                 }
             }
-            packer.push(b);
+            packer.push(e);
         })
     })
 }
 
+/// Prepends `a` to `b`.
 #[sqlfunc(
     output_type_expr = "input_type_b.scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
-    introduces_nulls = false
+    introduces_nulls = false,
+    alias = "list_prepend",
+    category = "List"
 )]
-fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn element_list_concat<'a>(
+    a: Datum<'a>,
+    b: Option<DatumList<'a>>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
             packer.push(a);
-            if !b.is_null() {
-                for elem in b.unwrap_list().iter() {
+            if let Some(b) = b {
+                for elem in b.iter() {
                     packer.push(elem);
                 }
             }
@@ -5316,57 +5173,43 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
-        packer.push_list_with(|packer| {
-            for elem in a.iter() {
-                if elem != b {
-                    packer.push(elem);
+fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> DatumList<'a> {
+    temp_storage
+        .make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                for elem in a.iter() {
+                    if elem != b {
+                        packer.push(elem);
+                    }
                 }
-            }
+            })
         })
-    })
+        .unwrap_list()
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_string<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a.as_bytes();
-    digest_inner(to_digest, b, temp_storage)
+#[sqlfunc(sqlname = "digest")]
+fn digest_string(string: &str, function: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(string.as_bytes(), function)
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_bytes<'a>(a: &[u8], b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a;
-    digest_inner(to_digest, b, temp_storage)
+#[sqlfunc(sqlname = "digest")]
+fn digest_bytes(bytes: &[u8], function: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(bytes, function)
 }
 
-fn digest_inner<'a>(
-    bytes: &[u8],
-    digest_fn: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let bytes = match digest_fn {
-        "md5" => Md5::digest(bytes).to_vec(),
-        "sha1" => Sha1::digest(bytes).to_vec(),
-        "sha224" => Sha224::digest(bytes).to_vec(),
-        "sha256" => Sha256::digest(bytes).to_vec(),
-        "sha384" => Sha384::digest(bytes).to_vec(),
-        "sha512" => Sha512::digest(bytes).to_vec(),
-        other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
-    };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+fn digest_inner(bytes: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
+    match digest_fn {
+        "md5" => Ok(Md5::digest(bytes).to_vec()),
+        "sha1" => Ok(Sha1::digest(bytes).to_vec()),
+        "sha224" => Ok(Sha224::digest(bytes).to_vec()),
+        "sha256" => Ok(Sha256::digest(bytes).to_vec()),
+        "sha384" => Ok(Sha384::digest(bytes).to_vec()),
+        "sha512" => Ok(Sha512::digest(bytes).to_vec()),
+        other => Err(EvalError::InvalidHashAlgorithm(other.into())),
+    }
 }
 
+/// Test
 #[sqlfunc(
     output_type = "String",
     sqlname = "mz_render_typmod",

@@ -119,6 +119,18 @@ impl fmt::Display for CastTimestampToTimestampTz {
     }
 }
 
+impl CastTimestampToTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "timestamp_to_timestamp_with_time_zone",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AdjustTimestampPrecision {
     pub from: Option<TimestampPrecision>,
@@ -164,6 +176,18 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampPrecision {
 impl fmt::Display for AdjustTimestampPrecision {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("adjust_timestamp_precision")
+    }
+}
+
+impl AdjustTimestampPrecision {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "adjust_timestamp_precision",
+            category: "Timstamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -215,6 +239,18 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     }
 }
 
+impl CastTimestampTzToTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "timestamp_with_time_zone_to_timestamp",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
@@ -260,6 +296,18 @@ impl<'a> EagerUnaryFunc<'a> for AdjustTimestampTzPrecision {
 impl fmt::Display for AdjustTimestampTzPrecision {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("adjust_timestamp_with_time_zone_precision")
+    }
+}
+
+impl AdjustTimestampTzPrecision {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "ajust_timestamp_with_time_zone_precision",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -330,6 +378,19 @@ impl fmt::Display for ExtractInterval {
     }
 }
 
+impl ExtractInterval {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "extract_interval",
+            category: "Timestamp",
+            signature: "EXTRACT (unit FROM interval) -> numeric",
+            description: "Extracts the specified `unit` from the given `interval` and returns it as a numeric value.",
+            url: Some("/sql/functions/extract"),
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DatePartInterval(pub DateTimeUnits);
 
@@ -349,6 +410,18 @@ impl<'a> EagerUnaryFunc<'a> for DatePartInterval {
 impl fmt::Display for DatePartInterval {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "date_part_{}_iv", self.0)
+    }
+}
+
+impl DatePartInterval {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_part_interval",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -424,6 +497,19 @@ impl fmt::Display for ExtractTimestamp {
     }
 }
 
+impl ExtractTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "extract_timestamp",
+            category: "Timestamp",
+            signature: "EXTRACT (unit FROM timestamp) -> numeric",
+            description: "Extracts the specified `unit` from the given `interval` and returns it as a numeric value.",
+            url: Some("/sql/functions/extract"),
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
@@ -453,6 +539,19 @@ impl fmt::Display for ExtractTimestampTz {
     }
 }
 
+impl ExtractTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "extract_tstz",
+            category: "Timestamp",
+            signature: "EXTRACT (unit FROM timestamp with timezone) -> numeric",
+            description: "Extracts the specified `unit` from the given `timestamp with timezone` and returns it as a numeric value.",
+            url: Some("/sql/functions/extract"),
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
@@ -475,6 +574,18 @@ impl fmt::Display for DatePartTimestamp {
     }
 }
 
+impl DatePartTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_part_timestamp",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
@@ -494,6 +605,18 @@ impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
 impl fmt::Display for DatePartTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "date_part_{}_tstz", self.0)
+    }
+}
+
+impl DatePartTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_part_tstz",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -555,6 +678,18 @@ impl fmt::Display for DateTruncTimestamp {
     }
 }
 
+impl DateTruncTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_truc_ts",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
@@ -581,6 +716,17 @@ impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
 impl fmt::Display for DateTruncTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "date_trunc_{}_tstz", self.0)
+    }
+}
+impl DateTruncTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_truc_tstz",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -665,6 +811,18 @@ impl fmt::Display for TimezoneTimestamp {
     }
 }
 
+impl TimezoneTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "timezone_ts",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct TimezoneTimestampTz(pub Timezone);
 
@@ -689,6 +847,17 @@ impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
 impl fmt::Display for TimezoneTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "timezone_{}_tstz", self.0)
+    }
+}
+impl TimezoneTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "timezone_tstz",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -717,6 +886,18 @@ impl fmt::Display for ToCharTimestamp {
     }
 }
 
+impl ToCharTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "tocharts",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
 pub struct ToCharTimestampTz {
     pub format_string: String,
@@ -739,5 +920,17 @@ impl<'a> EagerUnaryFunc<'a> for ToCharTimestampTz {
 impl fmt::Display for ToCharTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "tochartstz[{}]", self.format_string)
+    }
+}
+
+impl ToCharTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "tochartstz",
+            category: "Timestamp",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

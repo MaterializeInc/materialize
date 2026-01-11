@@ -71,6 +71,18 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
+impl CastDateToTimestamp {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_to_timestamp",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
@@ -108,6 +120,18 @@ impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
 impl fmt::Display for CastDateToTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("date_to_timestamp_with_timezone")
+    }
+}
+
+impl CastDateToTimestampTz {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "date_to_timestamp_with_timezone",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -166,5 +190,18 @@ impl<'a> EagerUnaryFunc<'a> for ExtractDate {
 impl fmt::Display for ExtractDate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "extract_{}_d", self.0)
+    }
+}
+
+impl ExtractDate {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "extract_date",
+            category: "Extract",
+            signature: "",
+            description: "",
+            url: Some("/sql/functions/extract/"),
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

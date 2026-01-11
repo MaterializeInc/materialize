@@ -58,6 +58,17 @@ impl std::fmt::Display for Left {
         f.write_str(stringify!(left))
     }
 }
+impl Left {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(left),
+            category: "Uncategorized",
+            signature: "left(string text, b int4) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn left<'a>(string: &'a str, b: i32) -> Result<&'a str, EvalError> {
     let n = i64::from(b);
     let mut byte_indices = string.char_indices().map(|(i, _)| i);

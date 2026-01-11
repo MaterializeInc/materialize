@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbGetStringStringify {
         f.write_str("->>")
     }
 }
+impl JsonbGetStringStringify {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_get_string_stringify),
+            category: "Uncategorized",
+            signature: "jsonb ->> text -> text?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_get_string_stringify<'a>(
     a: JsonbRef<'a>,
     k: &str,

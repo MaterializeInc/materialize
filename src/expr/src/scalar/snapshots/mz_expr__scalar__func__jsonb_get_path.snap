@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbGetPath {
         f.write_str("#>")
     }
 }
+impl JsonbGetPath {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_get_path),
+            category: "Uncategorized",
+            signature: "jsonb #> anyarray -> jsonb?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {
     let path = b.elements();
     for key in path.iter() {

@@ -181,6 +181,18 @@ impl fmt::Display for CastInt32ToNumeric {
     }
 }
 
+impl CastInt32ToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "integer_to_numeric",
+            category: "Cast",
+            signature: "CAST(a: int32 AS numeric) -> numeric",
+            description: "Returns the number of elements in `m`.",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[sqlfunc(
     sqlname = "integer_to_oid",
     preserves_uniqueness = true,
@@ -210,7 +222,12 @@ fn cast_int32_to_pg_legacy_char(a: i32) -> Result<PgLegacyChar, EvalError> {
     Ok(PgLegacyChar(u8::reinterpret_cast(a)))
 }
 
-#[sqlfunc]
+/// Return the character with the given Unicode codepoint.
+/// Only supports codepoints that can be encoded in UTF-8.
+/// The NULL (0) character is not allowed.
+///
+/// Errors if the codepoint is invalid or too large.
+#[sqlfunc(category = "String")]
 fn chr(a: i32) -> Result<String, EvalError> {
     // This error matches the behavior of Postgres 13/14 (and potentially earlier versions)
     // Postgres 15 will have a different error message for negative values

@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbGetInt64 {
         f.write_str("->")
     }
 }
+impl JsonbGetInt64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_get_int64),
+            category: "Uncategorized",
+            signature: "jsonb -> int8 -> jsonb?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_get_int64<'a>(a: JsonbRef<'a>, i: i64) -> Option<JsonbRef<'a>> {
     match a.into_datum() {
         Datum::List(list) => {

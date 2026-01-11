@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn starts_with(a: &str, b: &str) -> bool {\n    a.starts_with(b)\n}\n"
+expression: "#[sqlfunc()]\nfn starts_with(a: &str, b: &str) -> bool {\n    a.starts_with(b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,13 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for StartsWith {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for StartsWith {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(starts_with))
+    }
+}
+impl StartsWith {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(starts_with),
+            category: "Uncategorized",
+            signature: "starts_with(a text, b text) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn starts_with(a: &str, b: &str) -> bool {

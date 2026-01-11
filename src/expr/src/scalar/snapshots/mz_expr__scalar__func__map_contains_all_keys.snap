@@ -55,6 +55,17 @@ impl std::fmt::Display for MapContainsAllKeys {
         f.write_str("?&")
     }
 }
+impl MapContainsAllKeys {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(map_contains_all_keys),
+            category: "Uncategorized",
+            signature: "anymap ?& anyarray -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {
     keys.elements()
         .iter()

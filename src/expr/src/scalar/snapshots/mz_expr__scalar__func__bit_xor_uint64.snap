@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"#\", propagates_nulls = true)]\nfn bit_xor_uint64(a: u64, b: u64) -> u64 {\n    a ^ b\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"#\")]\nfn bit_xor_uint64(a: u64, b: u64) -> u64 {\n    a ^ b\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitXorUint64 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for BitXorUint64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("#")
+    }
+}
+impl BitXorUint64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_xor_uint64),
+            category: "Uncategorized",
+            signature: "uint8 # uint8 -> uint8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn bit_xor_uint64(a: u64, b: u64) -> u64 {

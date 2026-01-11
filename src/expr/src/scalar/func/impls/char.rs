@@ -47,6 +47,18 @@ impl fmt::Display for PadChar {
     }
 }
 
+impl PadChar {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "padchar",
+            category: "Char",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 // This function simply allows the expression of changing a's type from char to
 // string
 #[sqlfunc(

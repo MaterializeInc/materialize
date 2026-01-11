@@ -58,6 +58,17 @@ impl std::fmt::Display for NotEq {
         f.write_str("!=")
     }
 }
+impl NotEq {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(not_eq),
+            category: "Uncategorized",
+            signature: "any != any -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn not_eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a != b
 }

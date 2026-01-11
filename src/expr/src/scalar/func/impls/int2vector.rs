@@ -66,6 +66,18 @@ impl fmt::Display for CastInt2VectorToArray {
     }
 }
 
+impl CastInt2VectorToArray {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "int2vectortoarray",
+            category: "Cast",
+            signature: "int2vectortoarray(a: any)",
+            description: "Casts the smallint vector `a` to an array.",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt2VectorToString;
 
@@ -113,5 +125,17 @@ impl LazyUnaryFunc for CastInt2VectorToString {
 impl fmt::Display for CastInt2VectorToString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("int2vectortostr")
+    }
+}
+
+impl CastInt2VectorToString {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "int2vectortostr",
+            category: "Cast",
+            signature: "int2vectortostr(a: any)",
+            description: "Casts the smallint vector `a` to its string representation.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

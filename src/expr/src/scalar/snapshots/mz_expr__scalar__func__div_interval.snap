@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {\n    if b == 0.0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.checked_div(b)\n            .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(false, false)\", is_infix_op = true, sqlname = \"/\")]\nfn div_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {\n    if b == 0.0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.checked_div(b)\n            .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -52,13 +52,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInterval {
     fn is_monotone(&self) -> (bool, bool) {
         (false, false)
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for DivInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("/")
+    }
+}
+impl DivInterval {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(div_interval),
+            category: "Uncategorized",
+            signature: "interval / float8 -> interval",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn div_interval(a: Interval, b: f64) -> Result<Interval, EvalError> {

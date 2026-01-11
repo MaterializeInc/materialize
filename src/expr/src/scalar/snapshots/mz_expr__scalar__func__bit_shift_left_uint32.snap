@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<<\", propagates_nulls = true)]\nfn bit_shift_left_uint32(a: u32, b: u32) -> u32 {\n    let lhs = a;\n    let rhs = b;\n    lhs.wrapping_shl(rhs)\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<<\")]\nfn bit_shift_left_uint32(a: u32, b: u32) -> u32 {\n    let lhs = a;\n    let rhs = b;\n    lhs.wrapping_shl(rhs)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftLeftUint32 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for BitShiftLeftUint32 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("<<")
+    }
+}
+impl BitShiftLeftUint32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_shift_left_uint32),
+            category: "Uncategorized",
+            signature: "uint4 << uint4 -> uint4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn bit_shift_left_uint32(a: u32, b: u32) -> u32 {

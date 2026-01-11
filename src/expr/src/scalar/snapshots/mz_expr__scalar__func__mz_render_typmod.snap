@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"String\",\n    sqlname = \"mz_render_typmod\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn mz_render_typmod<'a>(\n    oid: u32,\n    typmod: i32,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let s = match Type::from_oid_and_typmod(oid, typmod) {\n        Ok(typ) => typ.constraint().display_or(\"\").to_string(),\n        Err(_) if typmod >= 0 => format!(\"({typmod})\"),\n        Err(_) => \"\".into(),\n    };\n    Ok(Datum::String(temp_storage.push_string(s)))\n}\n"
+expression: "#[sqlfunc(\n    output_type = \"String\",\n    sqlname = \"mz_render_typmod\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\n/// Test\nfn mz_render_typmod<'a>(\n    oid: u32,\n    typmod: i32,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let s = match Type::from_oid_and_typmod(oid, typmod) {\n        Ok(typ) => typ.constraint().display_or(\"\").to_string(),\n        Err(_) if typmod >= 0 => format!(\"({typmod})\"),\n        Err(_) => \"\".into(),\n    };\n    Ok(Datum::String(temp_storage.push_string(s)))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -58,6 +58,18 @@ impl std::fmt::Display for MzRenderTypmod {
         f.write_str("mz_render_typmod")
     }
 }
+impl MzRenderTypmod {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_render_typmod),
+            category: "Uncategorized",
+            signature: "mz_render_typmod(oid uint4, typmod int4) -> any",
+            description: "Test",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+/// Test
 fn mz_render_typmod<'a>(
     oid: u32,
     typmod: i32,

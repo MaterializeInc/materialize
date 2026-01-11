@@ -158,6 +158,18 @@ impl fmt::Display for CastInt64ToNumeric {
     }
 }
 
+impl CastInt64ToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "bigint_to_numeric",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[sqlfunc(
     sqlname = "bigint_to_real",
     preserves_uniqueness = false,

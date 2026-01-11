@@ -8,10 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use darling::FromMeta;
+use itertools::Itertools;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use syn::spanned::Spanned;
-use syn::{Expr, Lifetime, Lit};
+use syn::{Expr, Lifetime, Lit, Meta};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
 #[derive(Debug, Default, darling::FromMeta)]
@@ -41,6 +42,23 @@ pub(crate) struct Modifiers {
     propagates_nulls: Option<Expr>,
     /// Whether the function introduces nulls. Applies to all functions.
     introduces_nulls: Option<Expr>,
+    /// Function category for documentation purposes.
+    category: Option<String>,
+    /// Signature of the function if different from the derived signature.
+    /// Used for documentation purposes.
+    signature: Option<String>,
+    /// Optional URL to link in the documentation.
+    url: Option<String>,
+    /// Optional string describing the version the function was added.
+    version_added: Option<String>,
+    /// Optional boolean expression to indicate the function is unmaterializable.
+    unmaterializable: Option<Expr>,
+    /// Optional boolean expression to indicate that the functions needs special time zone casts.
+    known_time_zone_limitation_cast: Option<Expr>,
+    /// Optional boolean expression to indicate that the function is side effecting.
+    side_effecting: Option<Expr>,
+    /// Optional alias for documentation purposes.
+    alias: Option<Expr>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -174,6 +192,32 @@ fn camel_case(ident: &Ident) -> Ident {
     Ident::new(&result, ident.span())
 }
 
+/// Determines the argument name of the nth argument of the function.
+///
+/// Panics if the function has fewer than `nth` arguments. Returns an error if
+/// the parameter is a `self` receiver.
+fn arg_name(arg: &syn::ItemFn, nth: usize) -> Result<String, syn::Error> {
+    match &arg.sig.inputs[nth] {
+        syn::FnArg::Typed(pat_ty) => {
+            let pat = &pat_ty.pat;
+            match pat.as_ref() {
+                syn::Pat::Ident(ident) => {
+                    let ident = &ident.ident;
+                    Ok(quote! {#ident}.to_string())
+                }
+                _ => Err(syn::Error::new(
+                    pat.span(),
+                    "Unsupported argument name pattern",
+                )),
+            }
+        }
+        _ => Err(syn::Error::new(
+            arg.sig.inputs[nth].span(),
+            "Unsupported argument name",
+        )),
+    }
+}
+
 /// Determines the argument type of the nth argument of the function.
 ///
 /// Adds a lifetime `'a` to the argument type if it is a reference type.
@@ -214,12 +258,50 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
     }
 }
 
+/// Extract the documentation string from a function.
+fn documentation_string(func: &syn::ItemFn) -> String {
+    let mut doc_lines = Vec::new();
+
+    for attr in &func.attrs {
+        if attr.path().is_ident("doc") {
+            // Ensure it is a NameValue (e.g., #[doc = "..."])
+            //  We ignore #[doc(hidden)] or #[doc(alias = ...)] which are Meta::List
+            if let Meta::NameValue(meta_nv) = &attr.meta {
+                if let Expr::Lit(expr_lit) = &meta_nv.value {
+                    if let Lit::Str(lit_str) = &expr_lit.lit {
+                        let trimmed = lit_str.value().trim().to_string();
+                        doc_lines.push(trimmed);
+                    } else {
+                        panic!("Invalid doc string literal: :{:?}", expr_lit.lit);
+                    }
+                } else {
+                    panic!("Invalid doc string literal: {:?}", meta_nv.value);
+                }
+            }
+        }
+    }
+
+    // Join lines with a newline to reconstruct the full block
+    doc_lines.join("\n")
+}
+
 /// Produce a `EagerUnaryFunc` implementation.
 fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input_ty = arg_type(func, 0)?;
     let output_ty = output_type(func)?;
+
+    let func_doc = generate_function_doc(
+        fn_name.to_string(),
+        func,
+        &struct_name,
+        &[&input_ty],
+        &[&arg_name(func, 0)?],
+        output_ty.clone(),
+        &modifiers,
+    );
+
     let Modifiers {
         is_monotone,
         sqlname,
@@ -232,6 +314,14 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         could_error,
         propagates_nulls,
         introduces_nulls,
+        category: _,
+        signature: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
+        alias: _,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -346,6 +436,8 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             }
         }
 
+        #func_doc
+
         #func
     };
     Ok(result)
@@ -363,6 +455,16 @@ fn binary_func(
     let input2_ty = arg_type(func, 1)?;
     let output_ty = output_type(func)?;
 
+    let func_doc = generate_function_doc(
+        fn_name.to_string(),
+        func,
+        &struct_name,
+        &[&input1_ty, &input2_ty],
+        &[&arg_name(func, 0)?, &arg_name(func, 1)?],
+        output_ty.clone(),
+        &modifiers,
+    );
+
     let Modifiers {
         is_monotone,
         sqlname,
@@ -375,6 +477,14 @@ fn binary_func(
         could_error,
         propagates_nulls,
         introduces_nulls,
+        category: _,
+        signature: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
+        alias: _,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
@@ -509,8 +619,208 @@ fn binary_func(
             }
         }
 
+        #func_doc
+
         #func
 
     };
+
     Ok(result)
+}
+
+/// Convert a Rust type to its SQL documentation representation.
+fn type_to_sqldoc(ty: &syn::Type) -> String {
+    /// Handle types that have a vector/slice representation in Rust but
+    /// are represented by a specific type in SQL, such as `bytea` for `Vec<u8>`.
+    fn bytea_handling(ty: String) -> String {
+        match ty.as_ref() {
+            "uint1" => "bytea".to_string(),
+            _ => format!("{ty}[]"),
+        }
+    }
+    /// Remap Rust type names to SQL type names for documentation.
+    fn remap_ty(ty: &str) -> &str {
+        match ty {
+            "AclItem" => "aclitem",
+            "Array" => "anyarray",
+            "Char" => "character",
+            "Date" => "date",
+            "DateTime" => "timestamptz",
+            "Datum" => "any",
+            "DatumList" => "listany",
+            "DatumMap" => "mapany",
+            "Decimal" => "numeric",
+            "Interval" => "interval",
+            "Jsonb" | "JsonbRef" => "jsonb",
+            "MzAclItem" => "mz_acl_item",
+            "NaiveDateTime" => "timestamp",
+            "NaiveTime" => "time",
+            "Numeric" => "numeric",
+            "Oid" => "oid",
+            "PgLegacyChar" => "character",
+            "PgLegacyName" => "name",
+            "Range" => "rangeany",
+            "RegClass" => "regclass",
+            "RegProc" => "regprocedure",
+            "RegType" => "regtype",
+            "Timestamp" => "mz_timestamp",
+            "Uuid" => "uuid",
+            "VarChar" => "varchar",
+            "bool" => "boolean",
+            "f32" => "float4",
+            "f64" => "float8",
+            "i16" => "int2",
+            "i32" => "int4",
+            "i64" => "int8",
+            "i8" => "int2",
+            "str" | "String" => "text",
+            "u16" => "uint2",
+            "u32" => "uint4",
+            "u64" => "uint8",
+            "u8" => "uint1",
+            _ => panic!("Unknown type for sqldoc: {}", ty),
+        }
+    }
+
+    match ty {
+        syn::Type::Path(type_path) => {
+            let seg = type_path.path.segments.last().expect("Path with segments");
+
+            if seg.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return format!("{}?", type_to_sqldoc(inner_ty));
+                    }
+                }
+                panic!("Option function should return AngleBracketed types");
+            } else if seg.ident == "ExcludeNull"
+                || seg.ident == "Result"
+                || seg.ident == "CheckedTimestamp"
+                || seg.ident == "OrderedDecimal"
+            {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return type_to_sqldoc(inner_ty);
+                    }
+                }
+                panic!("Wrapper types should return AngleBracketed types");
+            } else if seg.ident == "ArrayRustType" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return format!("{}[]", type_to_sqldoc(inner_ty));
+                    }
+                }
+                panic!("ArrayRustType function should return AngleBracketed types");
+            } else if seg.ident == "Cow" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    // Find the first generic argument (Cow starts with a lifetime)
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner_ty) = arg {
+                            return type_to_sqldoc(inner_ty);
+                        }
+                    }
+                }
+                panic!("Cow function should return AngleBracketed types");
+            } else if seg.ident == "Vec" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return bytea_handling(type_to_sqldoc(inner_ty));
+                    }
+                }
+                panic!("Vec function should return AngleBracketed types");
+            } else {
+                remap_ty(&seg.ident.to_string()).to_string()
+            }
+        }
+        syn::Type::Reference(type_ref) => type_to_sqldoc(&type_ref.elem),
+        syn::Type::Group(group_ref) => type_to_sqldoc(&group_ref.elem),
+        syn::Type::Slice(slice_ref) => bytea_handling(type_to_sqldoc(&slice_ref.elem)),
+        _ => panic!("Unsupported type: {ty:?}"),
+    }
+}
+
+/// Generate the function documentation implementation. Adds a `func_doc` associated
+/// function to the struct, which returns a `FuncDoc` instance.
+fn generate_function_doc(
+    name: String,
+    func: &syn::ItemFn,
+    struct_name: &Ident,
+    arg_types: &[&syn::Type],
+    arg_names: &[&str],
+    return_type: syn::Type,
+    modifiers: &Modifiers,
+) -> TokenStream {
+    let sqlname = if let Some(sqlname) = &modifiers.sqlname {
+        format!("{}", quote! { #sqlname })
+    } else {
+        name.clone()
+    }
+    .replace('"', "");
+
+    let url = modifiers.url.as_ref().map(|expr| {
+        quote! { url: Some(#expr), }
+    });
+    let version_added = modifiers.version_added.as_ref().map(|expr| {
+        quote! { version_added: Some(#expr), }
+    });
+    let unmaterializable = modifiers.unmaterializable.as_ref().map(|expr| {
+        quote! { unmaterializable: #expr, }
+    });
+    let known_time_zone_limitation_cast =
+        modifiers
+            .known_time_zone_limitation_cast
+            .as_ref()
+            .map(|expr| {
+                quote! { known_time_zone_limitation_cast: #expr, }
+            });
+    let side_effecting = modifiers.side_effecting.as_ref().map(|expr| {
+        quote! { side_effecting: #expr, }
+    });
+    let alias = modifiers.alias.as_ref().map(|expr| {
+        quote! { alias: Some(stringify!(#expr)), }
+    });
+
+    let category = modifiers
+        .category
+        .as_deref()
+        .unwrap_or("Uncategorized")
+        .to_string();
+
+    let description = documentation_string(func);
+
+    let return_type = type_to_sqldoc(&return_type);
+
+    let signature = if let Some(signature) = modifiers.signature.as_ref() {
+        signature.clone()
+    } else if modifiers.is_infix_op.is_some() {
+        let args: Vec<String> = arg_types.iter().copied().map(type_to_sqldoc).collect();
+        format!("{} {sqlname} {} -> {return_type}", args[0], args[1],)
+    } else {
+        let args: Vec<String> = arg_names
+            .iter()
+            .zip_eq(arg_types.iter().copied().map(type_to_sqldoc))
+            .map(|(name, ty)| format!("{name} {ty}"))
+            .collect();
+        format!("{}({}) -> {return_type}", sqlname, args.join(", "),)
+    };
+    let unique_ident = &func.sig.ident;
+    quote! {
+        impl #struct_name {
+            pub const fn func_doc() -> crate::func::FuncDoc {
+                crate::func::FuncDoc {
+                    unique_name: stringify!(#unique_ident),
+                    category: #category,
+                    signature: #signature,
+                    description: #description,
+                    #url
+                    #version_added
+                    #unmaterializable
+                    #known_time_zone_limitation_cast
+                    #side_effecting
+                    #alias
+                    ..crate::func::FuncDoc::default()
+                }
+            }
+        }
+    }
 }

@@ -58,6 +58,17 @@ impl std::fmt::Display for ArrayRemove {
         f.write_str("array_remove")
     }
 }
+impl ArrayRemove {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(array_remove),
+            category: "Uncategorized",
+            signature: "array_remove(arr anyarray, b any) -> any",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn array_remove<'a>(
     arr: Array<'a>,
     b: Datum<'a>,

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\", propagates_nulls = true)]\nfn mod_int64(a: i64, b: i64) -> Result<i64, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        Ok(a.checked_rem(b).unwrap_or(0))\n    }\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\")]\nfn mod_int64(a: i64, b: i64) -> Result<i64, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        Ok(a.checked_rem(b).unwrap_or(0))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModInt64 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ModInt64 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("%")
+    }
+}
+impl ModInt64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mod_int64),
+            category: "Uncategorized",
+            signature: "int8 % int8 -> int8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn mod_int64(a: i64, b: i64) -> Result<i64, EvalError> {

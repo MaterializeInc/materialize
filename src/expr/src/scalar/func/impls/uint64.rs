@@ -156,3 +156,15 @@ impl fmt::Display for CastUint64ToNumeric {
         f.write_str("uint8_to_numeric")
     }
 }
+
+impl CastUint64ToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "uint8_to_numeric",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

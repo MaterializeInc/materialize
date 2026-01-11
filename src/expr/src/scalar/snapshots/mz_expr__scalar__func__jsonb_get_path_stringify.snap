@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbGetPathStringify {
         f.write_str("#>>")
     }
 }
+impl JsonbGetPathStringify {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_get_path_stringify),
+            category: "Uncategorized",
+            signature: "jsonb #>> anyarray -> text?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_get_path_stringify<'a>(
     a: JsonbRef<'a>,
     b: Array<'a>,
