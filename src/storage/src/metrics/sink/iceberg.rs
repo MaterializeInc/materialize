@@ -18,18 +18,12 @@ use prometheus::core::AtomicU64;
 
 #[derive(Debug, Clone)]
 pub(crate) struct IcebergSinkMetricDefs {
-    /// Number of rows written by the iceberg sink.
-    pub rows_written: IntCounterVec,
-    /// Number of rows deleted by the iceberg sink.
-    pub rows_deleted: IntCounterVec,
     /// Number of data files written by the iceberg sink.
     pub data_files_written: IntCounterVec,
     /// Number of delete files written by the iceberg sink.
     pub delete_files_written: IntCounterVec,
     /// Number of stashed rows in the iceberg sink.
     pub stashed_rows: UIntGaugeVec,
-    /// Total number of bytes written in data and delete files to object storage.
-    pub bytes_written: IntCounterVec,
     /// Number of snapshots committed by the iceberg sink.
     pub snapshots_committed: IntCounterVec,
     /// Commit failures in the iceberg sink.
@@ -46,16 +40,6 @@ impl IcebergSinkMetricDefs {
     // metrics for that `source_id`.
     pub(crate) fn register_with(registry: &mz_ore::metrics::MetricsRegistry) -> Self {
         Self {
-            rows_written: registry.register(metric!(
-                name: "sink_iceberg_rows_written",
-                help: "Number of rows written by the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
-            )),
-            rows_deleted: registry.register(metric!(
-                name: "sink_iceberg_rows_deleted",
-                help: "Number of rows deleted by the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
-            )),
             data_files_written: registry.register(metric!(
                 name: "sink_iceberg_data_files_written",
                 help: "Number of data files written by the iceberg sink",
@@ -69,11 +53,6 @@ impl IcebergSinkMetricDefs {
             stashed_rows: registry.register(metric!(
                 name: "sink_iceberg_stashed_rows",
                 help: "Number of stashed rows in the iceberg sink",
-                var_labels: ["sink_id", "worker_id"]
-            )),
-            bytes_written: registry.register(metric!(
-                name: "sink_iceberg_bytes_written",
-                help: "Number of bytes written by the iceberg sink",
                 var_labels: ["sink_id", "worker_id"]
             )),
             snapshots_committed: registry.register(metric!(
@@ -97,18 +76,12 @@ impl IcebergSinkMetricDefs {
 
 #[derive(Clone)]
 pub(crate) struct IcebergSinkMetrics {
-    /// Number of rows written by the iceberg sink.
-    pub rows_written: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    /// Number of rows deleted by the iceberg sink.
-    pub rows_deleted: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Number of data files written by the iceberg sink.
     pub data_files_written: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Number of delete files written by the iceberg sink.
     pub delete_files_written: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Number of stashed rows in the iceberg sink.
     pub stashed_rows: DeleteOnDropGauge<AtomicU64, Vec<String>>,
-    /// Number of bytes written by the iceberg sink.
-    pub bytes_written: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Number of snapshots committed by the iceberg sink.
     pub snapshots_committed: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     /// Number of commit failures in the iceberg sink.
@@ -122,8 +95,6 @@ impl IcebergSinkMetrics {
     pub(crate) fn new(defs: &IcebergSinkMetricDefs, sink_id: GlobalId, worker_id: usize) -> Self {
         let labels = vec![sink_id.to_string(), worker_id.to_string()];
         Self {
-            rows_written: defs.rows_written.get_delete_on_drop_metric(labels.clone()),
-            rows_deleted: defs.rows_deleted.get_delete_on_drop_metric(labels.clone()),
             data_files_written: defs
                 .data_files_written
                 .get_delete_on_drop_metric(labels.clone()),
@@ -131,7 +102,6 @@ impl IcebergSinkMetrics {
                 .delete_files_written
                 .get_delete_on_drop_metric(labels.clone()),
             stashed_rows: defs.stashed_rows.get_delete_on_drop_metric(labels.clone()),
-            bytes_written: defs.bytes_written.get_delete_on_drop_metric(labels.clone()),
             snapshots_committed: defs
                 .snapshots_committed
                 .get_delete_on_drop_metric(labels.clone()),

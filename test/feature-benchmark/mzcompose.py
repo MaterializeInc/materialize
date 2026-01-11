@@ -92,6 +92,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
@@ -99,8 +100,9 @@ from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -151,12 +153,18 @@ SERVICES = [
     MySql(),
     SqlServer(),
     Balancerd(),
+    PolarisBootstrap(),
+    Polaris(),
+    Mc(),
     # Overridden below
     Materialized(),
     Clusterd(),
     Testdrive(),
     Mz(app_password=""),
 ]
+
+
+iceberg_credentials: tuple[str, str] | None = None
 
 
 def run_one_scenario(
@@ -246,6 +254,14 @@ def run_one_scenario(
         )
         first_run = False
 
+        testdrive_entrypoint_extra = []
+        if iceberg_credentials:
+            _, key = iceberg_credentials
+            testdrive_entrypoint_extra = [
+                f"--var=s3-access-key={key}",
+                "--var=aws-endpoint=minio:9000",
+            ]
+
         with c.override(
             Testdrive(
                 materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
@@ -254,6 +270,7 @@ def run_one_scenario(
                 metadata_store="cockroach",
                 external_blob_store=True,
                 blob_store_is_azure=args.azurite,
+                entrypoint_extra=testdrive_entrypoint_extra,
             )
         ):
             c.testdrive(
@@ -556,6 +573,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
     c.up(*dependencies)
+
+    iceberg_scenarios = [s for s in selected_scenarios if "Iceberg" in s.__name__]
+    global iceberg_credentials
+    if iceberg_scenarios:
+        iceberg_credentials = setup_polaris_for_iceberg(c)
 
     scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
