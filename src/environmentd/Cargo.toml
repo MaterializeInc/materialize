@@ -16,7 +16,7 @@ anyhow = "1.0.100"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 async-trait = "0.1.89"
 axum = { version = "0.7.5", features = ["ws"] }
-axum-extra = { version = "0.9.3", features = ["typed-header"] }
+axum-extra = { version = "0.12.2", features = ["typed-header"] }
 base64 = "0.22.1"
 bytes = "1.10.1"
 bytesize = "2.1.0"
