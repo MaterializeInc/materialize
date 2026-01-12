@@ -47,7 +47,7 @@ postgres-protocol = { version = "0.6.9" }
 regex = "1.12.2"
 reqwest = { version = "0.12.28", features = ["json"] }
 shell-words = "1.1.1"
-serde_json = "1.0.148"
+serde_json = "1.0.149"
 tempfile = "3.23.0"
 time = "0.3.17"
 tracing = "0.1.44"
@@ -57,7 +57,7 @@ tokio-postgres = { version = "0.7.15", features = [
     "with-uuid-1",
     "with-serde_json-1",
 ] }
-tokio-stream = { version = "0.1.17", features = ["net"] }
+tokio-stream = { version = "0.1.18", features = ["net"] }
 tower-http = { version = "0.6.7", features = ["cors"] }
 uuid = "1.19.0"
 walkdir = "2.5.0"

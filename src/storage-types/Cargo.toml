@@ -65,14 +65,14 @@ rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz
 regex = "1.12.2"
 reqwest = "0.12.28"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.148", features = ["preserve_order"] }
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 thiserror = "2.0.17"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely = "0.25.1"
 tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tracing = "0.1.44"
-url = { version = "2.5.7", features = ["serde"] }
+url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 base64 = "0.22.1"
