@@ -234,7 +234,7 @@ An active AWS account with appropriate permissions to create:
 
 ### Step 5: Connect to Materialize
 
-Using the `dns_name` and `external_login_password_mz_system` from the Terraform
+Using the `nlb_dns_name` and `external_login_password_mz_system` from the Terraform
 output, you can connect to Materialize via the Materialize Console or
 PostgreSQL-compatible tools/drivers using the following ports:
 
