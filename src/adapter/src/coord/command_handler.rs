@@ -489,6 +489,51 @@ impl Coordinator {
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
+                Command::CreateInternalSubscribe {
+                    df_desc,
+                    cluster_id,
+                    replica_id,
+                    depends_on,
+                    as_of,
+                    arity,
+                    sink_id,
+                    conn_id,
+                    session_uuid,
+                    start_time,
+                    read_holds,
+                    tx,
+                } => {
+                    self.handle_create_internal_subscribe(
+                        *df_desc,
+                        cluster_id,
+                        replica_id,
+                        depends_on,
+                        as_of,
+                        arity,
+                        sink_id,
+                        conn_id,
+                        session_uuid,
+                        start_time,
+                        read_holds,
+                        tx,
+                    )
+                    .await;
+                }
+                Command::AttemptTimestampedWrite {
+                    target_id,
+                    diffs,
+                    write_ts,
+                    tx,
+                } => {
+                    self.handle_attempt_timestamped_write(
+                        target_id, diffs, write_ts, tx,
+                    )
+                    .await;
+                }
+                Command::DropInternalSubscribe { sink_id, tx } => {
+                    self.drop_internal_subscribe(sink_id).await;
+                    let _ = tx.send(());
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -761,6 +806,9 @@ impl Coordinator {
                     persist_client: self.persist_client.clone(),
                     statement_logging_frontend,
                     superuser_attribute,
+                    occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
+                    frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
+                    read_only: self.controller.read_only(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

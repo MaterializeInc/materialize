@@ -31,7 +31,7 @@ use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType};
+use mz_repr::{CatalogItemId, ColumnIndex, Diff, GlobalId, Row, RowIterator, SqlRelationType};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -41,16 +41,17 @@ use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::appends::{BuiltinTableAppendNotify, TimestampedWriteResult};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{ExecuteContextExtra, ExecuteContextGuard};
 use crate::error::AdapterError;
+use crate::optimize::LirDataflowDescription;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{
@@ -324,6 +325,41 @@ pub enum Command {
     /// Statement logging event from frontend peek sequencing.
     /// No response channel needed - this is fire-and-forget.
     FrontendStatementLogging(FrontendStatementLoggingEvent),
+
+    /// Creates an internal subscribe (not visible in introspection) and returns
+    /// the response channel. Initially used for frontend-sequenced
+    /// read-then-write (DELETE/UPDATE/INSERT...SELECT) operations via OCC.
+    CreateInternalSubscribe {
+        df_desc: Box<LirDataflowDescription>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        depends_on: BTreeSet<GlobalId>,
+        as_of: mz_repr::Timestamp,
+        arity: usize,
+        sink_id: GlobalId,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        start_time: mz_ore::now::EpochMillis,
+        read_holds: ReadHolds<mz_repr::Timestamp>,
+        tx: oneshot::Sender<Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>>,
+    },
+
+    /// Attempts a timestamped write for OCC (optimistic concurrency control).
+    /// Used by frontend read-then-write to submit accumulated diffs.
+    AttemptTimestampedWrite {
+        target_id: CatalogItemId,
+        diffs: Vec<(Row, Diff)>,
+        write_ts: mz_repr::Timestamp,
+        tx: oneshot::Sender<TimestampedWriteResult>,
+    },
+
+    /// Drops an internal subscribe.
+    ///
+    /// Used for cleanup after the subscribe's purpose is fulfilled or on error.
+    DropInternalSubscribe {
+        sink_id: GlobalId,
+        tx: oneshot::Sender<()>,
+    },
 }
 
 impl Command {
@@ -358,7 +394,10 @@ impl Command {
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..) => None,
+            | Command::FrontendStatementLogging(..)
+            | Command::CreateInternalSubscribe { .. }
+            | Command::AttemptTimestampedWrite { .. }
+            | Command::DropInternalSubscribe { .. } => None,
         }
     }
 
@@ -393,7 +432,10 @@ impl Command {
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..) => None,
+            | Command::FrontendStatementLogging(..)
+            | Command::CreateInternalSubscribe { .. }
+            | Command::AttemptTimestampedWrite { .. }
+            | Command::DropInternalSubscribe { .. } => None,
         }
     }
 }
@@ -435,6 +477,15 @@ pub struct StartupResponse {
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control)
+    /// write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Whether frontend OCC read-then-write is enabled (determined once at
+    /// process startup).
+    pub frontend_read_then_write_enabled: bool,
+    /// Whether the coordinator is in read-only mode (e.g. during 0dt upgrades).
+    /// The frontend path must reject mutations when this is true.
+    pub read_only: bool,
 }
 
 #[derive(Derivative)]

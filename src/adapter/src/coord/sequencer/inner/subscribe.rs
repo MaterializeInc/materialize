@@ -456,6 +456,8 @@ impl Coordinator {
             depends_on: dependency_ids,
             start_time: self.now(),
             output,
+            internal: false, // User-facing subscribe - appears in
+                             // mz_subscriptions.
         };
         active_subscribe.initialize();
 

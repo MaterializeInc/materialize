@@ -264,18 +264,27 @@ impl Coordinator {
 
         let ret_fut = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
-                let update =
-                    self.catalog()
-                        .state()
-                        .pack_subscribe_update(id, active_subscribe, Diff::ONE);
-                let update = self.catalog().state().resolve_builtin_table_update(update);
+                // Skip builtin table update for internal subscribes
+                if active_subscribe.internal {
+                    #[allow(clippy::as_conversions)]
+                    {
+                        Box::pin(std::future::ready(())) as BuiltinTableAppendNotify
+                    }
+                } else {
+                    let update = self.catalog().state().pack_subscribe_update(
+                        id,
+                        active_subscribe,
+                        Diff::ONE,
+                    );
+                    let update = self.catalog().state().resolve_builtin_table_update(update);
 
-                self.metrics
-                    .active_subscribes
-                    .with_label_values(&[session_type])
-                    .inc();
+                    self.metrics
+                        .active_subscribes
+                        .with_label_values(&[session_type])
+                        .inc();
 
-                self.builtin_table_update().execute(vec![update]).await.0
+                    self.builtin_table_update().execute(vec![update]).await.0
+                }
             }
             ActiveComputeSink::CopyTo(_) => {
                 self.metrics
@@ -311,18 +320,21 @@ impl Coordinator {
 
             match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
-                    let update = self.catalog().state().pack_subscribe_update(
-                        id,
-                        active_subscribe,
-                        Diff::MINUS_ONE,
-                    );
-                    let update = self.catalog().state().resolve_builtin_table_update(update);
-                    self.builtin_table_update().blocking(vec![update]).await;
+                    // Skip builtin table update for internal subscribes
+                    if !active_subscribe.internal {
+                        let update = self.catalog().state().pack_subscribe_update(
+                            id,
+                            active_subscribe,
+                            Diff::MINUS_ONE,
+                        );
+                        let update = self.catalog().state().resolve_builtin_table_update(update);
+                        self.builtin_table_update().blocking(vec![update]).await;
 
-                    self.metrics
-                        .active_subscribes
-                        .with_label_values(&[session_type])
-                        .dec();
+                        self.metrics
+                            .active_subscribes
+                            .with_label_values(&[session_type])
+                            .dec();
+                    }
                 }
                 ActiveComputeSink::CopyTo(_) => {
                     self.metrics
