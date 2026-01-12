@@ -114,6 +114,7 @@ impl Coordinator {
             Message::GroupCommitApplied {
                 responses,
                 statement_logging_ids,
+                internal_results,
                 write_ts,
             } => {
                 // Record statement timestamps before retiring, since retiring ends the statement
@@ -130,6 +131,11 @@ impl Coordinator {
                 // that and we can downgrade the local read holds without an oracle round trip.
                 self.downgrade_local_read_holds(write_ts);
                 self.advance_custom_timelines().boxed_local().await;
+                for result in internal_results {
+                    result.send(crate::coord::appends::WriteResult::Success {
+                        timestamp: write_ts,
+                    });
+                }
             }
             Message::AdvanceTimelines => {
                 // Only sent by the periodic tick in read-only mode, where group commits (which

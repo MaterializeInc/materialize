@@ -422,6 +422,13 @@ pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
     "The burst-replica linger duration written when an AUTO SCALING STRATEGY omits LINGER DURATION.",
 );
 
+pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
+    "enable_adapter_frontend_occ_read_then_write",
+    false,
+    "Use frontend sequencing (with optimistic concurrency control) for \
+     DELETE, UPDATE, and INSERT operations.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -474,4 +481,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
         .add(&ENABLE_SCOPED_SYSTEM_PARAMETERS)
+        .add(&FRONTEND_READ_THEN_WRITE)
 }
