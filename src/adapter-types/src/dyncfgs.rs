@@ -230,6 +230,13 @@ pub const CONSOLE_OIDC_SCOPES: Config<&'static str> = Config::new(
     "Space-separated OIDC scopes requested by the web console.",
 );
 
+pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
+    "enable_adapter_frontend_occ_read_then_write",
+    // WIP: true for testing in ci, Should be false before merging.
+    true,
+    "Use frontend sequencing (with optimistic concurrency control) for \
+     DELETE, UPDATE, and INSERT operations.",
+);
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -263,4 +270,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)
+        .add(&FRONTEND_READ_THEN_WRITE)
 }

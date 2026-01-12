@@ -31,6 +31,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
 use mz_timestamp_oracle::WriteTimestamp;
 use smallvec::SmallVec;
+use timely::PartialOrder;
 use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, oneshot};
 use tracing::{Instrument, Span, debug_span, info, warn};
 
@@ -131,13 +132,63 @@ pub(crate) enum BuiltinTableUpdateSource {
     Background(oneshot::Sender<()>),
 }
 
+/// Result of an internally-submitted write (one where the caller receives the
+/// result via a oneshot channel rather than through a session `ExecuteContext`).
+///
+/// `TimestampPassed` is returned when the caller requested a specific target
+/// timestamp but the oracle has already advanced past it by the time group
+/// commit runs; the caller decides whether to retry.
+#[derive(Debug, Clone)]
+pub enum WriteResult {
+    /// The write was committed at the indicated timestamp.
+    Success {
+        /// The timestamp at which the write was committed.
+        timestamp: Timestamp,
+    },
+    /// The caller requested a specific target timestamp, and the oracle has
+    /// already advanced past it.
+    TimestampPassed {
+        /// The timestamp the write was targeting.
+        target_timestamp: Timestamp,
+        /// The current write timestamp from the oracle.
+        current_write_ts: Timestamp,
+    },
+    /// The write was canceled before it could commit, e.g. because a cancel
+    /// request arrived for the originating connection.
+    Canceled,
+    /// The coordinator is in read-only mode and cannot accept mutations.
+    /// Indicates the caller bypassed the read-only check at the RTW entry
+    /// point (see `try_frontend_read_then_write`); this is a defense in
+    /// depth to avoid panicking the coordinator.
+    ReadOnly,
+}
+
 /// Where to deliver the result of a [`PendingWriteTxn::User`] write.
 #[derive(Debug)]
 pub(crate) enum UserWriteResponder {
     /// Session-bound write. The coordinator retires the session's
     /// `ExecuteContext` once the write commits.
     Session(PendingTxn),
+    /// Internal write originating from `conn_id`. The coordinator sends the
+    /// result through the oneshot; caller decides what to do with it. The
+    /// `conn_id` lets cancellation (e.g. `handle_privileged_cancel`) identify
+    /// and cancel in-flight internal writes for that connection.
+    Internal {
+        conn_id: ConnectionId,
+        result_tx: oneshot::Sender<WriteResult>,
+    },
 }
+
+impl UserWriteResponder {
+    /// The connection that originated this write.
+    pub(crate) fn conn_id(&self) -> &ConnectionId {
+        match self {
+            UserWriteResponder::Session(pending_txn) => pending_txn.ctx.session().conn_id(),
+            UserWriteResponder::Internal { conn_id, .. } => conn_id,
+        }
+    }
+}
+
 
 /// A pending write transaction that will be committing during the next group commit.
 #[derive(Debug)]
@@ -160,6 +211,35 @@ pub(crate) enum PendingWriteTxn {
         updates: Vec<BuiltinTableUpdate>,
         source: BuiltinTableUpdateSource,
     },
+    /// A write submitted with a caller-chosen target timestamp.
+    ///
+    /// **Important**: This variant supports writes to multiple tables in a
+    /// single entry. It is the caller's responsibility to ensure that:
+    /// 1. All writes are consistent (e.g., computed from the same read
+    ///    timestamp)
+    /// 2. Dependencies between tables have been properly resolved
+    ///
+    /// **Concurrency semantics**: Only ONE `InternalTimestamped` write is
+    /// processed per group commit round. The round's commit advances the oracle
+    /// past the chosen timestamp, so any other timestamped write targeting the
+    /// same (or a smaller) timestamp will fail with `TimestampPassed`.
+    /// Timestamped writes don't acquire write locks: a concurrent regular write
+    /// landing at the same target timestamp likewise makes one of them fail
+    /// with `TimestampPassed`.
+    InternalTimestamped(InternalTimestampedWrite),
+}
+
+/// A write submitted with a caller-chosen target timestamp (see
+/// [`PendingWriteTxn::InternalTimestamped`]).
+#[derive(Debug)]
+pub(crate) struct InternalTimestampedWrite {
+    /// Connection originating the write. Used by cancellation to identify
+    /// in-flight internal writes to remove.
+    pub conn_id: ConnectionId,
+    pub span: Span,
+    pub writes: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>>,
+    pub target_timestamp: Timestamp,
+    pub result_tx: oneshot::Sender<WriteResult>,
 }
 
 impl PendingWriteTxn {
@@ -169,7 +249,12 @@ impl PendingWriteTxn {
                 source: BuiltinTableUpdateSource::Internal(_),
                 ..
             } => true,
-            _ => false,
+            PendingWriteTxn::System {
+                source: BuiltinTableUpdateSource::Background(_),
+                ..
+            }
+            | PendingWriteTxn::User { .. }
+            | PendingWriteTxn::InternalTimestamped(_) => false,
         }
     }
 }
@@ -350,12 +435,16 @@ impl Coordinator {
             match pending_write {
                 // We always allow system writes to proceed.
                 PendingWriteTxn::System { .. } => validated_writes.push(pending_write),
+                // Timestamped writes don't acquire locks: a concurrent write
+                // landing at the same target timestamp makes one of them fail
+                // with `TimestampPassed` instead.
+                PendingWriteTxn::InternalTimestamped(_) => validated_writes.push(pending_write),
                 // We have a set of locks! Validate they're correct (expected).
                 PendingWriteTxn::User {
                     span,
                     write_locks: Some(write_locks),
                     writes,
-                    responder: UserWriteResponder::Session(pending_txn),
+                    responder,
                 } => match write_locks.validate(writes.keys().copied()) {
                     Ok(validated_locks) => {
                         // Merge all of our write locks together since we can allow concurrent
@@ -366,7 +455,7 @@ impl Coordinator {
                             span,
                             writes,
                             write_locks: None,
-                            responder: UserWriteResponder::Session(pending_txn),
+                            responder,
                         };
                         validated_writes.push(validated_write);
                     }
@@ -376,62 +465,109 @@ impl Coordinator {
                     // not taken we could violate serializability.
                     Err(missing) => {
                         let writes: Vec<_> = writes.keys().collect();
+                        let conn_id = responder.conn_id();
                         panic!(
-                            "got to group commit with partial set of locks!\nmissing: {:?}, writes: {:?}, txn: {:?}",
-                            missing, writes, pending_txn,
+                            "got to group commit with partial set of locks!\nmissing: {:?}, writes: {:?}, conn_id: {}",
+                            missing, writes, conn_id,
                         );
                     }
                 },
-                // If we don't have any locks, try to acquire them, otherwise defer the write.
+                // If we don't have any locks, try to acquire them. On failure,
+                // session-bound writes defer via the lock-wait machinery;
+                // internal writes push back and re-trigger the group commit.
                 PendingWriteTxn::User {
                     span,
                     writes,
                     write_locks: None,
-                    responder: UserWriteResponder::Session(pending_txn),
+                    responder,
                 } => {
                     let missing = group_write_locks.missing_locks(writes.keys().copied());
 
                     if missing.is_empty() {
                         // We have all the locks! Queue the pending write.
-                        let validated_write = PendingWriteTxn::User {
+                        validated_writes.push(PendingWriteTxn::User {
                             span,
                             writes,
                             write_locks: None,
-                            responder: UserWriteResponder::Session(pending_txn),
-                        };
-                        validated_writes.push(validated_write);
-                    } else {
-                        // Try to acquire the locks we're missing.
-                        let mut just_in_time_locks = WriteLocks::builder(missing.clone());
-                        for collection in missing {
-                            if let Some(lock) = self.try_grant_object_write_lock(collection) {
-                                just_in_time_locks.insert_lock(collection, lock);
+                            responder,
+                        });
+                        continue;
+                    }
+
+                    match responder {
+                        UserWriteResponder::Session(pending_txn) => {
+                            // Try to acquire the locks we're missing.
+                            let mut just_in_time_locks = WriteLocks::builder(missing.clone());
+                            for collection in missing {
+                                if let Some(lock) = self.try_grant_object_write_lock(collection) {
+                                    just_in_time_locks.insert_lock(collection, lock);
+                                }
+                            }
+
+                            match just_in_time_locks
+                                .all_or_nothing(pending_txn.ctx.session().conn_id())
+                            {
+                                // We acquired all of the locks! Proceed with the write.
+                                Ok(locks) => {
+                                    group_write_locks.merge(locks);
+                                    validated_writes.push(PendingWriteTxn::User {
+                                        span,
+                                        writes,
+                                        write_locks: None,
+                                        responder: UserWriteResponder::Session(pending_txn),
+                                    });
+                                }
+                                // Darn. We couldn't acquire the locks, defer the write.
+                                Err(missing) => {
+                                    let acquire_future =
+                                        self.grant_object_write_lock(missing).map(Option::Some);
+                                    let write = DeferredWrite {
+                                        span,
+                                        writes,
+                                        pending_txn,
+                                    };
+                                    deferred_writes.push((acquire_future, write));
+                                }
                             }
                         }
+                        UserWriteResponder::Internal { conn_id, result_tx } => {
+                            // Internal writes have no session to hand them off to
+                            // the deferred-op machinery, so we acquire directly
+                            // into `group_write_locks` and push back on failure.
+                            let mut acquired_all = true;
+                            let mut acquired_locks = Vec::new();
+                            for collection in &missing {
+                                if let Some(lock) = self.try_grant_object_write_lock(*collection) {
+                                    acquired_locks.push((*collection, lock));
+                                } else {
+                                    acquired_all = false;
+                                    break;
+                                }
+                            }
 
-                        match just_in_time_locks.all_or_nothing(pending_txn.ctx.session().conn_id())
-                        {
-                            // We acquired all of the locks! Proceed with the write.
-                            Ok(locks) => {
-                                group_write_locks.merge(locks);
-                                let validated_write = PendingWriteTxn::User {
+                            if acquired_all {
+                                for (id, lock) in acquired_locks {
+                                    group_write_locks.insert_lock(id, lock);
+                                }
+                                validated_writes.push(PendingWriteTxn::User {
                                     span,
                                     writes,
                                     write_locks: None,
-                                    responder: UserWriteResponder::Session(pending_txn),
-                                };
-                                validated_writes.push(validated_write);
-                            }
-                            // Darn. We couldn't acquire the locks, defer the write.
-                            Err(missing) => {
-                                let acquire_future =
-                                    self.grant_object_write_lock(missing).map(Option::Some);
-                                let write = DeferredWrite {
+                                    responder: UserWriteResponder::Internal { conn_id, result_tx },
+                                });
+                            } else {
+                                // Could not acquire all locks. Push back for the
+                                // next group commit round; the caller is waiting
+                                // on `result_tx` so the retry is transparent to
+                                // them.
+                                drop(acquired_locks);
+                                self.pending_writes.push(PendingWriteTxn::User {
                                     span,
                                     writes,
-                                    pending_txn,
-                                };
-                                deferred_writes.push((acquire_future, write));
+                                    write_locks: None,
+                                    responder: UserWriteResponder::Internal { conn_id, result_tx },
+                                });
+                                self.trigger_group_commit();
                             }
                         }
                     }
@@ -444,17 +580,65 @@ impl Coordinator {
             self.defer_op(acquire_future, DeferredOp::Write(write));
         }
 
-        // The value returned here still might be ahead of `now()` if `now()` has gone backwards at
-        // any point during this method or if this was triggered from DDL. We will still commit the
-        // write without waiting for `now()` to advance. This is ok because the next batch of writes
-        // will trigger the wait loop in `try_group_commit()` if `now()` hasn't advanced past the
-        // global timeline, preventing an unbounded advancing of the global timeline ahead of
-        // `now()`. Additionally DDL is infrequent enough and takes long enough that we don't think
-        // it's practical for continuous DDL to advance the global timestamp in an unbounded manner.
-        let WriteTimestamp {
-            timestamp,
-            advance_to,
-        } = self.get_local_write_ts().await;
+        // Separate timestamped writes from regular writes in a single pass.
+        let mut regular_writes = Vec::new();
+        let mut timestamped_writes: Vec<InternalTimestampedWrite> = Vec::new();
+        for write in validated_writes {
+            match write {
+                PendingWriteTxn::InternalTimestamped(w) => timestamped_writes.push(w),
+                other => regular_writes.push(other),
+            }
+        }
+
+        // Determine the write timestamp, resolving any timestamped writes.
+        //
+        // We can only process ONE InternalTimestamped write per group commit
+        // round: after committing at timestamp T the oracle advances past T,
+        // so any other write targeting T (or smaller) would fail with
+        // `TimestampPassed` anyway — we fail them early here.
+        //
+        // When a timestamped write is selected, we apply ONLY that write in
+        // this round and defer all regular writes to the next round. This
+        // avoids any subtle interactions between the timestamped write (which
+        // targets a specific timestamp) and regular writes.
+        let resolved = if !timestamped_writes.is_empty() {
+            self.resolve_timestamped_writes(timestamped_writes).await
+        } else {
+            None
+        };
+
+        let (timestamp, advance_to, validated_writes) = match resolved {
+            Some((ts, advance_to, selected_write)) => {
+                // Defer all regular writes to the next round.
+                self.pending_writes.extend(regular_writes);
+                if !self.pending_writes.is_empty() {
+                    self.trigger_group_commit();
+                }
+                (
+                    ts,
+                    advance_to,
+                    vec![PendingWriteTxn::InternalTimestamped(selected_write)],
+                )
+            }
+            None => {
+                // The value returned here still might be ahead of `now()` if
+                // `now()` has gone backwards at any point during this method or
+                // if this was triggered from DDL. We will still commit the
+                // write without waiting for `now()` to advance. This is ok
+                // because the next batch of writes will trigger the wait loop
+                // in `try_group_commit()` if `now()` hasn't advanced past the
+                // global timeline, preventing an unbounded advancing of the
+                // global timeline ahead of `now()`. Additionally DDL is
+                // infrequent enough and takes long enough that we don't think
+                // it's practical for continuous DDL to advance the global
+                // timestamp in an unbounded manner.
+                let WriteTimestamp {
+                    timestamp,
+                    advance_to,
+                } = self.get_local_write_ts().await;
+                (timestamp, advance_to, regular_writes)
+            }
+        };
 
         // Advance the catalog shard's upper to keep it in sync with the oracle
         // timestamp. This ensures that reads of mz_catalog_raw at the oracle's
@@ -471,6 +655,7 @@ impl Coordinator {
         let mut appends: BTreeMap<CatalogItemId, SmallVec<[TableData; 1]>> = BTreeMap::new();
         let mut responses = Vec::with_capacity(validated_writes.len());
         let mut notifies = Vec::new();
+        let mut write_result_txs = Vec::new();
 
         for validated_write_txn in validated_writes {
             match validated_write_txn {
@@ -478,12 +663,7 @@ impl Coordinator {
                     span: _,
                     writes,
                     write_locks,
-                    responder:
-                        UserWriteResponder::Session(PendingTxn {
-                            ctx,
-                            response,
-                            action,
-                        }),
+                    responder,
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
                     for (id, table_data) in writes {
@@ -496,11 +676,24 @@ impl Coordinator {
                             appends.entry(id).or_default().extend(table_data);
                         }
                     }
-                    if let Some(id) = ctx.extra().contents() {
-                        self.set_statement_execution_timestamp(id, timestamp);
+                    match responder {
+                        UserWriteResponder::Session(PendingTxn {
+                            ctx,
+                            response,
+                            action,
+                        }) => {
+                            if let Some(id) = ctx.extra().contents() {
+                                self.set_statement_execution_timestamp(id, timestamp);
+                            }
+                            responses.push(CompletedClientTransmitter::new(ctx, response, action));
+                        }
+                        UserWriteResponder::Internal {
+                            conn_id: _,
+                            result_tx,
+                        } => {
+                            write_result_txs.push(result_tx);
+                        }
                     }
-
-                    responses.push(CompletedClientTransmitter::new(ctx, response, action));
                 }
                 PendingWriteTxn::System { updates, source } => {
                     for update in updates {
@@ -511,6 +704,20 @@ impl Coordinator {
                         BuiltinTableUpdateSource::Internal(tx)
                         | BuiltinTableUpdateSource::Background(tx) => notifies.push(tx),
                     }
+                }
+                PendingWriteTxn::InternalTimestamped(InternalTimestampedWrite {
+                    conn_id: _,
+                    span: _,
+                    writes,
+                    target_timestamp: _,
+                    result_tx,
+                }) => {
+                    for (id, table_data) in writes {
+                        if self.catalog().try_get_entry(&id).is_some() {
+                            appends.entry(id).or_default().extend(table_data);
+                        }
+                    }
+                    write_result_txs.push(result_tx);
                 }
             }
         }
@@ -591,9 +798,10 @@ impl Coordinator {
                     .instrument(debug_span!("group_commit_apply::append_fut"))
                     .await
                 {
-                    Ok(append_result) => {
-                        append_result.unwrap_or_terminate("cannot fail to apply appends")
-                    }
+                    Ok(append_result) => append_result.unwrap_or_terminate(&format!(
+                        "cannot fail to apply appends at {} ({:?})",
+                        timestamp, permit
+                    )),
                     Err(_) => warn!("Writer terminated with writes in indefinite state"),
                 };
 
@@ -624,11 +832,91 @@ impl Coordinator {
                     // We don't care if the listeners have gone away.
                     let _ = notify.send(());
                 }
+
+                // Notify callers of internally-submitted writes.
+                for result_tx in write_result_txs {
+                    let _ = result_tx.send(WriteResult::Success { timestamp });
+                }
             }
             .instrument(span),
         );
 
         timestamp
+    }
+
+    /// Pick at most one timestamped write to apply this group-commit round.
+    ///
+    /// Selects the write at the lowest eligible target timestamp; writes whose
+    /// timestamp has already passed (or that tie at the chosen timestamp) are
+    /// failed with `TimestampPassed`, and writes at higher timestamps are
+    /// deferred to the next round. Returns `None` if all timestamped writes
+    /// had already passed, in which case the caller falls back to the oracle.
+    async fn resolve_timestamped_writes(
+        &mut self,
+        timestamped_writes: Vec<InternalTimestampedWrite>,
+    ) -> Option<(Timestamp, Timestamp, InternalTimestampedWrite)> {
+        debug_assert!(!timestamped_writes.is_empty());
+
+        let next_eligible_write_ts = self.peek_local_write_ts().await.step_forward();
+
+        // Find the lowest eligible target timestamp in a single scan.
+        let lowest_eligible_ts = timestamped_writes
+            .iter()
+            .filter(|w| !w.target_timestamp.less_than(&next_eligible_write_ts))
+            .map(|w| w.target_timestamp)
+            .min();
+
+        let Some(target_ts) = lowest_eligible_ts else {
+            // All timestamped writes have passed. Fail them all; the caller
+            // will fall back to the normal oracle for regular writes.
+            for w in timestamped_writes {
+                let _ = w.result_tx.send(WriteResult::TimestampPassed {
+                    target_timestamp: w.target_timestamp,
+                    current_write_ts: next_eligible_write_ts,
+                });
+            }
+            return None;
+        };
+
+        // Dispatch each timestamped write in a single pass:
+        // - Passed (target < next_eligible_write_ts): fail with TimestampPassed
+        // - At target_ts, first one seen: select for this round
+        // - At target_ts, subsequent: fail (only one per round)
+        // - Above target_ts: defer to next round
+        let mut selected: Option<InternalTimestampedWrite> = None;
+        for w in timestamped_writes {
+            if w.target_timestamp.less_than(&next_eligible_write_ts) {
+                // Timestamp has passed.
+                let _ = w.result_tx.send(WriteResult::TimestampPassed {
+                    target_timestamp: w.target_timestamp,
+                    current_write_ts: next_eligible_write_ts,
+                });
+            } else if w.target_timestamp == target_ts && selected.is_none() {
+                // Winner: include in this round.
+                selected = Some(w);
+            } else if w.target_timestamp == target_ts {
+                // Loser at same timestamp — only one can write per round.
+                let _ = w.result_tx.send(WriteResult::TimestampPassed {
+                    target_timestamp: w.target_timestamp,
+                    current_write_ts: target_ts.step_forward(),
+                });
+            } else {
+                // Higher timestamp — defer to next round.
+                self.pending_writes
+                    .push(PendingWriteTxn::InternalTimestamped(w));
+            }
+        }
+
+        // If there are more timestamped writes waiting, trigger another group commit.
+        if self
+            .pending_writes
+            .iter()
+            .any(|w| matches!(w, PendingWriteTxn::InternalTimestamped(_)))
+        {
+            self.trigger_group_commit();
+        }
+
+        selected.map(|write| (target_ts, target_ts.step_forward(), write))
     }
 
     /// Submit a write to be executed during the next group commit and trigger a group commit.

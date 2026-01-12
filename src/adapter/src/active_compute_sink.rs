@@ -116,6 +116,9 @@ pub struct ActiveSubscribe {
     pub start_time: EpochMillis,
     /// How to present the subscribe's output.
     pub output: SubscribeOutput,
+    /// If true, this is an internal subscribe that should not appear in
+    /// introspection tables like mz_subscriptions.
+    pub internal: bool,
 }
 
 impl ActiveSubscribe {
