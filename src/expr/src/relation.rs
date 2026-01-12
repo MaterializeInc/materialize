@@ -2198,8 +2198,11 @@ pub fn non_nullable_columns(predicates: &[MirScalarExpr]) -> BTreeSet<usize> {
 }
 
 impl CollectionPlan for MirRelationExpr {
-    // !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
-    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    /// Collects the global collections that this MIR expression directly depends on, i.e., that it
+    /// has a `Get` for. (It does _not_ traverse view definitions transitively.)
+    ///
+    /// !!!WARNING!!!: this method has an HirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let MirRelationExpr::Get {
             id: Id::Global(id), ..

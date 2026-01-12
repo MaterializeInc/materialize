@@ -2286,8 +2286,12 @@ impl HirRelationExpr {
 }
 
 impl CollectionPlan for HirRelationExpr {
-    // !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
-    // should be kept in sync w.r.t. HIR ⇒ MIR lowering!
+    /// Collects the global collections that this HIR expression directly depends on, i.e., that it
+    /// has a `Get` for. (It does _not_ traverse view definitions transitively.)
+    /// (It does explore inside subqueries.)
+    ///
+    /// !!!WARNING!!!: this method has an MirRelationExpr counterpart. The two
+    /// should be kept in sync w.r.t. HIR ⇒ MIR lowering!
     fn depends_on_into(&self, out: &mut BTreeSet<GlobalId>) {
         if let Self::Get {
             id: Id::Global(id), ..
