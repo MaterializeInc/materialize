@@ -1735,7 +1735,27 @@ fn test_subscribe_outlive_cluster() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
-    let server = test_util::TestHarness::default().start_blocking();
+    test_read_then_write_serializability_inner(false);
+}
+
+// Same as `test_read_then_write_serializability`, but exercising the frontend
+// OCC read-then-write path. Concurrent `INSERT INTO t SELECT * FROM t` must
+// still double the row count exactly, i.e. OCC retries must prevent lost
+// updates.
+#[mz_ore::test]
+fn test_read_then_write_serializability_frontend_occ() {
+    test_read_then_write_serializability_inner(true);
+}
+
+fn test_read_then_write_serializability_inner(frontend_occ: bool) {
+    let mut harness = test_util::TestHarness::default();
+    if frontend_occ {
+        harness = harness.with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        );
+    }
+    let server = harness.start_blocking();
 
     // Create table with initial value
     {

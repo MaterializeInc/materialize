@@ -128,7 +128,7 @@ Session Task                         Coordinator
   |                                      |
   |-- acquire OCC semaphore              |
   |                                      |
-  |-- CreateReadThenWriteSubscribe ----> |
+  |-- CreateInternalSubscribe ---------> |
   | <------------ subscribe channel -----|
   |                                      |
   |   +-- OCC Loop ------------------+   |
@@ -141,7 +141,7 @@ Session Task                         Coordinator
   |   |   if Success: break          |   |
   |   +------------------------------+   |
   |                                      |
-  |-- DropReadThenWriteSubscribe ------> |
+  |-- DropInternalSubscribe -----------> |
   |                                      |
 ```
 
@@ -193,7 +193,7 @@ subscribe.
 The subscribes created for read-then-write are internal: they do not appear in
 `mz_subscriptions` or other introspection tables, and they don't increment the
 active subscribes metric. They are created and dropped via dedicated `Command`
-variants (`CreateReadThenWriteSubscribe`, `DropReadThenWriteSubscribe`).
+variants (`CreateInternalSubscribe`, `DropInternalSubscribe`).
 
 ## Correctness
 

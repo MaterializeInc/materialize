@@ -31,11 +31,11 @@ use prometheus::Histogram;
 use qcell::QCell;
 use thiserror::Error;
 use timely::progress::Antichain;
-use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::command::{CatalogSnapshot, Command};
+use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::peek::FastPathPlan;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::session::{LifecycleTimestamps, Session};
@@ -75,6 +75,12 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
+    pub frontend_read_then_write_enabled: bool,
+    /// Whether the coordinator is in read-only mode. Mutations must be rejected.
+    pub read_only: bool,
 }
 
 impl PeekClient {
@@ -90,6 +96,9 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        occ_write_semaphore: Arc<Semaphore>,
+        frontend_read_then_write_enabled: bool,
+        read_only: bool,
     ) -> Self {
         Self {
             coordinator_client,
@@ -101,6 +110,9 @@ impl PeekClient {
             statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
+            occ_write_semaphore,
+            frontend_read_then_write_enabled,
+            read_only,
         }
     }
 
@@ -198,6 +210,12 @@ impl PeekClient {
         self.coordinator_client.send(f(tx));
         rx.await
             .expect("if the coordinator is still alive, it shouldn't have dropped our call")
+    }
+
+    /// Returns a clone of the coordinator client, for use in cleanup guards
+    /// that need to send fire-and-forget commands.
+    pub(crate) fn coordinator_client(&self) -> &crate::Client {
+        &self.coordinator_client
     }
 
     /// Acquire read holds on the given compute/storage collections, and
@@ -500,12 +518,11 @@ impl PeekClient {
     /// entry. If `outer_ctx_extra` is `Some` (e.g. EXECUTE/FETCH), reuses and
     /// retires the existing logging context.
     ///
-    /// Returns a [`StatementLoggingGuard`]. Callers must either
-    /// [`retire`](StatementLoggingGuard::retire) the guard on the execution's
-    /// terminal outcome, or [`defuse`](StatementLoggingGuard::defuse) it at
-    /// the point where end-of-execution logging is handed off to another
-    /// component. Dropping the guard without retiring it emits an `Aborted`
-    /// end-execution event.
+    /// Returns a [`StatementLoggingGuard`]. Callers must retire the guard
+    /// (e.g. via [`StatementLoggingGuard::retire_with_result`]) on the
+    /// execution's terminal outcome, or [`defuse`](StatementLoggingGuard::defuse)
+    /// it when handing off logging responsibility. Dropping the guard without
+    /// retiring it emits an `Aborted` end-execution event.
     pub(crate) fn begin_statement_logging(
         &self,
         session: &mut Session,
@@ -674,6 +691,17 @@ impl StatementLoggingGuard {
     /// A no-op if the guard was defused or the statement is not sampled.
     pub(crate) fn retire(mut self, reason: statement_logging::StatementEndedExecutionReason) {
         self.emit(reason);
+    }
+
+    /// Retires the guard using the standard mapping from an execution result.
+    pub(crate) fn retire_with_result(self, result: &Result<ExecuteResponse, AdapterError>) {
+        let reason = match result {
+            Ok(resp) => resp.into(),
+            Err(e) => statement_logging::StatementEndedExecutionReason::Errored {
+                error: e.to_string(),
+            },
+        };
+        self.retire(reason);
     }
 
     /// Hands off logging responsibility without emitting an end-execution
