@@ -61,7 +61,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -70,7 +70,7 @@ use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
-use crate::coord::appends::PendingWriteTxn;
+use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
@@ -562,6 +562,65 @@ impl Coordinator {
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
+                Command::RegisterConnectionCancelWatch { conn_id, tx } => {
+                    // Always replace any existing entry. Another code path
+                    // (e.g. `sequence_staged`) may have left a stale watch
+                    // here, possibly already signaled `true` from a prior
+                    // cancel. Reusing it via `or_insert_with` would hand out
+                    // a `Receiver` that already reads `true`, causing the new
+                    // operation to immediately return `Canceled` even though
+                    // it hasn't been cancelled.
+                    let (watch_tx, watch_rx) = watch::channel(false);
+                    self.connection_cancel_watches
+                        .insert(conn_id, (watch_tx, watch_rx.clone()));
+                    let _ = tx.send(watch_rx);
+                }
+                Command::UnregisterConnectionCancelWatch { conn_id } => {
+                    self.connection_cancel_watches.remove(&conn_id);
+                }
+                Command::CreateInternalSubscribe {
+                    df_desc,
+                    cluster_id,
+                    replica_id,
+                    depends_on,
+                    as_of,
+                    arity,
+                    sink_id,
+                    conn_id,
+                    session_uuid,
+                    start_time,
+                    read_holds,
+                    tx,
+                } => {
+                    self.handle_create_internal_subscribe(
+                        *df_desc,
+                        cluster_id,
+                        replica_id,
+                        depends_on,
+                        as_of,
+                        arity,
+                        sink_id,
+                        conn_id,
+                        session_uuid,
+                        start_time,
+                        read_holds,
+                        tx,
+                    )
+                    .await;
+                }
+                Command::AttemptWrite {
+                    conn_id,
+                    target_id,
+                    diffs,
+                    write_ts,
+                    tx,
+                } => {
+                    self.handle_attempt_write(conn_id, target_id, diffs, write_ts, tx)
+                        .await;
+                }
+                Command::DropInternalSubscribe { sink_id } => {
+                    self.drop_internal_subscribe(sink_id).await;
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -847,6 +906,9 @@ impl Coordinator {
                     persist_client: self.persist_client.clone(),
                     statement_logging_frontend,
                     superuser_attribute,
+                    occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
+                    frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
+                    read_only: self.controller.read_only(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -1805,20 +1867,45 @@ impl Coordinator {
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
 
-        // Cancel pending writes. There is at most one pending write per session.
-        let pending_write_idx = self.pending_writes.iter().position(|pending_write_txn| {
-            matches!(pending_write_txn, PendingWriteTxn::User {
-                pending_txn: PendingTxn { ctx, .. },
-                ..
-            } if *ctx.session().conn_id() == conn_id)
-        });
-        if let Some(idx) = pending_write_idx {
-            if let PendingWriteTxn::User {
-                pending_txn: PendingTxn { ctx, .. },
-                ..
-            } = self.pending_writes.remove(idx)
-            {
-                maybe_ctx = Some(ctx);
+        // Cancel all pending writes for this connection:
+        // - At most one session-bound write (`UserWriteResponder::Session`);
+        //   retired via its `ExecuteContext` below.
+        // - Any number of internal writes submitted by the frontend
+        //   read-then-write path (`UserWriteResponder::Internal` or
+        //   `InternalTimestamped`); the waiter receives `WriteResult::Canceled`.
+        let (cancelled, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_writes)
+            .into_iter()
+            .partition(|pending_write_txn| match pending_write_txn {
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
+                    ..
+                } => *ctx.session().conn_id() == conn_id,
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Internal { conn_id: c, .. },
+                    ..
+                } => *c == conn_id,
+                PendingWriteTxn::InternalTimestamped(w) => w.conn_id == conn_id,
+                PendingWriteTxn::System { .. } => false,
+            });
+        self.pending_writes = kept;
+        for pending in cancelled {
+            match pending {
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
+                    ..
+                } => {
+                    maybe_ctx = Some(ctx);
+                }
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Internal { result_tx, .. },
+                    ..
+                } => {
+                    let _ = result_tx.send(WriteResult::Canceled);
+                }
+                PendingWriteTxn::InternalTimestamped(w) => {
+                    let _ = w.result_tx.send(WriteResult::Canceled);
+                }
+                PendingWriteTxn::System { .. } => unreachable!("filtered out above"),
             }
         }
 

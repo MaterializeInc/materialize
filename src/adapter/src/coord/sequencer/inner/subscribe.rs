@@ -505,6 +505,7 @@ impl Coordinator {
             depends_on: dependency_ids,
             start_time: self.now(),
             output: plan.output,
+            internal: false,
         };
         active_subscribe.initialize();
 

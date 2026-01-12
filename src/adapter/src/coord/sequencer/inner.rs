@@ -97,7 +97,9 @@ use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{self, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
 use crate::command::{ExecuteResponse, Response};
-use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
+use crate::coord::appends::{
+    BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
+};
 use crate::coord::read_then_write::validate_read_then_write_dependencies;
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
@@ -2082,11 +2084,11 @@ impl Coordinator {
                     span: Span::current(),
                     writes: collected_writes,
                     write_locks: validated_locks,
-                    pending_txn: PendingTxn {
+                    responder: UserWriteResponder::Session(PendingTxn {
                         ctx,
                         response,
                         action,
-                    },
+                    }),
                 });
                 return;
             }
