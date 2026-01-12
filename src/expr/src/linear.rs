@@ -1741,12 +1741,10 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
-                row_buf.packer().extend(
-                    self.mfp
-                        .projection
-                        .iter()
-                        .map(|c| datums.get(*c).expect("invalid map")),
-                );
+                let mut packer = row_buf.packer();
+                for i in &self.mfp.projection {
+                    packer.push(datums.get(*i)?);
+                }
                 Ok(Some(row_buf))
             }
         }
@@ -1766,12 +1764,22 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
-                Ok(Some(
-                    self.mfp
-                        .projection
-                        .iter()
-                        .map(move |i| datums.get(*i).expect("error in map!")),
-                ))
+                // If any of the projection indices are errored, return the first error.
+                let first_err = self
+                    .mfp
+                    .projection
+                    .iter()
+                    .find_map(|i| datums.get(*i).err());
+                if let Some(err) = first_err {
+                    Err(err)
+                } else {
+                    Ok(Some(
+                        self.mfp
+                            .projection
+                            .iter()
+                            .map(move |i| datums.get(*i).expect("error free")),
+                    ))
+                }
             }
         }
 
@@ -1784,22 +1792,30 @@ pub mod plan {
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
             let mut expression = 0;
+            let mut null = false;
+            let mut err = None;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    let datum: Datum<'a> =
-                        self.mfp.expressions[expression].eval(&*datums, arena)?;
-                    datums.push(datum);
+                    datums.push_result(self.mfp.expressions[expression].eval(&*datums, arena));
                     expression += 1;
                 }
-                if predicate.eval(&*datums, arena)? != Datum::True {
-                    return Ok(false);
+                match predicate.eval(&*datums, arena) {
+                    Ok(Datum::False) => return Ok(false),
+                    Ok(Datum::True) => {}
+                    Ok(Datum::Null) => null = true,
+                    Err(e) => err = std::cmp::max(err.take(), Some(e)),
+                    Ok(_) => unreachable!(),
                 }
             }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&*datums, arena)?);
+                datums.push_result(self.mfp.expressions[expression].eval(&*datums, arena));
                 expression += 1;
             }
-            Ok(true)
+            match (err, null) {
+                (Some(err), _) => Err(err),
+                (None, true) => Ok(false),
+                (None, false) => Ok(true),
+            }
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -1976,15 +1992,7 @@ pub mod plan {
         ) -> impl Iterator<
             Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>,
         > + use<E, V> {
-            match self.mfp.evaluate_inner(datums, arena) {
-                Err(e) => {
-                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
-                }
-                Ok(true) => {}
-                Ok(false) => {
-                    return None.into_iter().chain(None);
-                }
-            }
+            let mut err = None;
 
             // Lower and upper bounds.
             let mut lower_bound = time;
@@ -1994,15 +2002,19 @@ pub mod plan {
             // prevent the record from being produced at any time.
             let mut null_eval = false;
 
+            match self.mfp.evaluate_inner(datums, arena) {
+                Err(e) => err = std::cmp::max(err.take(), Some(e)),
+                Ok(true) => {}
+                Ok(false) => {
+                    return None.into_iter().chain(None);
+                }
+            }
+
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
                 match l.eval(&*datums, arena) {
-                    Err(e) => {
-                        return Some(Err((e.into(), time, diff)))
-                            .into_iter()
-                            .chain(None.into_iter());
-                    }
+                    Err(e) => err = std::cmp::max(err.take(), Some(e)),
                     Ok(Datum::MzTimestamp(d)) => {
                         lower_bound = lower_bound.max(d);
                     }
@@ -2026,11 +2038,7 @@ pub mod plan {
                 // as the update will certainly not be produced in that case.
                 if upper_bound != Some(lower_bound) {
                     match u.eval(&*datums, arena) {
-                        Err(e) => {
-                            return Some(Err((e.into(), time, diff)))
-                                .into_iter()
-                                .chain(None.into_iter());
-                        }
+                        Err(e) => err = std::cmp::max(err.take(), Some(e)),
                         Ok(Datum::MzTimestamp(d)) => {
                             if let Some(upper) = upper_bound {
                                 upper_bound = Some(upper.min(d));
@@ -2064,20 +2072,27 @@ pub mod plan {
 
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
-            if Some(lower_bound) != upper_bound && !null_eval {
-                row_builder.packer().extend(
-                    self.mfp
-                        .mfp
-                        .projection
-                        .iter()
-                        .map(|c| datums.get(*c).expect("fixme")),
-                );
+            let result = if Some(lower_bound) != upper_bound && !null_eval {
+                let mut packer = row_builder.packer();
+                for i in &self.mfp.mfp.projection {
+                    match datums.get(*i) {
+                        Ok(d) => {
+                            packer.push(d);
+                        }
+                        Err(e) => err = std::cmp::max(err.take(), Some(e)),
+                    }
+                }
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
                 lower.into_iter().chain(upper_opt)
             } else {
                 None.into_iter().chain(None)
+            };
+            if let Some(e) = err {
+                Some(Err((e.into(), time, diff))).into_iter().chain(None)
+            } else {
+                result
             }
         }
 
