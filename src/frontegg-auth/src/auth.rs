@@ -15,11 +15,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
+use async_trait::async_trait;
 use derivative::Derivative;
 use futures::FutureExt;
 use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
+use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -166,27 +168,27 @@ impl Authenticator {
         Ok(Some(Self::new(config, client, registry)))
     }
 
-    /// Establishes a new authentication session.
-    ///
-    /// If successful, returns a handle to the authentication session.
-    /// Otherwise, returns the authentication error.
-    pub async fn authenticate(
-        &self,
-        expected_user: &str,
-        password: &str,
-    ) -> Result<AuthSessionHandle, Error> {
-        let password: AppPassword = password.parse()?;
-        match self.authenticate_inner(expected_user, password).await {
-            Ok(handle) => {
-                tracing::debug!("authentication successful");
-                Ok(handle)
-            }
-            Err(e) => {
-                tracing::debug!(error = ?e, "authentication failed");
-                Err(e)
-            }
-        }
-    }
+    // /// Establishes a new authentication session.
+    // ///
+    // /// If successful, returns a handle to the authentication session.
+    // /// Otherwise, returns the authentication error.
+    // pub async fn authenticate(
+    //     &self,
+    //     expected_user: &str,
+    //     password: &str,
+    // ) -> Result<AuthSessionHandle, Error> {
+    //     let password: AppPassword = password.parse()?;
+    //     match self.authenticate_inner(expected_user, password).await {
+    //         Ok(handle) => {
+    //             tracing::debug!("authentication successful");
+    //             Ok(handle)
+    //         }
+    //         Err(e) => {
+    //             tracing::debug!(error = ?e, "authentication failed");
+    //             Err(e)
+    //         }
+    //     }
+    // }
 
     #[instrument(level = "debug", fields(client_id = %password.client_id))]
     async fn authenticate_inner(
@@ -298,6 +300,34 @@ impl Authenticator {
         };
         request.await
     }
+}
+
+#[async_trait]
+impl OidcAuthenticator for Authenticator {
+    type Error = Error;
+    type SessionHandle = AuthSessionHandle;
+    type ValidatedClaims = ValidatedClaims;
+    /// Establishes a new authentication session.
+    ///
+    /// If successful, returns a handle to the authentication session.
+    /// Otherwise, returns the authentication error.
+    async fn authenticate(
+        &self,
+        expected_user: &str,
+        password: &str,
+    ) -> Result<AuthSessionHandle, Error> {
+        let password: AppPassword = password.parse()?;
+        match self.authenticate_inner(expected_user, password).await {
+            Ok(handle) => {
+                tracing::debug!("authentication successful");
+                Ok(handle)
+            }
+            Err(e) => {
+                tracing::debug!(error = ?e, "authentication failed");
+                Err(e)
+            }
+        }
+    }
 
     /// Validates an access token, returning the validated claims.
     ///
@@ -309,7 +339,7 @@ impl Authenticator {
     ///
     /// If `expected_user` is provided, the token's user name is additionally
     /// validated to match `expected_user`.
-    pub fn validate_access_token(
+    fn validate_access_token(
         &self,
         token: &str,
         expected_user: Option<&str>,
@@ -317,23 +347,13 @@ impl Authenticator {
         self.inner.validate_access_token(token, expected_user)
     }
 }
-
 /// A handle to an authentication session.
-///
-/// An authentication session represents a duration of time during which a
-/// user's authentication is known to be valid.
 ///
 /// An authentication session begins with a successful API key exchange with
 /// Frontegg. While there is at least one outstanding handle to the session, the
 /// session's metadata and validity are refreshed with Frontegg at a regular
 /// interval. The session ends when all outstanding handles are dropped and the
 /// refresh interval is reached.
-///
-/// [`AuthSessionHandle::external_metadata_rx`] can be used to receive events if
-/// the session's metadata is updated.
-///
-/// [`AuthSessionHandle::expired`] can be used to learn if the session has
-/// failed to refresh the validity of the API key.
 #[derive(Debug, Clone)]
 pub struct AuthSessionHandle {
     ident: Arc<AuthSessionIdent>,
@@ -344,28 +364,29 @@ pub struct AuthSessionHandle {
     app_password: AppPassword,
 }
 
-impl AuthSessionHandle {
-    /// Returns the name of the user that created the session.
-    pub fn user(&self) -> &str {
+#[async_trait]
+impl OidcAuthSessionHandle for AuthSessionHandle {
+    fn user(&self) -> &str {
         &self.ident.user
     }
 
+    async fn expired(&mut self) {
+        // We piggyback on the external metadata channel to determine session
+        // expiration. The external metadata channel is closed when the session
+        // expires.
+        let _ = self.external_metadata_rx.wait_for(|_| false).await;
+    }
+}
+
+impl AuthSessionHandle {
     /// Returns the ID of the tenant that created the session.
     pub fn tenant_id(&self) -> Uuid {
         self.ident.tenant_id
     }
 
-    /// Mints a receiver for updates to the session user's external metadata.
+    /// Returns a receiver for updates to the session user's external metadata.
     pub fn external_metadata_rx(&self) -> watch::Receiver<ExternalUserMetadata> {
         self.external_metadata_rx.clone()
-    }
-
-    /// Completes when the authentication session has expired.
-    pub async fn expired(&mut self) {
-        // We piggyback on the external metadata channel to determine session
-        // expiration. The external metadata channel is closed when the session
-        // expires.
-        let _ = self.external_metadata_rx.wait_for(|_| false).await;
     }
 }
 

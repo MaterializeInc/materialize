@@ -45,6 +45,7 @@ use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSes
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
+use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_controller::ReplicaHttpLocator;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;

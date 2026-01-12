@@ -31,6 +31,7 @@ use mz_adapter::{
 };
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
+use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};
@@ -229,7 +230,7 @@ where
                         internal_user_metadata: None,
                         helm_chart_version,
                     });
-                    let expired = async move { auth_session.expired().await };
+                    let expired = async move { auth_session.expired().await }.boxed();
                     (session, expired.left_future())
                 }
                 Err(err) => {

@@ -43,6 +43,7 @@ mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-auth = { path = "../auth" }
 mz-authenticator = { path = "../authenticator" }
+mz-authenticator-types = { path = "../authenticator-types" }
 mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
 mz-adapter = { path = "../adapter" }

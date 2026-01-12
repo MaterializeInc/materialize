@@ -1,0 +1,23 @@
+[package]
+name = "mz-authenticator-types"
+description = "Shared types for Materialize authentication."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1.89"
+mz-repr = { path = "../repr" }
+tokio = { version = "1.48.0", features = ["macros"] }
+uuid = { version = "1.19.0", features = ["serde"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]
