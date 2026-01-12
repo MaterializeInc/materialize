@@ -333,13 +333,7 @@ impl fmt::Display for HirScalarExpr {
             }
             CallBinary {
                 func, expr1, expr2, ..
-            } => {
-                if func.is_infix_op() {
-                    write!(f, "({} {} {})", expr1, func, expr2)
-                } else {
-                    write!(f, "{}({}, {})", func, expr1, expr2)
-                }
-            }
+            } => func.format(f, expr1, expr2),
             CallVariadic { func, exprs, .. } => {
                 use mz_expr::VariadicFunc::*;
                 match func {

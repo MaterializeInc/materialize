@@ -1084,6 +1084,20 @@ select position(strcol1 IN strcol2) from positiontest;
 NULL
 NULL
 
+query T multiline
+EXPLAIN SELECT position(strcol1 IN strcol2) FROM positiontest;
+----
+Explained Query:
+  →Read materialize.public.positiontest
+
+Source materialize.public.positiontest
+  project=(#4)
+  map=(position(char_to_text(#0{strcol1}) in char_to_text(#1{strcol2})))
+
+Target cluster: quickstart
+
+EOF
+
 query I rowsort
 SELECT position(vccol1 IN vccol2) FROM positiontest
 ----

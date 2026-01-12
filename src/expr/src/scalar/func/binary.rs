@@ -63,6 +63,15 @@ pub(crate) trait LazyBinaryFunc {
 
     /// Yep, I guess this returns true for infix operators.
     fn is_infix_op(&self) -> bool;
+
+    fn format(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        expr_a: impl std::fmt::Display,
+        expr_b: impl std::fmt::Display,
+    ) -> std::fmt::Result
+    where
+        Self: std::fmt::Display;
 }
 
 #[allow(unused)]
@@ -108,6 +117,23 @@ pub(crate) trait EagerBinaryFunc<'a> {
 
     fn is_infix_op(&self) -> bool {
         false
+    }
+
+    fn format(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        expr_a: impl std::fmt::Display,
+        expr_b: impl std::fmt::Display,
+    ) -> std::fmt::Result
+    where
+        Self: std::fmt::Display,
+    {
+        if self.is_infix_op() {
+            write!(f, "({} {} {})", expr_a, self, expr_b)?
+        } else {
+            write!(f, "{}({}, {})", self, expr_b, expr_b)?
+        }
+        Ok(())
     }
 }
 
@@ -174,6 +200,18 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
 
     fn is_infix_op(&self) -> bool {
         self.is_infix_op()
+    }
+
+    fn format(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        expr_a: impl std::fmt::Display,
+        expr_b: impl std::fmt::Display,
+    ) -> std::fmt::Result
+    where
+        Self: std::fmt::Display,
+    {
+        self.format(f, expr_a, expr_b)
     }
 }
 

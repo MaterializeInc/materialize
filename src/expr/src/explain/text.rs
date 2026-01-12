@@ -1290,22 +1290,18 @@ where
                         }
                     }
                 }
-                if let Some(is) = func.is() {
-                    let expr = self.child::<MirScalarExpr>(&*expr);
-                    write!(f, "({}) IS {}", expr, is)
-                } else {
-                    let expr = self.child::<MirScalarExpr>(&*expr);
-                    write!(f, "{}({})", func, expr)
-                }
+                // if let Some(is) = func.is() {
+                //     let expr = self.child::<MirScalarExpr>(&*expr);
+                //     write!(f, "({}) IS {}", expr, is)
+                // } else {
+                let expr = self.child::<MirScalarExpr>(&*expr);
+                func.format(f, expr)
+                // }
             }
             CallBinary { func, expr1, expr2 } => {
                 let expr1 = self.child::<MirScalarExpr>(&*expr1);
                 let expr2 = self.child::<MirScalarExpr>(&*expr2);
-                if func.is_infix_op() {
-                    write!(f, "({} {} {})", expr1, func, expr2)
-                } else {
-                    write!(f, "{}({}, {})", func, expr1, expr2)
-                }
+                func.format(f, expr1, expr2)
             }
             CallVariadic { func, exprs } => {
                 use crate::VariadicFunc::*;

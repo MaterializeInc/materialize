@@ -197,6 +197,18 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
                 }
             }
+            pub fn format(
+                &self,
+                f: &mut std::fmt::Formatter<'_>,
+                expr: impl std::fmt::Display,
+            ) -> std::fmt::Result
+            where
+                Self: std::fmt::Display,
+            {
+                match self {
+                    $(Self::$name(s) => LazyUnaryFunc::format(s, f, expr),)*
+                }
+            }
         }
 
         impl fmt::Display for UnaryFunc {

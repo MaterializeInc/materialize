@@ -55,7 +55,8 @@ impl fmt::Display for PadChar {
     inverse = to_unary!(super::CastStringToChar{
         length: None,
         fail_on_len: false,
-    })
+    }),
+    format = "{0}::char::text"
 )]
 fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
     a.0

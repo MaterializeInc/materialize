@@ -95,6 +95,17 @@ pub trait LazyUnaryFunc {
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the argument and the result are non-error datums.
     fn is_monotone(&self) -> bool;
+
+    fn format(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        expr: impl std::fmt::Display,
+    ) -> std::fmt::Result
+    where
+        Self: std::fmt::Display,
+    {
+        write!(f, "{}({})", self, expr)
+    }
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -135,6 +146,17 @@ pub trait EagerUnaryFunc<'a> {
 
     fn is_monotone(&self) -> bool {
         false
+    }
+
+    fn format(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        expr: impl std::fmt::Display,
+    ) -> std::fmt::Result
+    where
+        Self: std::fmt::Display,
+    {
+        write!(f, "{}({})", self, expr)
     }
 }
 
@@ -183,6 +205,17 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
 
     fn is_monotone(&self) -> bool {
         self.is_monotone()
+    }
+
+    fn format(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        expr: impl std::fmt::Display,
+    ) -> std::fmt::Result
+    where
+        Self: std::fmt::Display,
+    {
+        self.format(f, expr)
     }
 }
 

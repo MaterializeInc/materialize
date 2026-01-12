@@ -41,6 +41,7 @@ pub(crate) struct Modifiers {
     propagates_nulls: Option<Expr>,
     /// Whether the function introduces nulls. Applies to all functions.
     introduces_nulls: Option<Expr>,
+    format: Option<String>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -232,6 +233,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         could_error,
         propagates_nulls,
         introduces_nulls,
+        format,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -275,6 +277,21 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         quote! {
             fn is_monotone(&self) -> bool {
                 #is_monotone
+            }
+        }
+    });
+
+    let format_fn = format.map(|format| {
+        quote! {
+            fn format(
+                &self,
+                f: &mut std::fmt::Formatter<'_>,
+                expr: impl std::fmt::Display,
+            ) -> std::fmt::Result
+            where
+                Self: std::fmt::Display,
+            {
+                write!(f, #format, expr)
             }
         }
     });
@@ -338,6 +355,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
             #inverse_fn
             #is_monotone_fn
             #preserves_uniqueness_fn
+            #format_fn
         }
 
         impl std::fmt::Display for #struct_name {
@@ -375,6 +393,7 @@ fn binary_func(
         could_error,
         propagates_nulls,
         introduces_nulls,
+        format,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
@@ -410,6 +429,22 @@ fn binary_func(
         quote! {
             fn is_monotone(&self) -> (bool, bool) {
                 #is_monotone
+            }
+        }
+    });
+
+    let format_fn = format.map(|format| {
+        quote! {
+            fn format(
+                &self,
+                f: &mut std::fmt::Formatter<'_>,
+                expr_a: impl std::fmt::Display,
+                expr_b: impl std::fmt::Display,
+            ) -> std::fmt::Result
+            where
+                Self: std::fmt::Display
+            {
+                write!(f, #format, expr_a, expr_b)
             }
         }
     });
@@ -501,6 +536,7 @@ fn binary_func(
             #is_monotone_fn
             #negate_fn
             #propagates_nulls_fn
+            #format_fn
         }
 
         impl std::fmt::Display for #struct_name {
