@@ -13,19 +13,49 @@ A [sink](/concepts/sinks/) describes an external system you
 want Materialize to write data to, and provides details about how to encode
 that data. You can define a sink over a materialized view, source, or table.
 
-## Connectors
+## Syntax summary
 
-Materialize bundles **native connectors** that allow writing data to the
-following external systems:
+<!--"Docs Note: Using include-example shortcode instead of include-syntax since only want the code snippet on this page."
+-->
 
-{{< multilinkbox >}}
-{{< linkbox title="Message Brokers" >}}
-- [Kafka/Redpanda](/sql/create-sink/kafka)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+{{< tabs >}}
 
-For details on the syntax, supported formats and features of each connector,
-check out the dedicated `CREATE SINK` documentation pages.
+{{< tab "Kafka/Redpanda" >}}
+
+{{< tabs >}}
+
+{{< tab "Format Avro" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-avro" %}}
+
+{{< /tab >}}
+
+{{< tab "Format JSON" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-json" %}}
+
+{{< /tab >}}
+
+{{< tab "Format TEXT/BYTES" >}}
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-text-bytes" %}}
+
+{{< /tab >}}
+
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
+
+By default, the message key is encoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT`.
+
+{{% include-example file="examples/create_sink_kafka" example="syntax-key-value-format" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+
+For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Best practices
 

@@ -19,11 +19,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-time.svg" >}}
-
-Field | Use
-------|------------
-_time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
+{{% include-syntax file="sql_types/time" example="syntax" %}}
 
 ## Details
 

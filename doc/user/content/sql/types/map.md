@@ -19,12 +19,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-map.svg" >}}
-
-Field | Use
-------|-----
-_map&lowbar;string_ | A well-formed map object.
-_value&lowbar;type_ | The [type](../../types) of the map's values.
+{{% include-syntax file="sql_types/map" example="syntax" %}}
 
 ## Map functions + operators
 

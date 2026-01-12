@@ -480,7 +480,7 @@ an SSH bastion server to accept connections from Materialize, check [this guide]
 
 A Confluent Schema Registry connection establishes a link to a [Confluent Schema
 Registry] server. You can use Confluent Schema Registry connections in the
-[`FORMAT`] clause of [`CREATE SOURCE`] and [`CREATE SINK`] statements.
+`FORMAT` clause of [`CREATE SOURCE`] and [`CREATE SINK`] statements.
 
 #### Syntax {#csr-syntax}
 
@@ -950,7 +950,6 @@ The privileges required to execute this statement are:
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
-[`FORMAT`]: /sql/create-source/#formats
 [`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
 [`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections

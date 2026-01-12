@@ -20,7 +20,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-bool.svg" >}}
+{{% include-syntax file="sql_types/boolean" example="syntax" %}}
 
 ## Details
 

@@ -10,18 +10,13 @@ The `cast` function and operator return a value converted to the specified [type
 
 ## Signatures
 
-{{< diagram "func-cast.svg" >}}
+{{% include-syntax file="sql_functions/cast" example="syntax-function" %}}
 
-{{< diagram "op-cast.svg" >}}
-
-Parameter | Type | Description
-----------|------|------------
-_val_ | [Any](../../types) | The value you want to convert.
-_type_ | [Typename](../../types) | The return value's type.
+{{% include-syntax file="sql_functions/cast" example="syntax-operator" %}}
 
 The following special syntax is permitted if _val_ is a string literal:
 
-{{< diagram "lit-cast.svg" >}}
+{{% include-syntax file="sql_functions/cast" example="syntax-literal" %}}
 
 ### Return value
 

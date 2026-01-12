@@ -13,7 +13,7 @@ To align values along arbitrary values, see [`date_bin`].
 
 ## Signatures
 
-{{< diagram "func-date-trunc.svg" >}}
+{{% include-syntax file="sql_functions/date_trunc" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

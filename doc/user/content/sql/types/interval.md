@@ -24,24 +24,15 @@ Detail | Info
 
 ## Syntax
 
-#### INTERVAL
+{{% include-syntax file="sql_types/interval" example="syntax" %}}
 
-{{< diagram "type-interval-val.svg" >}}
+### `time_expr` syntax
 
-#### `time_expr`
+{{% include-syntax file="sql_types/interval" example="syntax-time-expr" %}}
 
-{{< diagram "type-interval-time-expr.svg" >}}
+### `time_unit` syntax
 
-#### `time_unit`
-
-{{< diagram "time-unit.svg" >}}
-
-Field | Use
-------|----
-_ym&lowbar;str_ | A string representing years and months in `Y-M D` format.
-_time&lowbar;str_ | A string representing hours, minutes, seconds, and nanoseconds in `H:M:S.NS` format.
-_head&lowbar;time&lowbar;unit_ | Return an interval without `time_unit`s larger than `head_time_unit`. Note that this differs from PostgreSQL's implementation, which ignores this clause.
-_tail&lowbar;time&lowbar;unit_ | 1. Return an interval without `time_unit` smaller than `tail_time_unit`.<br/><br/>2. If the final `time_expr` is only a number, treat the `time_expr` as belonging to `tail_time_unit`. This is the case of the most common `interval` format like `INTERVAL '1' MINUTE`.
+{{% include-syntax file="sql_types/interval" example="syntax-time-unit" %}}
 
 ## Details
 

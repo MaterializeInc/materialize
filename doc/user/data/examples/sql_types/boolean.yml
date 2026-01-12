@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    TRUE | FALSE
+  syntax_elements:
+    - name: "**TRUE**"
+      description: |
+        The boolean value `true`.
+    - name: "**FALSE**"
+      description: |
+        The boolean value `false`.

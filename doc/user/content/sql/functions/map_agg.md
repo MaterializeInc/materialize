@@ -13,7 +13,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "func-map-agg.svg" >}}
+{{% include-syntax file="sql_functions/map_agg" example="syntax" %}}
 
 ## Signatures
 

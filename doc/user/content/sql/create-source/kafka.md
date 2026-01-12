@@ -17,76 +17,139 @@ aliases:
 ---
 
 {{% create-source/intro %}}
-To connect to a Kafka broker (and optionally a schema registry), you first need
-to [create a connection](#creating-a-connection) that specifies access and
-authentication parameters. Once created, a connection is **reusable** across
-multiple `CREATE SOURCE` and `CREATE SINK` statements.
-{{% /create-source/intro %}}
+
+To connect to a Kafka/Redpanda broker (and optionally a schema registry), you
+first need to [create a connection](#prerequisite-creating-a-connection) that specifies
+access and authentication parameters. Once created, a connection is **reusable**
+across multiple `CREATE SOURCE` and `CREATE SINK` statements. {{%
+/create-source/intro %}}
 
 {{< note >}}
 The same syntax, supported formats and features can be used to connect to a
 [Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
-{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
-
 ## Syntax
 
-{{< diagram "create-source-kafka.svg" >}}
+{{< tabs >}}
 
-#### `format_spec`
+{{< tab "Format Avro" >}}
+### Format Avro
 
-{{< diagram "format-spec.svg" >}}
+Materialize can decode Avro messages by integrating with a schema registry to
+retrieve a schema, and automatically determine the columns and data types to use
+in the source.
 
-#### `key_strat`
+{{% include-syntax file="examples/create_source_kafka" example="syntax-avro" %}}
 
-{{< diagram "key-strat.svg" >}}
 
-#### `val_strat`
+#### Schema versioning
 
-{{< diagram "val-strat.svg" >}}
+The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued.
 
-#### `strat`
+#### Schema evolution
 
-{{< diagram "strat.svg" >}}
+As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/++version++/specification/#schema-resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source.
 
-### `with_options`
+#### Name collision
 
-{{< diagram "with-options-retain-history.svg" >}}
+To avoid [case-sensitivity](/sql/identifiers/#case-sensitivity) conflicts with Materialize identifiers, we recommend double-quoting all field names when working with Avro-formatted sources.
 
-{{% create-source/syntax-connector-details connector="kafka" envelopes="debezium upsert append-only" %}}
+#### Supported types
 
-### `CONNECTION` options
+Materialize supports all [Avro
+types](https://avro.apache.org/docs/++version++/specification/), _except for_
+recursive types and union types in arrays.
 
-Field                                         | Value     | Description
-----------------------------------------------|-----------|-------------------------------------
-**TOPIC**                                     | `text`    | The Kafka topic you want to subscribe to.
-**GROUP ID PREFIX**                           | `text`    | The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{< /tab >}}
 
-## Supported formats
+{{< tab "Format JSON" >}}
+### Format JSON
 
-|<div style="width:290px">Format</div> | [Append-only envelope] | [Upsert envelope] | [Debezium envelope] |
----------------------------------------|:----------------------:|:-----------------:|:-------------------:|
-| [Avro]                               | ✓                      | ✓                 | ✓                   |
-| [JSON]                               | ✓                      | ✓                 |                     |
-| [Protobuf]                           | ✓                      | ✓                 |                     |
-| [Text/bytes]                         | ✓                      | ✓                 |                     |
-| [CSV]                                | ✓                      |                   |                     |
+Materialize can decode JSON messages into a single column named `data` with type
+`jsonb`. Refer to the [`jsonb` type](/sql/types/jsonb) documentation for the
+supported operations on this type.
 
-### Key-value encoding
+{{% include-syntax file="examples/create_source_kafka" example="syntax-json" %}}
 
+If your JSON messages have a consistent shape, we recommend creating a parsing
+[view](/concepts/views) that maps the individual fields to
+columns with the required data types:
+
+```mzsql
+-- extract jsonb into typed columns
+CREATE VIEW my_typed_source AS
+  SELECT
+    (data->>'field1')::boolean AS field_1,
+    (data->>'field2')::int AS field_2,
+    (data->>'field3')::float AS field_3
+  FROM my_jsonb_source;
+```
+
+To avoid doing this task manually, you can use [this **JSON parsing
+widget**](/sql/types/jsonb/#parsing).
+
+
+#### Schema registry integration
+
+Retrieving schemas from a schema registry is not supported yet for JSON-formatted sources. This means that Materialize cannot decode messages serialized using the [JSON Schema](https://docs.confluent.io/platform/current/schema-registry/serdes-develop/serdes-json.html#json-schema-serializer-and-deserializer) serialization format (`JSON_SR`).
+
+{{< /tab >}}
+
+{{< tab "Format TEXT/BYTES" >}}
+### Format Text/Bytes
+
+Materialize can:
+- Parse **new-line delimited** data as plain text. Data is assumed to be **valid
+  unicode** (UTF-8), and discarded if it cannot be converted to UTF-8.
+  Text-formatted sources have a single column, by default named `text`. For details on casting, check the [`text`](/sql/types/text/) documentation.
+
+- Read raw bytes without applying any formatting or decoding. Raw byte-formatted
+sources have a single column, by default named `data`. For details on encodings
+and casting, check the [`bytea`](/sql/types/bytea/) documentation.
+
+
+{{% include-syntax file="examples/create_source_kafka" example="syntax-text-bytes" %}}
+
+{{< /tab >}}
+
+{{< tab "Format CSV" >}}
+### Format CSV
+
+Materialize can parse CSV-formatted data. The data in CSV sources is read as
+[`text`](/sql/types/text).
+
+{{% include-syntax file="examples/create_source_kafka" example="syntax-csv" %}}
+
+{{< /tab >}}
+
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
+### KEY FORMAT VALUE FORMAT
 By default, the message key is decoded using the same format as the message
 value. However, you can set the key and value encodings explicitly using the
-`KEY FORMAT ... VALUE FORMAT` [syntax](#syntax).
+`KEY FORMAT ... VALUE FORMAT`.
 
-## Features
+{{% include-syntax file="examples/create_source_kafka" example="syntax-key-value-format" %}}
 
-### Handling upserts
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Envelopes
+
+In addition to determining how to decode incoming records, Materialize also needs to understand how to interpret them. Whether a new record inserts, updates, or deletes existing data in Materialize depends on the `ENVELOPE` specified in the `CREATE SOURCE` statement.
+
+### Append-only envelope
+
+<p style="font-size:14px"><b>Syntax:</b> <code>ENVELOPE NONE</code></p>
+
+The append-only envelope treats all records as inserts. This is the **default** envelope, if no envelope is specified.
+
+### Upsert envelope
 
 To create a source that uses the standard key-value convention to support
 inserts, updates, and deletes within Materialize, you can use `ENVELOPE
-UPSERT`:
+UPSERT`. For example:
 
 ```mzsql
 CREATE SOURCE kafka_upsert
@@ -95,7 +158,16 @@ CREATE SOURCE kafka_upsert
   ENVELOPE UPSERT;
 ```
 
-Note that:
+The upsert envelope treats all records as having a **key** and a **value**, and supports inserts, updates and deletes within Materialize:
+
+- If the key does not match a preexisting record, it inserts the record's key and value.
+
+- If the key matches a preexisting record and the value is _non-null_, Materialize updates
+  the existing record with the new value.
+
+- If the key matches a preexisting record and the value is _null_, Materialize deletes the record.
+
+{{< note >}}
 
 - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
 
@@ -103,6 +175,8 @@ Note that:
   maintaining the source. We recommend using a standard-sized cluster, rather
   than a legacy-sized cluster, to automatically spill the workload to disk. See
   [spilling to disk](#spilling-to-disk) for details.
+
+{{< /note >}}
 
 #### Null keys
 
@@ -161,17 +235,16 @@ FROM kafka_upsert
 WHERE error IS NULL;
 ```
 
-### Using Debezium
+### Debezium envelope
 
 {{< debezium-json >}}
 
 Materialize provides a dedicated envelope (`ENVELOPE DEBEZIUM`) to decode Kafka
-messages produced by [Debezium](https://debezium.io/). To create a source that
-interprets Debezium messages:
+messages produced by [Debezium](https://debezium.io/). For example:
 
 ```mzsql
 CREATE SOURCE kafka_repl
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'pg_repl.public.table1')
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'my_table1')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
   ENVELOPE DEBEZIUM;
 ```
@@ -180,14 +253,43 @@ Any materialized view defined on top of this source will be incrementally
 updated as new change events stream in through Kafka, as a result of `INSERT`,
 `UPDATE` and `DELETE` operations in the original database.
 
-For more details and a step-by-step guide on using Kafka+Debezium for Change
-Data Capture (CDC), check [Using Debezium](/integrations/debezium/).
+This envelope treats all records as [change events](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-events) with a diff structure that indicates whether each record should be interpreted as an insert, update or delete within Materialize:
 
-Note that:
+|    |   |
+ ----|---
+ **Insert** | If the `before` field is _null_, the record represents an upstream [`create` event](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-create-events), and Materialize inserts the record's key and value.
+ **Update** | If the `before` and `after` fields are _non-null_, the record represents an upstream [`update` event](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-update-events), and Materialize updates the existing record with the new value.
+ **Delete** | If the `after` field is _null_, the record represents an upstream [`delete` event](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-delete-events), and Materialize deletes the record.
+
+
+{{< note>}}
 
 - This envelope can lead to high memory utilization in the cluster maintaining
   the source. Materialize can automatically offload processing to
   disk as needed. See [spilling to disk](#spilling-to-disk) for details.
+
+- Materialize expects a specific message structure that includes the row data
+  before and after the change event, which is **not guaranteed** for every
+  Debezium connector. For more details, check the [Debezium integration
+  guide](/integrations/debezium/).
+
+{{</ note >}}
+
+#### Truncation
+
+The Debezium envelope does not support upstream [`truncate` events](https://debezium.io/documentation/reference/stable/connectors/postgresql.html#postgresql-truncate-events).
+
+#### Debezium metadata
+
+The envelope exposes the `before` and `after` value fields from change events.
+
+#### Duplicate handling
+
+Debezium may produce duplicate records if the connector is interrupted. Materialize makes a best-effort attempt to detect and filter out duplicates.
+
+## Features
+
+
 
 ### Spilling to disk
 
@@ -384,22 +486,6 @@ If you need to limit the amount of data maintained as state after source
 creation, consider using [temporal filters](/sql/patterns/temporal-filters/)
 instead.
 
-#### `CONNECTION` options
-
-Field               | Value | Description
---------------------|-------|--------------------
-`START OFFSET`      | `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers.
-`START TIMESTAMP`   | `int` | Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). The offset for each partition will be the earliest offset whose timestamp is greater than or equal to the given timestamp in the corresponding partition. If no such offset exists for a partition, the partition's end offset will be used.
-
-#### `KEY STRATEGY` and `VALUE STRATEGY`
-
-It is possible to define how an Avro reader schema will be chosen for Avro sources by
-using the `KEY STRATEGY` and `VALUE STRATEGY` keywords, as shown in the syntax diagram.
-
-A strategy of `LATEST` (the default) will choose the latest writer schema from
-the schema registry to use as a reader schema. `ID` or `INLINE` will allow
-specifying a schema from the registry by ID or inline in the `CREATE SOURCE`
-statement, respectively.
 
 ### Monitoring source progress
 
@@ -459,7 +545,7 @@ provided solely for the benefit of Kafka monitoring tools.
 
 Committed offsets are associated with a consumer group specific to the source.
 The ID of the consumer group consists of the prefix configured with the [`GROUP
-ID PREFIX` option](#connection-options) followed by a Materialize-generated
+ID PREFIX` option](#syntax) followed by a Materialize-generated
 suffix.
 
 You should not make assumptions about the number of consumer groups that
@@ -477,7 +563,7 @@ JOIN mz_sources s ON s.id = ks.id
 WHERE s.name = '<src_name>'
 ```
 
-## Required permissions
+## Required Kafka ACLs
 
 The access control lists (ACLs) on the Kafka cluster must allow Materialize
 to perform the following operations on the following resources:
@@ -485,11 +571,17 @@ to perform the following operations on the following resources:
 Operation type | Resource type    | Resource name
 ---------------|------------------|--------------
 Read           | Topic            | The specified `TOPIC` option
-Read           | Group            | All group IDs starting with the specified [`GROUP ID PREFIX` option](#connection-options)
+Read           | Group            | All group IDs starting with the specified [`GROUP ID PREFIX` option](#syntax)
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+{{< include-md file="shared-content/sql-command-privileges/create-source.md" >}}
 
 ## Examples
 
-### Creating a connection
+### Prerequisite: Creating a connection
 
 A connection describes how to connect and authenticate to an external system you
 want Materialize to read data from.
@@ -698,57 +790,6 @@ columns with the required data types. To avoid doing this tedious task
 manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
 
 {{< /tab >}}
-{{< tab "Protobuf">}}
-
-**Using Confluent Schema Registry**
-
-```mzsql
-CREATE SOURCE proto_source
-  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
-```
-
-**Using an inline schema**
-
-If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
-to specify a Protobuf schema descriptor inline. Protobuf does not serialize a
-schema with the message, so before creating a source you must:
-
-* Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
-
-  ```proto
-  // example.proto
-  syntax = "proto3";
-  message Batch {
-      int32 id = 1;
-      // ...
-  }
-  ```
-
-  ```bash
-  protoc --include_imports --descriptor_set_out=example.pb example.proto
-  ```
-
-* Encode the descriptor file into a SQL byte string:
-
-  ```bash
-  $ printf '\\x' && xxd -p example.pb | tr -d '\n'
-  \x0a300a0d62696...
-  ```
-
-* Create the source using the encoded descriptor bytes from the previous step
-  (including the `\x` at the beginning):
-
-  ```mzsql
-  CREATE SOURCE proto_source
-    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
-    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...';
-  ```
-
-  For more details about Protobuf message names and descriptors, check the
-  [Protobuf format](../#protobuf) documentation.
-
-{{< /tab >}}
 {{< tab "Text/bytes">}}
 
 ```mzsql
@@ -778,14 +819,3 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
 - [`SHOW SOURCES`](/sql/show-sources)
 - [`DROP SOURCE`](/sql/drop-source)
 - [Using Debezium](/integrations/debezium/)
-
-[Avro]: /sql/create-source/#avro
-[JSON]: /sql/create-source/#json
-[Protobuf]: /sql/create-source/#protobuf
-[Text/bytes]: /sql/create-source/#textbytes
-[CSV]: /sql/create-source/#csv
-
-[Append-only envelope]: /sql/create-source/#append-only-envelope
-[Upsert envelope]: /sql/create-source/#upsert-envelope
-[Debezium envelope]: /sql/create-source/#debezium-envelope
-[`mz_kafka_sources`]: /sql/system-catalog/mz_catalog/#mz_kafka_sources

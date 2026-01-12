@@ -39,7 +39,7 @@ clarity around best practices."
 {{< tab "Read-write table" >}}
 ### Read-write table
 
-{{% include-syntax file="examples/create_table/example_user_populated_table"
+{{% include-syntax file="examples/create_table_user_populated"
 example="syntax" %}}
 
 {{< /tab >}}
@@ -49,11 +49,11 @@ example="syntax" %}}
 {{< private-preview />}}
 
 {{< note >}}
-{{% include-example file="examples/create_table/example_postgres_table"
+{{% include-example file="examples/create_table_postgres"
 example="syntax-version-requirement" %}}
 {{< /note >}}
 
-{{% include-syntax file="examples/create_table/example_postgres_table"
+{{% include-syntax file="examples/create_table_postgres"
 example="syntax" %}}
 
 For an example, see [Create a table (PostgreSQL
@@ -87,7 +87,7 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 {{< private-preview />}}
 
 {{< note >}}
-{{% include-example file="examples/create_table/example_postgres_table"
+{{% include-example file="examples/create_table_postgres"
 example="syntax-version-requirement" %}}
 {{< /note >}}
 
@@ -146,16 +146,16 @@ The privileges required to execute this statement are:
 
 ### Create a table (User-populated)
 
-{{% include-example file="examples/create_table/example_user_populated_table"
+{{% include-example file="examples/create_table_user_populated"
  example="create-table" %}}
 
 Once a user-populated table is created, you can perform CRUD
 (Create/Read/Update/Write) operations on it.
 
-{{% include-example file="examples/create_table/example_user_populated_table"
+{{% include-example file="examples/create_table_user_populated"
  example="write-to-table" %}}
 
-{{% include-example file="examples/create_table/example_user_populated_table"
+{{% include-example file="examples/create_table_user_populated"
  example="read-from-table" %}}
 
 ### Create a table (PostgreSQL source)
@@ -164,7 +164,7 @@ Once a user-populated table is created, you can perform CRUD
 
 {{< note >}}
 
-{{% include-example file="examples/create_table/example_postgres_table"
+{{% include-example file="examples/create_table_postgres"
 example="syntax-version-requirement" %}}
 
 The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
@@ -176,13 +176,13 @@ integration guides](/ingest-data/postgres/#supported-versions-and-services).
 
 {{</ note >}}
 
-{{% include-example file="examples/create_table/example_postgres_table"
+{{% include-example file="examples/create_table_postgres"
  example="create-table" %}}
 
 {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
 
 
-{{% include-example file="examples/create_table/example_postgres_table"
+{{% include-example file="examples/create_table_postgres"
  example="read-from-table" %}}
 
 

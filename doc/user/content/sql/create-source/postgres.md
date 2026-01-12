@@ -39,31 +39,7 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 
 ## Syntax
 
-{{< diagram "create-source-postgres.svg" >}}
-
-### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists. _Default._
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**CONNECTION** _connection_name_ | The name of the PostgreSQL connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection/#postgresql) documentation page.
-**FOR ALL TABLES** | Create subsources for all tables in the publication.
-**FOR SCHEMAS (** _schema_list_ **)** | Create subsources for specific schemas in the publication.
-**FOR TABLES (** _table_list_ **)** | Create subsources for specific tables in the publication.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
-
-### `CONNECTION` options
-
-Field                                | Value     | Description
--------------------------------------|-----------|-------------------------------------
-`PUBLICATION`                        | `text`    | **Required.** The PostgreSQL [publication](https://www.postgresql.org/docs/current/logical-replication-publication.html) (the replication data set containing the tables to be streamed to Materialize).
-`TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
-`EXCLUDE COLUMNS`                    | A list of fully-qualified names | Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
+{{% include-syntax file="examples/create_source_postgres_legacy" example="syntax" %}}
 
 ## Features
 

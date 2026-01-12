@@ -1,0 +1,7 @@
+- name: "syntax"
+  code: |
+    '<json_string>'::JSONB
+  syntax_elements:
+    - name: "`'<json_string>'`"
+      description: |
+        A well-formed [JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON) string.

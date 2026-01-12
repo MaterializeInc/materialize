@@ -41,7 +41,7 @@ If the specified Kafka topic does not exist, Materialize will attempt to create
 it using the broker's default number of partitions, default replication factor,
 default compaction policy, and default retention policy, unless any specific
 overrides are provided as part of the [connection
-options](/sql/create-sink/kafka#connection-options).
+options](/sql/create-sink/kafka#syntax).
 
 If the connection's [progress
 topic](/sql/create-sink/kafka#exactly-once-processing) does not exist,
@@ -53,7 +53,7 @@ CONNECTION`](/sql/create-connection).
 
 To customize topic-level configuration, including compaction settings and other
 values, use the `TOPIC CONFIG` option in the [connection
-options](/sql/create-sink/kafka#connection-options) to set any relevant kafka
+options](/sql/create-sink/kafka#syntax) to set any relevant kafka
 [topic configs](https://kafka.apache.org/documentation/#topicconfigs).
 
 If you manually create the topic or progress topic in Kafka before

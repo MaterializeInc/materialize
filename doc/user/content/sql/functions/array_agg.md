@@ -11,7 +11,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "array-agg.svg" >}}
+{{% include-syntax file="sql_functions/array_agg" example="syntax" %}}
 
 ## Signatures
 

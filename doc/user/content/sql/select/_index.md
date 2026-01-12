@@ -16,34 +16,19 @@ on the underlying relations based on common query patterns.
 
 ## Syntax
 
-### select_stmt
+{{% include-syntax file="examples/select" example="syntax" %}}
 
-{{< diagram "select-stmt.svg" >}}
+### Common table expressions (CTEs)
 
-### simple_select_stmt
+#### Regular CTEs
 
-{{< diagram "simple-select-stmt.svg" >}}
+{{% include-syntax file="examples/select" example="syntax-with-ctes" %}}
 
-Field | Use
-------|-----
-_select&lowbar;with&lowbar;ctes_, _select&lowbar;with&lowbar;recursive&lowbar;ctes_ | [Common table expressions](#common-table-expressions-ctes) (CTEs) for this query.
-**(** _col&lowbar;ident_... **)** | Rename the CTE's columns to the list of identifiers, both of which must be the same length.
-**ALL** | Return all rows from query _(Default)_.
-**DISTINCT** | <a name="select-distinct"></a>Return only distinct values.
-**DISTINCT ON (** _col&lowbar;ref_... **)**  | <a name="select-distinct-on"></a>Return only the first row with a distinct value for _col&lowbar;ref_. If an `ORDER BY` clause is also present, then `DISTINCT ON` will respect that ordering when choosing which row to return for each distinct value of `col_ref...`. Please note that in this case, you should start the `ORDER BY` clause with the same `col_ref...` as the `DISTINCT ON` clause. For an example, see [Top K](/transform-data/idiomatic-materialize-sql/top-k/#select-top-1-item).
-_target&lowbar;elem_ | Return identified columns or functions.
-**FROM** _table&lowbar;expr_ | The tables you want to read from; note that these can also be other `SELECT` statements, [Common Table Expressions](#common-table-expressions-ctes) (CTEs), or [table function calls](/sql/functions/table-functions).
-_join&lowbar;expr_ | A join expression; for more details, see the [`JOIN` documentation](/sql/select/join/).
-**WHERE** _expression_ | Filter tuples by _expression_.
-**GROUP BY** _col&lowbar;ref_ | Group aggregations by _col&lowbar;ref_.
-**OPTIONS (** _hint&lowbar;list_ **)** | Specify one or more [query hints](#query-hints).
-**HAVING** _expression_ | Filter aggregations by _expression_.
-**ORDER BY** _col&lowbar;ref_... | Sort results in either **ASC** or **DESC** order (_default: **ASC**_).<br/><br/>Use the **NULLS FIRST** and **NULLS LAST** options to determine whether nulls appear before or after non-null values in the sort ordering _(default: **NULLS LAST** for **ASC**, **NULLS FIRST** for **DESC**)_.<br/><br>
-**LIMIT** _expression_ | Limit the number of returned results to _expression_.
-**OFFSET** _integer_ | Skip the first _integer_ number of rows.
-**UNION** | Records present in `select_stmt` or `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the sum of the times it occurs in each input statement.
-**INTERSECT** | Records present in both `select_stmt` and `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the lesser of the times it occurs in each input statement.
-**EXCEPT** | Records present in `select_stmt` but not in `another_select_stmt`.<br/><br/>**DISTINCT** returns only unique rows from these results _(implied default)_.<br/><br/>With **ALL** specified, each record occurs a number of times equal to the times it occurs in `select_stmt` less the times it occurs in `another_select_stmt`, or not at all if the former is greater than latter.
+#### Recursive CTEs
+
+{{% include-syntax file="examples/select" example="syntax-recursive-ctes" %}}
+
+For details and examples, see the [Recursive CTEs](/sql/select/recursive-ctes) page.
 
 ## Details
 
@@ -85,29 +70,6 @@ SET cluster = <cluster name>;
 
 Materialize will remove the dataflow as soon as it has returned the query results to you.
 
-### Common table expressions (CTEs)
-
-Common table expressions, also known as CTEs or `WITH` queries, create aliases for statements.
-
-#### Regular CTEs
-
-{{< diagram "with-ctes.svg" >}}
-
-##### cte_binding
-
-{{< diagram "cte-binding.svg" >}}
-
-With _regular CTEs_, any `cte_ident` alias can be referenced in subsequent `cte_binding` definitions and in the final `select_stmt`.
-Regular CTEs can enhance legibility of complex queries, but doesn't alter the queries' semantics.
-For an example, see [Using regular CTEs](#using-regular-ctes).
-
-#### Recursive CTEs
-
-
-In addition, Materialize also provides support for _recursive CTEs_ that can mutually reference each other.
-Recursive CTEs can be used to define computations on recursively defined structures (such as trees or graphs) implied by your data.
-For details and examples, see the [Recursive CTEs](/sql/select/recursive-ctes)
-page.
 
 #### Known limitations
 

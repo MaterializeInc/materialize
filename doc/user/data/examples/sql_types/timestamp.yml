@@ -1,0 +1,23 @@
+- name: "syntax"
+  code: |
+    TIMESTAMP [(<precision>)] [WITH [OUT] TIME ZONE] '<date_str>' [<time_str>] [<tz_offset>]
+    TIMESTAMPTZ [(<precision>)] '<date_str>' [<time_str>] [<tz_offset>]
+  syntax_elements:
+    - name: "**TIMESTAMP** [(`<precision>`)]"
+      description: |
+        A timestamp without time zone. `<precision>` is optional and specifies the number of digits of precision to use to represent fractional seconds. If unspecified, timestamps use six digits of precision (microsecond resolution).
+    - name: "**WITH TIME ZONE** | **WITHOUT TIME ZONE**"
+      description: |
+        Optional. `WITH TIME ZONE` applies the `<tz_offset>` field. `WITHOUT TIME ZONE` ignores the `<tz_offset>` field. This is the default if neither is specified.
+    - name: "**TIMESTAMPTZ** [(`<precision>`)]"
+      description: |
+        A shorter alias for `TIMESTAMP WITH TIME ZONE`.
+    - name: "`'<date_str>'`"
+      description: |
+        A string representing a date in `Y-M-D`, `Y M-D`, `Y M D` or `YMD` format.
+    - name: "`<time_str>`"
+      description: |
+        Optional. A string representing a time of day in `H:M:S.NS` format. Can be separated from `<date_str>` by a space or `T`.
+    - name: "`<tz_offset>`"
+      description: |
+        Optional. The timezone's distance from UTC, in hours, specified as `+HH` or `-HH`.

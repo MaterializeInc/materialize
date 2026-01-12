@@ -25,31 +25,7 @@ expect.
 
 ## Syntax
 
-### join_expr
-
-{{< diagram "join-expr.svg" >}}
-
-### join_type
-
-{{< diagram "join-type.svg" >}}
-
-### table_ref
-
-{{< diagram "table-ref.svg" >}}
-
-Field | Use
-------|-----
-_select&lowbar;pred_ | The predicating [`SELECT`](/sql/select) clauses you want to use, e.g. `SELECT col_ref FROM table_ref...`. The _table&lowbar;ref_ from the _select&lowbar;pred_ is the left-hand table.
-**NATURAL** | Join table expressions on all columns with the same names in both tables. This is similar to the `USING` clause naming all identically named columns in both tables.
-**LATERAL** | Let the following subquery or table function call refer to columns from join's left-hand side. See [`LATERAL` subqueries](#lateral-subqueries) below.
-_join\_type_ | The type of `JOIN` you want to use _(`INNER` is implied default)_.
-_select\_stmt_ | A [`SELECT` statement](/sql/select).
-_table\_ref_ | The table expression you want to join, i.e. the right-hand table.
-_table\_func\_call_ | A call to a [table function](/sql/functions/#table-functions).
-**USING (** _col\_ref..._ **)** | If the join condition does not require table-level qualification (i.e. joining tables on columns with the same name), the columns to join the tables on. For example, `USING (customer_id)`.
-_join\_using\_alias_ | A table alias for the join columns specified in the `USING` clause. The columns will remain referenceable by their original names. For example, given `lhs JOIN rhs USING (c) AS joint`, the column `c` will be referenceable as `lhs.c`, `rhs.c`, and `joint.c`.
-**ON** _expression_ | The condition on which to join the tables. For example `ON purchase.customer_id = customer.id`.
-_select&lowbar;pred_ | The remaining [`SELECT`](/sql/select) clauses you want to use, e.g. `...WHERE expr GROUP BY col_ref HAVING expr`.
+{{% include-syntax file="examples/select_join" example="syntax" %}}
 
 **Note**: It's possible to join together table expressions as inner joins without using this clause whatsoever, e.g. `SELECT cols... FROM t1, t2 WHERE t1.x = t2.x GROUP BY cols...`
 

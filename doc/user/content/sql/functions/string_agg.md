@@ -14,7 +14,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "string-agg.svg" >}}
+{{% include-syntax file="sql_functions/string_agg" example="syntax" %}}
 
 ## Signatures
 

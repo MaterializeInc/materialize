@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    EXTRACT ( <time_period> FROM <val> )
+  syntax_elements:
+    - name: "`<time_period>`"
+      description: |
+        The time period to extract. Valid values: `EPOCH`, `MILLENNIUM`, `CENTURY`, `DECADE`, `YEAR`, `QUARTER`, `MONTH`, `WEEK`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `MICROSECOND`, `MILLISECOND`, `DOW`, `ISODOW`, `DOY`. See the [Arguments](#arguments) section for synonyms.
+    - name: "**FROM** `<val>`"
+      description: |
+        A [`date`](/sql/types/date/), [`time`](/sql/types/time/), [`timestamp`](/sql/types/timestamp/), [`timestamp with time zone`](/sql/types/timestamp/), or [`interval`](/sql/types/interval/) value from which to extract a component.

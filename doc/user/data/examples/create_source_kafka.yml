@@ -1,0 +1,459 @@
+- name: "syntax-avro"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+      [KEY STRATEGY <key_strategy>]
+      [VALUE STRATEGY <value_strategy>]
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | DEBEZIUM
+      | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
+    ]
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH (RETAIN HISTORY FOR <retention_period>)]
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "`<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "`'<topic>'`"
+      description: |
+        The Kafka topic you want to subscribe to.
+    - name: "**GROUP ID PREFIX** `<group_id_prefix>`"
+      description: |
+        Optional. The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
+    - name: "**START OFFSET** (`<partition_offset>` [, ...])"
+      description: |
+        Optional. Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers. See [Setting start offsets](#setting-start-offsets) for details.
+    - name: "**START TIMESTAMP** `<timestamp>`"
+      description: |
+        Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
+    - name: "`<csr_connection_name>`"
+      description: |
+        The Confluent Schema Registry connection to use in the source.
+    - name: "**KEY STRATEGY** `<key_strategy>`"
+      description: |
+        Optional. Define how an Avro reader schema will be chosen for the
+        message key.
+        | Strategy | Description |
+        |--------|-------------|
+        | **LATEST** | (Default) Use the latest writer schema from the schema registry as the reader schema. |
+        | **ID** | Use a specific schema from the registry. |
+        | **INLINE** | Use the inline schema. |
+
+
+    - name: "**VALUE STRATEGY** `<value_strategy>`"
+      description: |
+        Optional. Define how an Avro reader schema will be chosen for the message value.
+        | Strategy | Description |
+        |--------|-------------|
+        | **LATEST** | (Default) Use the latest writer schema from the schema registry as the reader schema. |
+        | **ID** | Use a specific schema from the registry. |
+        | **INLINE** | Use the inline schema. |
+
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | **KEY [AS \<name\>]** | Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas, the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
+        | **PARTITION [AS \<name\>]** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
+        | **OFFSET [AS \<name\>]** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
+        | **TIMESTAMP [AS \<name\>]** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
+        | **HEADERS [AS \<name\>]** | Include a `headers` column containing the Kafka message headers as a list of records of type `(key text, value bytea)`. The column can be renamed with the optional **AS** *name* clause.
+        | **HEADER \<key\> AS \<name\> [**BYTES**]** | Include a *name* column containing the Kafka message header *key* parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option.
+
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+        | `DEBEZIUM` | Decode Kafka messages produced by [Debezium](https://debezium.io/). |
+        | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
+    - name: "**EXPOSE PROGRESS AS** `<progress_subsource_name>`"
+      description: |
+        Optional. The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. See [Monitoring source progress](#monitoring-source-progress) for details.
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+
+- name: "syntax-json"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    FORMAT JSON
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE]
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH (RETAIN HISTORY FOR <retention_period>)]
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        **Required.** The Kafka topic you want to subscribe to.
+    - name: "**GROUP ID PREFIX** `<group_id_prefix>`"
+      description: |
+        Optional. The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
+    - name: "**START OFFSET** (`<partition_offset>` [, ...])"
+      description: |
+        Optional. Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers. See [Setting start offsets](#setting-start-offsets) for details.
+    - name: "**START TIMESTAMP** `<timestamp>`"
+      description: |
+        Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
+    - name: "**FORMAT JSON**"
+      description: |
+        Decode JSON-formatted messages. JSON-formatted messages are ingested as a JSON blob. We recommend creating a parsing view on top of your Kafka source that maps the individual fields to columns with the required data types.
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `PARTITION [AS <name>]` | Expose the Kafka partition as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `OFFSET [AS <name>]` | Expose the Kafka offset as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `TIMESTAMP [AS <name>]` | Expose the Kafka timestamp as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `HEADERS [AS <name>]` | Expose all message headers as a column with type `record(key: text, value: bytea?) list`. See [Headers](#headers) for details. |
+        | `HEADER '<key>' AS <name> [BYTES]` | Expose a specific message header as a column. The `bytea` value is automatically parsed into a UTF-8 string unless `BYTES` is specified. See [Headers](#headers) for details. |
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. See [Append-only envelope](/sql/create-source/kafka/#append-only-envelope) for details. |
+
+    - name: "**EXPOSE PROGRESS AS** `<progress_subsource_name>`"
+      description: |
+        Optional. The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. See [Monitoring source progress](#monitoring-source-progress) for details.
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+
+- name: "syntax-text-bytes"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    FORMAT TEXT | BYTES
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE]
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH (RETAIN HISTORY FOR <retention_period>)]
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        **Required.** The Kafka topic you want to subscribe to.
+    - name: "**GROUP ID PREFIX** `<group_id_prefix>`"
+      description: |
+        Optional. The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
+    - name: "**START OFFSET** (`<partition_offset>` [, ...])"
+      description: |
+        Optional. Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers. See [Setting start offsets](#setting-start-offsets) for details.
+    - name: "**START TIMESTAMP** `<timestamp>`"
+      description: |
+        Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
+    - name: "**FORMAT TEXT|BYTES**"
+      description: |
+        - If `TEXT`, decode new-line delimited data as
+        plain text. Data is assumed to be valid unicode (UTF-8), and discarded
+        if it cannot be converted to UTF-8. Text-formatted sources have a single
+        column, by default named `text`.
+
+        - If `BYTES`, read raw bytes without applying any formatting or decoding. Raw byte-formatted sources have a single column, by default named `data`.
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `PARTITION [AS <name>]` | Expose the Kafka partition as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `OFFSET [AS <name>]` | Expose the Kafka offset as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `TIMESTAMP [AS <name>]` | Expose the Kafka timestamp as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `HEADERS [AS <name>]` | Expose all message headers as a column with type `record(key: text, value: bytea?) list`. See [Headers](#headers) for details. |
+        | `HEADER '<key>' AS <name> [BYTES]` | Expose a specific message header as a column. The `bytea` value is automatically parsed into a UTF-8 string unless `BYTES` is specified. See [Headers](#headers) for details. |
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. See [Append-only envelope](/sql/create-source/kafka/#append-only-envelope) for details. |
+    - name: "`EXPOSE PROGRESS AS <progress_subsource_name>`"
+      description: |
+        Optional. The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. See [Monitoring source progress](#monitoring-source-progress) for details.
+    - name: "`WITH (<with_option> [, ...])`"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+
+- name: "syntax-csv"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name> ( <col_name> [, ...] )
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    FORMAT CSV WITH <n> COLUMNS | WITH HEADER [ ( <col_name> [, ...] ) ]
+    [INCLUDE
+        PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE]
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH (RETAIN HISTORY FOR <retention_period>)]
+  syntax_elements:
+    - name: "`<src_name> ( <col_name> [, ...] )`"
+      description: |
+        The name for the source and the column names. Column names are required for CSV-formatted sources.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        **Required.** The Kafka topic you want to subscribe to.
+    - name: "**GROUP ID PREFIX** `<group_id_prefix>`"
+      description: |
+        Optional. The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
+    - name: "**START OFFSET** (`<partition_offset>` [, ...])"
+      description: |
+        Optional. Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers. See [Setting start offsets](#setting-start-offsets) for details.
+    - name: "**START TIMESTAMP** `<timestamp>`"
+      description: |
+        Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
+    - name: "**FORMAT CSV WITH** `<csv_format_option>`"
+      description: |
+        CSV format options:
+
+        | Option | Description |
+        |--------|-------------|
+        | `WITH <n> COLUMNS` | Treat the source data as if it has `<n>` columns. By default, columns are named `column1`, `column2`...`columnN`, but you can override these names by specifying column names in the source definition. |
+        | `WITH HEADER [ ( <col_name> [, ...] ) ]` | Materialize determines the
+        number of columns and the name of each column using the header row. The
+        header is not ingested as data. Optionally, you can provide a list of
+        column names to validate against the header or override the source
+        column names. |
+
+        Any row that does not match the number of columns determined by the format is ignored, and Materialize logs an error.
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `PARTITION [AS <name>]` | Expose the Kafka partition as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `OFFSET [AS <name>]` | Expose the Kafka offset as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `TIMESTAMP [AS <name>]` | Expose the Kafka timestamp as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `HEADERS [AS <name>]` | Expose all message headers as a column with type `record(key: text, value: bytea?) list`. See [Headers](#headers) for details. |
+        | `HEADER '<key>' AS <name> [BYTES]` | Expose a specific message header as a column. The `bytea` value is automatically parsed into a UTF-8 string unless `BYTES` is specified. See [Headers](#headers) for details. |
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. CSV format only supports `NONE`:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. See [Append-only envelope](/sql/create-source/kafka/#append-only-envelope) for details. |
+    - name: "**EXPOSE PROGRESS AS** `<progress_subsource_name>`"
+      description: |
+        Optional. The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. See [Monitoring source progress](#monitoring-source-progress) for details.
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+
+- name: "syntax-key-value-format"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    KEY FORMAT <key_format> VALUE FORMAT <value_format>
+    -- <key_format> and <value_format> can be:
+    -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+    --     [KEY STRATEGY <strategy>]
+    --     [VALUE STRATEGY <strategy>]
+    -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
+    -- | JSON | TEXT | BYTES
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | DEBEZIUM
+      | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+    ]
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH (RETAIN HISTORY FOR <retention_period>)]
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        **Required.** The Kafka topic you want to subscribe to.
+    - name: "**GROUP ID PREFIX** `<group_id_prefix>`"
+      description: |
+        Optional. The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
+    - name: "**START OFFSET** (`<partition_offset>` [, ...])"
+      description: |
+        Optional. Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers. See [Setting start offsets](#setting-start-offsets) for details.
+    - name: "**START TIMESTAMP** `<timestamp>`"
+      description: |
+        Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
+    - name: "**KEY FORMAT** `<key_format_spec>`"
+      description: |
+        **Required.** Set the key encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'`, `TEXT`, `BYTES`.
+    - name: "**VALUE FORMAT** `<value_format_spec>`"
+      description: |
+        **Required.** Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'`, `TEXT`, `BYTES`. By default, the message key is decoded using the same format as the message value.
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `KEY [AS <name>]` | Expose the message key as a column. Composite keys are also supported. The `UPSERT` envelope always includes keys. The `DEBEZIUM` envelope is incompatible with this option. See [Exposing source metadata](#exposing-source-metadata) for details. |
+        | `PARTITION [AS <name>]` | Expose the Kafka partition as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `OFFSET [AS <name>]` | Expose the Kafka offset as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `TIMESTAMP [AS <name>]` | Expose the Kafka timestamp as a column. See [Partition, offset, timestamp](#partition-offset-timestamp) for details. |
+        | `HEADERS [AS <name>]` | Expose all message headers as a column with type `record(key: text, value: bytea?) list`. The `DEBEZIUM` envelope is incompatible with this option. See [Headers](#headers) for details. |
+        | `HEADER '<key>' AS <name> [BYTES]` | Expose a specific message header as a column. The `bytea` value is automatically parsed into a UTF-8 string unless `BYTES` is specified. The `DEBEZIUM` envelope is incompatible with this option. See [Headers](#headers) for details. |
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. See [Append-only envelope](/sql/create-source/kafka/#append-only-envelope) for details. |
+        | `DEBEZIUM` | Decode Kafka messages produced by [Debezium](https://debezium.io/). |
+        | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
+    - name: "**EXPOSE PROGRESS AS** `<progress_subsource_name>`"
+      description: |
+        Optional. The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. See [Monitoring source progress](#monitoring-source-progress) for details.
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |

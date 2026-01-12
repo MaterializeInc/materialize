@@ -16,39 +16,7 @@ Webhook sources expose a [public URL](#webhook-url) that allows your application
 
 ## Syntax
 
-```mzsql
-CREATE SOURCE [IF NOT EXISTS] <src_name>
-[ IN CLUSTER <cluster_name> ]
-FROM WEBHOOK
-  BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
-  [ INCLUDE HEADER <header_name> AS <column_alias> [BYTES]  |
-    INCLUDE HEADERS [ ( [NOT] <header_name> [, [NOT] <header_name> ... ] ) ]
-  ][...]
-  [ CHECK (
-      [ WITH ( <BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ...])]
-      <check_expression>
-    )
-  ]
-```
-
-
-### `webhook_check_option`
-
-Field                            | Use
----------------------------------|--------------------------
-  _src_name_                     | The name for the source.
- **IN CLUSTER** _cluster_name_   | The [cluster](/sql/create-cluster) to maintain this source.
- **INCLUDE HEADER**              | Map a header value from a request into a column.
- **INCLUDE HEADERS**             | Include a column named `'headers'` of type `map[text => text]` containing the headers of the request.
- **CHECK**                       | Specify a boolean expression that is used to validate each request received by the source.
-
-### `CHECK WITH` options
-
-Field                  | Type                | Description
------------------------|---------------------|--------------
-`BODY`                 | `text` or `bytea`   | Provide a `body` column to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `bytea` with the optional **BYTES** keyword.
-`HEADERS`              | `map[text=>text]` or `map[text=>bytea]` | Provide a column `'headers'` to the check expression. The column can be renamed with the optional **AS** _alias_ statement, and the data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
-`SECRET` _secret_name_ | `text` or `bytea`    | Securely provide a [`SECRET`](/sql/create-secret) to the check expression. The `constant_time_eq` validation function **does not support** fully qualified secret names: if the secret is in a different namespace to the source, the column can be renamed with the optional **AS** _alias_ statement. The data type can also be changed to `bytea` using the optional **BYTES** keyword.
+{{% include-syntax file="examples/create_source_webhook" example="syntax" %}}
 
 ## Supported formats
 

@@ -1,0 +1,388 @@
+- name: "syntax-avro"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, COMPRESSION TYPE <compression_type>]
+      [, TRANSACTIONAL ID PREFIX '<transactional_id_prefix>']
+      [, PARTITION BY = <expression>]
+      [, PROGRESS GROUP ID PREFIX '<progress_group_id_prefix>']
+      [, TOPIC REPLICATION FACTOR <replication_factor>]
+      [, TOPIC PARTITION COUNT <partition_count>]
+      [, TOPIC CONFIG <topic_config>]
+    )
+    [KEY ( <key_col1> [, ...] ) [NOT ENFORCED]]
+    [HEADERS <headers_column>]
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name> [
+      (
+        [AVRO KEY FULLNAME '<avro_key_fullname>']
+        [, AVRO VALUE FULLNAME '<avro_value_fullname>']
+        [, NULL DEFAULTS <null_defaults>]
+        [, DOC ON <doc_on_option> [, ...]]
+        [, KEY COMPATIBILITY LEVEL '<key_compatibility_level>']
+        [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
+      )
+    ]
+    [ENVELOPE DEBEZIUM | UPSERT]
+    [WITH (SNAPSHOT = <snapshot>)]
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a sink with the same name already exists. Instead, issue a notice and skip the sink creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view you want to send to the sink.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        The name of the Kafka topic to write to.
+    - name: "**COMPRESSION TYPE** `<compression_type>`"
+      description: |
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+    - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
+      description: |
+        Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**PARTITION BY** = `<expression>`"
+      description: |
+        Optional. A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
+    - name: "**PROGRESS GROUP ID PREFIX** `'<progress_group_id_prefix>'`"
+      description: |
+        Optional. The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**TOPIC REPLICATION FACTOR** `<replication_factor>`"
+      description: |
+        Optional. The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC PARTITION COUNT** `<partition_count>`"
+      description: |
+        Optional. The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC CONFIG** `<topic_config>`"
+      description: |
+        Optional. Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist). See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+    - name: "**KEY** ( `<key_col1>` [, ...] ) [**NOT ENFORCED**]"
+      description: |
+        Optional. A list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset. When using the upsert envelope, the key must be unique. Use **NOT ENFORCED** to disable validation of key uniqueness. See [Upsert key selection](#upsert-key-selection) for details.
+    - name: "**HEADERS** `<headers_column>`"
+      description: |
+        Optional. A column containing headers to add to each Kafka message emitted by the sink. The column must be of type `map[text => text]` or `map[text => bytea]`. See [Headers](#headers) for details.
+    - name: "**FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION** `<csr_connection_name>`"
+      description: |
+        Encode messages using Avro format with schemas published to the Confluent Schema Registry.
+    - name: "**AVRO KEY FULLNAME** `'<avro_key_fullname>'`"
+      description: |
+        Optional. Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
+    - name: "**AVRO VALUE FULLNAME** `'<avro_value_fullname>'`"
+      description: |
+        Optional. Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
+    - name: "**NULL DEFAULTS** `<null_defaults>`"
+      description: |
+        Optional. Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
+    - name: "**DOC ON** `<doc_on_option>` [, ...]"
+      description: |
+        Optional. Add a documentation comment to the generated Avro schemas.
+
+        | Option | Description |
+        |--------|-------------|
+        | `TYPE <type_name>` | Names a SQL type or relation, e.g. `my_app.point`. |
+        | `COLUMN <column_name>` | Names a column of a SQL type or relation, e.g. `my_app.point.x`. |
+
+        The `KEY` and `VALUE` options specify whether the comment applies to the
+        key schema or the value schema. If neither `KEY` or `VALUE` is
+        specified, the comment applies to both types of schemas.
+
+        See [Avro schema documentation](#avro-schema-documentation) for details
+        on how documentation comments are added to the generated Avro schemas.
+    - name: "**KEY COMPATIBILITY LEVEL** `'<key_compatibility_level>'`"
+      description: |
+        Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+    - name: "**VALUE COMPATIBILITY LEVEL** `'<value_compatibility_level>'`"
+      description: |
+        Optional. If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `DEBEZIUM` | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source. |
+        | `UPSERT` | The sink emits data with [upsert semantics](#upsert-envelope). Requires a unique key specified using the `KEY` option. |
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `SNAPSHOT = <snapshot>` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`. |
+
+- name: "syntax-json"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, COMPRESSION TYPE <compression_type>]
+      [, TRANSACTIONAL ID PREFIX '<transactional_id_prefix>']
+      [, PARTITION BY = <expression>]
+      [, PROGRESS GROUP ID PREFIX '<progress_group_id_prefix>']
+      [, TOPIC REPLICATION FACTOR <replication_factor>]
+      [, TOPIC PARTITION COUNT <partition_count>]
+      [, TOPIC CONFIG <topic_config>]
+    )
+    [KEY ( <key_col1> [, ...] ) [NOT ENFORCED]]
+    [HEADERS <headers_column>]
+    FORMAT JSON
+    [ENVELOPE DEBEZIUM | UPSERT]
+    [WITH (SNAPSHOT = <snapshot>)]
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a sink with the same name already exists. Instead, issue a notice and skip the sink creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view you want to send to the sink.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        The name of the Kafka topic to write to.
+    - name: "**COMPRESSION TYPE** `<compression_type>`"
+      description: |
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+    - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
+      description: |
+        Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**PARTITION BY** = `<expression>`"
+      description: |
+        Optional. A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
+    - name: "**PROGRESS GROUP ID PREFIX** `'<progress_group_id_prefix>'`"
+      description: |
+        Optional. The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**TOPIC REPLICATION FACTOR** `<replication_factor>`"
+      description: |
+        Optional. The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC PARTITION COUNT** `<partition_count>`"
+      description: |
+        Optional. The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC CONFIG** `<topic_config>`"
+      description: |
+        Optional. Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist). See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+    - name: "**KEY** ( `<key_col1>` [, ...] ) [**NOT ENFORCED**]"
+      description: |
+        Optional. A list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset. When using the upsert envelope, the key must be unique. Use **NOT ENFORCED** to disable validation of key uniqueness. See [Upsert key selection](#upsert-key-selection) for details.
+    - name: "**HEADERS** `<headers_column>`"
+      description: |
+        Optional. A column containing headers to add to each Kafka message emitted by the sink. The column must be of type `map[text => text]` or `map[text => bytea]`. See [Headers](#headers) for details.
+    - name: "**FORMAT JSON**"
+      description: |
+        Encode messages using JSON format.
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `DEBEZIUM` | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source. |
+        | `UPSERT` | The sink emits data with [upsert semantics](#upsert-envelope). Requires a unique key specified using the `KEY` option. |
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `SNAPSHOT = <snapshot>` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`. |
+
+- name: "syntax-text-bytes"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, COMPRESSION TYPE <compression_type>]
+      [, TRANSACTIONAL ID PREFIX '<transactional_id_prefix>']
+      [, PARTITION BY = <expression>]
+      [, PROGRESS GROUP ID PREFIX '<progress_group_id_prefix>']
+      [, TOPIC REPLICATION FACTOR <replication_factor>]
+      [, TOPIC PARTITION COUNT <partition_count>]
+      [, TOPIC CONFIG <topic_config>]
+    )
+    FORMAT TEXT | BYTES
+    [ENVELOPE DEBEZIUM | UPSERT]
+    [WITH (SNAPSHOT = <snapshot>)]
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a sink with the same name already exists. Instead, issue a notice and skip the sink creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view you want to send to the sink. Note that `TEXT` and `BYTES` format options only support single-column encoding.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        The name of the Kafka topic to write to.
+    - name: "**COMPRESSION TYPE** `<compression_type>`"
+      description: |
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+    - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
+      description: |
+        Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**PARTITION BY** = `<expression>`"
+      description: |
+        Optional. A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
+    - name: "**PROGRESS GROUP ID PREFIX** `'<progress_group_id_prefix>'`"
+      description: |
+        Optional. The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**TOPIC REPLICATION FACTOR** `<replication_factor>`"
+      description: |
+        Optional. The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC PARTITION COUNT** `<partition_count>`"
+      description: |
+        Optional. The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC CONFIG** `<topic_config>`"
+      description: |
+        Optional. Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist). See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+    - name: "**FORMAT TEXT**"
+      description: |
+        Encode messages as plain text. Only supports single-column encoding.
+    - name: "**FORMAT BYTES**"
+      description: |
+        Encode messages as raw bytes. Only supports single-column encoding and scalar data types.
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `DEBEZIUM` | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source. |
+        | `UPSERT` | The sink emits data with [upsert semantics](#upsert-envelope). Requires a unique key specified using the `KEY` option. |
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `SNAPSHOT = <snapshot>` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`. |
+
+- name: "syntax-key-value-format"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, COMPRESSION TYPE <compression_type>]
+      [, TRANSACTIONAL ID PREFIX '<transactional_id_prefix>']
+      [, PARTITION BY = <expression>]
+      [, PROGRESS GROUP ID PREFIX '<progress_group_id_prefix>']
+      [, TOPIC REPLICATION FACTOR <replication_factor>]
+      [, TOPIC PARTITION COUNT <partition_count>]
+      [, TOPIC CONFIG <topic_config>]
+    )
+    [KEY ( <key_col1> [, ...] ) [NOT ENFORCED]]
+    [HEADERS <headers_column>]
+    KEY FORMAT <key_format> VALUE FORMAT <value_format>
+    -- <key_format> and <value_format> can be:
+    -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name> [
+    --     (
+    --       [AVRO KEY FULLNAME '<avro_key_fullname>']
+    --       [, AVRO VALUE FULLNAME '<avro_value_fullname>']
+    --       [, NULL DEFAULTS <null_defaults>]
+    --       [, DOC ON <doc_on_option> [, ...]]
+    --       [, KEY COMPATIBILITY LEVEL '<key_compatibility_level>']
+    --       [, VALUE COMPATIBILITY LEVEL '<value_compatibility_level>']
+    --     )
+    -- ]
+    -- | JSON | TEXT | BYTES
+    [ENVELOPE DEBEZIUM | UPSERT]
+    [WITH (SNAPSHOT = <snapshot>)]
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a sink with the same name already exists. Instead, issue a notice and skip the sink creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view you want to send to the sink.
+    - name: "**CONNECTION** `<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "**TOPIC** `'<topic>'`"
+      description: |
+        The name of the Kafka topic to write to.
+    - name: "**COMPRESSION TYPE** `<compression_type>`"
+      description: |
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+    - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
+      description: |
+        Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**PARTITION BY** = `<expression>`"
+      description: |
+        Optional. A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
+    - name: "**PROGRESS GROUP ID PREFIX** `'<progress_group_id_prefix>'`"
+      description: |
+        Optional. The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
+    - name: "**TOPIC REPLICATION FACTOR** `<replication_factor>`"
+      description: |
+        Optional. The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC PARTITION COUNT** `<partition_count>`"
+      description: |
+        Optional. The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+    - name: "**TOPIC CONFIG** `<topic_config>`"
+      description: |
+        Optional. Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist). See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+    - name: "**KEY** ( `<key_col1>` [, ...] ) [**NOT ENFORCED**]"
+      description: |
+        Optional. A list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset. When using the upsert envelope, the key must be unique. Use **NOT ENFORCED** to disable validation of key uniqueness. See [Upsert key selection](#upsert-key-selection) for details.
+    - name: "**HEADERS** `<headers_column>`"
+      description: |
+        Optional. A column containing headers to add to each Kafka message emitted by the sink. The column must be of type `map[text => text]` or `map[text => bytea]`. See [Headers](#headers) for details.
+    - name: "**KEY FORMAT** `<key_format>`"
+      description: |
+        Set the key encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `TEXT`, `BYTES`.
+    - name: "**VALUE FORMAT** `<value_format>`"
+      description: |
+        Set the value encoding explicitly. Supported formats: `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>`, `JSON`, `TEXT`, `BYTES`.
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how changes to the sink's upstream relation are mapped to Kafka messages. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `DEBEZIUM` | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source. |
+        | `UPSERT` | The sink emits data with [upsert semantics](#upsert-envelope). Requires a unique key specified using the `KEY` option. |
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `SNAPSHOT = <snapshot>` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`. |

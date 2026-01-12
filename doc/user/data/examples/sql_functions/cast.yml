@@ -1,0 +1,32 @@
+- name: "syntax-function"
+  code: |
+    CAST ( <val> AS <type> )
+  syntax_elements:
+    - name: "`<val>`"
+      description: |
+        Any value you want to convert.
+    - name: "**AS** `<type>`"
+      description: |
+        The return value's [type](/sql/types/).
+
+- name: "syntax-operator"
+  code: |
+    <val>::<type>
+  syntax_elements:
+    - name: "`<val>`"
+      description: |
+        Any value you want to convert.
+    - name: "`::<type>`"
+      description: |
+        The return value's [type](/sql/types/).
+
+- name: "syntax-literal"
+  code: |
+    <type> '<val>'
+  syntax_elements:
+    - name: "`<type>`"
+      description: |
+        The return value's [type](/sql/types/).
+    - name: "`'<val>'`"
+      description: |
+        A string literal value. This special syntax is permitted if `<val>` is a string literal.

@@ -1,0 +1,47 @@
+- name: "syntax"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM WEBHOOK
+      BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
+      [INCLUDE HEADER <header_name> AS <column_alias> [BYTES] |
+       INCLUDE HEADERS [ ( [NOT] <header_name> [, [NOT] <header_name> ... ] ) ]
+      ][...]
+      [CHECK (
+          [WITH ( <BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ...])]
+          <check_expression>
+        )
+      ]
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "`BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>`"
+      description: |
+        **Required.** Specifies the format of the request body. Valid formats:
+        - `TEXT`: Parses the body as UTF-8 text. If the body is not valid UTF-8, a response of `400` Bad Request will be returned.
+        - `JSON`: Parses the body as JSON. Also accepts events batched as newline-delimited JSON (`NDJSON`). If the body is not valid JSON, a response of `400` Bad Request will be returned.
+        - `JSON ARRAY`: Parses the body as a list of JSON objects, automatically expanding the list to individual rows. Also accepts a single JSON object. If the body is not valid JSON, a response of `400` Bad Request will be returned.
+        - `BYTES`: Does no parsing of the request, and stores the body as it was received.
+    - name: "`INCLUDE HEADER <header_name> AS <column_alias> [BYTES]`"
+      description: |
+        Optional. Map a header value from a request into a column. The `bytea` value is automatically parsed into a UTF-8 string unless `BYTES` is specified. Header columns are nullable. If the header of a request does not contain a specified field, the `NULL` value will be used as a default.
+    - name: "`INCLUDE HEADERS [ ( [NOT] <header_name> [, [NOT] <header_name> ... ] ) ]`"
+      description: |
+        Optional. Include a column named `headers` of type `map[text => text]` containing the headers of the request. To exclude specific header fields from the mapping, use the `NOT` option. This can be useful if you need to accept a dynamic list of fields but want to exclude sensitive information like authorization.
+    - name: "`CHECK ( [WITH ( ... )] <check_expression> )`"
+      description: |
+        Optional. Specify a boolean expression that is used to validate each request received by the source. Without a `CHECK` statement, **all requests will be accepted**. To prevent bad actors from injecting data into your source, it is **strongly encouraged** that you define a `CHECK` statement with your webhook sources.
+    - name: "`WITH ( <BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ...])`"
+      description: |
+        Optional. Provide columns to the check expression. The headers and body of the request are only subject to validation if `WITH ( BODY, HEADERS, ... )` is specified as part of the `CHECK` statement. By default, the type of `body` used for validation is `text`, regardless of the `BODY FORMAT` you specified for the source.
+
+        - `BODY`: Provide a `body` column to the check expression. The column can be renamed with the optional **AS** `<alias>` statement, and the data type can be changed to `bytea` with the optional **BYTES** keyword.
+        - `HEADERS`: Provide a column `headers` to the check expression. The column can be renamed with the optional **AS** `<alias>` statement, and the data type can be changed to `map[text => bytea]` with the optional **BYTES** keyword.
+        - `SECRET <secret_name>`: Securely provide a [`SECRET`](/sql/create-secret) to the check expression. The `constant_time_eq` validation function **does not support** fully qualified secret names: if the secret is in a different namespace to the source, the column can be renamed with the optional **AS** `<alias>` statement. The data type can also be changed to `bytea` using the optional **BYTES** keyword.

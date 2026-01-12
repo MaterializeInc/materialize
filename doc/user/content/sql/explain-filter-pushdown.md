@@ -14,16 +14,7 @@ statements and materialized views.
 
 ## Syntax
 
-{{< diagram "explain-filter-pushdown.svg" >}}
-
-### Explained object
-
-The following objects can be explained with `EXPLAIN FILTER PUSHDOWN`:
-
- Explained object           | Description
-----------------------------|-------------------------------------------------------------------------------
- **select_stmt**            | Display statistics for an ad-hoc [`SELECT` statement](../select).
- **MATERIALIZED VIEW name** | Display statistics for an existing materialized view.
+{{% include-syntax file="examples/explain_filter_pushdown" example="syntax" %}}
 
 ## Details
 

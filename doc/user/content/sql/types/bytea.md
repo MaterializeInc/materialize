@@ -26,13 +26,13 @@ Detail | Info
 
 ### Hex format
 
-{{< diagram "type-bytea-hex.svg" >}}
+{{% include-syntax file="sql_types/bytea" example="syntax-hex" %}}
 
 In some cases, the initial backslash may need to be escaped by doubling it (`\\`). For more information, see the PostgreSQL documentation on [string constants](https://www.postgresql.org/docs/13/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS).
 
 ### Escape format
 
-{{< diagram "type-bytea-esc.svg" >}}
+{{% include-syntax file="sql_types/bytea" example="syntax-escape" %}}
 
 In the escape format, octet values can be escaped by converting them into their three-digit octal values and preceding them with backslashes; the backslash itself can be escaped as a double backslash. While any octet value *can* be escaped, the values in the table below *must* be escaped.
 
