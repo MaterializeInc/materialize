@@ -10,13 +10,13 @@ is not reachable by the user.
 
 This document proposes a design where we can achieve true zero-downtime
 upgrades for DML and DQL queries, with the caveat that we still have a window
-(again on the order of 10s of seconds) where users cannot issue DDL.
+(about 10-30 seconds) where users cannot issue DDL.
 
 The long-term goal is to remove the caveats from zero-downtime upgrades and to
 remove downtime at all moments. The latter is usually tracked under the
 separate initiatives of _high availability_ and _physical isolation_. However,
 the engineering work that they all require overlaps and they thematically fit
-together.
+together so we also talk about them briefly below.
 
 The focus of this document is on improving zero-downtime upgrades in the short
 term, but I will describe below what the other initiatives entail, what
@@ -38,8 +38,8 @@ on the new version.
 ## Non-Goals
 
 - True zero-downtime upgrades for DDL
-- high availability, so no downtime during upgrades or any other time
-- physical isolation
+- High availability, so no downtime during upgrades or any other time
+- Physical isolation
 
 ## Context
 
@@ -68,7 +68,7 @@ Why there's downtime:
 - Network routes update to new process
 - During this window, environment is unreachable
 
-### Catalog Migrations
+### Version Compatibility and Catalog Migrations
 
 When a new version first establishes itself in the durable catalog by writing
 down its version and deploy generation, it sometimes has to modify the schema
@@ -79,9 +79,9 @@ interact with the catalog once a new version has "touched" it.
 ### High Availability
 
 Technically, high availability would include zero-downtime upgrades because it
-means that the system is "always" available. We historically differentiate
-between the two because they require slightly different engineering work,
-although with overlap.
+means that the system is always "highly" available. We historically
+differentiated between the two because they require slightly different
+engineering work, although with overlap.
 
 Zero-downtime upgrades means that we don't want to impose downtime when doing
 upgrades, and high availability means we want to protect from unavailability
@@ -89,8 +89,8 @@ that can happen at any other time, say from an `environmentd` process crashing
 or a machine failing.
 
 Thinking in terms of our current architecture, high availability requires
-multiple `environmentd`-flavored processes, so that in case of a failure the
-load can be immediately moved to another `environmentd`.
+multiple live `environmentd` processes, so that in case of a failure the load
+can be immediately moved to another `environmentd`.
 
 ### Physical Isolation
 
@@ -100,7 +100,7 @@ replicas, but all work of query processing and controlling the clusters happens
 on a single `environmentd` instance.
 
 Physical isolation would require to shard the workload across multiple
-`environmentd` instances, which is why this is related to both high
+`environmentd` instances, which is how this is related to both high
 availability and zero-downtime upgrades.
 
 ## Conceptual Framework: How These Initiatives Relate
@@ -155,14 +155,21 @@ deployment still accepts connections but rejects DDL with an error message.
 When cutting over, we drop connections and rely on reconnects to reach the new
 version.
 
-This modified flow requires a number of changes in different components. I will
-sketch these below, but each of the sub-sections will require a small-ish
-design document of its own or at the very least a thorough GitHub issue.
+Implicit in this proposal is that we initially still don't want to support DDL
+during the upgrade window. In addition to all the proposed work, this would
+require two additional large pieces of engineering work that I think are hard
+enough that we want to postpone them and instead deliver this incremental
+improvement to our upgrade procedure. I will expand on this future work below.
+
+The proposed upgrade flow requires a number of changes across different
+components. I will sketch these below, but each of the sub-sections will
+require a small-ish design document of its own or at the very least a thorough
+GitHub issue.
 
 The required work is sectioned into work that is unique to zero-downtime
 upgrades, work that is shared with the other initiatives, and then lastly I
-will describe the work that is unique to the future initiatives. The latter
-will be very sparse, because the focus of this document is the more immediate
+will describe the work that is unique to future initiatives. The latter will be
+very sparse, because the focus of this document is the more immediate
 improvements to zero-downtime upgrades.
 
 ## Work required for Zero-Downtime Upgrades (for DML/DQL)
@@ -335,14 +342,18 @@ traffic (the lame-duck phase).
 
 ## Shared Work Required for all of Physical Isolation, High Availability, and Full Zero-Downtime Upgrades
 
-The major work required for all of these efforts is enabling multiple actors to
-interact with and modify the catalog. Multiple instances of `environmentd` need
-to be able to:
+> [!NOTE]
+> Beyond here we are talking about future work that is not part of this
+> proposal.
+
+The major work required for all of the related future initiatives is enabling
+multiple actors to interact with and modify the catalog. Multiple instances of
+`environmentd` need to be able to:
 
 - subscribe to catalog changes and apply their implications
 - collaborate in writing down changes to the catalog
 
-The basic ideas of this are explained in [platform v2
+The foundational ideas behind this are explained in [platform v2
 architecture](20231127_pv2_uci_logical_architecture.md), and there is ongoing
 work towards allowing the adapter to subscribe to catalog changes and apply
 their implications.
@@ -366,11 +377,11 @@ by catalog version.
 
 ## Work required for Physical Isolation
 
-TBD
+WIP: Maybe leave out of this proposal?
 
 ## Work required for High Availability
 
-TBD
+WIP: Maybe leave out of this proposal?
 
 ## Alternatives
 
