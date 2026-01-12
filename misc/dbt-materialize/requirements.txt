@@ -34,7 +34,7 @@ networkx==3.4.2
 orderly-set==5.5.0
 packaging==25.0
 parsedatetime==2.6
-pathspec==0.12.1
+pathspec==1.0.2
 pluggy==1.6.0
 protobuf==6.33.2
 psycopg2-binary==2.9.11
