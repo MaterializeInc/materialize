@@ -30,25 +30,33 @@ The test harness:
 
 The benchmark can run multiple experiments with different numbers of
 materialized views and outputs results to a CSV file for further analysis.
+
+When using --mz-url for remote Materialize instances, you must also provide
+--remote-kafka-broker pointing to a Kafka broker accessible from both the test
+harness and the remote Materialize instance.
 """
 
 import csv
 import os
 import threading
 import time
+import uuid
 from textwrap import dedent
 
 import numpy as np
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
+from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import PgConnInfo, parse_pg_conn_string
 
 # Use a fixed external port for Kafka so we can connect from outside Docker
 KAFKA_EXTERNAL_PORT = 30123
@@ -73,26 +81,53 @@ SERVICES = [
     Materialized(),
 ]
 
-TOPIC_NAME = "data"
+def generate_topic_name() -> str:
+    """Generate a unique topic name for each test run."""
+    return f"freshness-benchmark-{uuid.uuid4().hex[:8]}"
 
 
-def create_topic(kafka_addr: str, max_retries: int = 30, retry_interval: float = 1.0) -> None:
+def get_kafka_admin_config(
+    kafka_addr: str,
+    kafka_username: str | None = None,
+    kafka_password: str | None = None,
+) -> dict:
+    """Build Kafka admin client configuration."""
+    config = {"bootstrap.servers": kafka_addr}
+    if kafka_username and kafka_password:
+        config.update({
+            "security.protocol": "SASL_PLAINTEXT",
+            "sasl.mechanism": "SCRAM-SHA-256",
+            "sasl.username": kafka_username,
+            "sasl.password": kafka_password,
+        })
+    return config
+
+
+def create_topic(
+    kafka_addr: str,
+    topic_name: str,
+    max_retries: int = 30,
+    retry_interval: float = 1.0,
+    kafka_username: str | None = None,
+    kafka_password: str | None = None,
+) -> None:
     """Create the Kafka topic for the benchmark with retry logic."""
     for attempt in range(max_retries):
         try:
-            admin = AdminClient({"bootstrap.servers": kafka_addr})
-            topic = NewTopic(TOPIC_NAME, num_partitions=1, replication_factor=1)
+            admin_config = get_kafka_admin_config(kafka_addr, kafka_username, kafka_password)
+            admin = AdminClient(admin_config)
+            topic = NewTopic(topic_name, num_partitions=1, replication_factor=1)
             futures = admin.create_topics([topic])
-            for topic_name, future in futures.items():
+            for name, future in futures.items():
                 # Wait for the topic creation with a timeout
                 future.result(timeout=10)
-                print(f"Created topic: {topic_name}")
+                print(f"Created topic: {name}")
             return
         except Exception as e:
             error_str = str(e)
             # Check if topic already exists (not an error)
             if "TOPIC_ALREADY_EXISTS" in error_str:
-                print(f"Topic {TOPIC_NAME} already exists")
+                print(f"Topic {topic_name} already exists")
                 return
             # Retry on timeout or broker not available errors
             if attempt < max_retries - 1:
@@ -107,38 +142,151 @@ def create_topic(kafka_addr: str, max_retries: int = 30, retry_interval: float =
                 )
 
 
-def setup_materialize(c: Composition, num_views: int) -> str:
+def delete_topic(
+    kafka_addr: str,
+    topic_name: str,
+    kafka_username: str | None = None,
+    kafka_password: str | None = None,
+) -> None:
+    """Delete a Kafka topic."""
+    try:
+        admin_config = get_kafka_admin_config(kafka_addr, kafka_username, kafka_password)
+        admin = AdminClient(admin_config)
+        futures = admin.delete_topics([topic_name])
+        for name, future in futures.items():
+            future.result(timeout=10)
+            print(f"Deleted topic: {name}")
+    except Exception as e:
+        print(f"Warning: Failed to delete topic {topic_name}: {e}")
+
+
+def wait_for_source_ready(
+    c: Composition,
+    source_name: str,
+    conn: PgConnInfo | None = None,
+    timeout_seconds: int = 120,
+    poll_interval: float = 1.0,
+) -> None:
+    """Wait for a source to reach 'running' status."""
+    query = f"""
+        SELECT status
+        FROM mz_internal.mz_source_statuses
+        WHERE name = '{source_name}'
+    """
+
+    start_time = time.time()
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            raise RuntimeError(
+                f"Timeout waiting for source '{source_name}' to become ready "
+                f"after {timeout_seconds} seconds"
+            )
+
+        try:
+            if conn:
+                pg_conn = conn.connect()
+                pg_conn.autocommit = True
+                with pg_conn.cursor() as cur:
+                    cur.execute(query)
+                    row = cur.fetchone()
+                pg_conn.close()
+            else:
+                result = c.sql_query(query)
+                row = result[0] if result else None
+
+            if row and row[0] == "running":
+                print(f"Source '{source_name}' is running (took {elapsed:.1f}s)")
+                return
+
+            status = row[0] if row else "not found"
+            print(f"Source status: {status}, waiting...")
+
+        except Exception as e:
+            print(f"Error checking source status: {e}, retrying...")
+
+        time.sleep(poll_interval)
+
+
+def setup_materialize(
+    c: Composition,
+    num_views: int,
+    topic_name: str,
+    conn: PgConnInfo | None = None,
+    kafka_broker: str = "kafka:9092",
+    kafka_username: str | None = None,
+    kafka_password: str | None = None,
+) -> str:
     """
     Set up the Kafka source and materialized views in Materialize.
 
     Args:
         c: The composition object
         num_views: Number of chained materialized views to create
+        topic_name: Name of the Kafka topic to consume from
+        conn: Optional PgConnInfo for remote Materialize connection
+        kafka_broker: Kafka broker address for Materialize to connect to
+        kafka_username: Optional username for Kafka SASL authentication
+        kafka_password: Optional password for Kafka SASL authentication
 
     Returns:
         The name of the final view/source to subscribe to
     """
-    # Create a beefy cluster for all objects
-    c.sql(
+
+    def run_sql(sql: str, user: str = "materialize", port: int | None = None) -> None:
+        """Execute SQL against local or remote Materialize."""
+        if conn:
+            pg_conn = conn.connect()
+            pg_conn.autocommit = True
+            with pg_conn.cursor() as cur:
+                # Materialize only supports single-statement execution,
+                # so split on semicolons and execute each separately
+                for statement in sql.split(";"):
+                    statement = statement.strip()
+                    if statement:
+                        cur.execute(statement)
+            pg_conn.close()
+        else:
+            c.sql(sql, user=user, port=port)
+
+    # Clean up any existing objects from previous runs
+    run_sql(
         dedent(
             """
-            CREATE CLUSTER beefy SIZE 'scale=1,workers=8';
+            DROP CLUSTER IF EXISTS beefy CASCADE;
+            DROP CONNECTION IF EXISTS kafka_conn;
+            DROP SECRET IF EXISTS kafka_password;
             """
         )
     )
 
-    c.sql(
+    # Create a beefy cluster for all objects
+    run_sql("CREATE CLUSTER beefy SIZE '400cc';")
+
+    # Build SASL options if credentials are provided
+    if kafka_username and kafka_password:
+        sasl_options = f"""
+                SECURITY PROTOCOL SASL_PLAINTEXT,
+                SASL MECHANISMS 'SCRAM-SHA-256',
+                SASL USERNAME '{kafka_username}',
+                SASL PASSWORD SECRET kafka_password"""
+        # Create a secret for the password first
+        run_sql(f"CREATE SECRET kafka_password AS '{kafka_password}';")
+    else:
+        sasl_options = "SECURITY PROTOCOL PLAINTEXT"
+
+    run_sql(
         dedent(
-            """
+            f"""
             CREATE CONNECTION kafka_conn TO KAFKA (
-                BROKER 'kafka:9092',
-                SECURITY PROTOCOL PLAINTEXT
+                BROKER '{kafka_broker}',
+                {sasl_options}
             );
 
             CREATE SOURCE data_source
             IN CLUSTER beefy
             FROM KAFKA CONNECTION kafka_conn (
-                TOPIC 'data'
+                TOPIC '{topic_name}'
             )
             KEY FORMAT TEXT
             VALUE FORMAT TEXT
@@ -148,11 +296,11 @@ def setup_materialize(c: Composition, num_views: int) -> str:
         )
     )
 
-    c.sql(f"CREATE MATERIALIZED VIEW max_data IN CLUSTER beefy AS (SELECT key, MAX(text) FROM data_source GROUP BY key);")
+    run_sql(f"CREATE MATERIALIZED VIEW max_data IN CLUSTER beefy AS (SELECT key, MAX(text) FROM data_source GROUP BY key);")
     for i in range(2, num_views + 1):
-        c.sql(f"CREATE MATERIALIZED VIEW dummy_mv{i} IN CLUSTER beefy AS (SELECT * FROM max_data);")
+        run_sql(f"CREATE MATERIALIZED VIEW dummy_mv{i} IN CLUSTER beefy AS (SELECT * FROM max_data);")
 
-    c.sql(f"CREATE MATERIALIZED VIEW data_mv1 IN CLUSTER beefy AS (SELECT DISTINCT * FROM data_source);")
+    run_sql(f"CREATE MATERIALIZED VIEW data_mv1 IN CLUSTER beefy AS (SELECT DISTINCT * FROM data_source);")
     return "data_mv1"
 
 
@@ -204,12 +352,22 @@ class FreshnessBenchmark:
     """
 
     def __init__(
-        self, c: Composition, kafka_addr: str, duration_seconds: int, subscribe_target: str
+        self,
+        c: Composition,
+        kafka_addr: str,
+        duration_seconds: int,
+        subscribe_target: str,
+        topic_name: str,
+        conn: PgConnInfo | None = None,
+        kafka_username: str | None = None,
+        kafka_password: str | None = None,
     ):
         self.c = c
         self.kafka_addr = kafka_addr
         self.duration_seconds = duration_seconds
         self.subscribe_target = subscribe_target
+        self.topic_name = topic_name
+        self.conn = conn  # Remote connection info, if any
 
         # Shared state protected by lock
         self.lock = threading.Lock()
@@ -219,7 +377,15 @@ class FreshnessBenchmark:
         self.running = True
 
         # Kafka producer
-        self.producer = Producer({"bootstrap.servers": kafka_addr})
+        producer_config = {"bootstrap.servers": kafka_addr}
+        if kafka_username and kafka_password:
+            producer_config.update({
+                "security.protocol": "SASL_PLAINTEXT",
+                "sasl.mechanism": "SCRAM-SHA-256",
+                "sasl.username": kafka_username,
+                "sasl.password": kafka_password,
+            })
+        self.producer = Producer(producer_config)
 
     def _delivery_callback(self, err, msg, seq: int) -> None:
         """Callback invoked when Kafka acknowledges a message."""
@@ -251,7 +417,7 @@ class FreshnessBenchmark:
             # Capture seq in closure for callback
             current_seq = seq
             self.producer.produce(
-                topic=TOPIC_NAME,
+                topic=self.topic_name,
                 key=key.encode(),
                 value=value.encode(),
                 callback=lambda err, msg, s=current_seq: self._delivery_callback(
@@ -284,13 +450,17 @@ class FreshnessBenchmark:
         """
         # Get a fresh connection for the subscriber
         # Need to disable autocommit for SUBSCRIBE with cursor
-        conn = self.c.sql_connection()
+        if self.conn:
+            conn = self.conn.connect()
+        else:
+            conn = self.c.sql_connection()
         conn.autocommit = False  # Override default for SUBSCRIBE transaction
 
         cursor = conn.cursor()
 
         # Start a transaction and declare a cursor for SUBSCRIBE
         cursor.execute("BEGIN")
+        cursor.execute("SET CLUSTER = beefy")
         cursor.execute(
             f"DECLARE sub CURSOR FOR SUBSCRIBE (SELECT * FROM {self.subscribe_target}) WITH (PROGRESS)"
         )
@@ -423,68 +593,136 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Consensus backend to use: 'postgres' (default) or 'cockroach'",
     )
 
+    parser.add_argument(
+        "--mz-url",
+        type=str,
+        help="Remote Materialize instance to run against (e.g., postgres://user:pass@host:6875/materialize)",
+    )
+
+    parser.add_argument(
+        "--remote-kafka-broker",
+        type=str,
+        help="Kafka broker address accessible from remote Materialize (required with --mz-url)",
+    )
+
+    parser.add_argument(
+        "--kafka-username",
+        type=str,
+        help="Username for Kafka SASL authentication",
+    )
+
+    parser.add_argument(
+        "--kafka-password",
+        type=str,
+        help="Password for Kafka SASL authentication",
+    )
+
     args = parser.parse_args()
 
     view_counts = parse_view_counts(args.view_counts)
     print(f"Will run benchmarks for view counts: {view_counts}")
 
-    # Determine consensus backend configuration
+    # Determine if we're using a remote Materialize instance
+    remote_conn: PgConnInfo | None = None
+
+    if args.mz_url:
+        assert args.remote_kafka_broker, "--remote-kafka-broker is required with --mz-url"
+        remote_conn = parse_pg_conn_string(args.mz_url)
+        print(f"Using remote Materialize: {remote_conn.host}:{remote_conn.port}")
+
+    # Determine Kafka addresses
+    if remote_conn:
+        # For remote Mz, we use the same Kafka broker for both producing and Mz consumption
+        kafka_addr = args.remote_kafka_broker
+        mz_kafka_broker = args.remote_kafka_broker
+    else:
+        # For local Mz, use local Kafka with fixed external port for producing
+        kafka_addr = f"127.0.0.1:{KAFKA_EXTERNAL_PORT}"
+        mz_kafka_broker = "kafka:9092"  # Docker network address for Mz
+
+    # Determine consensus backend configuration (only used for local Mz)
     if args.consensus_backend == "cockroach":
         metadata_store = "cockroach"
     else:
         metadata_store = "postgres-metadata"
 
-    print(f"Using consensus backend: {args.consensus_backend} (metadata_store={metadata_store})")
-
-    # Use the fixed external port for Kafka
-    kafka_addr = f"127.0.0.1:{KAFKA_EXTERNAL_PORT}"
+    if not remote_conn:
+        print(f"Using consensus backend: {args.consensus_backend} (metadata_store={metadata_store})")
 
     # Collect all results for CSV output
     all_results: list[dict] = []
 
     for num_views in view_counts:
+        # Generate a unique topic name for this experiment
+        topic_name = generate_topic_name()
+
         print("\n" + "=" * 60)
         print(f"EXPERIMENT: {num_views} materialized view(s)")
+        print(f"Topic: {topic_name}")
         print("=" * 60)
 
-        # Start fresh for each experiment
-        print("--- Starting services")
-        c.down(destroy_volumes=True)
+        if remote_conn:
+            # For remote Materialize, we don't need to start local services
+            # Just create the topic on the remote Kafka
+            print(f"Kafka address: {kafka_addr}")
+            print("--- Creating Kafka topic")
+            create_topic(kafka_addr, topic_name, kafka_username=args.kafka_username, kafka_password=args.kafka_password)
+        else:
+            # Start fresh for each experiment
+            print("--- Starting services")
+            c.down(destroy_volumes=True)
 
-        with c.override(
-            Materialized(
-                external_metadata_store=True,
-                metadata_store=metadata_store,
+            with c.override(
+                Materialized(
+                    external_metadata_store=True,
+                    metadata_store=metadata_store,
+                )
+            ):
+                c.up("zookeeper", "kafka", "schema-registry", metadata_store, "materialized")
+
+            print(f"Kafka address: {kafka_addr}")
+
+            # Create topic (with retry logic for Redpanda startup)
+            print("--- Creating Kafka topic")
+            create_topic(kafka_addr, topic_name, kafka_username=args.kafka_username, kafka_password=args.kafka_password)
+
+            # Configure source ticking rate
+            print(f"--- Setting kafka_default_metadata_fetch_interval to {args.tick_interval}")
+            c.sql(
+                f"ALTER SYSTEM SET kafka_default_metadata_fetch_interval = '{args.tick_interval}'",
+                user="mz_system",
+                port=6877,
             )
-        ):
-            c.up("zookeeper", "kafka", "schema-registry", metadata_store, "materialized")
-
-        print(f"Kafka address: {kafka_addr}")
-
-        # Create topic (with retry logic for Redpanda startup)
-        print("--- Creating Kafka topic")
-        create_topic(kafka_addr)
-
-        # Configure source ticking rate
-        print(f"--- Setting kafka_default_metadata_fetch_interval to {args.tick_interval}")
-        c.sql(
-            f"ALTER SYSTEM SET kafka_default_metadata_fetch_interval = '{args.tick_interval}'",
-            user="mz_system",
-            port=6877,
-        )
 
         # Set up Materialize with the specified number of views
         print(f"--- Setting up Materialize source with {num_views} materialized view(s)")
-        subscribe_target = setup_materialize(c, num_views)
+        subscribe_target = setup_materialize(
+            c,
+            num_views,
+            topic_name=topic_name,
+            conn=remote_conn,
+            kafka_broker=mz_kafka_broker,
+            kafka_username=args.kafka_username,
+            kafka_password=args.kafka_password,
+        )
         print(f"--- Will subscribe to: {subscribe_target}")
 
         # Wait for the source to be ready
         print("--- Waiting for source to be ready")
-        time.sleep(5)
+        wait_for_source_ready(c, "data_source", conn=remote_conn)
 
         # Run the benchmark
         print(f"--- Running freshness benchmark for {args.duration} seconds")
-        benchmark = FreshnessBenchmark(c, kafka_addr, args.duration, subscribe_target)
+        benchmark = FreshnessBenchmark(
+            c,
+            kafka_addr,
+            args.duration,
+            subscribe_target,
+            topic_name=topic_name,
+            conn=remote_conn,
+            kafka_username=args.kafka_username,
+            kafka_password=args.kafka_password,
+        )
         stats, latencies_ms = benchmark.run()
 
         print("\n" + "-" * 50)
@@ -492,6 +730,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print("-" * 50)
         print(stats)
         print("-" * 50)
+
+        # Clean up the topic
+        print(f"--- Cleaning up topic: {topic_name}")
+        delete_topic(kafka_addr, topic_name, kafka_username=args.kafka_username, kafka_password=args.kafka_password)
 
         # Collect results for CSV
         for latency in latencies_ms:
