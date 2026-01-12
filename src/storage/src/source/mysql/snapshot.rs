@@ -94,9 +94,7 @@ use itertools::Itertools;
 use mysql_async::prelude::Queryable;
 use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts};
 use mz_mysql_util::decoding::pack_mysql_row_from_values;
-use mz_mysql_util::{
-    ER_NO_SUCH_TABLE, MySqlError, query_sys_var, quote_identifier,
-};
+use mz_mysql_util::{ER_NO_SUCH_TABLE, MySqlError, query_sys_var, quote_identifier};
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
@@ -124,7 +122,7 @@ use crate::statistics::SourceStatistics;
 use super::schemas::verify_schemas;
 use super::{
     DefiniteError, MySqlTableName, ReplicationError, RewindRequest, SourceOutputInfo,
-    TransientError, return_definite_error_rows, validate_mysql_repl_settings, serialize_mysql_row
+    TransientError, return_definite_error_rows, serialize_mysql_row, validate_mysql_repl_settings,
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -369,15 +367,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 let mut removed_outputs = BTreeSet::new();
                 for (output, err) in errored_outputs {
                     // Publish the error for this table and stop ingesting it
-                    raw_handle
-                        .give(
-                            &data_cap_set[0],
-                            (
-                                (output.output_index, Err(err.clone().into())),
-                                GtidPartition::minimum(),
-                                Diff::ONE,
-                            ),
-                        );
+                    raw_handle.give(
+                        &data_cap_set[0],
+                        (
+                            (output.output_index, Err(err.clone().into())),
+                            GtidPartition::minimum(),
+                            Diff::ONE,
+                        ),
+                    );
                     trace!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
                     removed_outputs.insert(output.output_index);
@@ -418,45 +415,14 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                     while let Some(row) = results.try_next().await? {
                         let row: MySqlRow = row;
                         let mut row_bytes = Vec::new();
-                        serialize_mysql_row(&mut row_bytes, row).await;
+                        serialize_mysql_row(&mut row_bytes, row);
                         snapshot_staged += 1;
                         for (output, row_buf) in outputs.iter().repeat_clone(row_bytes) {
                             let update = (output.output_index, Ok((row_buf, output.desc.clone())));
-                            // let raw_handle: () = raw_handle;
-                            raw_handle
-                                .give(
-                                    &data_cap_set[0],
-                                    (
-                                        update,
-                                        GtidPartition::minimum(),
-                                        Diff::ONE,
-                                    ),
-                                );
-                            // let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
-                            // {
-                            //     Ok(row) => Ok(SourceMessage {
-                            //         key: Row::default(),
-                            //         value: row,
-                            //         metadata: Row::default(),
-                            //     }),
-                            //     // Produce a DefiniteError in the stream for any rows that fail to decode
-                            //     Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                            //         Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                            //             err.to_string(),
-                            //         )))
-                            //     }
-                            //     Err(err) => Err(err)?,
-                            // };
-                            // raw_handle
-                            //     .give_fueled(
-                            //         &data_cap_set[0],
-                            //         (
-                            //             (output.output_index, event),
-                            //             GtidPartition::minimum(),
-                            //             Diff::ONE,
-                            //         ),
-                            //     )
-                            //     .await;
+                            raw_handle.give(
+                                &data_cap_set[0],
+                                (update, GtidPartition::minimum(), Diff::ONE),
+                            );
                         }
                         // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.
                         snapshot_staged_total += u64::cast_from(outputs.len());
@@ -518,18 +484,21 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
             move |input, output| {
                 input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
-                    for ((output_index, event), time, diff) in
-                        data.flat_map(|data| data.drain(..))
+                    for ((output_index, event), time, diff) in data.flat_map(|data| data.drain(..))
                     {
                         let event = event
-                            // .as_ref()
                             .map_err(|e: DataflowError| e.clone())
                             .and_then(|(row_bytes, output_desc)| {
-                                let row_val = match deserialize_mysql_row(&row_bytes, &output_desc) {
+                                let row_val = match deserialize_mysql_row(&row_bytes, &output_desc)
+                                {
                                     Ok(vals) => vals,
                                     Err(err) => panic!("Failed to deserialize row: {}", err),
                                 };
-                                match pack_mysql_row_from_values(&mut final_row, row_val, &output_desc) {
+                                match pack_mysql_row_from_values(
+                                    &mut final_row,
+                                    row_val,
+                                    &output_desc,
+                                ) {
                                     Ok(row) => Ok(SourceMessage {
                                         key: Row::default(),
                                         value: row,
@@ -541,9 +510,9 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                             err.to_string(),
                                         )))
                                     }
-                                    Err(err) => Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                                        err.to_string(),
-                                    ))),
+                                    Err(err) => Err(DataflowError::from(
+                                        DefiniteError::ValueDecodeError(err.to_string()),
+                                    )),
                                 }
                             });
 
@@ -554,12 +523,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         })
         .as_collection();
 
-    (
-        snapshot_updates,
-        rewinds,
-        errors,
-        button.press_on_drop(),
-    )
+    (snapshot_updates, rewinds, errors, button.press_on_drop())
 }
 
 /// Fetch the size of the snapshot on this worker and emits the appropriate emtrics and statistics
