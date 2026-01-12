@@ -1695,6 +1695,8 @@ pub mod plan {
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
+    use crate::linear::ResultVecBorrow;
+    use crate::scalar::Columns;
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1731,7 +1733,7 @@ pub mod plan {
         #[inline(always)]
         pub fn evaluate_into<'a, 'row>(
             &'a self,
-            datums: &mut Vec<Datum<'a>>,
+            datums: &mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
             row_buf: &'row mut Row,
         ) -> Result<Option<&'row Row>, EvalError> {
@@ -1739,9 +1741,12 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
-                row_buf
-                    .packer()
-                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                row_buf.packer().extend(
+                    self.mfp
+                        .projection
+                        .iter()
+                        .map(|c| datums.get(*c).expect("invalid map")),
+                );
                 Ok(Some(row_buf))
             }
         }
@@ -1754,37 +1759,44 @@ pub mod plan {
         #[inline(always)]
         pub fn evaluate_iter<'b, 'a: 'b>(
             &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
+            datums: &'b mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
         ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {
                 Ok(None)
             } else {
-                Ok(Some(self.mfp.projection.iter().map(move |i| datums[*i])))
+                Ok(Some(
+                    self.mfp
+                        .projection
+                        .iter()
+                        .map(move |i| datums.get(*i).expect("error in map!")),
+                ))
             }
         }
 
         /// Populates `datums` with `self.expressions` and tests `self.predicates`.
         ///
         /// This does not apply `self.projection`, which is up to the calling method.
-        pub fn evaluate_inner<'b, 'a: 'b>(
+        pub fn evaluate_inner<'a>(
             &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
+            datums: &mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
             let mut expression = 0;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                    let datum: Datum<'a> =
+                        self.mfp.expressions[expression].eval(&*datums, arena)?;
+                    datums.push(datum);
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], arena)? != Datum::True {
+                if predicate.eval(&*datums, arena)? != Datum::True {
                     return Ok(false);
                 }
             }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                datums.push(self.mfp.expressions[expression].eval(&*datums, arena)?);
                 expression += 1;
             }
             Ok(true)
@@ -1955,7 +1967,7 @@ pub mod plan {
         /// returns an iterator with any `Ok(_)` element.
         pub fn evaluate<'b, 'a: 'b, E: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
             &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
+            datums: &'b mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
             time: mz_repr::Timestamp,
             diff: Diff,
@@ -1985,7 +1997,7 @@ pub mod plan {
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
-                match l.eval(&datums[..], arena) {
+                match l.eval(&*datums, arena) {
                     Err(e) => {
                         return Some(Err((e.into(), time, diff)))
                             .into_iter()
@@ -2013,7 +2025,7 @@ pub mod plan {
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
                 if upper_bound != Some(lower_bound) {
-                    match u.eval(&datums[..], arena) {
+                    match u.eval(&*datums, arena) {
                         Err(e) => {
                             return Some(Err((e.into(), time, diff)))
                                 .into_iter()
@@ -2053,9 +2065,13 @@ pub mod plan {
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
             if Some(lower_bound) != upper_bound && !null_eval {
-                row_builder
-                    .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                row_builder.packer().extend(
+                    self.mfp
+                        .mfp
+                        .projection
+                        .iter()
+                        .map(|c| datums.get(*c).expect("fixme")),
+                );
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));

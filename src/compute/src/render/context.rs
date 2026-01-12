@@ -22,7 +22,7 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
-use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_expr::{Id, MapFilterProject, MirScalarExpr, ResultVec};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
@@ -729,7 +729,7 @@ where
         mfp.optimize();
         let mfp_plan = mfp.into_plan().unwrap();
 
-        let mut datum_vec = DatumVec::new();
+        let mut datum_vec = ResultVec::new();
         // Wrap in an `Rc` so that lifetimes work out.
         let until = std::rc::Rc::new(until);
 
@@ -739,7 +739,7 @@ where
             let temp_storage = RowArena::new();
             let row_iter = row_datums.iter();
             let mut datums_local = datum_vec.borrow();
-            datums_local.extend(row_iter);
+            datums_local.extend(row_iter.copied());
             let time = time.clone();
             let event_time = time.event_time();
             mfp_plan

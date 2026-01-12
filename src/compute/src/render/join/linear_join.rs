@@ -22,6 +22,7 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
+use mz_expr::ResultVec;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -261,7 +262,7 @@ where
                     type CB<C> = ConsolidatingContainerBuilder<C>;
                     let (j, errs) = joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                         // Reuseable allocation for unpacking.
-                        let mut datums = DatumVec::new();
+                        let mut datums = ResultVec::new();
                         move |row| {
                             let mut row_builder = SharedRow::get();
                             let temp_storage = RowArena::new();
@@ -305,7 +306,7 @@ where
                 type CB<C> = ConsolidatingContainerBuilder<C>;
                 let (updates, errs) = joined.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                     // Reuseable allocation for unpacking.
-                    let mut datums = DatumVec::new();
+                    let mut datums = ResultVec::new();
                     move |row| {
                         let mut row_builder = SharedRow::get();
                         let temp_storage = RowArena::new();
@@ -484,7 +485,7 @@ where
         for<'a> Tr2::Val<'a>: ToDatumIter,
     {
         // Reuseable allocation for unpacking.
-        let mut datums = DatumVec::new();
+        let mut datums = ResultVec::new();
 
         if closure.could_error() {
             let (oks, err) = self

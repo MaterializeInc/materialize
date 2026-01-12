@@ -33,8 +33,8 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
+use mz_expr::{ResultVec, SafeMfpPlan};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
@@ -1260,7 +1260,7 @@ impl PersistPeek {
 
         // Re-used state for processing and building rows.
         let mut result = vec![];
-        let mut datum_vec = DatumVec::new();
+        let mut datum_vec = ResultVec::new();
         let mut row_builder = Row::default();
         let arena = RowArena::new();
         let mut total_size = 0usize;

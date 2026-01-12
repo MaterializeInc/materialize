@@ -1092,6 +1092,7 @@ impl Interpreter for Trace {
 
 #[cfg(test)]
 mod tests {
+    use crate::ResultVec;
     use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, SqlScalarType};
@@ -1440,8 +1441,9 @@ mod tests {
             let spec = interpreter.mfp_filter(&mfp);
             let safe_plan = mfp.into_plan().unwrap().into_nontemporal().unwrap();
             let mut buffer = Row::default();
+            let mut result_vec = ResultVec::new();
             for row in &rows {
-                let mut datums: Vec<_> = row.iter().collect();
+                let mut datums = result_vec.borrow_with(row);
                 let eval_result = safe_plan.evaluate_into(&mut datums, &arena, &mut buffer);
                 match eval_result {
                     Ok(None) => {

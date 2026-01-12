@@ -29,8 +29,8 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::{MapFilterProject, MirScalarExpr};
-use mz_repr::{Datum, Row, RowArena};
+use mz_expr::{MapFilterProject, MirScalarExpr, ResultVecBorrow};
+use mz_repr::{Row, RowArena};
 use serde::{Deserialize, Serialize};
 
 pub mod delta_join;
@@ -67,15 +67,15 @@ impl JoinClosure {
     #[inline(always)]
     pub fn apply<'a, 'row>(
         &'a self,
-        datums: &mut Vec<Datum<'a>>,
+        datums: &mut ResultVecBorrow<'a>,
         temp_storage: &'a RowArena,
         row: &'row mut Row,
     ) -> Result<Option<&'row Row>, mz_expr::EvalError> {
         for exprs in self.ready_equivalences.iter() {
             // Each list of expressions should be equal to the same value.
-            let val = exprs[0].eval(&datums[..], temp_storage)?;
+            let val = exprs[0].eval(&*datums, temp_storage)?;
             for expr in exprs[1..].iter() {
-                if expr.eval(&datums[..], temp_storage)? != val {
+                if expr.eval(&*datums, temp_storage)? != val {
                     return Ok(None);
                 }
             }
