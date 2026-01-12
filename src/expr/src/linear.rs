@@ -2072,7 +2072,10 @@ pub mod plan {
 
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
-            let result = if Some(lower_bound) != upper_bound && !null_eval {
+            if Some(lower_bound) == upper_bound || null_eval {
+                return None.into_iter().chain(None);
+            }
+            let result = {
                 let mut packer = row_builder.packer();
                 for i in &self.mfp.mfp.projection {
                     match datums.get(*i) {
@@ -2086,8 +2089,6 @@ pub mod plan {
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
                 lower.into_iter().chain(upper_opt)
-            } else {
-                None.into_iter().chain(None)
             };
             if let Some(e) = err {
                 Some(Err((e.into(), time, diff))).into_iter().chain(None)

@@ -36,7 +36,7 @@ use mz_expr::{
 };
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{Datum, DatumList, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};

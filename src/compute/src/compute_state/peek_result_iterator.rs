@@ -14,7 +14,7 @@ use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_expr::ResultVec;
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_repr::{Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
 pub struct PeekResultIterator<Tr>

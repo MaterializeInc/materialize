@@ -1518,7 +1518,9 @@ mod tests {
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
         let spec = interpreter.mfp_filter(&mfp);
-        assert!(spec.range.may_fail());
+        assert!(!spec.range.may_fail());
+        assert!(spec.range.may_contain(Datum::False));
+        assert!(!spec.range.may_contain(Datum::True));
     }
 
     #[mz_ore::test]

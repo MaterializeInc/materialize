@@ -75,6 +75,22 @@ EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers where value < 10;
 ----
 materialize.public.numbers  1313  1313  1  1
 
+# For filters that never return true, we only need to fetch data when the query may error.
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers WHERE value / 1 < 0;
+----
+materialize.public.numbers  1313  0  1  0
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers WHERE value / 0 < 0;
+----
+materialize.public.numbers  1313  1313  1  1
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM numbers WHERE value / 1 < 0 AND value / 0 < 0;
+----
+materialize.public.numbers  1313  0  1  0
+
 # Verify that pushdown of jsonb_get_string is infallible. Before this was
 # fixed, a filter expression on a jsonb field that is not present in all parts
 # would cause those parts to be fetched, even when AND'ed together with an

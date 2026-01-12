@@ -33,7 +33,7 @@ use mz_persist_client::stats::STATS_AUDIT_PANIC;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::columnar::{ColumnEncoder, Schema};
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::{CollectionMetadata, TxnsCodecRow};
 use mz_storage_types::errors::DataflowError;
