@@ -1048,7 +1048,7 @@ class ReplaceMaterializedViewAction(Action):
 
         tmp_mv = identifier(view.name() + "_" + threading.current_thread().getName())
         exe.execute(
-            f"CREATE MATERIALIZED VIEW {tmp_mv} REPLACING {identifier(view.name())} AS {view.get_select()}",
+            f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {identifier(view.name())} AS {view.get_select()}",
         )
         time.sleep(self.rng.random())
         if self.rng.choice([True, False]):

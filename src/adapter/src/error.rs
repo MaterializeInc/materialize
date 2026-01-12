@@ -711,11 +711,10 @@ impl fmt::Display for AdapterError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             AdapterError::AbsurdSubscribeBounds { as_of, up_to } => {
-                assert!(up_to < as_of);
                 write!(
                     f,
-                    r#"subscription lower ("as of") bound is beyond its upper ("up to") bound: {} < {}"#,
-                    up_to, as_of
+                    "subscription lower bound (`AS OF`) is greater than its upper bound (`UP TO`): \
+                     {as_of} > {up_to}",
                 )
             }
             AdapterError::AmbiguousSystemColumnReference => {

@@ -30,8 +30,8 @@ use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff, StateUpdate,
-    StateUpdateKind, TemporaryItem,
+    CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff,
+    StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -832,6 +832,9 @@ impl Catalog {
                 let mut new_entry = state.get_entry(&id).clone();
                 let replacement = state.get_entry(&replacement_id);
 
+                let new_audit_events =
+                    apply_replacement_audit_events(state, &new_entry, replacement);
+
                 let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
                     return Err(AdapterError::internal(
                         "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
@@ -850,7 +853,21 @@ impl Catalog {
                 tx.remove_item(replacement_id)?;
                 tx.update_item(id, new_entry.into())?;
 
-                // TODO(alter-mv): audit logging
+                let comment_id = CommentObjectId::MaterializedView(replacement_id);
+                tx.drop_comments(&[comment_id].into())?;
+
+                for (event_type, details) in new_audit_events {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        event_type,
+                        ObjectType::MaterializedView,
+                        details,
+                    )?;
+                }
             }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
@@ -1357,6 +1374,9 @@ impl Catalog {
                                     id: id.to_string(),
                                     name,
                                     cluster_id: mv.cluster_id.to_string(),
+                                    replacement_target_id: mv
+                                        .replacement_target
+                                        .map(|id| id.to_string()),
                                 },
                             )
                         }
@@ -2556,6 +2576,60 @@ impl Catalog {
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
+}
+
+/// Generate audit events for a replacement apply operation.
+fn apply_replacement_audit_events(
+    state: &CatalogState,
+    target: &CatalogEntry,
+    replacement: &CatalogEntry,
+) -> Vec<(EventType, EventDetails)> {
+    let mut events = Vec::new();
+
+    let target_name = state.resolve_full_name(target.name(), target.conn_id());
+    let target_id_name = IdFullNameV1 {
+        id: target.id().to_string(),
+        name: Catalog::full_name_detail(&target_name),
+    };
+    let replacement_name = state.resolve_full_name(replacement.name(), replacement.conn_id());
+    let replacement_id_name = IdFullNameV1 {
+        id: replacement.id().to_string(),
+        name: Catalog::full_name_detail(&replacement_name),
+    };
+
+    if Catalog::should_audit_log_item(&target.item) {
+        events.push((
+            EventType::Alter,
+            EventDetails::AlterApplyReplacementV1(mz_audit_log::AlterApplyReplacementV1 {
+                target: target_id_name.clone(),
+                replacement: replacement_id_name.clone(),
+            }),
+        ));
+
+        if let Some(old_cluster_id) = target.cluster_id()
+            && let Some(new_cluster_id) = replacement.cluster_id()
+            && old_cluster_id != new_cluster_id
+        {
+            events.push((
+                EventType::Alter,
+                EventDetails::AlterSetClusterV1(mz_audit_log::AlterSetClusterV1 {
+                    id: target.id().to_string(),
+                    name: target_id_name.name,
+                    old_cluster_id: old_cluster_id.to_string(),
+                    new_cluster_id: new_cluster_id.to_string(),
+                }),
+            ));
+        }
+    }
+
+    if Catalog::should_audit_log_item(&replacement.item) {
+        events.push((
+            EventType::Drop,
+            EventDetails::IdFullNameV1(replacement_id_name),
+        ));
+    }
+
+    events
 }
 
 /// All of the objects that need to be removed in response to an [`Op::DropObjects`].

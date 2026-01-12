@@ -31,6 +31,8 @@ def main():
     metadata = frontmatter.load(release_version_doc_file)
     metadata["released"] = True
     metadata["patch"] = int(args.patch)
+    if "rc" in metadata:
+        del metadata["rc"]
     with open(release_version_doc_file, "wb") as f:
         frontmatter.dump(metadata, f, sort_keys=False)
         # Always have a trailing newline

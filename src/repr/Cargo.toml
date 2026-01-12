@@ -64,14 +64,14 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.12.2"
 ryu = "1.0.22"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.148", features = ["arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0.149", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
 static_assertions = "1.1"
 strsim = "0.11.1"
 timely = "0.25.1"
 tokio-postgres = { version = "0.7.15" }
 tracing-core = "0.1.35"
-url = { version = "2.5.7", features = ["serde"] }
+url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }

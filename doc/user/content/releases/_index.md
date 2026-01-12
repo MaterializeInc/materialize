@@ -15,9 +15,19 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.6.0
+*Released to Materialize Cloud: 2026-01-08*<br>
+*Released to Materialize Self-Managed: 2026-01-09*<br>
+
+v26.6.0 includes bug fixes for Kafka sinks and Self-Managed deployments.
+
+### Bug Fixes
+- Fixed an issue where console and balancer deployments could fail to upgrade to the correct version during Self-Managed environment upgrades.
+- Fixed an issue where `ALTER SINK ... SET FROM` on Kafka sinks could incorrectly restart in snapshot mode even when the sink had already made progress, causing unnecessary resource consumption and potential out-of-memory errors.
+
 ## v26.5.1
 *Released to Materialize Self-Managed: 2025-12-23* <br>
-*Scheduled for release to Materialize Cloud: 2026-01-08* <br>
+*Released to Materialize Cloud: 2026-01-08* <br>
 
 v26.5.1 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
 
@@ -48,6 +58,7 @@ v26.4.0 introduces several performance improvements and bugfixes.
 - **Up to 3x faster hydration times for large PostgreSQL tables**: We've reduced the overhead incurred by communication between multiple *workers* on a large cluster. We've observed up to 3x throughput improvement when ingesting 1 TB PostgreSQL tables on large clusters.
 - **More efficient source ingestion batching**: Sources now batch writes more effectively. This can result in improved freshness and lower resource utilization, especially when a source is doing a large number of writes.
 - **CloudSQL HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers in CloudSQL HA sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
+- **Manual Promotion** (<red>*Materialize Self-Managed only*</red>): [Rollout strategies](/self-managed-deployments/upgrading/#rollout-strategies) allow you control how Materialize transitions from the current generation to a new generation during an upgrade. We've added a new rollout strategy called `ManuallyPromote` which allows you to choose when to promote the new generation. This means that you can minimize the impact of potential downtime.
 
 ### Bug Fixes
 - Fixed timestamp determination logic to handle empty read holds correctly.
@@ -56,8 +67,7 @@ v26.4.0 introduces several performance improvements and bugfixes.
 
 ## v26.3.0
 
-*Released Cloud: 2025-12-12*<br>
-*Released Self-Managed: 2025-12-12*
+*Released to Materialize Cloud & Materialize Self-Managed: 2025-12-12*<br>
 
 ### Improvements
 - For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.

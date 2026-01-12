@@ -2991,7 +2991,7 @@ pub fn plan_create_materialized_view(
 
     // Validate the replacement target, if one is given.
     let mut replacement_target = None;
-    if let Some(target_name) = &stmt.replacing {
+    if let Some(target_name) = &stmt.replacement_for {
         scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
 
         let target = scx.get_item_by_resolved_name(target_name)?;
@@ -3015,6 +3015,17 @@ pub fn plan_create_materialized_view(
                 "cannot replace {} because it is also a dependency",
                 scx.catalog.minimal_qualification(target.name()),
             );
+        }
+
+        for use_id in target.used_by() {
+            let use_item = scx.get_item(use_id);
+            if use_item.replacement_target() == Some(target.id()) {
+                sql_bail!(
+                    "cannot replace {} because it already has a replacement: {}",
+                    scx.catalog.minimal_qualification(target.name()),
+                    scx.catalog.minimal_qualification(use_item.name()),
+                );
+            }
         }
 
         replacement_target = Some(target.id());

@@ -34,7 +34,7 @@ SELECT * FROM mv
 5 6
 
 statement ok
-CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a + b as a, b FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + b as a, b FROM t
 
 query II
 SELECT * FROM mv
@@ -94,7 +94,7 @@ SELECT * FROM mv
 # Test: aborted replacement workflow
 
 statement ok
-CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT -a as a, b FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT -a as a, b FROM t
 
 query II
 SELECT * FROM mv
@@ -130,7 +130,7 @@ SELECT * FROM mv
 # Test: replacement can be created in another cluster
 
 statement ok
-CREATE MATERIALIZED VIEW rp REPLACING mv IN CLUSTER other AS SELECT a, b FROM t;
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER other AS SELECT a, b FROM t;
 
 query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
@@ -152,7 +152,7 @@ mv   other   (empty)
 # Test: replacement can have the same query
 
 statement ok
-CREATE MATERIALIZED VIEW rp REPLACING mv IN CLUSTER other AS SELECT a, b FROM t;
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER other AS SELECT a, b FROM t;
 
 query TTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
@@ -174,25 +174,28 @@ mv   other   (empty)
 # Test: usage errors
 
 statement error db error: ERROR: incompatible schemas
-CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a, b, 1 FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b, 1 FROM t
 
 statement error db error: ERROR: cannot replace table t with materialized view rp
-CREATE MATERIALIZED VIEW rp REPLACING t AS SELECT a, b FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR t AS SELECT a, b FROM t
 
 statement error db error: ERROR: t is a table not a materialized view
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT t
 
 statement error db error: ERROR: cannot replace mv because it is also a dependency
-CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM mv
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM mv
 
 statement ok
 CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv
 
 statement ok
-CREATE MATERIALIZED VIEW rp REPLACING mv2 AS SELECT a, b FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv2 AS SELECT a, b FROM t
 
 statement error cannot replace materialized view mv with materialized view rp
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+statement error cannot replace mv2 because it already has a replacement: rp
+CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv2 AS SELECT a, b FROM t
 
 statement ok
 DROP MATERIALIZED VIEW mv2 CASCADE
@@ -201,7 +204,7 @@ DROP MATERIALIZED VIEW mv2 CASCADE
 # Test: replacement depends on target materialized view
 
 statement ok
-CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a, b FROM t
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b FROM t
 
 statement error db error: ERROR: cannot drop materialized view "mv": still depended upon by materialized view "rp"
 DROP MATERIALIZED VIEW mv;
@@ -219,8 +222,31 @@ statement error db error: ERROR: index cannot be created on materialize.public.r
 CREATE DEFAULT INDEX ON rp
 
 
+# Test: comments on replacements
+
+statement ok
+COMMENT ON MATERIALIZED VIEW rp IS 'comment:rp'
+
+statement ok
+COMMENT ON COLUMN rp.a IS 'comment:rp.a'
+
+query TT rowsort
+SELECT object_sub_id, comment
+FROM mz_internal.mz_comments
+WHERE object_type = 'materialized-view'
+----
+NULL  comment:rp
+1     comment:rp.a
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query TT rowsort
+SELECT object_sub_id, comment
+FROM mz_internal.mz_comments
+WHERE object_type = 'materialized-view'
+----
+
+
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE;
-
-# TODO(alter-mv): Test: not more than one replacement allowed per MV
-# TODO(alter-mv): Test: audit log

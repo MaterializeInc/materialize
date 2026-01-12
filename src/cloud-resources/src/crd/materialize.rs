@@ -42,9 +42,15 @@ pub mod v1alpha1 {
         /// Create a new generation of pods, leaving the old generation as the serving generation
         /// until the user manually promotes the new generation.
         ///
-        /// Users can promote the new generation at any time, even if the new generation pods are
-        /// not fully caught up, by setting `forcePromote` to the same value as `requestRollout` in
-        /// the Materialize spec.
+        /// When using `ManuallyPromote`, the new generation can be promoted at any
+        /// time, even if it has dataflows that are not fully caught up, by setting
+        /// `forcePromote` to the same value as `requestRollout` in the Materialize spec.
+        ///
+        /// To minimize downtime, promotion should occur when the new generation
+        /// has caught up to the prior generation. To determine if the new
+        /// generation has caught up, consult the `UpToDate` condition in the
+        /// status of the Materialize Resource. If the condition's reason is
+        /// `ReadyToPromote` the new generation is ready to promote.
         ///
         /// {{<warning>}}
         /// Do not leave new generations unpromoted indefinitely.

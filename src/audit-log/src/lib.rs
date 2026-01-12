@@ -169,6 +169,7 @@ pub enum EventDetails {
     CreateSourceSinkV4(CreateSourceSinkV4),
     CreateIndexV1(CreateIndexV1),
     CreateMaterializedViewV1(CreateMaterializedViewV1),
+    AlterApplyReplacementV1(AlterApplyReplacementV1),
     AlterSetClusterV1(AlterSetClusterV1),
     AlterSourceSinkV1(AlterSourceSinkV1),
     GrantRoleV1(GrantRoleV1),
@@ -455,6 +456,15 @@ pub struct CreateMaterializedViewV1 {
     pub cluster_id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_target_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
+pub struct AlterApplyReplacementV1 {
+    #[serde(flatten)]
+    pub target: IdFullNameV1,
+    pub replacement: IdFullNameV1,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -471,8 +481,8 @@ pub struct AlterSetClusterV1 {
     pub id: String,
     #[serde(flatten)]
     pub name: FullNameV1,
-    pub old_cluster: Option<String>,
-    pub new_cluster: Option<String>,
+    pub old_cluster_id: String,
+    pub new_cluster_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Ord, Hash, Arbitrary)]
@@ -616,6 +626,9 @@ impl EventDetails {
             EventDetails::CreateSourceSinkV4(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateIndexV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::CreateMaterializedViewV1(v) => {
+                serde_json::to_value(v).expect("must serialize")
+            }
+            EventDetails::AlterApplyReplacementV1(v) => {
                 serde_json::to_value(v).expect("must serialize")
             }
             EventDetails::AlterSourceSinkV1(v) => serde_json::to_value(v).expect("must serialize"),

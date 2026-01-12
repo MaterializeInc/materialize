@@ -18,6 +18,9 @@
     "pg-query-stream": "^4.5.3",
     "prettier": "^2.0.4"
   },
+  "resolutions": {
+    "js-yaml": "^3.14.2"
+  },
   "prettier": {
     "tabWidth": 2,
     "trailingComma": "all"

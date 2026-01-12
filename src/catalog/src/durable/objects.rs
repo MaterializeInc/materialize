@@ -1333,9 +1333,9 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
     let mut tokens = create_sql.split_whitespace();
     assert_eq!(tokens.next(), Some("CREATE"));
 
-    // Read away TEMPORARY, if any.
+    // Read away item type modifiers, if any.
     let next_token = match tokens.next() {
-        Some("TEMPORARY") => tokens.next(),
+        Some("TEMPORARY") | Some("REPLACEMENT") => tokens.next(),
         token => token,
     };
 

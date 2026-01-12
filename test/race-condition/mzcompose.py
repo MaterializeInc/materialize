@@ -661,14 +661,14 @@ class MaterializedView(Object):
             lambda: dedent(
                 f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
-                > CREATE MATERIALIZED VIEW {self.name}_replacement REPLACING {self.name} AS SELECT {self.select}
+                > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
                 """
             ),
             lambda: dedent(
                 f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
-                > CREATE MATERIALIZED VIEW {self.name}_replacement REPLACING {self.name} AS SELECT {self.select}
+                > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > DROP MATERIALIZED VIEW {self.name}_replacement
                 """
             ),

@@ -7313,6 +7313,12 @@ SELECT
             JOIN mz_catalog.mz_types t ON a.element_id = t.id
             WHERE a.id = mz_types.id
         ),
+        (
+            SELECT t.oid
+            FROM mz_catalog.mz_list_types l
+            JOIN mz_catalog.mz_types t ON l.element_id = t.id
+            WHERE l.id = mz_types.id
+        ),
         0
     ) AS typelem,
     coalesce(
@@ -7416,6 +7422,7 @@ pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
             .with_column("attlen", SqlScalarType::Int16.nullable(true))
             .with_column("attnum", SqlScalarType::Int16.nullable(false))
             .with_column("atttypmod", SqlScalarType::Int32.nullable(false))
+            .with_column("attndims", SqlScalarType::Int16.nullable(false))
             .with_column("attnotnull", SqlScalarType::Bool.nullable(false))
             .with_column("atthasdef", SqlScalarType::Bool.nullable(false))
             .with_column("attidentity", SqlScalarType::PgLegacyChar.nullable(false))
@@ -7434,6 +7441,9 @@ SELECT
     pg_type_all_databases.typlen AS attlen,
     position::int8::int2 as attnum,
     mz_columns.type_mod as atttypmod,
+    -- dummy value, just to make go-jet's workaround work for now. Discussion:
+    -- https://github.com/MaterializeInc/materialize/pull/34649#issuecomment-3714291409
+    0::int2 as attndims,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
@@ -7475,6 +7485,7 @@ ON mz_internal.pg_attribute_all_databases (
     is_retained_metrics_object: false,
 };
 
+/// <https://www.postgresql.org/docs/current/catalog-pg-attribute.html>
 pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
         name: "pg_attribute",
@@ -7487,6 +7498,7 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("attlen", SqlScalarType::Int16.nullable(true))
             .with_column("attnum", SqlScalarType::Int16.nullable(false))
             .with_column("atttypmod", SqlScalarType::Int32.nullable(false))
+            .with_column("attndims", SqlScalarType::Int16.nullable(false))
             .with_column("attnotnull", SqlScalarType::Bool.nullable(false))
             .with_column("atthasdef", SqlScalarType::Bool.nullable(false))
             .with_column("attidentity", SqlScalarType::PgLegacyChar.nullable(false))
@@ -7497,8 +7509,8 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
         column_comments: BTreeMap::new(),
         sql: "
 SELECT
-    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
-    attgenerated, attisdropped, attcollation
+    attrelid, attname, atttypid, attlen, attnum, atttypmod, attndims, attnotnull, atthasdef,
+    attidentity, attgenerated, attisdropped, attcollation
 FROM mz_internal.pg_attribute_all_databases
 WHERE
   (database_name IS NULL OR database_name = pg_catalog.current_database()) AND

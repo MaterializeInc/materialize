@@ -29,10 +29,10 @@ serde = "1.0.219"
 serde_yaml = "0.9.34"
 tokio = "1.48.0"
 tokio-postgres = { version = "0.7.15" }
-tokio-util = { version = "0.7.17", features = ["io"] }
+tokio-util = { version = "0.7.18", features = ["io"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt"] }
-url = { version = "2.5.7", features = ["serde"] }
+url = { version = "2.5.8", features = ["serde"] }
 walkdir = "2.5"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 zip = { version = "6.0.0", default-features = false, features=["deflate-flate2"]}
