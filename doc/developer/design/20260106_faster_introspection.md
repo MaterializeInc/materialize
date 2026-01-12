@@ -122,6 +122,38 @@ explicitly mention it in this section and provide details on why you'd
 like to skip or delay it.
 -->
 
+For an MVP, I would prefer to reserve a low number of threads for a separate Timely runtime that is dedicated to processing introspection data, but runs within the same pod.
+This allows us to avoid any network overhead and orchestration complexity, which we'd need to solve otherwise.
+We can make this opt-in, and could limit it to larger cluster sizes where losing a CPU core would not have a large impact.
+
+All mechanisms that externalize introspection data need the same interface changes, regardless of where we host the data.
+This means that even for co-locating introspection data processing on the same pod, we need the same abstraction boundaries as if the introspection data was processed on a different pod.
+
+Specifically, we do the following:
+* We introduce a separate Timely runtime for introspection.
+  It uses the same compute protocol as the compute runtime, and has the same capabilities.
+* We introduce a mechanism to externalize the introspection data from a Timely run time, and ingesting it in a separate instance.
+  For the co-located implementation, we can use shared memory as our transport.
+* We change the coordinator to surface a separate, non-modifiable, introspection cluster along with the regular cluster.
+
+
+### Sidecar clusters
+
+This command crates a new replica and a separate introspection sidecar replica.
+```SQL
+CREATE CLUSTER REPLICA cluster_name.replica_name (INTROSPECTION SIDECAR = COLOCATED, INTROSPECTION SIDECAR NAME = introspection_cluster_name);
+```
+
+We require the sidecar to be a separate _cluster_, and not just a separate _cluster replica_.
+Otherwise, users would need to use replica-targeted queries to obtain the relevant information.
+
+### Sidecar cluster replicas
+
+This command crates a new replica and a separate introspection sidecar replica.
+```SQL
+CREATE CLUSTER REPLICA cluster_name.replica_name (INTROSPECTION SIDECAR = COLOCATED, INTROSPECTION SIDECAR NAME = introspection_cluster.introspection_replica_name);
+```
+
 ## Alternatives
 
 <!--
@@ -146,3 +178,6 @@ process, you are responsible for getting answers to these open
 questions. All open questions should be answered by the time a design
 document is merged.
 -->
+
+* Should we maintain the introspection indexes on both the sidecar and the main cluster?
+* What's the name of the introspection sidecar?
