@@ -261,6 +261,19 @@ steps:
                 - --other-tag
                 - common-ancestor
 
+      - id: freshness-benchmark
+        label: "Freshness Benchmark"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: freshness-benchmark
+              args:
+                - --duration=60
+                - --view-counts=1,5,10
+
   - group: Kafka
     key: kafka
     steps:
