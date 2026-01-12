@@ -23,7 +23,7 @@ issue describing the problem.
 -->
 
 In Materialize, cluster replicas host the user's workload.
-Users observe the status of their workloads via introspection queries that gater information from various parts of the system.
+Users observe the status of their workloads via introspection queries that gather information from various parts of the system.
 Currently, the queries can be slow or unresponsive when the system is under load.
 In the limit, this makes it impossible to observe progress for workloads that never hydrate, and slow for others.
 
@@ -80,9 +80,14 @@ This way, even if the main runtime is busy, the introspection data can still be 
 
 * Reserve workers: We can reserve a subset of workers in the cluster for processing introspection data.
   These workers would run a separate Timely runtime that only processes introspection data.
+  This allows us to process the data within the same process, avoiding the need for a separate network connection.
+  A downside is that not all workers are available for query processing.
+  This might be justifiable for large replicas, though.
 * Sidecar cluster replica: We can run a separate cluster replica that only processes introspection data.
   This replica would run a separate Timely runtime that only processes introspection data.
   The main cluster replica would send introspection data to the sidecar replica.
+  An upside is that the original cluster replica would still have all compute resources available as it has at the moment.
+  A downside is that we introduce a network connection, which are a source of runtime errors.
 
 The separate cluster could maintain the introspection data as indexes, or write it to persist if desired.
 This part of the design is orthogonal to the main proposal, and can be decided based on the desired trade-offs.
@@ -91,12 +96,7 @@ Separating the introspection data processing into a separate timely runtime has 
 Currently, introspection queries are executed in the same cluster replica as the user's workload.
 With the proposed design, we need to route introspection queries to a separate cluster replica.
 
-* When a user creates a replica, we spawn a sidecar replica for introspection.
-  The user can then query the sidecar replica for introspection data.
-* We could share a sidecar replica for multiple user replicas.
-
-All solutions sending data over the network introduce a new failure mode as the network can be unreliable.
-
+A separate introspection cluster could be used by multiple replicas to process their introspection data.
 
 ## Minimal Viable Prototype
 
