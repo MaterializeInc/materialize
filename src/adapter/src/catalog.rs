@@ -85,7 +85,6 @@ use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
 use tokio::sync::MutexGuard;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::error;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -318,43 +317,11 @@ impl Catalog {
             }
         }
 
-        if dropped_notices.iter().any(|n| Arc::strong_count(n) != 1) {
-            use mz_ore::str::{bracketed, separated};
-            let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
-            let bad_notices = bad_notices.map(|n| {
-                // Try to find where the bad reference is.
-                // Maybe in `dataflow_metainfos`?
-                let mut dataflow_metainfo_occurrences = Vec::new();
-                for (id, meta_info) in self.plans.dataflow_metainfos.iter() {
-                    if meta_info.optimizer_notices.contains(n) {
-                        dataflow_metainfo_occurrences.push(id);
-                    }
-                }
-                // Or `notices_by_dep_id`?
-                let mut notices_by_dep_id_occurrences = Vec::new();
-                for (id, notices) in self.plans.notices_by_dep_id.iter() {
-                    if notices.iter().contains(n) {
-                        notices_by_dep_id_occurrences.push(id);
-                    }
-                }
-                format!(
-                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {}, \
-                    dataflow_metainfo_occurrences = {:?}, notices_by_dep_id_occurrences = {:?})",
-                    n.id,
-                    n.kind,
-                    n.dependencies,
-                    Arc::strong_count(n),
-                    dataflow_metainfo_occurrences,
-                    notices_by_dep_id_occurrences
-                )
-            });
-            let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            error!(
-                "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
-                 bad_notices = {bad_notices}; \
-                 drop_ids = {drop_ids:?}"
-            );
-        }
+        // (We used to have a sanity check here that
+        // `dropped_notices.iter().any(|n| Arc::strong_count(n) != 1)`
+        // but this is not a correct assertion: There might be other clones of the catalog (e.g. if
+        // a peek is running concurrently to an index drop), in which case those clones also hold
+        // references to the notices.)
 
         dropped_notices
     }
