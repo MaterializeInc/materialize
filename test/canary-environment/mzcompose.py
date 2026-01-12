@@ -346,7 +346,28 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         )
 
-    c.exec("dbt", "dbt", "run", "--threads", "8", workdir="/workdir")
+    # TODO: Remove split when https://github.com/MaterializeInc/database-issues/issues/10014 is fixed
+    c.exec(
+        "dbt",
+        "dbt",
+        "run",
+        "--threads",
+        "8",
+        "--exclude",
+        "config.materialized:sink",
+        workdir="/workdir",
+    )
+    try:
+        c.exec(
+            "dbt",
+            "dbt",
+            "run",
+            "--select",
+            "config.materialized:sink",
+            workdir="/workdir",
+        )
+    except:
+        pass
 
 
 def workflow_test(c: Composition, parser: WorkflowArgumentParser) -> None:
