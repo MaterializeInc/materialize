@@ -374,31 +374,43 @@ TBD
 
 ## Alternatives
 
-### Read-Only `environmentd` Follows Catalog Changes
+### Cut over to new version without halt-and-restart
 
 Instead of the halt-and-restart approach, the new-version `environmentd` would
 listen to catalog changes, apply migrations live, and when promoted fences out
 the old `environmentd` and gets all its in-memory structures, controllers, and
 the like out of read-only mode.
 
-This would still have the downside that bringing it out of read-only mode can
-take on the order of seconds, but we would shorten the window during which DDL
-is not available.
+I contend that this can still take on the order of seconds and only an approach
+where we use HA across versions can bring us down to true zero downtime.
 
-As described above, this part is hard.
+Additionally, the parts required for live-listening to changes and acting on
+them will be tricky to write, though we will need it long term for the other
+initiatives.
 
-### Fully Operational `environmentd` at different versions
+### Focus on further improving `environmentd` bootstrap times
 
-This is an extension of the above, and basically all the different work streams
-mentioned above (high availability, physical isolation, following catalog
-changes and applying migrations).
+We currently take on the order of 30s for bootstrapping `environmentd` in our
+largest customer environments. Going from there to sub-second restart times
+looks prohibitively hard. Plus, there is never a guarantee that you will be
+able to restart in time.
 
-The only observable downtime would be when we cut over how traffic gets routed
-to different `environmentd`s.
+Here again I content that only an approach with HA across versions can deliver
+true zero downtime.
 
-In the fullness of time we want this, but it's a decent amount of work.
-Especially the forward/backward compatibility across a range of versions. On top
-of the other hard challenges.
+### True zero-downtime for everything, including DDL
+
+Lame-duck mode is a "deviation" from the end goal of true zero-downtime
+upgrades for all kinds of commands. One could say that we should instead try
+and deliver that end goal immediately.
+
+I think the proposal as described above is more feasible in the short term.
+True zero-downtime upgrades including DDL require us to solve two hard
+engineering problems:
+- subscribing to and applying catalog changes
+- forward/backward compatibility for the catalog
+
+I think these are hard and we should focus on incrementally delivering value.
 
 ## Open Questions
 
