@@ -31,6 +31,10 @@ The lived experience for users will be: **no perceived downtime for DQL and
 DML, and an error message about DDL not being allowed during version cutover,
 which should be on the order of 10s of seconds**.
 
+Alternative: we can think about instead delaying DDL statements, they will
+eventually be cancelled when we cut over network connections and then succeed
+on the new version.
+
 ## Non-Goals
 
 - True zero-downtime upgrades for DDL
@@ -187,17 +191,21 @@ important detail to figure out here is what happens when the old-version
 `environmentd` process crashes while we're in a lame-duck phase. If the since
 of the catalog shard has advanced, it will not be able to restart and read the
 catalog at the old version that it understands. This may require holding back
-the since of the catalog shard during upgrades or a similar mechanism.
+the since of the catalog shard during upgrades or a similar mechanism. On the
+other hand, this might be okay if we assume that the new version restarts about
+as fast as the old version, so the new version will be ready to take over about
+as fast as the old `environmentd` could restart.
 
 TODO: It could even be the case that builtin tables are compatible for writing
 between the versions, because of how persist schema backward compatibility
 works. We have to audit whether it would work for both the old and new version
 to write at the same time. This is important for builtin tables that are not
-derived from catalog state, for example `mz_sessions`, the audit log, and
-probably others.
+derived from catalog state, for example `mz_sessions`, the storage-usage table,
+and probably others.
 
 TODO: Figure out if we want to allow background tasks to keep writing. This
-includes, but is not limited to storage usage collection.
+includes, but is not limited to storage usage collection and all the
+storage-managed collections.
 
 ### Change How Old-Version Processes are Reaped
 
@@ -279,6 +287,9 @@ supports concurrently running ingestion instances.
 
 Kafka Sinks use a transactional producer ID, so they would also fight over this
 but settle down when the old-version cluster processes are eventually reaped.
+
+Alternative: instead of letting sources and sinks fight, we _could_ shut them
+down on the lame-duck deployment to give the new version room to work.
 
 TODO: Figure out how big the impact of the above-mentioned squabbling would be.
 
