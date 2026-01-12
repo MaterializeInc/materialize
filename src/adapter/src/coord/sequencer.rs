@@ -876,6 +876,13 @@ impl Coordinator {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
+                //
+                // NOTE: This behavior differs from PostgreSQL. In PostgreSQL,
+                // `UPDATE t SET x = x` reports the number of rows matching the WHERE
+                // clause, even if no values actually change. In Materialize, because
+                // we use differential dataflow, the +1 and -1 diffs for unchanged rows
+                // cancel out during consolidation, resulting in 0 affected rows.
+                // This has been Materialize's behavior since early versions.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
                 affected_rows = Diff::ZERO;
