@@ -1945,15 +1945,6 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> =
-    LazyLock::new(|| BuiltinLog {
-        name: "mz_dataflow_shutdown_durations_histogram_raw",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW_OID,
-        variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
-        access: vec![PUBLIC_SELECT],
-    });
-
 pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_arrangement_heap_size_raw",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -7322,6 +7313,12 @@ SELECT
             JOIN mz_catalog.mz_types t ON a.element_id = t.id
             WHERE a.id = mz_types.id
         ),
+        (
+            SELECT t.oid
+            FROM mz_catalog.mz_list_types l
+            JOIN mz_catalog.mz_types t ON l.element_id = t.id
+            WHERE l.id = mz_types.id
+        ),
         0
     ) AS typelem,
     coalesce(
@@ -7425,6 +7422,7 @@ pub static PG_ATTRIBUTE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| 
             .with_column("attlen", SqlScalarType::Int16.nullable(true))
             .with_column("attnum", SqlScalarType::Int16.nullable(false))
             .with_column("atttypmod", SqlScalarType::Int32.nullable(false))
+            .with_column("attndims", SqlScalarType::Int16.nullable(false))
             .with_column("attnotnull", SqlScalarType::Bool.nullable(false))
             .with_column("atthasdef", SqlScalarType::Bool.nullable(false))
             .with_column("attidentity", SqlScalarType::PgLegacyChar.nullable(false))
@@ -7443,6 +7441,9 @@ SELECT
     pg_type_all_databases.typlen AS attlen,
     position::int8::int2 as attnum,
     mz_columns.type_mod as atttypmod,
+    -- dummy value, just to make go-jet's workaround work for now. Discussion:
+    -- https://github.com/MaterializeInc/materialize/pull/34649#issuecomment-3714291409
+    0::int2 as attndims,
     NOT nullable as attnotnull,
     mz_columns.default IS NOT NULL as atthasdef,
     ''::pg_catalog.\"char\" as attidentity,
@@ -7484,6 +7485,7 @@ ON mz_internal.pg_attribute_all_databases (
     is_retained_metrics_object: false,
 };
 
+/// <https://www.postgresql.org/docs/current/catalog-pg-attribute.html>
 pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
     BuiltinView {
         name: "pg_attribute",
@@ -7496,6 +7498,7 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("attlen", SqlScalarType::Int16.nullable(true))
             .with_column("attnum", SqlScalarType::Int16.nullable(false))
             .with_column("atttypmod", SqlScalarType::Int32.nullable(false))
+            .with_column("attndims", SqlScalarType::Int16.nullable(false))
             .with_column("attnotnull", SqlScalarType::Bool.nullable(false))
             .with_column("atthasdef", SqlScalarType::Bool.nullable(false))
             .with_column("attidentity", SqlScalarType::PgLegacyChar.nullable(false))
@@ -7506,8 +7509,8 @@ pub static PG_ATTRIBUTE: LazyLock<BuiltinView> = LazyLock::new(|| {
         column_comments: BTreeMap::new(),
         sql: "
 SELECT
-    attrelid, attname, atttypid, attlen, attnum, atttypmod, attnotnull, atthasdef, attidentity,
-    attgenerated, attisdropped, attcollation
+    attrelid, attname, atttypid, attlen, attnum, atttypmod, attndims, attnotnull, atthasdef,
+    attidentity, attgenerated, attisdropped, attcollation
 FROM mz_internal.pg_attribute_all_databases
 WHERE
   (database_name IS NULL OR database_name = pg_catalog.current_database()) AND
@@ -7962,62 +7965,6 @@ FROM mz_introspection.mz_peek_durations_histogram_per_worker
 GROUP BY type, duration_ns",
     access: vec![PUBLIC_SELECT],
 });
-
-pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
-        name: "mz_dataflow_shutdown_durations_histogram_per_worker",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER_OID,
-        desc: RelationDesc::builder()
-            .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-            .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
-            .with_column("count", SqlScalarType::Int64.nullable(false))
-            .with_key(vec![0, 1])
-            .finish(),
-        column_comments: BTreeMap::new(),
-        sql: "SELECT
-    worker_id, duration_ns, pg_catalog.count(*) AS count
-FROM
-    mz_introspection.mz_dataflow_shutdown_durations_histogram_raw
-GROUP BY
-    worker_id, duration_ns",
-        access: vec![PUBLIC_SELECT],
-    });
-
-pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
-        name: "mz_dataflow_shutdown_durations_histogram",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_OID,
-        desc: RelationDesc::builder()
-            .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
-            .with_column(
-                "count",
-                SqlScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_key(vec![0])
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            (
-                "duration_ns",
-                "The upper bound of the bucket in nanoseconds.",
-            ),
-            (
-                "count",
-                "The (noncumulative) count of dataflows in this bucket.",
-            ),
-        ]),
-        sql: "
-SELECT
-    duration_ns,
-    pg_catalog.sum(count) AS count
-FROM mz_introspection.mz_dataflow_shutdown_durations_histogram_per_worker
-GROUP BY duration_ns",
-        access: vec![PUBLIC_SELECT],
-    });
 
 pub static MZ_SCHEDULING_ELAPSED_PER_WORKER: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
@@ -13855,7 +13802,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
-        Builtin::Log(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
@@ -13980,8 +13926,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
-        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER),
-        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),

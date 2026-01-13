@@ -302,3 +302,44 @@ query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
 75  create  role  {"id":"u4","name":"new_user"}  NULL
+
+# Test audit events for replacement materialized views
+
+statement ok
+CREATE CLUSTER test1 SIZE 'scale=1,workers=1'
+
+statement ok
+CREATE CLUSTER test2 SIZE 'scale=1,workers=1'
+
+statement ok
+CREATE MATERIALIZED VIEW mv IN CLUSTER test1 AS SELECT id FROM mz_tables
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER test1 AS SELECT id FROM mz_tables
+
+query ITTTT
+SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
+----
+81  create  materialized-view  {"cluster_id":"u3","database":"materialize","id":"u18","item":"rp","replacement_target_id":"u17","schema":"public"}  materialize
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query ITTTT
+SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 2
+----
+83  drop  materialized-view  {"database":"materialize","id":"u18","item":"rp","schema":"public"}  materialize
+82  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u18","item":"rp","schema":"public"},"schema":"public"}  materialize
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv IN CLUSTER test2 AS SELECT id FROM mz_tables
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp2
+
+query ITTTT
+SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 3
+----
+87  drop  materialized-view  {"database":"materialize","id":"u19","item":"rp2","schema":"public"}  materialize
+86  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","new_cluster_id":"u4","old_cluster_id":"u3","schema":"public"}  materialize
+85  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u19","item":"rp2","schema":"public"},"schema":"public"}  materialize

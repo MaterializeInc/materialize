@@ -176,16 +176,20 @@ def load_composition(args: argparse.Namespace) -> Composition:
                 hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
             )
 
-        compose_local_version = Version.parse(
-            spawn.capture(["docker", "compose", "version", "--short"])
+        compose_local_version_s = spawn.capture(
+            ["docker", "compose", "version", "--short"]
         )
-        compose_ci_version = Version.parse("2.15.1")
-        if compose_local_version < compose_ci_version:
-            raise UIError(
-                f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
-                hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
-            )
-            sys.exit(1)
+        try:
+            compose_local_version = Version.parse(compose_local_version_s)
+            compose_ci_version = Version.parse("2.15.1")
+            if compose_local_version < compose_ci_version:
+                raise UIError(
+                    f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
+                    hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
+                )
+                sys.exit(1)
+        except ValueError:
+            pass
 
     repo = mzbuild.Repository.from_arguments(MZ_ROOT, args)
     try:

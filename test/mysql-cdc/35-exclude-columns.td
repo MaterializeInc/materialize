@@ -55,8 +55,11 @@ INSERT INTO t1 SELECT * FROM t1;
 
 $ set-regex match="DETAILS = '[a-f0-9]+'" replacement=<DETAILS>
 
-> SHOW CREATE TABLE t1;
+>[version<2600700] SHOW CREATE TABLE t1;
 materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.int4, f4 pg_catalog.varchar(64)) FROM SOURCE materialize.public.da (REFERENCE = public.t1) WITH (EXCLUDE COLUMNS = (f2, f3), <DETAILS>);"
+
+>[version>=2600700] SHOW CREATE TABLE t1;
+materialize.public.t1 "CREATE TABLE materialize.public.t1 (f1 pg_catalog.int4, f4 pg_catalog.varchar(64))\nFROM SOURCE materialize.public.da (REFERENCE = public.t1)\nWITH (\n    EXCLUDE COLUMNS = (f2, f3),\n    <DETAILS>\n);"
 
 ! SELECT f2 FROM t1;
 contains:column "f2" does not exist

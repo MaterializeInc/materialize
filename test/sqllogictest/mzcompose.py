@@ -416,6 +416,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/regressions.slt",
         "test/sqllogictest/regtype.slt",
         "test/sqllogictest/returning.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
         "test/sqllogictest/role.slt",
         "test/sqllogictest/role_create.slt",
         "test/sqllogictest/role_membership.slt",
@@ -703,6 +704,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/web-console.slt",
         "test/sqllogictest/show_clusters.slt",
+        "test/sqllogictest/replacement-materialized-views.slt",
     }
     tests_no_auto_index_selects = {
         # pg_typeof contains public schema name in views

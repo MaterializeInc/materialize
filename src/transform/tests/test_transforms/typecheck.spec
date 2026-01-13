@@ -65,8 +65,13 @@ Constant
 
 
 bad constant row
-      got ("oh", "no")
+      got 2 mismatches
 expected row of type (Int64, Int64)
+
+      column #0:
+        got datum String("oh"), expected representation type Int64
+      column #1:
+        got datum String("no"), expected representation type Int64
 ----
 ----
 
@@ -286,8 +291,11 @@ Constant
 
 
 bad constant row
-      got (2, "uh oh")
+      got 1 mismatch
 expected row of type (Int64, Int64)
+
+      column #1:
+        got datum String("uh oh"), expected representation type Int64
 ----
 ----
 

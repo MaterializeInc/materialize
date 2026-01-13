@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-expression: "#[sqlfunc(\n    sqlname = \"text_to_bytea\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastBytesToString),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {\n    { strconv::parse_bytes(a).err_into() }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"text_to_bytea\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastBytesToString)\n)]\nfn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {\n    strconv::parse_bytes(a).err_into()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToBytes {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastBytesToString)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -44,7 +41,6 @@ impl std::fmt::Display for CastStringToBytes {
         f.write_str("text_to_bytea")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
-    { strconv::parse_bytes(a).err_into() }
+fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
+    strconv::parse_bytes(a).err_into()
 }

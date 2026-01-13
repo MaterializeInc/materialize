@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/numeric.rs
-expression: "#[sqlfunc(\n    sqlname = \"numeric_to_uint2\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastUint16ToNumeric(None)),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_numeric_to_uint16<'a>(a: Numeric) -> Result<u16, EvalError> {\n    {\n        let mut a = a;\n        {\n            let mut cx = numeric::cx_datum();\n            cx.round(&mut a);\n            cx.clear_status();\n            let u = cx\n                .try_into_u32(a)\n                .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))?;\n            u16::try_from(u)\n                .or_else(|_| Err(EvalError::UInt16OutOfRange(u.to_string().into())))\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"numeric_to_uint2\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastUint16ToNumeric(None)),\n    is_monotone = true\n)]\nfn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {\n    let mut cx = numeric::cx_datum();\n    cx.round(&mut a);\n    cx.clear_status();\n    let u = cx\n        .try_into_u32(a)\n        .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))?;\n    u16::try_from(u).or_else(|_| Err(EvalError::UInt16OutOfRange(u.to_string().into())))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,19 +44,12 @@ impl std::fmt::Display for CastNumericToUint16 {
         f.write_str("numeric_to_uint2")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_numeric_to_uint16<'a>(a: Numeric) -> Result<u16, EvalError> {
-    {
-        let mut a = a;
-        {
-            let mut cx = numeric::cx_datum();
-            cx.round(&mut a);
-            cx.clear_status();
-            let u = cx
-                .try_into_u32(a)
-                .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))?;
-            u16::try_from(u)
-                .or_else(|_| Err(EvalError::UInt16OutOfRange(u.to_string().into())))
-        }
-    }
+fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
+    let mut cx = numeric::cx_datum();
+    cx.round(&mut a);
+    cx.clear_status();
+    let u = cx
+        .try_into_u32(a)
+        .or_else(|_| Err(EvalError::UInt16OutOfRange(a.to_string().into())))?;
+    u16::try_from(u).or_else(|_| Err(EvalError::UInt16OutOfRange(u.to_string().into())))
 }

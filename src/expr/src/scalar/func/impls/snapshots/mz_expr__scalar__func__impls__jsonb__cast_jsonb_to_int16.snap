@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/jsonb.rs
-expression: "#[sqlfunc(\n    sqlname = \"jsonb_to_smallint\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {\n    {\n        match a.into_datum() {\n            Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),\n            datum => {\n                Err(EvalError::InvalidJsonbCast {\n                    from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),\n                    to: \"smallint\".into(),\n                })\n            }\n        }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"jsonb_to_smallint\", is_monotone = true)]\nfn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {\n    match a.into_datum() {\n        Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),\n        datum => {\n            Err(EvalError::InvalidJsonbCast {\n                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),\n                to: \"smallint\".into(),\n            })\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,14 +29,8 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastJsonbToInt16 {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
     fn is_monotone(&self) -> bool {
         true
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
     }
 }
 impl std::fmt::Display for CastJsonbToInt16 {
@@ -44,17 +38,14 @@ impl std::fmt::Display for CastJsonbToInt16 {
         f.write_str("jsonb_to_smallint")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
-    {
-        match a.into_datum() {
-            Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
-            datum => {
-                Err(EvalError::InvalidJsonbCast {
-                    from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                    to: "smallint".into(),
-                })
-            }
+fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(a) => cast_numeric_to_int16(a.into_inner()),
+        datum => {
+            Err(EvalError::InvalidJsonbCast {
+                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+                to: "smallint".into(),
+            })
         }
     }
 }

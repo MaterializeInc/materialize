@@ -445,9 +445,18 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         "clusterd_2_1",
         "clusterd_2_2",
     ]
-    c.kill(*cleanup_list)
-    c.rm(*cleanup_list, destroy_volumes=True)
-    c.rm_volumes("mzdata")
+    try:
+        c.kill(*cleanup_list)
+    except:
+        pass
+    try:
+        c.rm(*cleanup_list, destroy_volumes=True)
+    except:
+        pass
+    try:
+        c.rm_volumes("mzdata")
+    except:
+        pass
     print(f"+++ Running disruption scenario {disruption.name}")
 
     with c.override(

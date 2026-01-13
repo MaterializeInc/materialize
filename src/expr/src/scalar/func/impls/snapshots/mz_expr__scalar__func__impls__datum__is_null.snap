@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/datum.rs
-expression: "#[sqlfunc(\n    sqlname = \"isnull\",\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn is_null<'a>(a: Datum<'a>) -> bool {\n    { a.is_null() }\n}\n"
+expression: "#[sqlfunc(sqlname = \"isnull\", is_monotone = true)]\nfn is_null<'a>(a: Datum<'a>) -> bool {\n    a.is_null()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,14 +29,8 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for IsNull {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
     fn is_monotone(&self) -> bool {
         true
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
     }
 }
 impl std::fmt::Display for IsNull {
@@ -44,7 +38,6 @@ impl std::fmt::Display for IsNull {
         f.write_str("isnull")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn is_null<'a>(a: Datum<'a>) -> bool {
-    { a.is_null() }
+fn is_null<'a>(a: Datum<'a>) -> bool {
+    a.is_null()
 }

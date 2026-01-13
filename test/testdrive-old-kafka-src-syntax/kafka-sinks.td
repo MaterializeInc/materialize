@@ -102,7 +102,7 @@ name               type   cluster   comment
 #   FROM v1
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-# contains:v1 is a view, which cannot be exported as a sink
+# contains:view v1 cannot be exported as a sink
 #
 # # ...Even if that view is based on a materialized source
 # ! CREATE SINK bad_view2
@@ -111,7 +111,7 @@ name               type   cluster   comment
 #   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-snk1-${testdrive.seed}')
 #   WITH (retention_ms=1000000)
 #   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
-# contains:v2 is a view, which cannot be exported as a sink
+# contains:view v2 cannot be exported as a sink
 #
 # > SHOW SINKS
 # name               type   size  cluster

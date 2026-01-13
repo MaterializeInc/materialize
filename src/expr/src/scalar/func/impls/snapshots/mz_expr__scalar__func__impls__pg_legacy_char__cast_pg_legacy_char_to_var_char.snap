@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/pg_legacy_char.rs
-expression: "#[sqlfunc(\n    sqlname = \"\\\"char\\\"_to_varchar\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(\n        super::CastStringToVarChar{fail_on_len:false,\n        length:Some(VarCharMaxLength::try_from(1).unwrap())}\n    ),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_pg_legacy_char_to_var_char<'a>(\n    a: PgLegacyChar,\n) -> Result<VarChar<String>, EvalError> {\n    {\n        let mut buf = String::new();\n        format_pg_legacy_char(&mut buf, a.0)?;\n        Ok(VarChar(buf))\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"\\\"char\\\"_to_varchar\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(\n        super::CastStringToVarChar{fail_on_len:false,\n        length:Some(VarCharMaxLength::try_from(1).unwrap())}\n    )\n)]\nfn cast_pg_legacy_char_to_var_char(\n    a: PgLegacyChar,\n) -> Result<VarChar<String>, EvalError> {\n    let mut buf = String::new();\n    format_pg_legacy_char(&mut buf, a.0)?;\n    Ok(VarChar(buf))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -35,9 +35,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastPgLegacyCharToVarChar {
             Some(VarCharMaxLength::try_from(1).unwrap()) }
         )
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         true
     }
@@ -47,13 +44,10 @@ impl std::fmt::Display for CastPgLegacyCharToVarChar {
         f.write_str("\"char\"_to_varchar")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_pg_legacy_char_to_var_char<'a>(
+fn cast_pg_legacy_char_to_var_char(
     a: PgLegacyChar,
 ) -> Result<VarChar<String>, EvalError> {
-    {
-        let mut buf = String::new();
-        format_pg_legacy_char(&mut buf, a.0)?;
-        Ok(VarChar(buf))
-    }
+    let mut buf = String::new();
+    format_pg_legacy_char(&mut buf, a.0)?;
+    Ok(VarChar(buf))
 }

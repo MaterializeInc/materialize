@@ -6152,4 +6152,4 @@ def workflow_github_9961(c: Composition):
             raise RuntimeError("MV frontiers didn't become equal")
 
         # database-issues#9961 causes this command to crash envd.
-        c.sql("CREATE MATERIALIZED VIEW rpl REPLACING mv AS SELECT * FROM t")
+        c.sql("CREATE REPLACEMENT MATERIALIZED VIEW rpl FOR mv AS SELECT * FROM t")

@@ -23,7 +23,7 @@ paste = "1.0.11"
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0" }
 serde = "1.0.219"
-tracing = "0.1.43"
+tracing = "0.1.44"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -33,8 +33,8 @@ mz-expr-parser = { path = "../expr-parser" }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"] }
-proc-macro2 = "1.0.103"
-serde_json = "1.0.145"
+proc-macro2 = "1.0.105"
+serde_json = "1.0.149"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

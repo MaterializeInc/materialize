@@ -85,7 +85,6 @@ use mz_transform::notice::OptimizerNotice;
 use smallvec::SmallVec;
 use tokio::sync::MutexGuard;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::error;
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -318,43 +317,11 @@ impl Catalog {
             }
         }
 
-        if dropped_notices.iter().any(|n| Arc::strong_count(n) != 1) {
-            use mz_ore::str::{bracketed, separated};
-            let bad_notices = dropped_notices.iter().filter(|n| Arc::strong_count(n) != 1);
-            let bad_notices = bad_notices.map(|n| {
-                // Try to find where the bad reference is.
-                // Maybe in `dataflow_metainfos`?
-                let mut dataflow_metainfo_occurrences = Vec::new();
-                for (id, meta_info) in self.plans.dataflow_metainfos.iter() {
-                    if meta_info.optimizer_notices.contains(n) {
-                        dataflow_metainfo_occurrences.push(id);
-                    }
-                }
-                // Or `notices_by_dep_id`?
-                let mut notices_by_dep_id_occurrences = Vec::new();
-                for (id, notices) in self.plans.notices_by_dep_id.iter() {
-                    if notices.iter().contains(n) {
-                        notices_by_dep_id_occurrences.push(id);
-                    }
-                }
-                format!(
-                    "(id = {}, kind = {:?}, deps = {:?}, strong_count = {}, \
-                    dataflow_metainfo_occurrences = {:?}, notices_by_dep_id_occurrences = {:?})",
-                    n.id,
-                    n.kind,
-                    n.dependencies,
-                    Arc::strong_count(n),
-                    dataflow_metainfo_occurrences,
-                    notices_by_dep_id_occurrences
-                )
-            });
-            let bad_notices = bracketed("{", "}", separated(", ", bad_notices));
-            error!(
-                "all dropped_notices entries should have `Arc::strong_count(_) == 1`; \
-                 bad_notices = {bad_notices}; \
-                 drop_ids = {drop_ids:?}"
-            );
-        }
+        // (We used to have a sanity check here that
+        // `dropped_notices.iter().any(|n| Arc::strong_count(n) != 1)`
+        // but this is not a correct assertion: There might be other clones of the catalog (e.g. if
+        // a peek is running concurrently to an index drop), in which case those clones also hold
+        // references to the notices.)
 
         dropped_notices
     }
@@ -2376,7 +2343,7 @@ mod tests {
     use mz_controller_types::{ClusterId, ReplicaId};
     use mz_expr::MirScalarExpr;
     use mz_ore::now::to_datetime;
-    use mz_ore::{assert_err, assert_ok, task};
+    use mz_ore::{assert_err, assert_ok, soft_assert_eq_or_log, task};
     use mz_persist_client::PersistClient;
     use mz_pgrepr::oid::{FIRST_MATERIALIZE_OID, FIRST_UNPINNED_OID, FIRST_USER_OID};
     use mz_repr::namespaces::{INFORMATION_SCHEMA, PG_CATALOG_SCHEMA};
@@ -2400,7 +2367,7 @@ mod tests {
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
-    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+    use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -3447,7 +3414,7 @@ mod tests {
         session
             .start_transaction(to_datetime(0), None, None)
             .expect("must succeed");
-        let prep_style = ExprPrepStyle::OneShot {
+        let prep_style = ExprPrepOneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
             catalog_state: &catalog.state,
@@ -3457,16 +3424,20 @@ mod tests {
         // otherwise ignoring eval errors. We also do various other checks.
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
-            if let Ok(mut mir) = hir.lower_uncorrelated() {
+            if let Ok(mut mir) = hir.lower_uncorrelated(catalog.system_config()) {
                 // Populate unmaterialized functions.
-                prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
+                prep_style.prep_scalar_expr(&mut mir).expect("must succeed");
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {
                         let mir_typ = mir.typ(&[]);
                         // MIR type inference should be consistent with the type
                         // we get from the catalog.
-                        assert_eq!(mir_typ.scalar_type, return_styp);
+                        soft_assert_eq_or_log!(
+                            mir_typ.scalar_type,
+                            return_styp,
+                            "MIR type did not match the catalog type (cast elimination/repr type error)"
+                        );
                         // The following will check not just that the scalar type
                         // is ok, but also catches if the function returned a null
                         // but the MIR type inference said "non-nullable".

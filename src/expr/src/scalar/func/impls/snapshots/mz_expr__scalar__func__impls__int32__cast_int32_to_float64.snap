@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int32.rs
-expression: "#[sqlfunc(\n    sqlname = \"integer_to_double\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastFloat64ToInt32),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_int32_to_float64<'a>(a: i32) -> f64 {\n    { f64::from(a) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"integer_to_double\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastFloat64ToInt32),\n    is_monotone = true\n)]\nfn cast_int32_to_float64(a: i32) -> f64 {\n    f64::from(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for CastInt32ToFloat64 {
         f.write_str("integer_to_double")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int32_to_float64<'a>(a: i32) -> f64 {
-    { f64::from(a) }
+fn cast_int32_to_float64(a: i32) -> f64 {
+    f64::from(a)
 }

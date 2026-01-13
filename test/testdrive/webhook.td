@@ -26,8 +26,11 @@ name   nullable  type  comment
 ------------------------------
 body   false     text  ""
 
-> SHOW CREATE SOURCE webhook_text;
+>[version<2600700] SHOW CREATE SOURCE webhook_text;
 materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
+
+>[version>=2600700] SHOW CREATE SOURCE webhook_text;
+materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text\nIN CLUSTER webhook_cluster\nFROM WEBHOOK\nBODY FORMAT TEXT;"
 
 > SELECT name, type FROM mz_objects WHERE name = 'webhook_text';
 webhook_text source

@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::char::{Char, CharLength, format_str_pad};
 use mz_repr::{SqlColumnType, SqlScalarType};
@@ -48,14 +49,14 @@ impl fmt::Display for PadChar {
 
 // This function simply allows the expression of changing a's type from char to
 // string
-sqlfunc!(
-    #[sqlname = "char_to_text"]
-    #[preserves_uniqueness = true]
-    #[inverse = to_unary!(super::CastStringToChar{
+#[sqlfunc(
+    sqlname = "char_to_text",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToChar{
         length: None,
         fail_on_len: false,
-    })]
-    fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
-        a.0
-    }
-);
+    })
+)]
+fn cast_char_to_string<'a>(a: Char<&'a str>) -> &'a str {
+    a.0
+}

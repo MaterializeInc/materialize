@@ -20,13 +20,13 @@ futures = "0.3.31"
 itertools = "0.14.0"
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.145" }
+serde_json = { version = "1.0.149" }
 ssh-key = { version = "0.6.7" }
 tempfile = "3.23.0"
 thiserror = { version = "2.0.17" }
 tokio = "1.48.0"
-tokio-stream = "0.1.17"
-tracing = "0.1.43"
+tokio-stream = "0.1.18"
+tracing = "0.1.44"
 zeroize = { version = "1.8.2", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

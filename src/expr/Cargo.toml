@@ -57,11 +57,11 @@ regex = "1.12.2"
 regex-syntax = "0.8.8"
 seahash = "4.1.0"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.149"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 subtle = "2.6.1"
-tracing = "0.1.43"
+tracing = "0.1.44"
 uncased = "0.9.7"
 unicode-normalization = "0.1.25"
 uuid = { version = "1.19.0", features = ["v5"] }
@@ -73,7 +73,7 @@ smallvec = { version = "1.15.1" }
 [dev-dependencies]
 criterion = { version = "0.8.1" }
 datadriven = "0.9.0"
-insta = "1.44"
+insta = "1.45"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }

@@ -86,12 +86,17 @@ use crate::durable::{CatalogError, DurableCatalogError};
 #[cfg(test)]
 const ENCODED_TEST_CASES: usize = 100;
 
+/// Generate per-version support code.
+///
+/// Here we have to deal with the fact that the pre-v79 objects had a protobuf-generated format,
+/// which gives them additional levels of indirection that the post-v79 objects don't have and thus
+/// requires slightly different code to be generated.
 macro_rules! objects {
-    ( $( $x:ident ),* ) => {
+    ( [$( $x_old:ident ),*], [$( $x:ident ),*] ) => {
         paste! {
             $(
-                pub(crate) mod [<objects_ $x>] {
-                    pub use mz_catalog_protos::[<objects_ $x>]::*;
+                pub(crate) mod [<objects_ $x_old>] {
+                    pub use mz_catalog_protos::[<objects_ $x_old>]::*;
 
                     use crate::durable::objects::state_update::StateUpdateKindJson;
 
@@ -104,12 +109,32 @@ macro_rules! objects {
                         }
                     }
 
-                    impl TryFrom<StateUpdateKindJson> for StateUpdateKind {
-                        type Error = String;
-
-                        fn try_from(value: StateUpdateKindJson) -> Result<Self, Self::Error> {
+                    impl From<StateUpdateKindJson> for StateUpdateKind {
+                        fn from(value: StateUpdateKindJson) -> Self {
                             let kind: state_update_kind::Kind = value.to_serde();
-                            Ok(StateUpdateKind { kind: Some(kind) })
+                            StateUpdateKind { kind: Some(kind) }
+                        }
+                    }
+                }
+            )*
+
+            $(
+                pub(crate) mod [<objects_ $x>] {
+                    pub use mz_catalog_protos::[<objects_ $x>]::*;
+
+                    use crate::durable::objects::state_update::StateUpdateKindJson;
+
+                    impl From<StateUpdateKind> for StateUpdateKindJson {
+                        fn from(value: StateUpdateKind) -> Self {
+                            // TODO: This requires that the json->proto->json roundtrips
+                            // exactly, see database-issues#7179.
+                            StateUpdateKindJson::from_serde(&value)
+                        }
+                    }
+
+                    impl From<StateUpdateKindJson> for StateUpdateKind {
+                        fn from(value: StateUpdateKindJson) -> Self {
+                            value.to_serde()
                         }
                     }
                 }
@@ -120,6 +145,9 @@ macro_rules! objects {
             #[cfg(test)]
             #[derive(Debug, Arbitrary)]
             enum AllVersionsStateUpdateKind {
+                $(
+                    [<$x_old:upper>](crate::durable::upgrade::[<objects_ $x_old>]::StateUpdateKind),
+                )*
                 $(
                     [<$x:upper>](crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind),
                 )*
@@ -143,9 +171,9 @@ macro_rules! objects {
                 ) -> Result<Option<Self>, String> {
                     match version {
                         $(
-                            concat!("objects_", stringify!($x)) => {
+                            concat!("objects_", stringify!($x_old)) => {
                                 let arbitrary_data =
-                                    crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                    crate::durable::upgrade::[<objects_ $x_old>]::StateUpdateKind::arbitrary()
                                         .new_tree(runner)
                                         .expect("unable to create arbitrary data")
                                         .current();
@@ -154,11 +182,21 @@ macro_rules! objects {
                                 // which is also not possible in production.
                                 // TODO(jkosh44) See if there's an arbitrary config that forces Some.
                                 let arbitrary_data = if arbitrary_data.kind.is_some() {
-                                    Some(Self::[<$x:upper>](arbitrary_data))
+                                    Some(Self::[<$x_old:upper>](arbitrary_data))
                                 } else {
                                     None
                                 };
                                 Ok(arbitrary_data)
+                            }
+                        )*
+                        $(
+                            concat!("objects_", stringify!($x)) => {
+                                let arbitrary_data =
+                                    crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                        .new_tree(runner)
+                                        .expect("unable to create arbitrary data")
+                                        .current();
+                                Ok(Some(Self::[<$x:upper>](arbitrary_data)))
                             }
                         )*
                         _ => Err(format!("unrecognized version {version} add enum variant")),
@@ -169,7 +207,11 @@ macro_rules! objects {
                 fn try_from_raw(version: &str, raw: StateUpdateKindJson) -> Result<Self, String> {
                     match version {
                         $(
-                            concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.try_into()?)),
+                            concat!("objects_", stringify!($x_old)) => Ok(Self::[<$x_old:upper>](raw.into())),
+                        )*
+                        $(
+                            concat!("objects_", stringify!($x)) => Ok(Self::[<$x:upper>](raw.into())),
+
                         )*
                         _ => Err(format!("unrecognized version {version} add enum variant")),
                     }
@@ -178,6 +220,9 @@ macro_rules! objects {
                 #[cfg(test)]
                 fn raw(self) -> StateUpdateKindJson {
                     match self {
+                        $(
+                            Self::[<$x_old:upper>](kind) => kind.into(),
+                        )*
                         $(
                             Self::[<$x:upper>](kind) => kind.into(),
                         )*
@@ -188,7 +233,7 @@ macro_rules! objects {
     }
 }
 
-objects!(v74, v75, v76, v77, v78);
+objects!([v74, v75, v76, v77, v78], [v79, v80]);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
@@ -204,6 +249,8 @@ mod v74_to_v75;
 mod v75_to_v76;
 mod v76_to_v77;
 mod v77_to_v78;
+mod v78_to_v79;
+mod v79_to_v80;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -319,6 +366,24 @@ async fn run_upgrade(
                 version,
                 commit_ts,
                 v77_to_v78::upgrade,
+            )
+            .await
+        }
+        78 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v78_to_v79::upgrade,
+            )
+            .await
+        }
+        79 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v79_to_v80::upgrade,
             )
             .await
         }

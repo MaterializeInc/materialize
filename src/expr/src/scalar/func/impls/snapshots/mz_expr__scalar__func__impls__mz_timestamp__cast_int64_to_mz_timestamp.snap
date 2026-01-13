@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/mz_timestamp.rs
-expression: "#[sqlfunc(\n    sqlname = \"bigint_to_mz_timestamp\",\n    preserves_uniqueness = true,\n    inverse = None,\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_int64_to_mz_timestamp<'a>(a: i64) -> Result<Timestamp, EvalError> {\n    { a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into())) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"bigint_to_mz_timestamp\",\n    preserves_uniqueness = true,\n    is_monotone = true\n)]\nfn cast_int64_to_mz_timestamp(a: i64) -> Result<Timestamp, EvalError> {\n    a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,9 +29,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToMzTimestamp {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
     fn is_monotone(&self) -> bool {
         true
     }
@@ -44,7 +41,6 @@ impl std::fmt::Display for CastInt64ToMzTimestamp {
         f.write_str("bigint_to_mz_timestamp")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_int64_to_mz_timestamp<'a>(a: i64) -> Result<Timestamp, EvalError> {
-    { a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into())) }
+fn cast_int64_to_mz_timestamp(a: i64) -> Result<Timestamp, EvalError> {
+    a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into()))
 }

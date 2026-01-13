@@ -1959,6 +1959,8 @@ impl<'a> Parser<'a> {
                 .map_parser_err(StatementKind::CreateConnection)
         } else if self.peek_keywords(&[MATERIALIZED, VIEW])
             || self.peek_keywords(&[OR, REPLACE, MATERIALIZED, VIEW])
+            || self.peek_keywords(&[REPLACEMENT, MATERIALIZED, VIEW])
+            || self.peek_keywords(&[OR, REPLACE, REPLACEMENT, MATERIALIZED, VIEW])
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
@@ -3855,6 +3857,7 @@ impl<'a> Parser<'a> {
         } else {
             IfExistsBehavior::Error
         };
+        let replacement = self.parse_keyword(REPLACEMENT);
         self.expect_keywords(&[MATERIALIZED, VIEW])?;
         if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
             if_exists = IfExistsBehavior::Skip;
@@ -3862,10 +3865,12 @@ impl<'a> Parser<'a> {
 
         let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
-        let replacing = self
-            .parse_keyword(REPLACING)
-            .then(|| self.parse_raw_name())
-            .transpose()?;
+        let replacement_for = if replacement {
+            self.expect_keyword(FOR)?;
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
         let in_cluster = self.parse_optional_in_cluster()?;
 
         let with_options = if self.parse_keyword(WITH) {
@@ -3886,7 +3891,7 @@ impl<'a> Parser<'a> {
                 if_exists,
                 name,
                 columns,
-                replacing,
+                replacement_for,
                 in_cluster,
                 query,
                 as_of,

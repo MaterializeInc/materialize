@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/boolean.rs
-expression: "#[sqlfunc(\n    sqlname = \"boolean_to_integer\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastInt32ToBool),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_bool_to_int32<'a>(a: bool) -> i32 {\n    {\n        match a {\n            true => 1,\n            false => 0,\n        }\n    }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"boolean_to_integer\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastInt32ToBool),\n    is_monotone = true\n)]\nfn cast_bool_to_int32(a: bool) -> i32 {\n    match a {\n        true => 1,\n        false => 0,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,12 +44,9 @@ impl std::fmt::Display for CastBoolToInt32 {
         f.write_str("boolean_to_integer")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_bool_to_int32<'a>(a: bool) -> i32 {
-    {
-        match a {
-            true => 1,
-            false => 0,
-        }
+fn cast_bool_to_int32(a: bool) -> i32 {
+    match a {
+        true => 1,
+        false => 0,
     }
 }

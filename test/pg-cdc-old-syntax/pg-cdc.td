@@ -800,8 +800,11 @@ enum_table              subsource cdc_cluster  ""
 var0
 var1
 
->[version>=14000] SHOW CREATE SOURCE enum_table
+>[14000<=version<2600700] SHOW CREATE SOURCE enum_table
 materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (a pg_catalog.text) OF SOURCE materialize.public.enum_source WITH (EXTERNAL REFERENCE = postgres.public.enum_table, TEXT COLUMNS = (a));"
+
+>[version>=2600700] SHOW CREATE SOURCE enum_table
+materialize.public.enum_table "CREATE SUBSOURCE materialize.public.enum_table (a pg_catalog.text)\nOF SOURCE materialize.public.enum_source\nWITH (EXTERNAL REFERENCE = postgres.public.enum_table, TEXT COLUMNS = (a));"
 
 >[version<14000] SHOW CREATE SOURCE enum_table
 materialize.public.enum_table "CREATE SUBSOURCE \"materialize\".\"public\".\"enum_table\" (\"a\" \"pg_catalog\".\"text\") OF SOURCE \"materialize\".\"public\".\"enum_source\" WITH (EXTERNAL REFERENCE = \"postgres\".\"public\".\"enum_table\", TEXT COLUMNS = (\"a\"))"

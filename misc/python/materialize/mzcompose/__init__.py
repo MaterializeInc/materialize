@@ -71,6 +71,7 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
+        "enable_cast_elimination": "false",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
@@ -176,6 +177,11 @@ def get_variable_system_parameters(
             "1048576",
             # force-enabled, the in-between, and the production value
             ["0", "1048576", "314572800", "67108864"],
+        ),
+        VariableSystemParameter(
+            "enable_cast_elimination",
+            "false",
+            ["true", "false"],
         ),
         VariableSystemParameter(
             "enable_password_auth",

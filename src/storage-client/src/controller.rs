@@ -142,9 +142,6 @@ pub struct CollectionDescription<T> {
     pub data_source: DataSource<T>,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<T>>,
-    /// A GlobalId to use for this collection to use for the status collection.
-    /// Used to keep track of source status/error information.
-    pub status_collection_id: Option<GlobalId>,
     /// The timeline of the source. Absent for materialized views, continual tasks, etc.
     pub timeline: Option<Timeline>,
     /// The primary of this collections.
@@ -163,7 +160,6 @@ impl<T> CollectionDescription<T> {
             desc,
             data_source: DataSource::Other,
             since,
-            status_collection_id: None,
             timeline: None,
             primary: None,
         }
@@ -175,7 +171,6 @@ impl<T> CollectionDescription<T> {
             desc,
             data_source: DataSource::Table,
             since: None,
-            status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
             primary: None,
         }

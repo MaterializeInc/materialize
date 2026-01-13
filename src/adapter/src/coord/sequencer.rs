@@ -68,7 +68,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::peek;
 use crate::session::{
     EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
@@ -1003,6 +1003,7 @@ pub(crate) fn emit_optimizer_notices(
     for notice in notices {
         let kind = OptimizerNoticeKind::from(notice);
         let notice_enabled = match kind {
+            OptimizerNoticeKind::EqualsNull => system_vars.enable_notices_for_equals_null(),
             OptimizerNoticeKind::IndexAlreadyExists => {
                 system_vars.enable_notices_for_index_already_exists()
             }
@@ -1036,13 +1037,13 @@ pub fn eval_copy_to_uri(
     session: &Session,
     catalog_state: &CatalogState,
 ) -> Result<Uri, AdapterError> {
-    let style = ExprPrepStyle::OneShot {
+    let style = ExprPrepOneShot {
         logical_time: EvalTime::NotAvailable,
         session,
         catalog_state,
     };
-    let mut to = to.lower_uncorrelated()?;
-    prep_scalar_expr(&mut to, style)?;
+    let mut to = to.lower_uncorrelated(catalog_state.system_config())?;
+    style.prep_scalar_expr(&mut to)?;
     let temp_storage = RowArena::new();
     let evaled = to.eval(&[], &temp_storage)?;
     if evaled == Datum::Null {

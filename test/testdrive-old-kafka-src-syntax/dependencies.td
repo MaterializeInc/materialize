@@ -156,7 +156,7 @@ contains:sink "materialize.public.s1" already exists
 
 # Test that sinks cannot be depended upon.
 ! CREATE VIEW v2 AS SELECT * FROM s1;
-contains:materialize.public.s1 is a sink, which cannot be depended upon
+contains:sink materialize.public.s1 cannot be depended upon
 
 > CREATE VIEW v2 AS SELECT X from s;
 
@@ -167,7 +167,7 @@ contains:materialize.public.s1 is a sink, which cannot be depended upon
 # Test that indexes cannot be depended upon
 
 ! CREATE VIEW v3 as SELECT * FROM i1;
-contains:materialize.public.i1 is an index, which cannot be depended upon
+contains:index materialize.public.i1 cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 

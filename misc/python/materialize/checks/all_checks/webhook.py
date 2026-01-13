@@ -111,14 +111,23 @@ class Webhook(Check):
                 \\\\x01
                 \\\\x01\\x02\\x03\\x04
 
-                >[version>=14000] SHOW CREATE SOURCE webhook_text
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT TEXT;"
 
-                >[version>=14000] SHOW CREATE SOURCE webhook_json
+                >[version>=2600700] SHOW CREATE SOURCE webhook_text
+                materialize.public.webhook_text "CREATE SOURCE materialize.public.webhook_text\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT TEXT;"
+
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_json
                 materialize.public.webhook_json "CREATE SOURCE materialize.public.webhook_json IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS;"
 
-                >[version>=14000] SHOW CREATE SOURCE webhook_bytes
+                >[version>=2600700] SHOW CREATE SOURCE webhook_json
+                materialize.public.webhook_json "CREATE SOURCE materialize.public.webhook_json\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT JSON\\nINCLUDE HEADERS;"
+
+                >[14000<=version<2600700] SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE materialize.public.webhook_bytes IN CLUSTER webhook_cluster FROM WEBHOOK BODY FORMAT BYTES;"
+
+                >[version>=2600700] SHOW CREATE SOURCE webhook_bytes
+                materialize.public.webhook_bytes "CREATE SOURCE materialize.public.webhook_bytes\\nIN CLUSTER webhook_cluster\\nFROM WEBHOOK\\nBODY FORMAT BYTES;"
 
                 >[version<14000] SHOW CREATE SOURCE webhook_text
                 materialize.public.webhook_text "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_text\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT TEXT"

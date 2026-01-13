@@ -199,6 +199,9 @@ IGNORE_RE = re.compile(
     # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9970 is fixed
     | limits-materialized-.* \| .* very\ slow\ coordinator\ message
     | zippy-materialized.* \| .* very\ slow\ coordinator\ message
+    | sqlsmith-mz.* \| .* very\ slow\ coordinator\ message
+    # Expected on AWS in RQG because of build
+    | comm="check"\ exe="/usr/bin/qemu-
     )
     """,
     re.VERBOSE | re.MULTILINE,

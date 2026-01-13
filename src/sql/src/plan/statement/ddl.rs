@@ -2662,6 +2662,8 @@ pub fn plan_create_view(
         })
         .unwrap_or_default();
 
+    validate_view_dependencies(scx, &view.dependencies.0)?;
+
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
     let partial_name = PartialItemName::from(full_name.clone());
@@ -2686,6 +2688,25 @@ pub fn plan_create_view(
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
+}
+
+/// Validate the dependencies of a (materialized) view.
+fn validate_view_dependencies(
+    scx: &StatementContext,
+    dependencies: &BTreeSet<CatalogItemId>,
+) -> Result<(), PlanError> {
+    for id in dependencies {
+        let item = scx.catalog.get_item(id);
+        if item.replacement_target().is_some() {
+            let name = scx.catalog.minimal_qualification(item.name());
+            return Err(PlanError::InvalidDependency {
+                name: name.to_string(),
+                item_type: format!("replacement {}", item.item_type()),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 pub fn describe_create_materialized_view(
@@ -2970,7 +2991,7 @@ pub fn plan_create_materialized_view(
 
     // Validate the replacement target, if one is given.
     let mut replacement_target = None;
-    if let Some(target_name) = &stmt.replacing {
+    if let Some(target_name) = &stmt.replacement_for {
         scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
 
         let target = scx.get_item_by_resolved_name(target_name)?;
@@ -2996,8 +3017,21 @@ pub fn plan_create_materialized_view(
             );
         }
 
+        for use_id in target.used_by() {
+            let use_item = scx.get_item(use_id);
+            if use_item.replacement_target() == Some(target.id()) {
+                sql_bail!(
+                    "cannot replace {} because it already has a replacement: {}",
+                    scx.catalog.minimal_qualification(target.name()),
+                    scx.catalog.minimal_qualification(use_item.name()),
+                );
+            }
+        }
+
         replacement_target = Some(target.id());
     }
+
+    validate_view_dependencies(scx, &dependencies)?;
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -3413,12 +3447,20 @@ fn plan_sink(
     {
         use CatalogItemType::*;
         match from.item_type() {
-            Table | Source | MaterializedView | ContinualTask => {}
+            Table | Source | MaterializedView | ContinualTask => {
+                if from.replacement_target().is_some() {
+                    let name = scx.catalog.minimal_qualification(from.name());
+                    return Err(PlanError::InvalidSinkFrom {
+                        name: name.to_string(),
+                        item_type: format!("replacement {}", from.item_type()),
+                    });
+                }
+            }
             Sink | View | Index | Type | Func | Secret | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
-                    item_type: from.item_type(),
+                    item_type: from.item_type().to_string(),
                 });
             }
         }
@@ -4047,7 +4089,7 @@ fn kafka_sink_builder(
                 CastContext::Assignment,
                 &SqlScalarType::UInt64,
             )?;
-            let expr = expr.lower_uncorrelated()?;
+            let expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
 
             Some(expr)
         }
@@ -4121,20 +4163,27 @@ pub fn plan_create_index(
         if_not_exists,
     } = &mut stmt;
     let on = scx.get_item_by_resolved_name(on_name)?;
-    let on_item_type = on.item_type();
 
-    if !matches!(
-        on_item_type,
-        CatalogItemType::View
-            | CatalogItemType::MaterializedView
-            | CatalogItemType::Source
-            | CatalogItemType::Table
-    ) {
-        sql_bail!(
-            "index cannot be created on {} because it is a {}",
-            on_name.full_name_str(),
-            on.item_type()
-        )
+    {
+        use CatalogItemType::*;
+        match on.item_type() {
+            Table | Source | View | MaterializedView | ContinualTask => {
+                if on.replacement_target().is_some() {
+                    sql_bail!(
+                        "index cannot be created on {} because it is a replacement {}",
+                        on_name.full_name_str(),
+                        on.item_type(),
+                    );
+                }
+            }
+            Sink | Index | Type | Func | Secret | Connection => {
+                sql_bail!(
+                    "index cannot be created on {} because it is a {}",
+                    on_name.full_name_str(),
+                    on.item_type(),
+                );
+            }
+        }
     }
 
     let on_desc = on.relation_desc().expect("item type checked above");
@@ -4957,6 +5006,7 @@ pub fn unplan_create_cluster(
                 enable_dequadratic_eqprop_map: _,
                 enable_eq_classes_withholding_errors: _,
                 enable_fast_path_plan_insights: _,
+                enable_cast_elimination: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/jsonb.rs
-expression: "#[sqlfunc(\n    sqlname = stringify!(jsonb_strip_nulls),\n    preserves_uniqueness = false,\n    inverse = None,\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {\n    {\n        fn strip_nulls(a: Datum, row: &mut RowPacker) {\n            match a {\n                Datum::Map(dict) => {\n                    row.push_dict_with(|row| {\n                        for (k, v) in dict.iter() {\n                            match v {\n                                Datum::JsonNull => {}\n                                _ => {\n                                    row.push(Datum::String(k));\n                                    strip_nulls(v, row);\n                                }\n                            }\n                        }\n                    })\n                }\n                Datum::List(list) => {\n                    row.push_list_with(|row| {\n                        for elem in list.iter() {\n                            strip_nulls(elem, row);\n                        }\n                    })\n                }\n                _ => row.push(a),\n            }\n        }\n        let mut row = Row::default();\n        strip_nulls(a.into_datum(), &mut row.packer());\n        Jsonb::from_row(row)\n    }\n}\n"
+expression: "#[sqlfunc()]\nfn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {\n    fn strip_nulls(a: Datum, row: &mut RowPacker) {\n        match a {\n            Datum::Map(dict) => {\n                row.push_dict_with(|row| {\n                    for (k, v) in dict.iter() {\n                        match v {\n                            Datum::JsonNull => {}\n                            _ => {\n                                row.push(Datum::String(k));\n                                strip_nulls(v, row);\n                            }\n                        }\n                    }\n                })\n            }\n            Datum::List(list) => {\n                row.push_list_with(|row| {\n                    for elem in list.iter() {\n                        strip_nulls(elem, row);\n                    }\n                })\n            }\n            _ => row.push(a),\n        }\n    }\n    let mut row = Row::default();\n    strip_nulls(a.into_datum(), &mut row.packer());\n    Jsonb::from_row(row)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -29,51 +29,39 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for JsonbStripNulls {
         let nullable = output.nullable;
         output.nullable(nullable || (propagates_nulls && input_type.nullable))
     }
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-    fn is_monotone(&self) -> bool {
-        false
-    }
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
 }
 impl std::fmt::Display for JsonbStripNulls {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(jsonb_strip_nulls))
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
-    {
-        fn strip_nulls(a: Datum, row: &mut RowPacker) {
-            match a {
-                Datum::Map(dict) => {
-                    row.push_dict_with(|row| {
-                        for (k, v) in dict.iter() {
-                            match v {
-                                Datum::JsonNull => {}
-                                _ => {
-                                    row.push(Datum::String(k));
-                                    strip_nulls(v, row);
-                                }
+fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
+    fn strip_nulls(a: Datum, row: &mut RowPacker) {
+        match a {
+            Datum::Map(dict) => {
+                row.push_dict_with(|row| {
+                    for (k, v) in dict.iter() {
+                        match v {
+                            Datum::JsonNull => {}
+                            _ => {
+                                row.push(Datum::String(k));
+                                strip_nulls(v, row);
                             }
                         }
-                    })
-                }
-                Datum::List(list) => {
-                    row.push_list_with(|row| {
-                        for elem in list.iter() {
-                            strip_nulls(elem, row);
-                        }
-                    })
-                }
-                _ => row.push(a),
+                    }
+                })
             }
+            Datum::List(list) => {
+                row.push_list_with(|row| {
+                    for elem in list.iter() {
+                        strip_nulls(elem, row);
+                    }
+                })
+            }
+            _ => row.push(a),
         }
-        let mut row = Row::default();
-        strip_nulls(a.into_datum(), &mut row.packer());
-        Jsonb::from_row(row)
     }
+    let mut row = Row::default();
+    strip_nulls(a.into_datum(), &mut row.packer());
+    Jsonb::from_row(row)
 }

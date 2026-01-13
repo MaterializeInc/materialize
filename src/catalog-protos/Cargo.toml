@@ -20,6 +20,7 @@ num_enum = "0.7.4"
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = "0.7.0"
 serde = { version = "1.0.219", features = ["derive"] }
+serde_repr = "0.1.20"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -30,7 +31,7 @@ similar-asserts = "1.7"
 anyhow = "1.0.100"
 md-5 = "0.10.6"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.149"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

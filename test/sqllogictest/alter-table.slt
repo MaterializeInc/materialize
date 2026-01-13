@@ -145,7 +145,7 @@ ALTER TABLE t1 ADD COLUMN c timestamp;
 query TT
 SHOW CREATE TABLE t1;
 ----
-materialize.public.t1  CREATE␠TABLE␠materialize.public.t1␠(a␠pg_catalog.int4␠NOT␠NULL,␠b␠pg_catalog.text␠VERSION␠ADDED␠1,␠c␠pg_catalog.timestamp␠VERSION␠ADDED␠2);
+materialize.public.t1  CREATE␠TABLE⏎␠␠␠␠materialize.public.t1⏎␠␠␠␠␠␠␠␠(⏎␠␠␠␠␠␠␠␠␠␠␠␠a␠pg_catalog.int4␠NOT␠NULL,⏎␠␠␠␠␠␠␠␠␠␠␠␠b␠pg_catalog.text␠VERSION␠ADDED␠1,⏎␠␠␠␠␠␠␠␠␠␠␠␠c␠pg_catalog.timestamp␠VERSION␠ADDED␠2⏎␠␠␠␠␠␠␠␠);
 
 query TTTT
 SHOW COLUMNS FROM t1;

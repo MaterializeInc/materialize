@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/boolean.rs
-expression: "#[sqlfunc(\n    sqlname = \"boolean_to_nonstandard_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToBool),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {\n    { strconv::format_bool_static(a) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"boolean_to_nonstandard_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToBool),\n    is_monotone = true\n)]\nfn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {\n    strconv::format_bool_static(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,7 +44,6 @@ impl std::fmt::Display for CastBoolToStringNonstandard {
         f.write_str("boolean_to_nonstandard_text")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
-    { strconv::format_bool_static(a) }
+fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
+    strconv::format_bool_static(a)
 }

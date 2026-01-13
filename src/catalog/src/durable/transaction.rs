@@ -859,7 +859,6 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::ArrangementHeapSize) => 24,
             LogVariant::Compute(ComputeLog::ArrangementHeapCapacity) => 25,
             LogVariant::Compute(ComputeLog::ArrangementHeapAllocations) => 26,
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => 27,
             LogVariant::Compute(ComputeLog::ErrorCount) => 28,
             LogVariant::Compute(ComputeLog::HydrationTime) => 29,
             LogVariant::Compute(ComputeLog::LirMapping) => 30,

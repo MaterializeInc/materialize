@@ -1048,7 +1048,7 @@ class ReplaceMaterializedViewAction(Action):
 
         tmp_mv = identifier(view.name() + "_" + threading.current_thread().getName())
         exe.execute(
-            f"CREATE MATERIALIZED VIEW {tmp_mv} REPLACING {identifier(view.name())} AS {view.get_select()}",
+            f"CREATE REPLACEMENT MATERIALIZED VIEW {tmp_mv} FOR {identifier(view.name())} AS {view.get_select()}",
         )
         time.sleep(self.rng.random())
         if self.rng.choice([True, False]):
@@ -1422,6 +1422,7 @@ class FlipFlagsAction(Action):
             "true",
             "false",
         ]
+        self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the

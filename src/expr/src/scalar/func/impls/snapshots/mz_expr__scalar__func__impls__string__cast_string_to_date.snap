@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-expression: "#[sqlfunc(\n    sqlname = \"text_to_date\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastDateToString),\n    is_monotone = false,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {\n    { strconv::parse_date(a).err_into() }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"text_to_date\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastDateToString)\n)]\nfn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {\n    strconv::parse_date(a).err_into()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -32,9 +32,6 @@ impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToDate {
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastDateToString)
     }
-    fn is_monotone(&self) -> bool {
-        false
-    }
     fn preserves_uniqueness(&self) -> bool {
         false
     }
@@ -44,7 +41,6 @@ impl std::fmt::Display for CastStringToDate {
         f.write_str("text_to_date")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
-    { strconv::parse_date(a).err_into() }
+fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
+    strconv::parse_date(a).err_into()
 }

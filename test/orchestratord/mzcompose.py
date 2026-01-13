@@ -183,6 +183,12 @@ def get_environmentd_data() -> dict[str, Any]:
     )
 
 
+def get_clusterd_data() -> dict[str, Any]:
+    return get_pod_data(
+        labels={"environmentd.materialize.cloud/namespace": "cluster"},
+    )
+
+
 @contextmanager
 def port_forward_environmentd(
     port: int = 6875,
@@ -498,35 +504,34 @@ class ConsoleEnabled(Modification):
         definition["operator"]["console"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
-        pass
-        # # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
-        # if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
-        #     "v0.148.0"
-        # ):
-        #     return
+        # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.148.0"
+        ):
+            return
 
-        # def check() -> None:
-        #     result = spawn.capture(
-        #         [
-        #             "kubectl",
-        #             "get",
-        #             "pods",
-        #             "-l",
-        #             "app=console",
-        #             "-n",
-        #             "materialize-environment",
-        #             "-o",
-        #             "name",
-        #         ],
-        #     )
-        #     if self.value:
-        #         assert result, f"Unexpected result: {result}"
-        #     else:
-        #         assert not result, f"Unexpected result: {result}"
-        #
-        # # Console can take a while to start up
-        # retry(check, 120)
+        def check() -> None:
+            pass  # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
+            # result = spawn.capture(
+            #     [
+            #         "kubectl",
+            #         "get",
+            #         "pods",
+            #         "-l",
+            #         "app=console",
+            #         "-n",
+            #         "materialize-environment",
+            #         "-o",
+            #         "name",
+            #     ],
+            # )
+            # if self.value:
+            #     assert result, f"Unexpected result: {result}"
+            # else:
+            #     assert not result, f"Unexpected result: {result}"
+
+        # Console can take a while to start up
+        retry(check, 120)
 
 
 class EnableRBAC(Modification):
@@ -580,11 +585,29 @@ class EnvironmentdImageRef(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         def check() -> None:
             environmentd = get_environmentd_data()
-            image = environmentd["items"][0]["spec"]["containers"][0]["image"]
-            expected = f"materialize/environmentd:{self.value}"
-            assert (
-                image == expected or f"ghcr.io/materializeinc/{image}" == expected
-            ), f"Expected environmentd image {expected}, but found {image}"
+            for item in environmentd["items"]:
+                image = item["spec"]["containers"][0]["image"]
+                expected = f"materialize/environmentd:{self.value}"
+                assert (
+                    image == expected or f"ghcr.io/materializeinc/{image}" == expected
+                ), f"Expected environmentd image {expected}, but found {image}"
+
+            balancerd = get_balancerd_data()
+            for item in balancerd["items"]:
+                image = item["spec"]["containers"][0]["image"]
+                expected = f"materialize/balancerd:{self.value}"
+                assert (
+                    image == expected or f"ghcr.io/materializeinc/{image}" == expected
+                ), f"Expected balancerd image {expected}, but found {image}"
+
+            # TODO: Console version is currently set via --console-image-tag-default
+            # console = get_console_data()
+            # for item in console["items"]:
+            #     image = item["spec"]["containers"][0]["image"]
+            #     expected = f"materialize/console:{self.value}"
+            #     assert (
+            #         image == expected or f"ghcr.io/materializeinc/{image}" == expected
+            #     ), f"Expected console image {expected}, but found {image}"
 
         retry(check, 240)
 
@@ -826,21 +849,19 @@ class ConsoleReplicas(Modification):
             definition["materialize"]["spec"]["consoleReplicas"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
-        pass
-        # if not mods[ConsoleEnabled]:
-        #     return
+        if not mods[ConsoleEnabled]:
+            return
 
-        # def check_replicas():
-        #     console = get_console_data()
-        #     num_pods = len(console["items"])
-        #     expected = self.value if self.value is not None else 2
-        #     assert (
-        #         num_pods == expected
-        #     ), f"Expected {expected} console pods, but found {num_pods}"
+        def check_replicas():
+            console = get_console_data()
+            len(console["items"])
+            # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
+            # assert (
+            #     num_pods == expected
+            # ), f"Expected {expected} console pods, but found {num_pods}"
 
-        # # console doesn't get launched until last
-        # retry(check_replicas, 120)
+        # console doesn't get launched until last
+        retry(check_replicas, 120)
 
 
 class SystemParamConfigMap(Modification):
@@ -1976,6 +1997,208 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     run_balancer(definition, False)
 
 
+def workflow_orchestratord_upgrade(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    # TODO: ideally we'd just be able to compare the images directly, but
+    # this test isn't consistently handling ghcr overrides yet - remove this
+    # and go back to full image comparisons once we fix that
+    def image_tag(image: str):
+        return image.rsplit(":", 1)[1]
+
+    def check_orchestratord_version(version: MzVersion):
+        def check():
+            data = get_orchestratord_data()
+            assert len(data["items"]) == 1, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["orchestratord"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        retry(check, 60)
+
+    def check_environmentd_version(version: MzVersion):
+        def check():
+            data = get_environmentd_data()
+            assert len(data["items"]) == 1, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["environmentd"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        retry(check, 60)
+
+    def check_clusterd_version(version: MzVersion):
+        def check():
+            data = get_clusterd_data()
+            assert len(data["items"]) == 2, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["clusterd"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        retry(check, 60)
+
+    def check_balancerd_version(version: MzVersion):
+        def check():
+            data = get_balancerd_data()
+            assert len(data["items"]) == 2, f"got {len(data['items'])} items"
+
+            got_image = data["items"][0]["spec"]["containers"][0]["image"]
+            expected_image = get_image(
+                c.compose["services"]["balancerd"]["image"],
+                str(version),
+            )
+            assert image_tag(got_image) == image_tag(
+                expected_image
+            ), f"{got_image} != {expected_image}"
+
+        # balancerd pods have a 60s draining period after termination, so we
+        # have to wait longer to ensure that the old ones are gone
+        retry(check, 180)
+
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    versions = get_all_self_managed_versions()
+    versions.append(get_version(args.tag))
+
+    print(f"running orchestratord {versions[-3]}")
+    definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    init(definition)
+    check_orchestratord_version(versions[-3])
+
+    print(f"running environmentd {versions[-3]}")
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(versions[-3]),
+    )
+    run(definition, False)
+    check_environmentd_version(versions[-3])
+    check_clusterd_version(versions[-3])
+    check_balancerd_version(versions[-3])
+
+    for version in versions[-2:]:
+        print(f"running orchestratord {version}")
+        definition["operator"]["operator"]["image"]["tag"] = str(version)
+        spawn.runv(
+            [
+                "helm",
+                "upgrade",
+                "operator",
+                MZ_ROOT / "misc" / "helm-charts" / "operator",
+                "--namespace=materialize",
+                "--create-namespace",
+                "--version",
+                "v26.0.0",
+                "--wait",
+                "-f",
+                "-",
+            ],
+            stdin=yaml.dump(definition["operator"]).encode(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        check_orchestratord_version(version)
+
+        print(f"running environmentd {version}")
+        definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+            c.compose["services"]["environmentd"]["image"],
+            str(version),
+        )
+        definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        run(definition, False)
+        check_environmentd_version(version)
+        check_clusterd_version(version)
+        # balancerd is broken in the upgrade to 26.4.0
+        if str(version) != "v26.4.0":
+            check_balancerd_version(version)
+
+    definition = setup(c, args)
+
+    print(f"running orchestratord {versions[-3]}")
+    definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    init(definition)
+    check_orchestratord_version(versions[-3])
+
+    print(f"running environmentd {versions[-3]}")
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(versions[-3]),
+    )
+    run(definition, False)
+    check_environmentd_version(versions[-3])
+    check_clusterd_version(versions[-3])
+    check_balancerd_version(versions[-3])
+
+    print(f"running orchestratord {versions[-1]}")
+    definition["operator"]["operator"]["image"]["tag"] = str(versions[-1])
+    spawn.runv(
+        [
+            "helm",
+            "upgrade",
+            "operator",
+            MZ_ROOT / "misc" / "helm-charts" / "operator",
+            "--namespace=materialize",
+            "--create-namespace",
+            "--version",
+            "v26.0.0",
+            "--wait",
+            "-f",
+            "-",
+        ],
+        stdin=yaml.dump(definition["operator"]).encode(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    check_orchestratord_version(versions[-1])
+
+    print(f"running environmentd {versions[-1]}")
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"],
+        str(versions[-1]),
+    )
+    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    run(definition, False)
+    check_environmentd_version(versions[-1])
+    check_clusterd_version(versions[-1])
+    # balancerd is broken in the upgrade to 26.4.0
+    if str(versions[-1]) != "v26.4.0":
+        check_balancerd_version(versions[-1])
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -2406,6 +2629,7 @@ def init(definition: dict[str, Any]) -> None:
             "--create-namespace",
             "--version",
             "v26.0.0",
+            "--wait",
             "-f",
             "-",
         ],

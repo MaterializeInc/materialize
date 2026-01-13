@@ -94,6 +94,466 @@ impl Pretty {
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 
+    pub(crate) fn doc_create_webhook_source<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateWebhookSourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        let mut title = "CREATE ".to_string();
+        if v.is_table {
+            title.push_str("TABLE");
+        } else {
+            title.push_str("SOURCE");
+        }
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(title, self.doc_display_pass(&v.name)));
+
+        // IN CLUSTER (only for sources, not tables)
+        if !v.is_table {
+            if let Some(cluster) = &v.in_cluster {
+                docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+            }
+        }
+
+        docs.push(RcDoc::text("FROM WEBHOOK"));
+        docs.push(nest_title(
+            "BODY FORMAT",
+            self.doc_display_pass(&v.body_format),
+        ));
+
+        if !v.include_headers.mappings.is_empty() || v.include_headers.column.is_some() {
+            let mut header_docs = Vec::new();
+
+            // Individual header mappings
+            for mapping in &v.include_headers.mappings {
+                header_docs.push(self.doc_display_pass(mapping));
+            }
+
+            // INCLUDE HEADERS column
+            if let Some(filters) = &v.include_headers.column {
+                if filters.is_empty() {
+                    header_docs.push(RcDoc::text("INCLUDE HEADERS"));
+                } else {
+                    header_docs.push(bracket(
+                        "INCLUDE HEADERS (",
+                        comma_separate(|f| self.doc_display_pass(f), filters),
+                        ")",
+                    ));
+                }
+            }
+
+            if !header_docs.is_empty() {
+                docs.extend(header_docs);
+            }
+        }
+
+        if let Some(check) = &v.validate_using {
+            docs.push(self.doc_webhook_check(check));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    fn doc_webhook_check<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateWebhookSourceCheck<T>,
+    ) -> RcDoc<'a> {
+        let mut inner = Vec::new();
+
+        if let Some(options) = &v.options {
+            let mut with_items = Vec::new();
+
+            for header in &options.headers {
+                with_items.push(self.doc_display_pass(header));
+            }
+            for body in &options.bodies {
+                with_items.push(self.doc_display_pass(body));
+            }
+            for secret in &options.secrets {
+                with_items.push(self.doc_display_pass(secret));
+            }
+
+            if !with_items.is_empty() {
+                inner.push(bracket("WITH (", comma_separated(with_items), ")"));
+                inner.push(RcDoc::line());
+            }
+        }
+
+        inner.push(self.doc_display_pass(&v.using));
+
+        bracket_doc(
+            RcDoc::text("CHECK ("),
+            RcDoc::concat(inner),
+            RcDoc::text(")"),
+            RcDoc::line(),
+        )
+    }
+
+    pub(crate) fn doc_create_table<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTableStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE [TEMPORARY] TABLE [IF NOT EXISTS] name
+        let mut title = "CREATE ".to_string();
+        if v.temporary {
+            title.push_str("TEMPORARY ");
+        }
+        title.push_str("TABLE");
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        // Table name and columns/constraints
+        let mut col_items = Vec::new();
+        col_items.extend(v.columns.iter().map(|c| self.doc_display_pass(c)));
+        col_items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+        let table_def = nest(
+            self.doc_display_pass(&v.name),
+            bracket("(", comma_separated(col_items), ")"),
+        );
+        docs.push(nest_title(title, table_def));
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_table_from_source<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTableFromSourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE TABLE [IF NOT EXISTS] name
+        let mut title = "CREATE TABLE".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        let mut table_def = self.doc_display_pass(&v.name);
+
+        let has_columns_or_constraints = match &v.columns {
+            TableFromSourceColumns::NotSpecified => false,
+            _ => true,
+        } || !v.constraints.is_empty();
+
+        if has_columns_or_constraints {
+            let mut items = Vec::new();
+
+            match &v.columns {
+                TableFromSourceColumns::NotSpecified => {}
+                TableFromSourceColumns::Named(cols) => {
+                    items.extend(cols.iter().map(|c| self.doc_display_pass(c)));
+                }
+                TableFromSourceColumns::Defined(cols) => {
+                    items.extend(cols.iter().map(|c| self.doc_display_pass(c)));
+                }
+            }
+
+            items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+            if !items.is_empty() {
+                table_def = nest(table_def, bracket("(", comma_separated(items), ")"));
+            }
+        }
+
+        docs.push(nest_title(title, table_def));
+
+        // FROM SOURCE
+        let mut from_source = nest_title("FROM SOURCE", self.doc_display_pass(&v.source));
+        if let Some(reference) = &v.external_reference {
+            from_source = nest(
+                from_source,
+                bracket("(REFERENCE = ", self.doc_display_pass(reference), ")"),
+            );
+        }
+        docs.push(from_source);
+
+        if let Some(format) = &v.format {
+            docs.push(self.doc_format_specifier(format));
+        }
+
+        if !v.include_metadata.is_empty() {
+            docs.push(nest_title(
+                "INCLUDE",
+                comma_separate(|im| self.doc_display_pass(im), &v.include_metadata),
+            ));
+        }
+
+        if let Some(envelope) = &v.envelope {
+            docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
+        }
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_connection<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateConnectionStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        let mut title = "CREATE CONNECTION".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(title, self.doc_display_pass(&v.name)));
+
+        let connection_with_values = nest(
+            RcDoc::concat([
+                RcDoc::text("TO "),
+                self.doc_display_pass(&v.connection_type),
+            ]),
+            bracket(
+                "(",
+                comma_separate(|val| self.doc_display_pass(val), &v.values),
+                ")",
+            ),
+        );
+        docs.push(connection_with_values);
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_sink<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateSinkStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE SINK [IF NOT EXISTS] [name]
+        let mut title = "CREATE SINK".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        if let Some(name) = &v.name {
+            docs.push(nest_title(title, self.doc_display_pass(name)));
+        } else {
+            docs.push(RcDoc::text(title));
+        }
+
+        if let Some(cluster) = &v.in_cluster {
+            docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+        }
+
+        docs.push(nest_title("FROM", self.doc_display_pass(&v.from)));
+        docs.push(nest_title("INTO", self.doc_display_pass(&v.connection)));
+
+        if let Some(format) = &v.format {
+            docs.push(self.doc_format_specifier(format));
+        }
+
+        if let Some(envelope) = &v.envelope {
+            docs.push(nest_title("ENVELOPE", self.doc_display_pass(envelope)));
+        }
+
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_subsource<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateSubsourceStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE SUBSOURCE [IF NOT EXISTS] name
+        let mut title = "CREATE SUBSOURCE".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        // Table name with columns/constraints
+        let mut col_items = Vec::new();
+        col_items.extend(v.columns.iter().map(|c| self.doc_display_pass(c)));
+        col_items.extend(v.constraints.iter().map(|c| self.doc_display_pass(c)));
+
+        let table_def = nest(
+            self.doc_display_pass(&v.name),
+            bracket("(", comma_separated(col_items), ")"),
+        );
+        docs.push(nest_title(title, table_def));
+
+        // OF SOURCE
+        if let Some(of_source) = &v.of_source {
+            docs.push(nest_title("OF SOURCE", self.doc_display_pass(of_source)));
+        }
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_cluster<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateClusterStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE CLUSTER name
+        docs.push(nest_title("CREATE CLUSTER", self.doc_display_pass(&v.name)));
+
+        // OPTIONS (...)
+        if !v.options.is_empty() {
+            docs.push(bracket(
+                "(",
+                comma_separate(|o| self.doc_display_pass(o), &v.options),
+                ")",
+            ));
+        }
+
+        // FEATURES (...)
+        if !v.features.is_empty() {
+            docs.push(bracket(
+                "FEATURES (",
+                comma_separate(|f| self.doc_display_pass(f), &v.features),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_cluster_replica<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateClusterReplicaStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE CLUSTER REPLICA cluster.replica
+        let replica_name = RcDoc::concat([
+            self.doc_display_pass(&v.of_cluster),
+            RcDoc::text("."),
+            self.doc_display_pass(&v.definition.name),
+        ]);
+        docs.push(nest_title("CREATE CLUSTER REPLICA", replica_name));
+
+        // OPTIONS (...)
+        docs.push(bracket(
+            "(",
+            comma_separate(|o| self.doc_display_pass(o), &v.definition.options),
+            ")",
+        ));
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_network_policy<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateNetworkPolicyStatement<T>,
+    ) -> RcDoc<'a> {
+        let docs = vec![
+            // CREATE NETWORK POLICY name
+            nest_title("CREATE NETWORK POLICY", self.doc_display_pass(&v.name)),
+            // OPTIONS (...)
+            bracket(
+                "(",
+                comma_separate(|o| self.doc_display_pass(o), &v.options),
+                ")",
+            ),
+        ];
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_index<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateIndexStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = Vec::new();
+
+        // CREATE [DEFAULT] INDEX [IF NOT EXISTS] [name]
+        let mut title = "CREATE".to_string();
+        if v.key_parts.is_none() {
+            title.push_str(" DEFAULT");
+        }
+        title.push_str(" INDEX");
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+
+        if let Some(name) = &v.name {
+            docs.push(nest_title(title, self.doc_display_pass(name)));
+        } else {
+            docs.push(RcDoc::text(title));
+        }
+
+        // IN CLUSTER
+        if let Some(cluster) = &v.in_cluster {
+            docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
+        }
+
+        // ON table_name [(key_parts)]
+        let on_clause = if let Some(key_parts) = &v.key_parts {
+            nest(
+                self.doc_display_pass(&v.on_name),
+                bracket(
+                    "(",
+                    comma_separate(|k| self.doc_display_pass(k), key_parts),
+                    ")",
+                ),
+            )
+        } else {
+            self.doc_display_pass(&v.on_name)
+        };
+        docs.push(nest_title("ON", on_clause));
+
+        // WITH options
+        if !v.with_options.is_empty() {
+            docs.push(bracket(
+                "WITH (",
+                comma_separate(|wo| self.doc_display_pass(wo), &v.with_options),
+                ")",
+            ));
+        }
+
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     fn doc_format_specifier<T: AstInfo>(&self, v: &FormatSpecifier<T>) -> RcDoc<'_> {
         match v {
             FormatSpecifier::Bare(format) => nest_title("FORMAT", self.doc_display_pass(format)),
@@ -243,9 +703,14 @@ impl Pretty {
     ) -> RcDoc<'a> {
         let mut docs = vec![];
         docs.push(RcDoc::text(format!(
-            "CREATE{} MATERIALIZED VIEW{} {}",
+            "CREATE{}{} MATERIALIZED VIEW{} {}",
             if v.if_exists == IfExistsBehavior::Replace {
                 " OR REPLACE"
+            } else {
+                ""
+            },
+            if v.replacement_for.is_some() {
+                " REPLACEMENT"
             } else {
                 ""
             },
@@ -263,9 +728,9 @@ impl Pretty {
                 ")",
             ));
         }
-        if let Some(target) = &v.replacing {
+        if let Some(target) = &v.replacement_for {
             docs.push(RcDoc::text(format!(
-                "REPLACING {}",
+                "FOR {}",
                 target.to_ast_string_simple()
             )));
         }

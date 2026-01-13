@@ -403,7 +403,7 @@ pub fn create_statement(
             if_exists,
             name,
             columns: _,
-            replacing: _,
+            replacement_for: _,
             in_cluster: _,
             query,
             with_options: _,

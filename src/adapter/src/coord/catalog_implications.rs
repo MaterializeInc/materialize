@@ -33,7 +33,6 @@ use std::time::{Duration, Instant};
 use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_catalog::builtin;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
     MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
@@ -1021,19 +1020,8 @@ impl Coordinator {
                         details,
                         data_config,
                     } => {
-                        // TODO: It's a little weird that a table will be present in this
-                        // source status collection, we might want to split out into a separate
-                        // status collection.
-                        let status_collection_id = self
-                            .catalog()
-                            .resolve_builtin_storage_collection(&builtin::MZ_SOURCE_STATUS_HISTORY);
-
                         let global_ingestion_id =
                             self.catalog().get_entry(ingestion_id).latest_global_id();
-                        let global_status_collection_id = self
-                            .catalog()
-                            .get_entry(&status_collection_id)
-                            .latest_global_id();
 
                         let collection_desc = CollectionDescription::<Timestamp> {
                             desc: table.desc.latest(),
@@ -1045,7 +1033,6 @@ impl Coordinator {
                                     .into_inline_connection(self.catalog.state()),
                             },
                             since: None,
-                            status_collection_id: Some(global_status_collection_id),
                             timeline: Some(timeline.clone()),
                             primary: None,
                         };
@@ -1091,7 +1078,6 @@ impl Coordinator {
                             desc,
                             data_source: DataSource::Webhook,
                             since: None,
-                            status_collection_id: None, // Webhook tables don't use status collections
                             timeline: Some(timeline.clone()),
                             primary: None,
                         };
@@ -1233,16 +1219,7 @@ impl Coordinator {
         source: Source,
         compaction_windows: BTreeMap<CompactionWindow, BTreeSet<CatalogItemId>>,
     ) -> Result<(), AdapterError> {
-        let source_status_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&builtin::MZ_SOURCE_STATUS_HISTORY);
-        let source_status_collection_id = Some(
-            self.catalog()
-                .get_entry(&source_status_item_id)
-                .latest_global_id(),
-        );
-
-        let (data_source, status_collection_id) = match source.data_source {
+        let data_source = match source.data_source {
             DataSourceDesc::Ingestion { desc, cluster_id } => {
                 let desc = desc.into_inline_connection(self.catalog().state());
                 let item_global_id = self.catalog().get_entry(&item_id).latest_global_id();
@@ -1253,10 +1230,7 @@ impl Coordinator {
                     item_global_id,
                 );
 
-                (
-                    DataSource::Ingestion(ingestion),
-                    source_status_collection_id,
-                )
+                DataSource::Ingestion(ingestion)
             }
             DataSourceDesc::OldSyntaxIngestion {
                 desc,
@@ -1291,10 +1265,7 @@ impl Coordinator {
                     .source_exports
                     .insert(source.global_id, legacy_export);
 
-                (
-                    DataSource::Ingestion(ingestion),
-                    source_status_collection_id,
-                )
+                DataSource::Ingestion(ingestion)
             }
             DataSourceDesc::IngestionExport {
                 ingestion_id,
@@ -1305,17 +1276,15 @@ impl Coordinator {
                 // TODO(parkmycar): We should probably check the type here, but I'm not sure if
                 // this will always be a Source or a Table.
                 let ingestion_id = self.catalog().get_entry(&ingestion_id).latest_global_id();
-                (
-                    DataSource::IngestionExport {
-                        ingestion_id,
-                        details,
-                        data_config: data_config.into_inline_connection(self.catalog().state()),
-                    },
-                    source_status_collection_id,
-                )
+
+                DataSource::IngestionExport {
+                    ingestion_id,
+                    details,
+                    data_config: data_config.into_inline_connection(self.catalog().state()),
+                }
             }
-            DataSourceDesc::Progress => (DataSource::Progress, None),
-            DataSourceDesc::Webhook { .. } => (DataSource::Webhook, None),
+            DataSourceDesc::Progress => DataSource::Progress,
+            DataSourceDesc::Webhook { .. } => DataSource::Webhook,
             DataSourceDesc::Introspection(_) => {
                 unreachable!("cannot create sources with introspection data sources")
             }
@@ -1328,7 +1297,6 @@ impl Coordinator {
                 data_source,
                 timeline: Some(source.timeline),
                 since: None,
-                status_collection_id,
                 primary: None,
             },
         );

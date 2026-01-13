@@ -789,6 +789,42 @@ pub fn register_runtime_metrics(
         };
     }
 
+    macro_rules! register_per_worker {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicU64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || {
+                    (0..metrics.num_workers())
+                        .map(|i| <u64 as crate::cast::CastFrom<_>>::cast_from(metrics.$method(i)))
+                        .sum::<u64>()
+                },
+            );
+        };
+    }
+
+    macro_rules! register_per_worker_duration_secs {
+        ($method:ident, $doc:literal) => {
+            let metrics = runtime_metrics.clone();
+            registry.register_computed_gauge::<prometheus::core::AtomicF64>(
+                crate::metric!(
+                    name: concat!("mz_tokio_", stringify!($method)),
+                    help: $doc,
+                    const_labels: {"runtime" => name},
+                ),
+                move || {
+                    (0..metrics.num_workers())
+                        .map(|i| metrics.$method(i).as_secs_f64())
+                        .sum::<f64>()
+                },
+            );
+        };
+    }
+
     register!(
         num_workers,
         "The number of worker threads used by the runtime."
@@ -801,6 +837,19 @@ pub fn register_runtime_metrics(
         global_queue_depth,
         "The number of tasks currently scheduled in the runtime's global queue."
     );
+    register_per_worker_duration_secs!(
+        worker_total_busy_duration,
+        "The amount of time the worker threads have been busy, in seconds."
+    );
+    register_per_worker!(
+        worker_park_count,
+        "The total number of times the worker threads have parked."
+    );
+    register_per_worker!(
+        worker_park_unpark_count,
+        "The total number of times the worker threads have parked and unparked."
+    );
+
     #[cfg(tokio_unstable)]
     {
         register!(
@@ -810,6 +859,14 @@ pub fn register_runtime_metrics(
         register!(
             num_idle_blocking_threads,
             "The number of idle threads which have spawned by the runtime for spawn_blocking calls."
+        );
+        register_per_worker!(
+            worker_local_queue_depth,
+            "The number of tasks currently scheduled in the workers' local queues."
+        );
+        register!(
+            blocking_queue_depth,
+            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
         );
         register!(
             spawned_tasks_count,
@@ -823,9 +880,33 @@ pub fn register_runtime_metrics(
             budget_forced_yield_count,
             "The number of times that tasks have been forced to yield back to the scheduler after exhausting their task budgets."
         );
-        register!(
-            blocking_queue_depth,
-            "The number of tasks currently scheduled in the blocking thread pool, spawned using spawn_blocking."
+        register_per_worker!(
+            worker_noop_count,
+            "The number of times the given worker thread unparked but performed no work before parking again."
+        );
+        register_per_worker!(
+            worker_steal_count,
+            "The number of tasks the given worker thread stole from another worker thread."
+        );
+        register_per_worker!(
+            worker_steal_operations,
+            "The number of times the given worker thread stole tasks from another worker thread."
+        );
+        register_per_worker!(
+            worker_poll_count,
+            "The number of tasks the given worker thread has polled."
+        );
+        register_per_worker!(
+            worker_local_schedule_count,
+            "The number of tasks scheduled from within the runtime on the given worker's local queue."
+        );
+        register_per_worker!(
+            worker_overflow_count,
+            "The number of times the given worker thread saturated its local queue."
+        );
+        register_per_worker_duration_secs!(
+            worker_mean_poll_time,
+            "The mean duration of task polls in seconds."
         );
     }
 }

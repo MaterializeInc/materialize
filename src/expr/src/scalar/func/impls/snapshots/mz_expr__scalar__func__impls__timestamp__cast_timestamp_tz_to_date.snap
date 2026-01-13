@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/timestamp.rs
-expression: "#[sqlfunc(\n    sqlname = \"timestamp_with_time_zone_to_date\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastDateToTimestampTz(None)),\n    is_monotone = true,\n)]\n#[allow(clippy::extra_unused_lifetimes)]\npub fn cast_timestamp_tz_to_date<'a>(\n    a: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Date, EvalError> {\n    { Ok(a.naive_utc().date().try_into()?) }\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"timestamp_with_time_zone_to_date\",\n    preserves_uniqueness = false,\n    inverse = to_unary!(super::CastDateToTimestampTz(None)),\n    is_monotone = true\n)]\nfn cast_timestamp_tz_to_date(\n    a: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Date, EvalError> {\n    Ok(a.naive_utc().date().try_into()?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -44,9 +44,8 @@ impl std::fmt::Display for CastTimestampTzToDate {
         f.write_str("timestamp_with_time_zone_to_date")
     }
 }
-#[allow(clippy::extra_unused_lifetimes)]
-pub fn cast_timestamp_tz_to_date<'a>(
+fn cast_timestamp_tz_to_date(
     a: CheckedTimestamp<DateTime<Utc>>,
 ) -> Result<Date, EvalError> {
-    { Ok(a.naive_utc().date().try_into()?) }
+    Ok(a.naive_utc().date().try_into()?)
 }

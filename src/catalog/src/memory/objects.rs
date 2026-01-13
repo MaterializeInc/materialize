@@ -1219,7 +1219,7 @@ impl Source {
     /// The expensive resource that each source consumes is persist shards. To
     /// prevent abuse, we want to prevent users from creating sources that use an
     /// unbounded number of persist shards. But we also don't want to count
-    /// persist shards that are mandated by teh system (e.g., the progress
+    /// persist shards that are mandated by the system (e.g., the progress
     /// shard) so that future versions of Materialize can introduce additional
     /// per-source shards (e.g., a per-source status shard) without impacting
     /// the limit calculation.
@@ -1474,7 +1474,7 @@ impl MaterializedView {
             if_exists: old_stmt.if_exists,
             name: old_stmt.name,
             columns: rpl_stmt.columns,
-            replacing: None,
+            replacement_for: None,
             in_cluster: rpl_stmt.in_cluster,
             query: rpl_stmt.query,
             as_of: rpl_stmt.as_of,
