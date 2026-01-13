@@ -1336,7 +1336,7 @@ pub struct AlterTablePlan {
     pub raw_sql_type: RawDataType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AlterMaterializedViewApplyReplacementPlan {
     pub id: CatalogItemId,
     pub replacement_id: CatalogItemId,

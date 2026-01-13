@@ -1500,6 +1500,14 @@ impl Coordinator {
                 false
             }
 
+            // `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` waits for the target MV to make
+            // enough progress for a clean cutover. If the target MV is stalled, it may block
+            // forever. Checks in sequencing ensure the operation fails if any of these happens
+            // concurrently:
+            //   * the target MV is dropped
+            //   * the replacement MV is dropped
+            Statement::AlterMaterializedViewApplyReplacement(_) => false,
+
             // Everything else must be serialized.
             _ => true,
         }
