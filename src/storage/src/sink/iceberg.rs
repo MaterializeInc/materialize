@@ -143,6 +143,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
 use crate::render::sinks::SinkRender;
+use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
 /// Set the default capacity for the array builders inside the ArrowBuilder. This is the
@@ -665,7 +666,8 @@ struct SerializableDataFile {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct AvroDataFile {
     pub data_file: Vec<u8>,
-    pub schema: Schema,
+    /// Schema serialized as JSON bytes to avoid bincode issues with HashMap
+    pub schema: Vec<u8>,
 }
 
 impl From<SerializableDataFile> for AvroDataFile {
@@ -678,10 +680,8 @@ impl From<SerializableDataFile> for AvroDataFile {
             FormatVersion::V2,
         )
         .expect("serialization into buffer");
-        AvroDataFile {
-            data_file,
-            schema: value.schema,
-        }
+        let schema = serde_json::to_vec(&value.schema).expect("schema serialization");
+        AvroDataFile { data_file, schema }
     }
 }
 
@@ -689,9 +689,11 @@ impl TryFrom<AvroDataFile> for SerializableDataFile {
     type Error = String;
 
     fn try_from(value: AvroDataFile) -> Result<Self, Self::Error> {
+        let schema: Schema = serde_json::from_slice(&value.schema)
+            .map_err(|e| format!("Failed to deserialize schema: {}", e))?;
         let data_files = read_data_files_from_avro(
             &mut &*value.data_file,
-            &value.schema,
+            &schema,
             0,
             &StructType::new(vec![]),
             FormatVersion::V2,
@@ -700,10 +702,7 @@ impl TryFrom<AvroDataFile> for SerializableDataFile {
         let Some(data_file) = data_files.into_iter().next() else {
             return Err("No DataFile found in Avro data".into());
         };
-        Ok(SerializableDataFile {
-            data_file,
-            schema: value.schema,
-        })
+        Ok(SerializableDataFile { data_file, schema })
     }
 }
 
@@ -759,6 +758,7 @@ fn write_data_files<G>(
     storage_configuration: StorageConfiguration,
     materialize_arrow_schema: Arc<ArrowSchema>,
     metrics: IcebergSinkMetrics,
+    statistics: SinkStatistics,
 ) -> (
     Stream<G, BoundedDataFile>,
     Stream<G, HealthStatusMessage>,
@@ -1047,15 +1047,14 @@ where
                                 match data_file.content_type() {
                                     iceberg::spec::DataContentType::Data => {
                                         metrics.data_files_written.inc();
-                                        metrics.rows_written.inc_by(data_file.record_count());
                                     }
                                     iceberg::spec::DataContentType::PositionDeletes
                                     | iceberg::spec::DataContentType::EqualityDeletes => {
                                         metrics.delete_files_written.inc();
-                                        metrics.rows_deleted.inc_by(data_file.record_count());
                                     }
                                 }
-                                metrics.bytes_written.inc_by(data_file.file_size_in_bytes());
+                                statistics.inc_messages_staged_by(data_file.record_count());
+                                statistics.inc_bytes_staged_by(data_file.file_size_in_bytes());
                                 let file = BoundedDataFile::new(
                                     data_file,
                                     current_schema.as_ref().clone(),
@@ -1101,6 +1100,7 @@ fn commit_to_iceberg<G>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     metrics: IcebergSinkMetrics,
+    statistics: SinkStatistics,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1211,7 +1211,12 @@ where
 
                     let mut data_files = vec![];
                     let mut delete_files = vec![];
+                    // Track totals for committed statistics
+                    let mut total_messages: u64 = 0;
+                    let mut total_bytes: u64 = 0;
                     for file in file_set.data_files {
+                        total_messages += file.data_file().record_count();
+                        total_bytes += file.data_file().file_size_in_bytes();
                         match file.data_file().content_type() {
                             iceberg::spec::DataContentType::Data => {
                                 data_files.push(file.into_data_file());
@@ -1292,6 +1297,8 @@ where
                     }).await.context("failed to commit to iceberg")?;
 
                     metrics.snapshots_committed.inc();
+                    statistics.inc_messages_committed_by(total_messages);
+                    statistics.inc_bytes_committed_by(total_bytes);
 
                     let mut expect_upper = write_handle.shared_upper();
                     loop {
@@ -1395,6 +1402,12 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             .metrics
             .get_iceberg_sink_metrics(sink_id, scope.index());
 
+        let statistics = storage_state
+            .aggregated_statistics
+            .get_sink(&sink_id)
+            .expect("statistics initialized")
+            .clone();
+
         let connection_for_minter = self.clone();
         let (minted_input, batch_descriptions, mint_status, mint_button) = mint_batch_descriptions(
             format!("{sink_id}-iceberg-mint"),
@@ -1415,6 +1428,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             storage_state.storage_configuration.clone(),
             Arc::new(arrow_schema_with_ids.clone()),
             metrics.clone(),
+            statistics.clone(),
         );
 
         let connection_for_committer = self.clone();
@@ -1429,6 +1443,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             storage_state.storage_configuration.clone(),
             write_handle,
             metrics.clone(),
+            statistics,
         );
 
         let running_status = Some(HealthStatusMessage {
