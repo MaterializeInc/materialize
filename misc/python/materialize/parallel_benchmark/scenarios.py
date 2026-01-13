@@ -92,6 +92,47 @@ class Kafka(Scenario):
         )
 
 
+class CreateKafkaSink(Scenario):
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        self.init(
+            [
+                TdPhase(
+                    """
+                    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                    ALTER SYSTEM SET max_objects_per_schema = 1000000;
+                    ALTER SYSTEM SET max_sinks = 1000000;
+
+                    > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+                    > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+                      URL '${testdrive.schema-registry-url}');
+
+                    > CREATE TABLE IF NOT EXISTS t (c INT)
+
+                    > INSERT INTO t VALUES (1)
+                    """
+                ),
+                LoadPhase(
+                    duration=900,
+                    actions=[
+                        ClosedLoop(
+                            action=TdAction(
+                                """
+                                $ set-from-sql var=id
+                                SELECT mz_now()::text
+
+                                > CREATE SINK sink${id} FROM t INTO KAFKA CONNECTION kafka_conn (TOPIC 'sink-${id}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE DEBEZIUM
+                                """,
+                                c,
+                            ),
+                            report_regressions=False,  # TODO: Currently not stable enough, add guarantees when we improve
+                        )
+                    ],
+                ),
+            ],
+        )
+
+
 class PgReadReplica(Scenario):
     def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
         self.init(
@@ -724,7 +765,7 @@ class OperationalDataMesh(Scenario):
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM;
 
-                    $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
+                    $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="30s"
 
                     #$ kafka-verify-topic sink=sink
 
