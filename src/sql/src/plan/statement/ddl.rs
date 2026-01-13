@@ -3010,12 +3010,19 @@ pub fn plan_create_materialized_view(
             );
         }
 
-        if !dependencies.insert(target.id()) {
-            sql_bail!(
-                "cannot replace {} because it is also a dependency",
-                scx.catalog.minimal_qualification(target.name()),
-            );
+        // Check for dependency cycles.
+        for dependent in scx.catalog.item_dependents(target.id()) {
+            if let ObjectId::Item(id) = dependent
+                && dependencies.contains(&id)
+            {
+                sql_bail!(
+                    "replacement would cause {} to depend on itself",
+                    scx.catalog.minimal_qualification(target.name()),
+                );
+            }
         }
+
+        dependencies.insert(target.id());
 
         for use_id in target.used_by() {
             let use_item = scx.get_item(use_id);
