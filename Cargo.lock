@@ -9873,9 +9873,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf-native"
-version = "0.3.2+26.1"
+version = "0.3.3+26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab382248bd8151301b96bd4630671199d65401c7d39a96a1423aa581669f0049"
+checksum = "3efb1fd5ce9a55e805a5eda5d0f631d44aab9a7782df2eeae4825dfb980b38fa"
 dependencies = [
  "cxx",
  "cxx-build",

@@ -2513,6 +2513,12 @@ async fn compile_proto(
 
     // Compile .proto files into a file descriptor set.
     let mut source_tree = VirtualSourceTree::new();
+
+    // Add well-known types (e.g., google/protobuf/timestamp.proto) to the source
+    // tree. These are implicitly available to protoc but are typically not
+    // registered in the schema registry.
+    source_tree.as_mut().map_well_known_types();
+
     for subject in iter::once(&primary_subject).chain(dependency_subjects.iter()) {
         source_tree.as_mut().add_file(
             Path::new(&subject.name),
