@@ -2061,42 +2061,37 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    /// Sort `CONNECTION` items.
-    ///
-    /// `CONNECTION`s can depend on one another, e.g. a `KAFKA CONNECTION` contains
-    /// a list of `BROKERS` and these broker definitions can themselves reference other
-    /// connections. This `BROKERS` list can also be `ALTER`ed and thus it's possible
-    /// for a connection to depend on another with an ID greater than its own.
-    fn sort_connections(connections: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
+    /// Sort items by their dependencies using topological sort.
+    fn sort_items_topological(items: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
         let mut topo: BTreeMap<
             (mz_catalog::durable::Item, Timestamp, StateDiff),
             BTreeSet<CatalogItemId>,
         > = BTreeMap::default();
-        let existing_connections: BTreeSet<_> = connections.iter().map(|item| item.0.id).collect();
+        let existing: BTreeSet<_> = items.iter().map(|item| item.0.id).collect();
 
         // Initialize our set of topological sort.
-        tracing::debug!(?connections, "sorting connections");
-        for (connection, ts, diff) in connections.drain(..) {
-            let statement = mz_sql::parse::parse(&connection.create_sql)
-                .expect("valid CONNECTION create_sql")
+        tracing::debug!(?items, "sorting items by dependencies");
+        for (item, ts, diff) in items.drain(..) {
+            let statement = mz_sql::parse::parse(&item.create_sql)
+                .expect("valid create_sql")
                 .into_element()
                 .ast;
             let mut dependencies = mz_sql::names::dependencies(&statement)
-                .expect("failed to find dependencies of CONNECTION");
+                .expect("failed to find dependencies of item");
             // Be defensive and remove any possible self references.
-            dependencies.remove(&connection.id);
-            // It's possible we're applying updates to a connection where the
-            // dependency already exists and thus it's not in `connections`.
-            dependencies.retain(|dep| existing_connections.contains(dep));
+            dependencies.remove(&item.id);
+            // It's possible we're applying updates to an item where the
+            // dependency already exists and thus it's not in `items`.
+            dependencies.retain(|dep| existing.contains(dep));
 
             // Be defensive and ensure we're not clobbering any items.
-            assert_none!(topo.insert((connection, ts, diff), dependencies));
+            assert_none!(topo.insert((item, ts, diff), dependencies));
         }
-        tracing::debug!(?topo, ?existing_connections, "built topological sort");
+        tracing::debug!(?topo, ?existing, "built topological sort",);
 
         // Do a topological sort, pushing back into the provided Vec.
         while !topo.is_empty() {
-            // Get all of the connections with no dependencies.
+            // Get all of the items with no dependencies.
             let no_deps: Vec<_> = topo
                 .iter()
                 .filter_map(|(item, deps)| {
@@ -2110,7 +2105,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 
             // Cycle in our graph!
             if no_deps.is_empty() {
-                panic!("programming error, cycle in Connections");
+                panic!("programming error, cycle in item dependencies");
             }
 
             // Process all of the items with no dependencies.
@@ -2122,7 +2117,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                     deps.remove(&item.0.id);
                 });
                 // Push it back into our list as "completed".
-                connections.push(item);
+                items.push(item);
             }
         }
     }
@@ -2131,8 +2126,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     ///
     /// First we group items into groups that are totally ordered by dependency. For example, when
     /// sorting all items by dependency we know that all tables can come after all sources, because
-    /// a source can never depend on a table. Within these groups, the ID order matches the
-    /// dependency order.
+    /// a source can never depend on a table. Second, we sort the items in each group in
+    /// topological order, or by ID, depending on the type.
     ///
     /// It used to be the case that the ID order of ALL items matched the dependency order. However,
     /// certain migrations shuffled item IDs around s.t. this was no longer true. A much better
@@ -2175,24 +2170,24 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             }
         }
 
-        // Within each group, sort by ID.
+        // For some groups, the items in them can depend on each other and can be `ALTER`ed so that
+        // an item ends up depending on an item with a greater ID. Thus we need to perform
+        // topological sort for these groups.
+        sort_items_topological(&mut connections);
+        sort_items_topological(&mut derived_items);
+
+        // Other groups we can simply sort by ID.
         for group in [
             &mut types,
             &mut funcs,
             &mut secrets,
             &mut sources,
             &mut tables,
-            &mut derived_items,
             &mut sinks,
             &mut continual_tasks,
         ] {
             group.sort_by_key(|(item, _, _)| item.id);
         }
-
-        // HACK(parkmycar): Connections are special and can depend on one another. Additionally
-        // connections can be `ALTER`ed and thus a `CONNECTION` can depend on another whose ID
-        // is greater than its own.
-        sort_connections(&mut connections);
 
         iter::empty()
             .chain(types)
