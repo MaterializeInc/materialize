@@ -741,6 +741,25 @@ impl MirScalarExpr {
                                     }
                                     _ => {}
                                 }
+                            } else if let UnaryFunc::CastStringToVarChar(
+                                func::CastStringToVarChar { length, .. },
+                            ) = func
+                            {
+                                if length.is_none() {
+                                    if let MirScalarExpr::CallUnary {
+                                        func: inner_func,
+                                        expr,
+                                    } = &mut **expr
+                                    {
+                                        if inner_func
+                                            == &UnaryFunc::CastVarCharToString(
+                                                func::CastVarCharToString,
+                                            )
+                                        {
+                                            *e = expr.take();
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {}
