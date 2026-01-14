@@ -17,23 +17,55 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-if [[ $# -lt 2 ]]; then
-    die "usage: $0 DOCKER-HUB-USERNAME ADDITIONAL-BUILD-METADATA [arguments for mzimage]"
+usage() {
+    die "usage: $0 -u USERNAME -m BUILD-METADATA [-i IMAGE...] [-- mzimage args]"
+}
+
+if [[ $# -lt 4 ]]; then
+    usage
 fi
-username=$1
-shift
-additional_build_metadata=$1
-shift
+
+
+images=()
+passthrough_args=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+      "-u"|"--username")
+          username="$2"
+          shift
+      ;;
+      "-m"|"--build-metadata")
+          build_meta="$2"
+          shift
+      ;;
+      "-i"|"--image")
+          images+=("$2")
+          shift;
+          ;;
+      "--")
+          shift
+          passthrough_args="$*"
+          break # everything after -- is passed through
+          ;;
+    esac
+    shift
+done
+
+if (( ${#images[@]} == 0 )); then
+  images=( "environmentd" "clusterd" )
+fi
 
 # This script indiscriminately pushes to DockerHub, so it can't use GHCR images as the targets.
 export MZ_GHCR=0
 
 version=$(bin/pyactivate -c "from materialize.mz_version import MzVersion; print(MzVersion.parse_cargo())")
-tag="$version--local.$additional_build_metadata"
+tag="$version--local.$build_meta"
 
-for image in environmentd clusterd; do
-    bin/mzimage acquire --arch=aarch64 "$image" "$@"
-    docker tag "$(bin/mzimage spec --arch=aarch64 "$image" "$@")" "$username/$image:$tag"
+for image in "${images[@]}"; do
+    # shellcheck disable=SC2086
+    passthrough_args/mzimage acquire --arch=aarch64 "$image" $passthrough_args
+    # shellcheck disable=SC2086
+    passthrough_argstag "$(bin/mzimage spec --arch=aarch64 "$image" $passthrough_args)" "$username/$image:$tag"
     docker push "$username/$image:$tag"
 done
 
