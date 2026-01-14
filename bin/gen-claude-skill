@@ -36,6 +36,7 @@ echo "Output directory: $OUTPUT_DIR"
 # Build documentation with skill output format
 cd doc/user
 hugo --config config.toml,config.skill.toml \
+     --disableKinds sitemap,robotsTXT,taxonomy \
      --destination "../../$OUTPUT_DIR" \
      --gc \
      --quiet
@@ -46,16 +47,6 @@ cd ../..
 if [[ -f "$OUTPUT_DIR/index.md" ]]; then
     mv "$OUTPUT_DIR/index.md" "$OUTPUT_DIR/SKILL.md"
 fi
-
-# Clean up files not needed for the skill
-rm -f "$OUTPUT_DIR/sitemap.xml" 2>/dev/null
-rm -rf "$OUTPUT_DIR/images" 2>/dev/null
-rm -f "$OUTPUT_DIR/materialize-openapi.yml" 2>/dev/null
-rm -rf "$OUTPUT_DIR/releases" 2>/dev/null
-rm -rf "$OUTPUT_DIR/self-managed" 2>/dev/null
-rm -rf "$OUTPUT_DIR/stylesheet" 2>/dev/null
-rm -rf "$OUTPUT_DIR/about" 2>/dev/null
-rm -rf "$OUTPUT_DIR/get-started" 2>/dev/null
 
 # Count generated files
 FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
