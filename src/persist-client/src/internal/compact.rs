@@ -1002,6 +1002,7 @@ where
             Arc::clone(&metrics),
             shard_metrics,
             metrics.read.compaction.clone(),
+            Arc::clone(&isolated_runtime),
             FetchBatchFilter::Compaction {
                 since: desc.since().clone(),
             },
