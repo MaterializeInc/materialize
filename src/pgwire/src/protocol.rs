@@ -184,30 +184,11 @@ where
 
     let (mut session, expired) = match authenticator {
         Authenticator::Frontegg(frontegg) => {
-            conn.send(BackendMessage::AuthenticationCleartextPassword)
-                .await?;
-            conn.flush().await?;
-            let password = match conn.recv().await? {
-                Some(FrontendMessage::RawAuthentication(data)) => {
-                    match decode_password(Cursor::new(&data)).ok() {
-                        Some(FrontendMessage::Password { password }) => password,
-                        _ => {
-                            return conn
-                                .send(ErrorResponse::fatal(
-                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                                    "expected Password message",
-                                ))
-                                .await;
-                        }
-                    }
-                }
-                _ => {
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            "expected Password message",
-                        ))
-                        .await;
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
                 }
             };
 
@@ -245,30 +226,11 @@ where
             }
         }
         Authenticator::Password(adapter_client) => {
-            conn.send(BackendMessage::AuthenticationCleartextPassword)
-                .await?;
-            conn.flush().await?;
-            let password = match conn.recv().await? {
-                Some(FrontendMessage::RawAuthentication(data)) => {
-                    match decode_password(Cursor::new(&data)).ok() {
-                        Some(FrontendMessage::Password { password }) => Password(password),
-                        _ => {
-                            return conn
-                                .send(ErrorResponse::fatal(
-                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                                    "expected Password message",
-                                ))
-                                .await;
-                        }
-                    }
-                }
-                _ => {
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            "expected Password message",
-                        ))
-                        .await;
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => Password(password),
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
                 }
             };
             let auth_response = match adapter_client.authenticate(&user, &password).await {
