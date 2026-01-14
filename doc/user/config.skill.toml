@@ -26,3 +26,6 @@
 [params]
   # Sections to exclude from skill generation
   excludeFromSkill = ["releases", "self-managed", "about", "get-started"]
+
+[cascade]
+  aliases = []
