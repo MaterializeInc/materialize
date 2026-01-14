@@ -674,6 +674,19 @@ CREATE SOURCE avro_source
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
 ```
 
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE avro_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
+
 {{< /tab >}}
 {{< tab "JSON">}}
 
@@ -696,6 +709,32 @@ JSON-formatted messages are ingested as a JSON blob. We recommend creating a
 parsing view on top of your Kafka source that maps the individual fields to
 columns with the required data types. To avoid doing this tedious task
 manually, you can use [this **JSON parsing widget**](/sql/types/jsonb/#parsing)!
+
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE json_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT JSON
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
+
+When using separate key and value formats:
+
+```mzsql
+CREATE SOURCE json_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  KEY FORMAT TEXT
+  VALUE FORMAT JSON
+  INCLUDE KEY AS message_key,
+          TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
 
 {{< /tab >}}
 {{< tab "Protobuf">}}
@@ -748,6 +787,19 @@ schema with the message, so before creating a source you must:
   For more details about Protobuf message names and descriptors, check the
   [Protobuf format](../#protobuf) documentation.
 
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE proto_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
+```
+
 {{< /tab >}}
 {{< tab "Text/bytes">}}
 
@@ -758,6 +810,20 @@ CREATE SOURCE text_source
   ENVELOPE UPSERT;
 ```
 
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE text_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT TEXT
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition
+  ENVELOPE UPSERT;
+```
+
 {{< /tab >}}
 {{< tab "CSV">}}
 
@@ -765,6 +831,19 @@ CREATE SOURCE text_source
 CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;
+```
+
+**With metadata**
+
+To expose Kafka metadata, use `INCLUDE` clauses after the `FORMAT` clause:
+
+```mzsql
+CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT CSV WITH 3 COLUMNS
+  INCLUDE TIMESTAMP AS kafka_ts,
+          OFFSET AS kafka_offset,
+          PARTITION AS kafka_partition;
 ```
 
 {{< /tab >}}
