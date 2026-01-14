@@ -13,19 +13,7 @@ Recursive CTEs operate on the recursively-defined structures like trees or graph
 
 ## Syntax
 
-### with_recursive_cte
-
-{{< diagram "with-recursive-ctes.svg" >}}
-
-### recursive_cte_binding
-
-{{< diagram "recursive-cte-binding.svg" >}}
-
-Field | Use
-------|-----
-**RETURN AT RECURSION LIMIT $n** | An optional clause indicating that the fixpoint computation should stop after `$n` iterations and use the current values computed for each `recursive_cte_binding` in the `select_stmt`. This could be useful when debugging and validating the correctness of recursive queries, or when you know exactly how many iterations you want to have, regardless of reaching a fixpoint. See the [Examples](#examples) section for an example.
-**ERROR AT RECURSION LIMIT $n** |  An optional clause indicating that the fixpoint computation should stop after `$n` iterations and fail the query with an error. Adding this clause with a reasonably high limit is a good safeguard against accidentally running a non-terminating dataflow in your production clusters.
-**recursive_cte_binding**  | A binding that gives the SQL fragment defined under `select_stmt` a `cte_ident` alias. This alias can be used in the same binding or in all other (preceding and subsequent) bindings in the enclosing recursive CTE block. In contrast to [the `cte_binding` definition](/sql/select/#cte_binding), a `recursive_cte_binding` needs to explicitly state its type as a comma-separated list of (`col_ident` `col_type`) pairs.
+{{% include-syntax file="examples/select" example="syntax-recursive-ctes" %}}
 
 ## Details
 

@@ -17,11 +17,7 @@ be other lists, known as "layered lists."
 
 ## Syntax
 
-{{< diagram "type-list.svg" >}}
-
-| Field     | Use                                                                                                       |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| _element_ | An element of any [data type](../) to place in the list. Note that all elements must be of the same type. |
+{{% include-syntax file="sql_types/list" example="syntax" %}}
 
 ## List functions + operators
 

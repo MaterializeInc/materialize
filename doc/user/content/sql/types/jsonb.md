@@ -23,11 +23,7 @@ implementation of `json`.
 
 ## Syntax
 
-{{< diagram "type-jsonb.svg" >}}
-
-Field | Use
-------|-----
-_json&lowbar;string_ | A well-formed [JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON).
+{{% include-syntax file="sql_types/jsonb" example="syntax" %}}
 
 ## `jsonb` functions + operators
 

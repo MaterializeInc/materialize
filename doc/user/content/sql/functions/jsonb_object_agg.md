@@ -12,7 +12,7 @@ The input values to the aggregate can be [filtered](../filters).
 
 ## Syntax
 
-{{< diagram "jsonb-object-agg.svg" >}}
+{{% include-syntax file="sql_functions/jsonb_object_agg" example="syntax" %}}
 
 ## Signatures
 

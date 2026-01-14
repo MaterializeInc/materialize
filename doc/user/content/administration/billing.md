@@ -80,7 +80,7 @@ Materialize uses cheap, scalable object storage for its storage layer
 (Amazon S3), and primarily passes the cost through to the customer.
 
 Most data in Materialize is continually compacted, with the exception of
-[append-only sources](/sql/create-source/#append-only-envelope). As such, the
+[append-only sources](/sql/create-source/kafka/). As such, the
 total state stored in Materialize tends to grow at a rate that is more similar
 to OLTP databases than cloud data warehouses.
 

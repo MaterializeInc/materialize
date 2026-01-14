@@ -34,7 +34,7 @@ Detail | Info
 
 ## Syntax
 
-{{< diagram "type-float.svg" >}}
+{{% include-syntax file="sql_types/float" example="syntax" %}}
 
 ## Details
 

@@ -23,20 +23,11 @@ Detail | Info
 
 ### Numeric values
 
-{{< diagram "type-numeric-val.svg" >}}
-
-Field | Use
-------|-----------
-**E**_exp_ | Multiply the number preceding **E** by 10<sup>exp</sup>
+{{% include-syntax file="sql_types/numeric" example="syntax-value" %}}
 
 ### Numeric definitions
 
-{{< diagram "type-numeric-dec.svg" >}}
-
-Field | Use
-------|-----------
-_precision_ | **Ignored**: All `numeric` values in Materialize have a precision of 39.
-_scale_ | The total number of fractional decimal digits to track, e.g. `.321` has a scale of 3. _scale_ cannot exceed the maximum precision.
+{{% include-syntax file="sql_types/numeric" example="syntax-definition" %}}
 
 ## Details
 

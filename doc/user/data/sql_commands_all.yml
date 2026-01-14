@@ -106,11 +106,10 @@ rows:
       - "txn"
   - command: "[`COPY FROM`](/sql/copy-from)"
     labels:
-      - "crud"
+      - "copy"
   - command: "[`COPY TO`](/sql/copy-to)"
     labels:
-      - "Query Related"
-      - "output"
+      - "copy"
   - command: "[`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)"
     object: "Cluster Replica"
     labels:

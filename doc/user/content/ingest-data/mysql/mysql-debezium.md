@@ -24,7 +24,7 @@ real-time views with incrementally updated results on top of CDC data.
 
 ## Kafka + Debezium
 
-You can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#using-debezium)
+You can use [Debezium](https://debezium.io/) and the [Kafka source](/sql/create-source/kafka/#debezium-envelope)
 to propagate CDC data from MySQL to Materialize in the unlikely event that using
 the [native MySQL source](/sql/create-source/mysql/) is not an option. Debezium
 captures row-level changes resulting from `INSERT`, `UPDATE` and `DELETE`
@@ -194,7 +194,7 @@ you **must** override the default value of `After-state only` to `false`.
 Debezium emits change events using an envelope that contains detailed
 information about upstream database operations, like the `before` and `after`
 values for each record. To create a source that interprets the
-[Debezium envelope](/sql/create-source/kafka/#using-debezium) in Materialize:
+[Debezium envelope](/sql/create-source/kafka/#debezium-envelope) in Materialize:
 
 ```mzsql
 CREATE SOURCE kafka_repl

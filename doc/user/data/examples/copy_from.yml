@@ -1,0 +1,24 @@
+- name: "syntax"
+  code: |
+    COPY [INTO] <table_name> [ ( <column> [, ...] ) ] FROM STDIN
+    [[WITH] ( <option1> [=] <val1> [, ...] ] )]
+    ;
+  syntax_elements:
+    - name: "`<table_name>`"
+      description: |
+        Name of an existing table to copy data into.
+    - name: "`( <column> [, ...] )`"
+      description: |
+        If specified, correlate the inserted rows' columns to `<table_name>`'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. If not specified, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
+
+    - name: "`[WITH] ( <option1> [=] <val1> [, ...] )`"
+      description: |
+        The following `<options>` are supported for the `COPY FROM` operation:
+        | Name |  Description |
+        |------|---------------|
+        | `FORMAT` |  Sets the input formatting method. Valid input formats are `TEXT` and `CSV`. For more information see [Text formatting](#text-formatting) and [CSV formatting](#csv-formatting).<br><br> Default: `TEXT`.
+        | `DELIMITER` | A single-quoted one-byte character to use as the column delimiter. Must be different from `QUOTE`.<br><br> Default: A tab character in `TEXT`  format, a comma in `CSV` format.
+        | `NULL`  | A single-quoted string that represents a _NULL_ value.<br><br> Default: `\N` (backslash-N) in text format, an unquoted empty string in CSV format.
+        | `QUOTE` | _For `FORMAT CSV` only._ A single-quoted one-byte character that specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. Must be different from `DELIMITER`.<br><br> Default: `"`.
+        | `ESCAPE` | _For `FORMAT CSV` only._ A single-quoted string that specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. <br><br> Default: `QUOTE`'s value.
+        | `HEADER`  | _For `FORMAT CSV` only._ A boolean that specifies that the file contains a header line with the names of each column in the file. The first line is ignored on input. <br><br> Default: `false`.

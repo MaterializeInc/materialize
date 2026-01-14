@@ -1,0 +1,10 @@
+- name: "syntax"
+  code: |
+    <int> [.<frac>]
+  syntax_elements:
+    - name: "`<int>`"
+      description: |
+        An integer value.
+    - name: "`.<frac>`"
+      description: |
+        Optional. Fractional decimal digits.

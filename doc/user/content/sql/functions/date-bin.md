@@ -33,7 +33,7 @@ strides, rather than only unit times.
 
 ## Signatures
 
-{{< diagram "func-date-bin.svg" >}}
+{{% include-syntax file="sql_functions/date_bin" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

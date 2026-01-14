@@ -12,9 +12,9 @@ menu:
 
 ## Signatures
 
-{{< diagram "func-timezone.svg" >}}
+{{% include-syntax file="sql_functions/timezone" example="syntax-timezone" %}}
 
-{{< diagram "func-at-time-zone.svg" >}}
+{{% include-syntax file="sql_functions/timezone" example="syntax-at-time-zone" %}}
 
 Parameter | Type | Description
 ----------|------|------------

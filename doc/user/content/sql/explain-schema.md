@@ -16,19 +16,7 @@ change arbitrarily in future versions of Materialize.
 
 ## Syntax
 
-{{< diagram "explain-schema.svg" >}}
-
-#### `sink_definition`
-
-{{< diagram "sink-definition.svg" >}}
-
-### Output format
-
-Only `JSON` can be specified as the output format.
-
-Output type | Description
-------|-----
-**JSON** | Format the explanation output as a JSON object.
+{{% include-syntax file="examples/explain_schema" example="syntax" %}}
 
 ## Details
 When creating a an Avro-formatted Kafka sink, Materialize automatically generates Avro schemas for the message key and value and publishes them to a schema registry.

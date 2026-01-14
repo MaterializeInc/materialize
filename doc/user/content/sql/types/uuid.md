@@ -22,7 +22,7 @@ bytes.
 
 ## Syntax
 
-{{< diagram "type-uuid.svg" >}}
+{{% include-syntax file="sql_types/uuid" example="syntax" %}}
 
 The standard form of a UUID consists of five groups of lowercase hexadecimal
 digits separated by hyphens, where the first group contains 8 digits, the next

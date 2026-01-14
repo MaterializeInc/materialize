@@ -11,7 +11,7 @@ an encoded string.
 
 ## Signatures
 
-{{< diagram "func-length.svg" >}}
+{{% include-syntax file="sql_functions/length" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

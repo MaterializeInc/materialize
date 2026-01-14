@@ -13,7 +13,7 @@ adjustment.
 
 ## Signatures
 
-{{< diagram "func-justify-interval.svg" >}}
+{{% include-syntax file="sql_functions/justify_interval" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

@@ -19,3 +19,7 @@ rows:
   - col1: "**Transactions**"
     commands: |
      {{< yaml-list data="sql_commands_all" label="txn" >}}
+
+  - col1: "**Copy**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="copy" >}}

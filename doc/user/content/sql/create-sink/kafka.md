@@ -28,92 +28,37 @@ Sink source type      | Description
 
 ## Syntax
 
-{{< diagram "create-sink-kafka.svg" >}}
+{{< tabs level=3 >}}
 
-#### `sink_definition`
+{{< tab "Format Avro" >}}
 
-{{< diagram "sink-definition.svg" >}}
+{{% include-syntax file="examples/create_sink_kafka" example="syntax-avro" %}}
 
-#### `sink_format_spec`
+{{< /tab >}}
 
-{{< diagram "sink-format-spec.svg" >}}
+{{< tab "Format JSON" >}}
 
-#### `kafka_sink_connection`
+{{% include-syntax file="examples/create_sink_kafka" example="syntax-json" %}}
 
-{{< diagram "kafka-sink-connection.svg" >}}
+{{< /tab >}}
 
-#### `csr_connection`
+{{< tab "Format TEXT/BYTES" >}}
 
-{{< diagram "csr-connection.svg" >}}
+{{% include-syntax file="examples/create_sink_kafka" example="syntax-text-bytes" %}}
 
-### `with_options`
+{{< /tab >}}
 
-{{< diagram "with-options-retain-history.svg" >}}
+{{< tab "KEY FORMAT VALUE FORMAT" >}}
 
-Field | Use
-------|-----
-**IF NOT EXISTS** | If specified, _do not_ generate an error if a sink of the same name already exists. <br/><br/>If _not_ specified, throw an error if a sink of the same name already exists. _(Default)_
-_sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this sink.
-_item&lowbar;name_ | The name of the source, table or materialized view you want to send to the sink.
-**CONNECTION** _connection_name_ | The name of the connection to use in the sink. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
-**KEY (** _key&lowbar;column_ **)** | An optional list of columns to use as the Kafka message key. If unspecified, the Kafka key is left unset.
-**HEADERS** | An optional column containing headers to add to each Kafka message emitted by the sink. See [Headers](#headers) for details.
-**FORMAT** | Specifies the format to use for both keys and values: `AVRO USING csr_connection`, `JSON`, `TEXT`, or `BYTES`. See [Formats](#formats) for details.
-**KEY FORMAT .. VALUE FORMAT** | {{< warn-if-unreleased-inline "v0.108" >}} Specifies the key format and value formats separately. See [Formats](#formats) for details.
-**NOT ENFORCED** | Whether to disable validation of key uniqueness when using the upsert envelope. See [Upsert key selection](#upsert-key-selection) for details.
-**ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope) to capture changes in the input view or source.
-**ENVELOPE UPSERT** | The sink emits data with [upsert semantics](#upsert-envelope).
+By default, the message key is encoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT`.
 
-### `CONNECTION` options
+{{% include-syntax file="examples/create_sink_kafka" example="syntax-key-value-format" %}}
 
-Field                               | Value  | Description
-------------------------------------|--------|------------
-`TOPIC`                             | `text`              | The name of the Kafka topic to write to.
-`COMPRESSION TYPE`                  | `text`              | The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
-`TRANSACTIONAL ID PREFIX`           | `text`              | The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
-`PARTITION BY`                      | expression          | A SQL expression returning a hash that can be used for partition assignment. See [Partitioning](#partitioning) for details.
-`PROGRESS GROUP ID PREFIX`          | `text`              | The prefix of the consumer group ID to use when reading from the progress topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
-`TOPIC REPLICATION FACTOR`          | `int`               | The replication factor to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC PARTITION COUNT`             | `int`               | The partition count to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-`TOPIC CONFIG`                      | `map[text => text]` | Any topic-level configs to use when creating the Kafka topic (if the Kafka topic does not already exist).<br>See the [Kafka documentation](https://kafka.apache.org/documentation/#topicconfigs) for available configs.<br>Default: empty.
+{{< /tab >}}
+
+{{< /tabs >}}
 
 
-### CSR `CONNECTION` options
-
-Field                | Value  | Description
----------------------|--------|------------
-`AVRO KEY FULLNAME`         | `text` | Default: `row`. Sets the Avro fullname on the generated key schema, if a `KEY` is specified. When used, a value must be specified for `AVRO VALUE FULLNAME`.
-`AVRO VALUE FULLNAME`       | `text` | Default: `envelope`. Sets the Avro fullname on the generated value schema. When `KEY` is specified, `AVRO KEY FULLNAME` must additionally be specified.
-`NULL DEFAULTS`             | `bool` | Default: `false`. Whether to automatically default nullable fields to `null` in the generated schemas.
-`DOC ON`                    | `text` | Add a documentation comment to the generated Avro schemas. See [`DOC ON` option syntax](#doc-on-option-syntax) below.
-`KEY COMPATIBILITY LEVEL`   | `text` | If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated key schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
-`VALUE COMPATIBILITY LEVEL` | `text` | If specified, set the [Compatibility Level](https://docs.confluent.io/platform/7.6/schema-registry/fundamentals/schema-evolution.html#schema-evolution-and-compatibility) for the generated value schema to one of: `BACKWARD`, `BACKWARD_TRANSITIVE`, `FORWARD`, `FORWARD_TRANSITIVE`, `FULL`, `FULL_TRANSITIVE`, `NONE`.
-
-#### `DOC ON` option syntax
-
-{{< diagram "create-sink-doc-on-option.svg" >}}
-
-The `DOC ON` option has special syntax, shown above, with the following
-mechanics:
-
-  * The `KEY` and `VALUE` options specify whether the comment applies to the
-    key schema or the value schema. If neither `KEY` or `VALUE` is specified, the
-    comment applies to both types of schemas.
-
-  * The `TYPE` clause names a SQL type or relation, e.g. `my_app.point`.
-
-  * The `COLUMN` clause names a column of a SQL type or relation, e.g.
-    `my_app.point.x`.
-
-See [Avro schema documentation](#avro-schema-documentation) for details on
-how documentation comments are added to the generated Avro schemas.
-
-### `WITH` options
-
-Field                | Value  | Description
----------------------|--------|------------
-`SNAPSHOT`           | `bool` | Default: `true`. Whether to emit the consolidated results of the query before the sink was created at the start of the sink. To see only results after the sink is created, specify `WITH (SNAPSHOT = false)`.
 
 ## Headers
 
@@ -146,11 +91,6 @@ Materialize writes to Kafka.
 
 To use a different format for keys and values, use `KEY FORMAT .. VALUE FORMAT ..`
 to choose independent formats for each.
-
-Note that the `TEXT` and `BYTES` format options only support single-column
-encoding and cannot be used for keys or values with multiple columns.
-
-Additionally, the `BYTES` format only works with scalar data types.
 
 ### Avro
 
@@ -239,23 +179,23 @@ Materialize allows control over the `doc` attribute for record fields and types
 in the generated Avro schemas for the sink.
 
 For the container record type (named `row` for the key schema and `envelope` for
-the value schema, unless overridden by the [`AVRO ... FULLNAME` options](#csr-connection-options)),
+the value schema, unless overridden by the [`AVRO ... FULLNAME` options](#syntax)),
 Materialize searches for documentation in the following locations, in order:
 
-1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
+1. For the key schema, a [`KEY DOC ON TYPE` option](#syntax)
    naming the sink's upstream relation. For the value schema, a
-   [`VALUE DOC ON TYPE` option](#doc-on-option-syntax) naming the
+   [`VALUE DOC ON TYPE` option](#syntax) naming the
    sink's upstream relation.
 2. A [comment](/sql/comment-on) on the sink's upstream relation.
 
 For record types within the container record type, Materialize searches for
 documentation in the following locations, in order:
 
-1. For the key schema, a [`KEY DOC ON TYPE` option](#doc-on-option-syntax)
+1. For the key schema, a [`KEY DOC ON TYPE` option](#syntax)
    naming the SQL type corresponding to the record type. For the value schema, a
-   [`VALUE DOC ON TYPE` option](#doc-on-option-syntax) naming the SQL type
+   [`VALUE DOC ON TYPE` option](#syntax) naming the SQL type
    corresponding to the record type.
-2. A [`DOC ON TYPE` option](#doc-on-option-syntax) naming the SQL type
+2. A [`DOC ON TYPE` option](#syntax) naming the SQL type
    corresponding to the record type.
 3. A [comment](/sql/comment-on) on the SQL type corresponding to the record
    type.
@@ -263,11 +203,11 @@ documentation in the following locations, in order:
 Similarly, for each field of each record type in the Avro schema, Materialize
 documentation in the following locations, in order:
 
-1. For the key schema, a [`KEY DOC ON COLUMN` option](#doc-on-option-syntax)
+1. For the key schema, a [`KEY DOC ON COLUMN` option](#syntax)
    naming the SQL column corresponding to the field. For the value schema, a
-   [`VALUE DOC ON COLUMN` option](#doc-on-option-syntax) naming the column
+   [`VALUE DOC ON COLUMN` option](#syntax) naming the column
    corresponding to the field.
-2. A [`DOC ON COLUMN` option](#doc-on-option-syntax) naming the SQL column
+2. A [`DOC ON COLUMN` option](#syntax) naming the SQL column
    corresponding to the field.
 3. A [comment](/sql/comment-on) on the SQL column corresponding to the field.
 
@@ -306,6 +246,14 @@ SQL type                     | Conversion
 [`uint4`]                    | Values are converted to JSON numbers.
 [`uint8`]                    | Values are converted to JSON numbers.
 Other                        | Values are cast to [`text`] and then converted to JSON strings.
+
+### Text/Bytes
+
+The `TEXT` and `BYTES` format options only support single-column encoding and
+cannot be used for keys or values with multiple columns.
+
+Additionally, the `BYTES` format only works with scalar data types.
+
 
 ## Envelopes
 
@@ -378,7 +326,7 @@ Consider using the Debezium envelope if:
 If the specified Kafka topic does not exist, Materialize will attempt to create
 it using the broker's default number of partitions, default replication factor,
 default compaction policy, and default retention policy, unless any specific
-overrides are provided as part of the [connection options](#connection-options).
+overrides are provided as part of the [connection options](#syntax).
 
 If the connection's [progress topic](#exactly-once-processing) does not exist,
 Materialize will attempt to create it with a single partition, the broker's
@@ -388,7 +336,7 @@ retention disabled. The replication factor can be overridden using the
 [`CREATE CONNECTION`](/sql/create-connection).
 
 To customize topic-level configuration, including compaction settings and other
-values, use the `TOPIC CONFIG` option in the [connection options](#connection-options)
+values, use the `TOPIC CONFIG` option in the [connection options](#syntax)
 to set any relevant kafka [topic configs](https://kafka.apache.org/documentation/#topicconfigs).
 
 If you manually create the topic or progress topic in Kafka before
@@ -507,9 +455,9 @@ to perform the following operations on the following resources:
 Operation type  | Resource type    | Resource name
 ----------------|------------------|--------------
 Read, Write     | Topic            | Consult `mz_kafka_connections.sink_progress_topic` for the sink's connection
-Write           | Topic            | The specified [`TOPIC` option](#connection-options)
-Write           | Transactional ID | All transactional IDs beginning with the specified [`TRANSACTIONAL ID PREFIX` option](#connection-options)
-Read            | Group            | All group IDs beginning with the specified [`PROGRESS GROUP ID PREFIX` option](#connection-options)
+Write           | Topic            | The specified [`TOPIC` option](#syntax)
+Write           | Transactional ID | All transactional IDs beginning with the specified [`TRANSACTIONAL ID PREFIX` option](#syntax)
+Read            | Group            | All group IDs beginning with the specified [`PROGRESS GROUP ID PREFIX` option](#syntax)
 
 When using [automatic topic creation](#automatic-topic-creation), Materialize
 additionally requires access to the following operations:

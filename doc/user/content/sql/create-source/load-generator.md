@@ -1,5 +1,5 @@
 ---
-title: "CREATE SOURCE: Load generator"
+title: "Appendix: Load generator"
 description: "Using Materialize's built-in load generators"
 pagerank: 50
 menu:
@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: load-generator
     name: Load generator
-    weight: 40
+    weight: 99
 ---
 
 {{% create-source/intro %}}
@@ -17,31 +17,7 @@ tests.
 
 ## Syntax
 
-{{< diagram "create-source-load-generator.svg" >}}
-
-#### `load_generator_option`
-
-{{< diagram "load-generator-option.svg" >}}
-
-#### `with_options`
-
-{{< diagram "with-options-retain-history.svg" >}}
-
-Field | Use
-------|-----
-_src_name_  | The name for the source.
-**IN CLUSTER** _cluster_name_ | The [cluster](/sql/create-cluster) to maintain this source.
-**AUCTION**  | Use the [auction](#auction) load generator.
-**MARKETING**| Use the [marketing](#marketing) load generator.
-**TPCH**     | Use the [tpch](#tpch) load generator.
-**IF NOT EXISTS**  | Do nothing (except issuing a notice) if a source with the same name already exists.
-**TICK INTERVAL**  | The interval at which the next datum should be emitted. Defaults to one second.
-**AS OF**  | The tick at which to start producing data. Defaults to 0. {{< warn-if-unreleased-inline "v0.101" >}}
-**UP TO**  | The tick before which to stop producing data. Defaults to infinite. {{< warn-if-unreleased-inline "v0.101" >}}
-**SCALE FACTOR**   | The scale factor for the `TPCH` generator. Defaults to `0.01` (~ 10MB).
-**FOR ALL TABLES** | Creates subsources for all tables in the load generator.
-**EXPOSE PROGRESS AS** _progress_subsource_name_ | The name of the progress subsource for the source. If this is not specified, the subsource will be named `<src_name>_progress`. For more information, see [Monitoring source progress](#monitoring-source-progress).
-**RETAIN HISTORY FOR** <br>_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/create_source_load_generator" example="syntax" %}}
 
 ## Description
 

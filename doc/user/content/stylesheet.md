@@ -50,11 +50,6 @@ When an ordered list has `<p>` tags (in markdown, multiple linebreaks between it
 
 ## Shortcodes
 
-### `diagram` shortcode
-
-Diagrams from [rr.red-dove.com/ui](https://rr.red-dove.com/ui):
-
-{{< diagram "join-type.svg" >}}
 
 ### `note` shortcode
 

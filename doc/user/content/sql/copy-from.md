@@ -10,29 +10,7 @@ menu:
 
 ## Syntax
 
-{{< diagram "copy-from.svg" >}}
-
-Field | Use
-------|-----
-_table_name_ | Copy values to this table.
-**(**_column_...**)** | Correlate the inserted rows' columns to _table_name_'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column. <br/><br/>Without a column list, all columns must have data provided, and will be referenced using their order in the table. With a partial column list, all unreferenced columns will receive their default value.
-_field_ | The name of the option you want to set.
-_val_ | The value for the option.
-
-### `WITH` options
-
-The following options are valid within the `WITH` clause.
-
-Name | Value type | Default value | Description
------|-----------------|---------------|------------
-`FORMAT` | `TEXT`, `CSV` | `TEXT` | Sets the input formatting method. For more information see [Text formatting](#text-formatting), [CSV formatting](#csv-formatting).
-`DELIMITER` | Single-quoted one-byte character | Format-dependent | Overrides the format's default column delimiter.
-`NULL` | Single-quoted strings | Format-dependent | Specifies the string that represents a _NULL_ value.
-`QUOTE` | Single-quoted one-byte character | `"` | Specifies the character to signal a quoted string, which may contain the `DELIMITER` value (without beginning new columns). To include the `QUOTE` character itself in column, wrap the column's value in the `QUOTE` character and prefix all instance of the value you want to literally interpret with the `ESCAPE` value. _`FORMAT CSV` only_
-`ESCAPE` | Single-quoted strings | `QUOTE`'s value | Specifies the character to allow instances of the `QUOTE` character to be parsed literally as part of a column's value. _`FORMAT CSV` only_
-`HEADER`  | `boolean`   | `boolean`  | Specifies that the file contains a header line with the names of each column in the file. The first line is ignored on input.  _`FORMAT CSV` only._
-
-Note that `DELIMITER` and `QUOTE` must use distinct values.
+{{% include-syntax file="examples/copy_from" example="syntax" %}}
 
 ## Details
 

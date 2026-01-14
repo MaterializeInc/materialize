@@ -11,7 +11,7 @@ converted to months.
 
 ## Signatures
 
-{{< diagram "func-justify-days.svg" >}}
+{{% include-syntax file="sql_functions/justify_days" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------
