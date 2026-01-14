@@ -123,6 +123,51 @@ Materialize can parse CSV-formatted data. The data in CSV sources is read as
 
 {{< /tab >}}
 
+{{< tab "Format Protobuf" >}}
+### Format Protobuf
+
+Materialize can decode Protobuf messages by integrating with a schema registry
+or parsing an inline schema to retrieve a `.proto` schema definition. It can
+then automatically define the columns and data types to use in the source.
+
+{{% include-syntax file="examples/create_source_kafka" example="syntax-protobuf" %}}
+
+Unlike Avro, Protobuf does not serialize a schema with the message, so Materialize expects:
+
+* A `FileDescriptorSet` that encodes the Protobuf message schema. You can generate the `FileDescriptorSet` with [`protoc`](https://grpc.io/docs/protoc-installation/), for example:
+
+  ```shell
+  protoc --include_imports --descriptor_set_out=SCHEMA billing.proto
+  ```
+
+* A top-level message name and its package name, so Materialize knows which message from the `FileDescriptorSet` is the top-level message to decode, in the following format:
+
+  ```shell
+  <package name>.<top-level message>
+  ```
+
+  For example, if the `FileDescriptorSet` were from a `.proto` file in the
+    `billing` package, and the top-level message was called `Batch`, the
+    _message&lowbar;name_ value would be `billing.Batch`.
+
+#### Schema versioning
+
+The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued.
+
+#### Schema evolution
+
+As long as the `.proto` schema definition changes in a [compatible way](https://developers.google.com/protocol-buffers/docs/overview#updating-defs), Materialize will continue using the original schema definition by mapping values from the new to the old schema version. To use the new version of the schema in Materialize, you need to **drop and recreate** the source.
+
+#### Supported types
+
+Materialize supports all [well-known](https://developers.google.com/protocol-buffers/docs/reference/google.protobuf) Protobuf types from the `proto2` and `proto3` specs, _except for_ recursive `Struct` values and map types.
+
+#### Multiple message schemas
+
+When using a schema registry with Protobuf sources, the registered schemas must contain exactly one `Message` definition.
+
+{{< /tab >}}
+
 {{< tab "KEY FORMAT VALUE FORMAT" >}}
 ### KEY FORMAT VALUE FORMAT
 By default, the message key is decoded using the same format as the message
@@ -807,6 +852,54 @@ CREATE SOURCE csv_source (col_foo, col_bar, col_baz)
   FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
   FORMAT CSV WITH 3 COLUMNS;
 ```
+
+{{< /tab >}}
+{{< tab "Protobuf">}}
+
+**Using Confluent Schema Registry**
+
+```mzsql
+CREATE SOURCE proto_source
+  FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+  FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection;
+```
+
+**Using an inline schema**
+
+If you're not using a schema registry, you can use the `MESSAGE...SCHEMA` clause
+to specify a Protobuf schema descriptor inline. Protobuf does not serialize a
+schema with the message, so before creating a source you must:
+
+* Compile the Protobuf schema into a descriptor file using [`protoc`](https://grpc.io/docs/protoc-installation/):
+
+  ```proto
+  // example.proto
+  syntax = "proto3";
+  message Batch {
+      int32 id = 1;
+      // ...
+  }
+  ```
+
+  ```bash
+  protoc --include_imports --descriptor_set_out=example.pb example.proto
+  ```
+
+* Encode the descriptor file into a SQL byte string:
+
+  ```bash
+  $ printf '\\x' && xxd -p example.pb | tr -d '\n'
+  \x0a300a0d62696...
+  ```
+
+* Create the source using the encoded descriptor bytes from the previous step
+  (including the `\x` at the beginning):
+
+  ```mzsql
+  CREATE SOURCE proto_source
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'test_topic')
+    FORMAT PROTOBUF MESSAGE 'Batch' USING SCHEMA '\x0a300a0d62696...';
+  ```
 
 {{< /tab >}}
 {{< /tabs >}}

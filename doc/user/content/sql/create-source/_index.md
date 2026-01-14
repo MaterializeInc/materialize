@@ -73,6 +73,11 @@ For details, see [CREATE SOURCE: SQL Server](/sql/create-source/sql-server/).
 {{% include-example file="examples/create_source_kafka" example="syntax-csv" %}}
 
 {{< /tab >}}
+{{< tab "Format Protobuf" >}}
+
+{{% include-example file="examples/create_source_kafka"
+example="syntax-protobuf" %}}
+{{< /tab >}}
 
 {{< tab "KEY FORMAT VALUE FORMAT" >}}
 

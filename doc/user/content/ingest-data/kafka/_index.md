@@ -26,6 +26,7 @@ Materialize can decode incoming bytes of data from several formats:
 - Avro
 - JSON
 - CSV
+- Protobuf
 - Plain text
 - Raw bytes
 

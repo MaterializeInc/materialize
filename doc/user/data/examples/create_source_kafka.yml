@@ -108,6 +108,97 @@
         |--------|-------------|
         | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
 
+- name: "syntax-protobuf"
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <src_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (
+      TOPIC '<topic>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET ( <partition_offset> [, ...] ) ]
+      [, START TIMESTAMP <timestamp> ]
+    )
+    FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
+      | FORMAT PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'
+    [INCLUDE
+        KEY [AS <name>]
+      | PARTITION [AS <name>]
+      | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>]
+      | HEADERS [AS <name>]
+      | HEADER '<key>' AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE
+      | UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]
+    ]
+    [EXPOSE PROGRESS AS <progress_subsource_name>]
+    [WITH (RETAIN HISTORY FOR <retention_period>)]
+  syntax_elements:
+    - name: "`<src_name>`"
+      description: |
+        The name for the source.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a source with the same name already exists. Instead, issue a notice and skip the source creation.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this source.
+    - name: "`<connection_name>`"
+      description: |
+        The name of the Kafka connection to use in the source. For details on creating connections, check the [`CREATE CONNECTION`](/sql/create-connection) documentation page.
+    - name: "`'<topic>'`"
+      description: |
+        The Kafka topic you want to subscribe to.
+    - name: "**GROUP ID PREFIX** `<group_id_prefix>`"
+      description: |
+        Optional. The prefix of the consumer group ID to use. See [Monitoring consumer lag](#monitoring-consumer-lag).<br>Default: `materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE_ID}`
+    - name: "**START OFFSET** (`<partition_offset>` [, ...])"
+      description: |
+        Optional. Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers. See [Setting start offsets](#setting-start-offsets) for details.
+    - name: "**START TIMESTAMP** `<timestamp>`"
+      description: |
+        Optional. Use the specified value to set `START OFFSET` based on the Kafka timestamp. Negative values will be interpreted as relative to the current system time in milliseconds (e.g. `-1000` means 1000 ms ago). See [Time-based offsets](#time-based-offsets) for details.
+    - name: "**FORMAT PROTOBUF** `<decode-option>`"
+      description: |
+        Decode Protobuf-formatted messages. The `<decode-option>` can be:
+
+        | Option | Description |
+        |--------|-------------|
+        | `USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>` | Use schemas from the Confluent Schema Registry. This format applies to both key and value. |
+        | `MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'` | Use an inline schema. `<message_name>` is the name of the Protobuf message type, and `<schema_bytes>` is the Protobuf schema definition as a string. This format applies to both key and value. |
+    - name: "**INCLUDE** `<include_option>`"
+      description: |
+        Optional. If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | **KEY [AS \<name\>]** | Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas, the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement. |
+        | **PARTITION [AS \<name\>]** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause. |
+        | **OFFSET [AS \<name\>]** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause. |
+        | **TIMESTAMP [AS \<name\>]** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details. |
+        | **HEADERS [AS \<name\>]** | Include a `headers` column containing the Kafka message headers as a list of records of type `(key text, value bytea)`. The column can be renamed with the optional **AS** *name* clause. |
+        | **HEADER \<key\> AS \<name\> [**BYTES**]** | Include a *name* column containing the Kafka message header *key* parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option. |
+    - name: "**ENVELOPE** `<envelope>`"
+      description: |
+        Optional. Specifies how Materialize interprets incoming records. Valid envelope types:
+
+        | Envelope | Description |
+        |----------|-------------|
+        | `NONE` | Append-only envelope (default). Each message is inserted as a new row. |
+        | `UPSERT [ ( VALUE DECODING ERRORS = INLINE [AS <name>] ) ]` | Use the standard key-value convention to support inserts, updates, and deletes. Required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction). |
+    - name: "**EXPOSE PROGRESS AS** `<progress_subsource_name>`"
+      description: |
+        Optional. The name of the progress collection for the source. If this is not specified, the progress collection will be named `<src_name>_progress`. See [Monitoring source progress](#monitoring-source-progress) for details.
+    - name: "**WITH** (`<with_option>` [, ...])"
+      description: |
+        Optional. The following `<with_option>`s are supported:
+
+        | Option | Description |
+        |--------|-------------|
+        | `RETAIN HISTORY FOR <retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+
 - name: "syntax-json"
   code: |
     CREATE SOURCE [IF NOT EXISTS] <src_name>
@@ -379,6 +470,8 @@
     --     [VALUE STRATEGY <strategy>]
     -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
     -- | JSON | TEXT | BYTES
+    -- | PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+    -- | PROTOBUF MESSAGE '<message_name>' USING SCHEMA '<schema_bytes>'
     [INCLUDE
         KEY [AS <name>]
       | PARTITION [AS <name>]
