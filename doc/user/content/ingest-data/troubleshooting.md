@@ -113,3 +113,4 @@ the cluster for steady-state.
 ## See also
 
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/)
+- [Postgres troubleshooting guides](/ingest-data/postgres/troubleshooting/)

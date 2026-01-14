@@ -26,17 +26,17 @@ Materialize could read the data it needed.
 
 ## Common causes
 
-- **WAL retention limits** - PostgreSQL has a setting called
+- **WAL retention limits**: PostgreSQL has a setting called
   `max_slot_wal_keep_size` that limits how much WAL data is kept for replication
   slots. If this value is too small, PostgreSQL may delete WAL data that
   Materialize still needs.
-- **Long-running snapshot operations** - If your source is taking a long time to
+- **Long-running snapshot operations**: If your source is taking a long time to
   complete its initial snapshot (e.g., for very large tables), the upstream
   PostgreSQL database may clean up WAL data before Materialize finishes.
-- **Paused or slow replication** - If your Materialize cluster is paused,
+- **Paused or slow replication**: If your Materialize cluster is paused,
   undersized, or experiencing performance issues, the replication slot may not
   advance quickly enough, causing PostgreSQL to reclaim WAL space.
-- **Provider-specific WAL policies** - Some managed PostgreSQL providers (such
+- **Provider-specific WAL policies**: Some managed PostgreSQL providers (such
   as Neon) may have aggressive WAL cleanup policies that can trigger this error
   more frequently.
 
@@ -93,22 +93,13 @@ ORDER BY age DESC;
 ### Immediate fix: Recreate the source
 
 {{< warning >}}
-This will cause Materialize to take a new snapshot of all tables, which may take
+This will cause Materialize to take a new snapshot, which may take
 time and temporarily increase load on your PostgreSQL database.
 {{</ warning >}}
 
 Once a slot has been overcompacted, the data is permanently lost from the WAL.
-You must **drop and recreate the source**:
-
-```mzsql
--- Drop the existing source
-DROP SOURCE your_source_name CASCADE;
-
--- Recreate it
-CREATE SOURCE your_source_name
-FROM POSTGRES CONNECTION your_pg_connection (PUBLICATION 'your_publication')
-FOR ALL TABLES;
-```
+You must **drop and recreate the source**. Dropping the source will also drop
+any dependent objects; be prepared to recreate them as part of the recovery process.
 
 ### Long-term fixes
 
@@ -152,14 +143,14 @@ WHERE id = 'your_source_id';
 **Best practices to avoid this error:**
 
 - Set `max_slot_wal_keep_size` to a value appropriate for your workload
-  (typically 5-10GB or more)
-- Size your source clusters appropriately for your data ingestion rate
-- Avoid pausing clusters for extended periods when sources are active
-- Monitor replication lag regularly
+  (typically 5-10GB or more).
+- Size your source clusters appropriately for your data ingestion rate.
+- Avoid pausing clusters for extended periods when sources are active.
+- Monitor replication lag regularly.
 - Consider limiting initial snapshot size by using `FOR TABLES` instead of
-  `FOR ALL TABLES` if you have very large databases
+  `FOR ALL TABLES` if you have very large databases.
 - If using a managed PostgreSQL provider, verify their replication slot and WAL
-  retention policies
+  retention policies.
 
 ## Provider-specific considerations
 
@@ -168,9 +159,9 @@ WHERE id = 'your_source_id';
 Neon has been observed to have more aggressive WAL cleanup policies. If you're
 using Neon:
 
-- Monitor replication lag more frequently
-- Consider using a dedicated Neon branch for replication
-- Contact Neon support about their replication slot retention policies
+- Monitor replication lag more frequently.
+- Consider using a dedicated Neon branch for replication.
+- Contact Neon support about their replication slot retention policies.
 
 ### Amazon RDS
 
