@@ -5,6 +5,7 @@ menu:
   main:
     parent: "monitor"
     weight: 15
+canonical: "/docs/manage/monitor/self-managed/"
 ---
 
 After setting up a monitoring tool, it is important to configure alert rules. Alert rules send a notification when a metric surpasses a threshold. This will help you prevent operational incidents.
