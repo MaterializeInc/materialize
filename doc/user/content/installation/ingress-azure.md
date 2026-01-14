@@ -2,7 +2,7 @@
 title: "Ingress guide: Azure"
 description: "How to access Self-managed Materialize deployment on Azure"
 draft: true
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 

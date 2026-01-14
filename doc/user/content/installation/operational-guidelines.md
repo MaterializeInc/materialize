@@ -8,7 +8,7 @@ menu:
     parent: "installation"
     weight: 80
     identifier: "sm-operational-guidelines"
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 ## Recommended instance types

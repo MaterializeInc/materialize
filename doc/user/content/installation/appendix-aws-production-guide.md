@@ -2,7 +2,7 @@
 title: "Production guide"
 description: "Production guide for Self-Managed Materialize AWS deployment."
 draft: true
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 
 ---
 

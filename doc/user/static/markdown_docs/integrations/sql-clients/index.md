@@ -147,7 +147,7 @@ To connect to a specific
 [cluster](/docs/self-managed/v25.2/concepts/clusters), you must define a
 bootstrap query in the connection initialization settings.
 
-  
+
 
 1.  Click on **Connection details**.
 

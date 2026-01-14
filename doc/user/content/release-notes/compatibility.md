@@ -7,7 +7,7 @@ menu:
     identifier: "release-compatibility"
     parent: "release-notes"
     weight: 10
-canonical: "/docs/releases/"
+canonical: "https://materialize.com/docs/releases/"
 ---
 
 ### Materialize Operator

@@ -8,7 +8,7 @@ menu:
     parent: "installation"
     identifier: "appendix-terraforms"
     weight: 100
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 To help you get started, Materialize provides some template Terraforms.

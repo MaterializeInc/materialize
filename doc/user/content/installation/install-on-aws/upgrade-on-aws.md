@@ -6,7 +6,7 @@ menu:
     parent: "install-on-aws"
     identifier: "upgrade-on-aws"
     weight: 10
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first

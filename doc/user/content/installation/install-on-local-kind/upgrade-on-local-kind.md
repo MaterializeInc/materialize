@@ -5,7 +5,7 @@ menu:
   main:
     parent: "install-on-local-kind"
     identifier: "upgrade-on-local-kind"
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first

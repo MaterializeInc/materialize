@@ -13,7 +13,7 @@ menu:
     name: Access control
     identifier: 'access-control'
     weight: 10
-canonical: "/docs/security/self-managed/"
+canonical: "https://materialize.com/docs/security/self-managed/"
 ---
 
 {{< note >}}

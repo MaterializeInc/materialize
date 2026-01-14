@@ -72,7 +72,7 @@ selectors:
   - name: exclude_sources_and_sinks
     description: >
       Exclude models that use source or sink materializations in the command
-      invocation.      
+      invocation.
     default: true
     definition:
       union:

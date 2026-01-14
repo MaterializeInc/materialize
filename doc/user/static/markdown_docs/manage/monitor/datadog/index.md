@@ -132,7 +132,7 @@ which has been tried and tested in production environments.
                     cluster_id::text AS cluster_id,
                     memory_percent::float AS memory_percent
                  FROM mz_cluster_replicas r
-                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;             
+                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
     ```
 
     </div>
@@ -203,7 +203,7 @@ indicators defined in the sample `config.yml`.
     corner, and select **Import dashboard JSON**. Copy and paste the
     contents of the provided sample `.json` file.
 
-      
+
     <img
     src="https://user-images.githubusercontent.com/11491779/216036715-9a4b4db7-8f93-4b6a-ac21-f7eb5a01d151.png"
     width="1728" alt="Template Datadog monitoring dashboard" />

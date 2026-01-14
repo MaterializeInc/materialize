@@ -5,6 +5,7 @@ menu:
   main:
     parent: "monitor"
     weight: 5
+canonical: "https://materialize.com/docs/manage/monitor/self-managed/"
 ---
 
 This guide walks you through the steps required to monitor the performance and

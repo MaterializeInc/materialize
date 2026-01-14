@@ -8,7 +8,7 @@ menu:
     weight: 50
 aliases:
   - /installation/install-on-gcp/appendix-gcp-provider-configuration
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 ## Required variables

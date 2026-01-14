@@ -64,7 +64,7 @@ troubleshooting](/docs/self-managed/v25.2/transform-data/dataflow-troubleshootin
 guide.
 
 *Do you have multiple materialized views chained on top of each other?
-Are you seeing small amounts of lag?*  
+Are you seeing small amounts of lag?*
 Tip: avoid intermediary materialized views where not necessary. Each
 chained materialized view incurs a small amount of processing lag from
 the previous one.
