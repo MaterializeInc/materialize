@@ -16,6 +16,12 @@
   section = ["skill"]
   page = ["skill"]
 
+[outputFormats.HTML]
+disable = true
+
+[outputFormats.RSS]
+disable = true
+
 # Exclude static files by excluding everything in the static mount
 [[module.mounts]]
   source = "static"
