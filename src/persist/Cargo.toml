@@ -40,6 +40,8 @@ deadpool-postgres = "0.10.3"
 differential-dataflow = "0.18.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.31"
+google-cloud-gax = "1.4.0"
+google-cloud-storage = "1.5.0"
 itertools = "0.14.0"
 md-5 = "0.10.6"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }

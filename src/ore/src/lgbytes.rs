@@ -98,6 +98,8 @@ pub struct LgBytesMetrics {
     pub persist_azure: LgBytesOpMetrics,
     /// Metrics for the "persist_arrow" usage of lgalloc bytes.
     pub persist_arrow: LgBytesOpMetrics,
+    /// Metrics for the "persist_gcs" usage of lgalloc bytes.
+    pub persist_gcs: LgBytesOpMetrics,
 }
 
 /// Metrics for an individual usage of lgalloc bytes.
@@ -191,6 +193,7 @@ impl LgBytesMetrics {
             persist_s3: op("persist_s3"),
             persist_azure: op("persist_azure"),
             persist_arrow: op("persist_arrow"),
+            persist_gcs: op("persist_gcs"),
         }
     }
 }

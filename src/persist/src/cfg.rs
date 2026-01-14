@@ -23,6 +23,7 @@ use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
 use crate::file::{FileBlob, FileBlobConfig};
+use crate::gcs::{GcsBlob, GcsBlobConfig};
 use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
@@ -51,6 +52,8 @@ pub enum BlobConfig {
     Mem(bool),
     /// Config for [AzureBlob].
     Azure(AzureBlobConfig),
+    /// Config for [GcsBlob].
+    Gcs(GcsBlobConfig),
     #[cfg(feature = "turmoil")]
     /// Config for [crate::turmoil::TurmoilBlob].
     Turmoil(crate::turmoil::BlobConfig),
@@ -77,6 +80,7 @@ impl BlobConfig {
             BlobConfig::File(config) => Ok(Arc::new(FileBlob::open(config).await?)),
             BlobConfig::S3(config) => Ok(Arc::new(S3Blob::open(config).await?)),
             BlobConfig::Azure(config) => Ok(Arc::new(AzureBlob::open(config).await?)),
+            BlobConfig::Gcs(config) => Ok(Arc::new(GcsBlob::open(config).await?)),
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
             }
@@ -142,6 +146,22 @@ impl BlobConfig {
                 .await?;
 
                 Ok(BlobConfig::S3(config))
+            }
+            "gcs" => {
+                let bucket = url
+                    .host()
+                    .ok_or_else(|| anyhow!("missing bucket: {}", &url.as_str()))?
+                    .to_string();
+                let prefix = url
+                    .path()
+                    .strip_prefix('/')
+                    .unwrap_or_else(|| url.path())
+                    .to_string();
+
+                query_params.clear();
+                let config = GcsBlobConfig::new(bucket, prefix, metrics, cfg).await?;
+
+                Ok(BlobConfig::Gcs(config))
             }
             "mem" => {
                 if !cfg!(debug_assertions) {
