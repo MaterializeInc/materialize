@@ -1518,3 +1518,232 @@ fn client_exchange_data() {
     is_exchange_data::<ExchangeableBatchPart<u64>>();
     is_exchange_data::<ExchangeableBatchPart<u64>>();
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use mz_ore::metrics::MetricsRegistry;
+
+    use crate::async_runtime::IsolatedRuntime;
+
+    /// Simulates CPU-bound work similar to blob decoding.
+    /// This function does busy work without yielding to simulate
+    /// what happens during synchronous decode operations.
+    ///
+    /// Returns the duration of the work for verification.
+    fn simulate_decode_work(target_duration: Duration) -> Duration {
+        let start = Instant::now();
+        let mut sum: u64 = 0;
+        let mut i: u64 = 0;
+
+        // Keep doing work until we've spent the target duration
+        while start.elapsed() < target_duration {
+            // Busy work that doesn't yield - simulate parquet/arrow decoding
+            for _ in 0..10000 {
+                sum = sum.wrapping_add(i.wrapping_mul(7919));
+                i = i.wrapping_add(1);
+            }
+            // Prevent compiler from optimizing away
+            std::hint::black_box(sum);
+        }
+
+        start.elapsed()
+    }
+
+    /// Test demonstrating that synchronous CPU-bound work on the main runtime
+    /// can block other tasks (like heartbeats) from running.
+    ///
+    /// This test reproduces the conditions that lead to persist reader lease
+    /// expirations when blob decoding blocks the tokio runtime.
+    ///
+    /// The hypothesis:
+    /// - Blob decoding is synchronous and runs on the main runtime
+    /// - Multiple concurrent decode operations can saturate runtime workers
+    /// - When workers are saturated, heartbeat tasks can't get scheduled
+    /// - After 15 minutes, leases expire and GC deletes blobs
+    ///
+    /// Note: This test uses a single-threaded runtime to make blocking
+    /// deterministic. In production, multi-threaded runtimes may mask the
+    /// issue until enough concurrent decodes saturate all workers.
+    #[mz_ore::test]
+    fn decode_blocking_starves_heartbeat_task() {
+        // Use a SINGLE-THREADED runtime to make the blocking behavior deterministic
+        // With only one worker thread, CPU-bound tasks WILL block other tasks
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let heartbeat_count = Arc::new(AtomicU64::new(0));
+            let max_heartbeat_delay_ms = Arc::new(AtomicU64::new(0));
+            let stop_flag = Arc::new(AtomicBool::new(false));
+
+            // Spawn a "heartbeat" task that should run every 10ms
+            let heartbeat_handle = {
+                let heartbeat_count = Arc::clone(&heartbeat_count);
+                let max_heartbeat_delay_ms = Arc::clone(&max_heartbeat_delay_ms);
+                let stop_flag = Arc::clone(&stop_flag);
+
+                mz_ore::task::spawn(|| "test_heartbeat", async move {
+                    let expected_interval = Duration::from_millis(10);
+                    let mut last_run = Instant::now();
+
+                    while !stop_flag.load(Ordering::Relaxed) {
+                        tokio::time::sleep(expected_interval).await;
+
+                        let actual_delay = last_run.elapsed();
+                        let delay_ms = actual_delay.as_millis() as u64;
+
+                        // Update max delay if this one is worse
+                        let _ = max_heartbeat_delay_ms.fetch_max(delay_ms, Ordering::Relaxed);
+
+                        heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                        last_run = Instant::now();
+                    }
+                })
+            };
+
+            // Spawn multiple "decode" tasks that do CPU-bound work without yielding
+            // This simulates what happens when decode_batch_part_blob runs
+            //
+            // We use spawn_blocking-style synchronous work to simulate the actual
+            // decode behavior. Each task will block for 200ms.
+            let decode_handles: Vec<_> = (0..4)
+                .map(|i| {
+                    mz_ore::task::spawn(|| format!("test_decode_{}", i), async move {
+                        // Simulate CPU-bound decode work that takes 200ms
+                        // This is synchronous work that doesn't yield
+                        let duration = simulate_decode_work(Duration::from_millis(200));
+                        println!("Decode task {} completed in {:?}", i, duration);
+                    })
+                })
+                .collect();
+
+            // Wait for all decode tasks to complete
+            for handle in decode_handles {
+                handle.await;
+            }
+
+            // Stop the heartbeat task
+            stop_flag.store(true, Ordering::Relaxed);
+            let _ = heartbeat_handle.await;
+
+            let final_heartbeat_count = heartbeat_count.load(Ordering::Relaxed);
+            let final_max_delay_ms = max_heartbeat_delay_ms.load(Ordering::Relaxed);
+
+            // In a healthy runtime, heartbeats should run ~every 10ms
+            // With blocking decode work, we expect significant delays
+            println!(
+                "Heartbeat count: {}, Max delay: {}ms",
+                final_heartbeat_count, final_max_delay_ms
+            );
+
+            // If decode work blocks the runtime, we expect:
+            // - Fewer heartbeats than expected (decode takes ~400ms total)
+            // - Max delay significantly higher than 10ms
+            //
+            // On a single-threaded runtime, we expect the heartbeat to be
+            // completely blocked during decode operations.
+            assert!(
+                final_max_delay_ms > 50,
+                "Expected heartbeat delays > 50ms due to blocking decode work, got {}ms. \
+                 This suggests decode work is not blocking as expected.",
+                final_max_delay_ms
+            );
+        });
+    }
+
+    /// Test demonstrating that running CPU-bound work on an isolated runtime
+    /// does NOT block tasks on the main runtime.
+    ///
+    /// This is the pattern used for encoding (which works correctly).
+    /// Decoding should follow the same pattern.
+    #[mz_ore::test]
+    fn isolated_runtime_does_not_block_heartbeat() {
+        // Use a SINGLE-THREADED main runtime - the heartbeat runs here
+        // But decode work runs on the isolated runtime (separate threads)
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let isolated = IsolatedRuntime::new(&MetricsRegistry::new(), Some(2));
+
+            let heartbeat_count = Arc::new(AtomicU64::new(0));
+            let max_heartbeat_delay_ms = Arc::new(AtomicU64::new(0));
+            let stop_flag = Arc::new(AtomicBool::new(false));
+
+            // Spawn a "heartbeat" task on the MAIN runtime
+            let heartbeat_handle = {
+                let heartbeat_count = Arc::clone(&heartbeat_count);
+                let max_heartbeat_delay_ms = Arc::clone(&max_heartbeat_delay_ms);
+                let stop_flag = Arc::clone(&stop_flag);
+
+                mz_ore::task::spawn(|| "test_heartbeat_isolated", async move {
+                    let expected_interval = Duration::from_millis(10);
+                    let mut last_run = Instant::now();
+
+                    while !stop_flag.load(Ordering::Relaxed) {
+                        tokio::time::sleep(expected_interval).await;
+
+                        let actual_delay = last_run.elapsed();
+                        let delay_ms = actual_delay.as_millis() as u64;
+
+                        let _ = max_heartbeat_delay_ms.fetch_max(delay_ms, Ordering::Relaxed);
+
+                        heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                        last_run = Instant::now();
+                    }
+                })
+            };
+
+            // Spawn CPU-bound "decode" tasks on the ISOLATED runtime
+            // This is the pattern used for encoding
+            let decode_handles: Vec<_> = (0..4)
+                .map(|i| {
+                    isolated.spawn_named(
+                        || format!("test_decode_isolated_{}", i),
+                        async move {
+                            let duration = simulate_decode_work(Duration::from_millis(200));
+                            println!("Isolated decode task {} completed in {:?}", i, duration);
+                        },
+                    )
+                })
+                .collect();
+
+            // Wait for all decode tasks to complete
+            for handle in decode_handles {
+                handle.await;
+            }
+
+            // Stop the heartbeat task
+            stop_flag.store(true, Ordering::Relaxed);
+            let _ = heartbeat_handle.await;
+
+            let final_heartbeat_count = heartbeat_count.load(Ordering::Relaxed);
+            let final_max_delay_ms = max_heartbeat_delay_ms.load(Ordering::Relaxed);
+
+            println!(
+                "Heartbeat count (isolated): {}, Max delay: {}ms",
+                final_heartbeat_count, final_max_delay_ms
+            );
+
+            // When decode work runs on isolated runtime, heartbeats should
+            // run on schedule (~10ms intervals) with minimal delays
+            //
+            // Note: We allow some slack because the test runtime itself
+            // may have scheduling jitter
+            assert!(
+                final_max_delay_ms < 100,
+                "Expected heartbeat delays < 100ms when decode runs on isolated runtime, got {}ms. \
+                 This suggests the isolated runtime is not properly isolating work.",
+                final_max_delay_ms
+            );
+        });
+    }
+}
