@@ -366,6 +366,7 @@ impl PersistClient {
             schemas,
             reader_state.since,
             heartbeat_ts,
+            Arc::clone(&self.isolated_runtime),
         )
         .await;
 
@@ -404,6 +405,7 @@ impl PersistClient {
             read_schemas,
             schema_cache,
             is_transient,
+            isolated_runtime: Arc::clone(&self.isolated_runtime),
             _phantom: PhantomData,
         };
 
@@ -663,6 +665,7 @@ impl PersistClient {
             batches,
             should_fetch_part,
             memory_budget_bytes,
+            Arc::clone(&self.isolated_runtime),
         )
     }
 

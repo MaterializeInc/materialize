@@ -1007,6 +1007,7 @@ where
             },
             None,
             prefetch_budget_bytes,
+            Arc::clone(&isolated_runtime),
         );
 
         for (desc, meta, parts) in runs {

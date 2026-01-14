@@ -40,6 +40,7 @@ use tokio::runtime::Handle;
 use tracing::{Instrument, debug_span, warn};
 use uuid::Uuid;
 
+use crate::async_runtime::IsolatedRuntime;
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
 use crate::fetch::FetchConfig;
@@ -483,6 +484,7 @@ where
             &self.handle.reader_id,
             self.handle.read_schemas.clone(),
             &mut self.handle.schema_cache,
+            Arc::clone(&self.handle.isolated_runtime),
         )
         .await;
         fetched_part
@@ -531,6 +533,7 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
@@ -563,6 +566,7 @@ where
         read_schemas: Schemas<K, V>,
         since: Antichain<T>,
         last_heartbeat: EpochMillis,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Self {
         let schema_cache = machine.applier.schema_cache();
         let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
@@ -575,6 +579,7 @@ where
             reader_id: reader_id.clone(),
             read_schemas,
             schema_cache,
+            isolated_runtime,
             since,
             last_heartbeat,
             leased_seqnos: BTreeMap::new(),
@@ -824,6 +829,7 @@ where
             self.read_schemas.clone(),
             reader_state.since,
             heartbeat_ts,
+            Arc::clone(&self.isolated_runtime),
         )
         .await;
         new_reader
@@ -1037,6 +1043,7 @@ where
             lease,
             should_fetch_part,
             COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+            Arc::clone(&self.isolated_runtime),
         )
     }
 
@@ -1053,6 +1060,7 @@ where
         lease: L,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
         memory_budget_bytes: usize,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
         let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
         let filter = FetchBatchFilter::Snapshot {
@@ -1071,6 +1079,7 @@ where
             filter,
             None,
             memory_budget_bytes,
+            isolated_runtime,
         );
         for batch in batches {
             for (meta, run) in batch.runs() {
@@ -1186,6 +1195,7 @@ where
         let schemas = self.read_schemas.clone();
         let mut schema_cache = self.schema_cache.clone();
         let persist_cfg = self.cfg.clone();
+        let isolated_runtime = Arc::clone(&self.isolated_runtime);
         let stream = async_stream::stream! {
             for part in snap {
                 let mut fetched_part = fetch_leased_part(
@@ -1198,6 +1208,7 @@ where
                     &reader_id,
                     schemas.clone(),
                     &mut schema_cache,
+                    Arc::clone(&isolated_runtime),
                 )
                 .await;
 

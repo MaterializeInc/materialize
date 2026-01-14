@@ -53,6 +53,7 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{
     BatchPart, HollowBatchPart, ProtoHollowBatchPart, ProtoInlineBatchPart,
 };
+use crate::async_runtime::IsolatedRuntime;
 use crate::read::LeasedReaderId;
 use crate::schema::{PartMigration, SchemaCache};
 
@@ -148,6 +149,7 @@ where
     pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
     pub(crate) is_transient: bool,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
@@ -204,26 +206,37 @@ where
                     .acquire_fetch_permits(x.encoded_size_bytes)
                     .await;
                 let read_metrics = if self.is_transient {
-                    &self.metrics.read.unindexed
+                    self.metrics.read.unindexed.clone()
                 } else {
-                    &self.metrics.read.batch_fetcher
+                    self.metrics.read.batch_fetcher.clone()
                 };
-                let buf = fetch_batch_part_blob(
+                let blob_bytes = fetch_batch_part_blob(
                     &shard_id,
                     self.blob.as_ref(),
                     &self.metrics,
                     &self.shard_metrics,
-                    read_metrics,
+                    &read_metrics,
                     x,
                 )
                 .await;
-                let buf = match buf {
+                let blob_bytes = match blob_bytes {
                     Ok(buf) => buf,
                     Err(key) => return Ok(Err(key)),
                 };
+                // Decode on the isolated runtime to avoid blocking heartbeat tasks
+                let encoded_part = decode_batch_part_blob(
+                    self.cfg.fetch_config.clone(),
+                    Arc::clone(&self.metrics),
+                    read_metrics,
+                    desc.clone(),
+                    x.clone(),
+                    blob_bytes,
+                    Arc::clone(&self.isolated_runtime),
+                )
+                .await;
                 let buf = FetchedBlobBuf::Hollow {
-                    buf,
-                    part: x.clone(),
+                    encoded_part,
+                    stats: x.stats.clone(),
                 };
                 (buf, Some(Arc::new(fetch_permit)))
             }
@@ -322,6 +335,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     reader_id: &LeasedReaderId,
     read_schemas: Schemas<K, V>,
     schema_cache: &mut SchemaCache<K, V, T, D>,
+    isolated_runtime: Arc<IsolatedRuntime>,
 ) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
@@ -334,11 +348,12 @@ where
         &fetch_config,
         &part.shard_id,
         blob,
-        &metrics,
+        Arc::clone(&metrics),
         shard_metrics,
         read_metrics,
         &part.desc,
         &part.part,
+        isolated_runtime,
     )
     .await
     .unwrap_or_else(|blob_key| {
@@ -401,59 +416,72 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     Ok(value)
 }
 
-pub(crate) fn decode_batch_part_blob<T>(
-    cfg: &FetchConfig,
-    metrics: &Metrics,
-    read_metrics: &ReadMetrics,
+/// Decode a batch part blob on the isolated runtime to avoid blocking heartbeat tasks.
+///
+/// This is the counterpart to encoding in `batch.rs` which also uses the isolated runtime.
+/// Running CPU-intensive decode work on a separate runtime prevents it from blocking
+/// other tasks on the main runtime (like heartbeat tasks that maintain reader leases).
+pub(crate) async fn decode_batch_part_blob<T>(
+    cfg: FetchConfig,
+    metrics: Arc<Metrics>,
+    read_metrics: ReadMetrics,
     registered_desc: Description<T>,
-    part: &HollowBatchPart<T>,
-    buf: &SegmentedBytes,
+    part: HollowBatchPart<T>,
+    buf: SegmentedBytes,
+    isolated_runtime: Arc<IsolatedRuntime>,
 ) -> EncodedPart<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Send + Sync,
 {
-    trace_span!("fetch_batch::decode").in_scope(|| {
-        let parsed = metrics
-            .codecs
-            .batch
-            .decode(|| BlobTraceBatchPart::decode(buf, &metrics.columnar))
-            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
-            // We received a State that we couldn't decode. This could happen if
-            // persist messes up backward/forward compatibility, if the durable
-            // data was corrupted, or if operations messes up deployment. In any
-            // case, fail loudly.
-            .expect("internal error: invalid encoded state");
-        read_metrics
-            .part_goodbytes
-            .inc_by(u64::cast_from(parsed.updates.goodbytes()));
-        EncodedPart::from_hollow(cfg, read_metrics.clone(), registered_desc, part, parsed)
-    })
+    isolated_runtime
+        .spawn_named(|| "fetch::decode_part", async move {
+            trace_span!("fetch_batch::decode").in_scope(|| {
+                let parsed = metrics
+                    .codecs
+                    .batch
+                    .decode(|| BlobTraceBatchPart::decode(&buf, &metrics.columnar))
+                    .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
+                    // We received a State that we couldn't decode. This could happen if
+                    // persist messes up backward/forward compatibility, if the durable
+                    // data was corrupted, or if operations messes up deployment. In any
+                    // case, fail loudly.
+                    .expect("internal error: invalid encoded state");
+                read_metrics
+                    .part_goodbytes
+                    .inc_by(u64::cast_from(parsed.updates.goodbytes()));
+                EncodedPart::from_hollow(&cfg, read_metrics, registered_desc, &part, parsed)
+            })
+        })
+        .await
 }
 
 pub(crate) async fn fetch_batch_part<T>(
     cfg: &FetchConfig,
     shard_id: &ShardId,
     blob: &dyn Blob,
-    metrics: &Metrics,
+    metrics: Arc<Metrics>,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     registered_desc: &Description<T>,
     part: &HollowBatchPart<T>,
+    isolated_runtime: Arc<IsolatedRuntime>,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Send + Sync,
 {
     let buf =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
-    let part = decode_batch_part_blob(
-        cfg,
+        fetch_batch_part_blob(shard_id, blob, &metrics, shard_metrics, read_metrics, part).await?;
+    let decoded = decode_batch_part_blob(
+        cfg.clone(),
         metrics,
-        read_metrics,
+        read_metrics.clone(),
         registered_desc.clone(),
-        part,
-        &buf,
-    );
-    Ok(part)
+        part.clone(),
+        buf,
+        isolated_runtime,
+    )
+    .await;
+    Ok(decoded)
 }
 
 /// This represents the lease of a seqno. It's generally paired with some external state,
@@ -671,10 +699,13 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
 
 #[derive(Debug, Clone)]
 enum FetchedBlobBuf<T> {
+    /// A hollow batch part that has been fetched from blob storage and decoded.
+    /// The decode work was done on the isolated runtime to avoid blocking heartbeat tasks.
     Hollow {
-        buf: SegmentedBytes,
-        part: HollowBatchPart<T>,
+        encoded_part: EncodedPart<T>,
+        stats: Option<LazyPartStats>,
     },
+    /// An inline batch part embedded in the state.
     Inline {
         desc: Description<T>,
         updates: LazyInlineBatchPart,
@@ -724,25 +755,22 @@ where
     }
 }
 
-impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64 + Sync, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
     pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
         self.parse_internal(&self.fetch_config)
     }
 
     /// Partially decodes this blob into a [FetchedPart].
+    ///
+    /// For hollow parts, the heavy decode work has already been done on the
+    /// isolated runtime in `BatchFetcher::fetch_leased_part`. This method
+    /// just wraps the pre-decoded data in the appropriate types.
     pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
-            FetchedBlobBuf::Hollow { buf, part } => {
-                let parsed = decode_batch_part_blob(
-                    cfg,
-                    &self.metrics,
-                    &self.read_metrics,
-                    self.registered_desc.clone(),
-                    part,
-                    buf,
-                );
-                (parsed, part.stats.as_ref())
+            FetchedBlobBuf::Hollow { encoded_part, stats } => {
+                // Decode work was already done on isolated runtime in fetch_leased_part
+                (encoded_part.clone(), stats.as_ref())
             }
             FetchedBlobBuf::Inline {
                 desc,
@@ -778,7 +806,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     /// Decodes and returns the pushdown stats for this part, if known.
     pub fn stats(&self) -> Option<PartStats> {
         match &self.buf {
-            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Hollow { stats, .. } => stats.as_ref().map(|x| x.decode()),
             FetchedBlobBuf::Inline { .. } => None,
         }
     }
@@ -813,7 +841,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     _phantom: PhantomData<fn() -> D>,
 }
 
-impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64 + Sync, D> FetchedPart<K, V, T, D> {
     pub(crate) fn new(
         metrics: Arc<Metrics>,
         part: EncodedPart<T>,
@@ -972,7 +1000,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 
 /// A [Blob] object that has been fetched, but has no associated decoding
 /// logic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct EncodedPart<T> {
     metrics: ReadMetrics,
     registered_desc: Description<T>,
@@ -1164,17 +1192,18 @@ where
 
 impl<T> EncodedPart<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Send + Sync,
 {
     pub async fn fetch(
         cfg: &FetchConfig,
         shard_id: &ShardId,
         blob: &dyn Blob,
-        metrics: &Metrics,
+        metrics: Arc<Metrics>,
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
         registered_desc: &Description<T>,
         part: &BatchPart<T>,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Result<Self, BlobKey> {
         match part {
             BatchPart::Hollow(x) => {
@@ -1187,6 +1216,7 @@ where
                     read_metrics,
                     registered_desc,
                     x,
+                    isolated_runtime,
                 )
                 .await
             }
@@ -1196,7 +1226,7 @@ where
                 ..
             } => Ok(EncodedPart::from_inline(
                 cfg,
-                metrics,
+                &metrics,
                 read_metrics.clone(),
                 registered_desc.clone(),
                 updates,

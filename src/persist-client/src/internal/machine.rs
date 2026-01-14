@@ -1933,11 +1933,12 @@ pub mod datadriven {
                 &FetchConfig::from_persist_config(&datadriven.client.cfg),
                 &datadriven.shard_id,
                 datadriven.client.blob.as_ref(),
-                datadriven.client.metrics.as_ref(),
+                Arc::clone(&datadriven.client.metrics),
                 datadriven.machine.applier.shard_metrics.as_ref(),
                 &datadriven.client.metrics.read.batch_fetcher,
                 &batch.batch.desc,
                 part,
+                Arc::clone(&datadriven.client.isolated_runtime),
             )
             .await
             .expect("invalid batch part");
@@ -2224,11 +2225,12 @@ pub mod datadriven {
                         &FetchConfig::from_persist_config(&datadriven.client.cfg),
                         &datadriven.shard_id,
                         datadriven.client.blob.as_ref(),
-                        datadriven.client.metrics.as_ref(),
+                        Arc::clone(&datadriven.client.metrics),
                         datadriven.machine.applier.shard_metrics.as_ref(),
                         &datadriven.client.metrics.read.batch_fetcher,
                         &batch.desc,
                         part,
+                        Arc::clone(&datadriven.client.isolated_runtime),
                     )
                     .await
                     .expect("invalid batch part");

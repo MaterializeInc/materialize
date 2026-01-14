@@ -383,6 +383,9 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
     // This is odd, but advance by the upper to get maximal consolidation.
     let as_of = state.upper().borrow();
 
+    // Create an isolated runtime for CLI usage
+    let isolated_runtime = Arc::new(IsolatedRuntime::new(&MetricsRegistry::new(), None));
+
     let mut parts = Vec::new();
     for batch in state.collections.trace.batches() {
         let mut part_stream =
@@ -393,11 +396,12 @@ async fn consolidated_size(args: &StateArgs) -> Result<(), anyhow::Error> {
                 &FetchConfig::from_persist_config(cfg),
                 &shard_id,
                 &*state_versions.blob,
-                &state_versions.metrics,
+                Arc::clone(&state_versions.metrics),
                 &shard_metrics,
                 &state_versions.metrics.read.snapshot,
                 &batch.desc,
                 &part,
+                Arc::clone(&isolated_runtime),
             )
             .await
             .expect("part exists");

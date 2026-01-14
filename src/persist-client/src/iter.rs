@@ -39,6 +39,7 @@ use timely::progress::Timestamp;
 use tracing::{Instrument, debug_span};
 
 use crate::ShardId;
+use crate::async_runtime::IsolatedRuntime;
 use crate::fetch::{EncodedPart, FetchBatchFilter, FetchConfig};
 use crate::internal::encoding::Schemas;
 use crate::internal::metrics::{ReadMetrics, ShardMetrics};
@@ -206,15 +207,16 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
 
 type FetchResult<T> = Result<EncodedPart<T>, HollowRun<T>>;
 
-impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
+impl<T: Codec64 + Timestamp + Lattice + Sync> FetchData<T> {
     async fn fetch(
         self,
         cfg: &FetchConfig,
         shard_id: ShardId,
         blob: &dyn Blob,
-        metrics: &Metrics,
+        metrics: Arc<Metrics>,
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> anyhow::Result<FetchResult<T>> {
         match self.part {
             RunPart::Single(part) => {
@@ -227,6 +229,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
                     read_metrics,
                     &self.part_desc,
                     &part,
+                    isolated_runtime,
                 )
                 .await
                 .map_err(|blob_key| anyhow!("missing unleased key {blob_key}"))?;
@@ -234,7 +237,7 @@ impl<T: Codec64 + Timestamp + Lattice> FetchData<T> {
             }
             RunPart::Many(run_ref) => {
                 let runs = run_ref
-                    .get(shard_id, blob, metrics)
+                    .get(shard_id, blob, &metrics)
                     .await
                     .ok_or_else(|| anyhow!("missing run ref {}", run_ref.key))?;
                 Ok(Err(runs))
@@ -281,7 +284,7 @@ enum ConsolidationPart<T, D> {
     },
 }
 
-impl<T: Timestamp + Codec64 + Lattice, D: Codec64> ConsolidationPart<T, D> {
+impl<T: Timestamp + Codec64 + Lattice + Sync, D: Codec64> ConsolidationPart<T, D> {
     pub(crate) fn from_encoded(
         part: EncodedPart<T>,
         force_reconsolidation: bool,
@@ -355,6 +358,7 @@ pub(crate) struct Consolidator<T, D, Sort: RowSort<T, D>> {
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
     read_metrics: Arc<ReadMetrics>,
+    isolated_runtime: Arc<IsolatedRuntime>,
     runs: Vec<VecDeque<(ConsolidationPart<T, D>, usize)>>,
     filter: FetchBatchFilter<T>,
     budget: usize,
@@ -409,6 +413,7 @@ where
         filter: FetchBatchFilter<T>,
         lower_bound: Option<LowerBound<T>>,
         prefetch_budget_bytes: usize,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Self {
         Self {
             context,
@@ -419,6 +424,7 @@ where
             blob,
             read_metrics: Arc::new(read_metrics),
             shard_metrics,
+            isolated_runtime,
             runs: vec![],
             filter,
             budget: prefetch_budget_bytes,
@@ -604,9 +610,10 @@ where
                                     &self.cfg,
                                     self.shard_id,
                                     &*self.blob,
-                                    &*self.metrics,
+                                    Arc::clone(&self.metrics),
                                     &*self.shard_metrics,
                                     &self.read_metrics,
+                                    Arc::clone(&self.isolated_runtime),
                                 )
                                 .await
                         }
@@ -782,14 +789,16 @@ where
                         let shard_metrics = Arc::clone(&self.shard_metrics);
                         let read_metrics = Arc::clone(&self.read_metrics);
                         let fetch_config = self.cfg.clone();
+                        let isolated_runtime = Arc::clone(&self.isolated_runtime);
                         async move {
                             data.fetch(
                                 &fetch_config,
                                 shard_id,
                                 &*blob,
-                                &*metrics,
+                                metrics,
                                 &*shard_metrics,
                                 &*read_metrics,
+                                isolated_runtime,
                             )
                             .instrument(span)
                             .await
@@ -1181,6 +1190,7 @@ mod tests {
                     budget: 0,
                     drop_stash: None,
                     lower_bound: Some(lower_bound),
+                    isolated_runtime: Arc::new(IsolatedRuntime::new_for_tests()),
                 };
 
                 let mut out = vec![];
@@ -1246,6 +1256,7 @@ mod tests {
                 validate_bounds_on_read: true,
             };
 
+            let isolated_runtime = Arc::new(IsolatedRuntime::new_for_tests());
             let mut consolidator: Consolidator<u64, i64, StructuredSort<_, _, _, _>> =
                 Consolidator::new(
                     "test".to_string(),
@@ -1261,6 +1272,7 @@ mod tests {
                     },
                     None,
                     budget,
+                    isolated_runtime,
                 );
 
             for run in runs {
