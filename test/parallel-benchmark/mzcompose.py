@@ -818,6 +818,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenario for scenario in all_subclasses(Scenario) if scenario.enabled
         ]
 
+    scenarios.sort(key=lambda cls: cls.__name__)
     sharded_scenarios = buildkite.shard_list(scenarios, lambda s: s.name())
 
     if not sharded_scenarios:

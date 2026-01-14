@@ -248,6 +248,7 @@ steps:
         label: "Parallel Benchmark"
         depends_on: build-x86_64
         timeout_in_minutes: 120
+        parallelism: 2
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
