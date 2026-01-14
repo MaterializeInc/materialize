@@ -223,7 +223,9 @@ where
                     Ok(buf) => buf,
                     Err(key) => return Ok(Err(key)),
                 };
-                // Decode on the isolated runtime to avoid blocking heartbeat tasks
+                // Decode on the isolated runtime to avoid blocking heartbeat tasks.
+                // CPU-intensive decoding on the main runtime can starve heartbeats,
+                // causing reader lease expiration and "lost lease" errors.
                 let encoded_part = decode_batch_part_blob(
                     self.cfg.fetch_config.clone(),
                     Arc::clone(&self.metrics),
@@ -421,6 +423,22 @@ pub(crate) async fn fetch_batch_part_blob<T>(
 /// This is the counterpart to encoding in `batch.rs` which also uses the isolated runtime.
 /// Running CPU-intensive decode work on a separate runtime prevents it from blocking
 /// other tasks on the main runtime (like heartbeat tasks that maintain reader leases).
+///
+/// # Why IsolatedRuntime instead of spawn_blocking?
+///
+/// We use persist's [`IsolatedRuntime`] rather than [`tokio::task::spawn_blocking`] because:
+///
+/// 1. **Shutdown safety**: `spawn_blocking` closures cannot be aborted during runtime
+///    shutdown (they have no await points), but Tokio disables its timer during shutdown.
+///    This causes panics if the closure uses `tokio::time::sleep`. See PR #13955.
+///
+/// 2. **Thread count control**: The blocking thread pool can grow up to 512 threads,
+///    potentially pinning CPU to 100% and starving critical threads like the Coordinator.
+///
+/// 3. **Consistency**: This matches the pattern already used for encoding in `batch.rs`.
+///
+/// The `IsolatedRuntime` provides a dedicated, fixed-size thread pool with clean shutdown
+/// semantics. See [`crate::async_runtime::IsolatedRuntime`] for more details.
 pub(crate) async fn decode_batch_part_blob<T>(
     cfg: FetchConfig,
     metrics: Arc<Metrics>,
@@ -1551,6 +1569,23 @@ fn client_exchange_data() {
 
 #[cfg(test)]
 mod tests {
+    //! Tests demonstrating that CPU-bound decode work must run on the isolated runtime.
+    //!
+    //! # Background
+    //!
+    //! A production incident revealed that synchronous blob decoding on the main Tokio
+    //! runtime can starve heartbeat tasks. When heartbeats don't run for 15+ minutes,
+    //! reader leases expire, GC deletes blobs, and fetches fail with "lost lease?" errors.
+    //!
+    //! The fix moves decoding to persist's `IsolatedRuntime`, which runs on separate OS
+    //! threads. This keeps the main runtime responsive for heartbeats.
+    //!
+    //! These tests validate the fix by demonstrating:
+    //! 1. CPU-bound work on the main runtime DOES block heartbeats (the problem)
+    //! 2. CPU-bound work on the isolated runtime does NOT block heartbeats (the fix)
+    //!
+    //! See `decode_batch_part_blob` and `IsolatedRuntime` for implementation details.
+
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
