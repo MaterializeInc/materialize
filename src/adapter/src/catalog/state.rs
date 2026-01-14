@@ -171,6 +171,9 @@ pub struct CatalogState {
 }
 
 /// Keeps track of what expressions are cached or not during startup.
+/// It's also used during catalog transactions to avoid re-optimizing CREATE VIEW / CREATE MAT VIEW
+/// statements when going back and forth between durable catalog operations and in-memory catalog
+/// operations.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum LocalExpressionCache {
     /// The cache is being used.
