@@ -50,6 +50,12 @@ name = "Network configuration"
 parent = 'ingest-data'
 weight = 35
 
+[[menu.main]]
+identifier = "sizing"
+name = "Sizing"
+parent = 'ingest-data'
+weight= 40
+
 #
 # Transform data
 #
