@@ -5,6 +5,7 @@ menu:
   main:
     parent: access-control
     weight: 100
+canonical: "/docs/security/self-managed/"
 ---
 
 ## `Public` role

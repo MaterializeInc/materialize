@@ -6,6 +6,7 @@ menu:
     weight: 50
     name: "Release notes"
     identifier: "release-notes"
+canonical: "/docs/releases/"
 ---
 
 ## v25.2.16

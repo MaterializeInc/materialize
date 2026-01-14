@@ -6,6 +6,7 @@ menu:
     parent: "install-on-gcp"
     identifier: "upgrade-on-gcp"
     weight: 10
+canonical: "/docs/self-managed-deployments/"
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first

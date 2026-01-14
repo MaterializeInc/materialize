@@ -9,6 +9,7 @@ aliases:
   - /sql/builtin-roles/
   - /manage/access-control/manage-privileges/
   - /manage/access-control/rbac-tutorial/
+canonical: "/docs/security/self-managed/"
 ---
 
 In Materialize, role-based access control (RBAC) governs access to objects

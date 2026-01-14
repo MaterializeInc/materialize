@@ -62,7 +62,7 @@
   color="#4d7cfe"
 />
 
-{{ $canonical := replace .Permalink "self-managed/v25.2/" "" }}
+{{ $canonical := cond (isset .Params "canonical") .Params.canonical (replace .Permalink "self-managed/v25.2/" "") }}
 <link rel="canonical" href="{{ $canonical }}" />
 
 {{/* Include all JavaScript files here */}}

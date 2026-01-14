@@ -4,6 +4,7 @@ description: "Upgrade Materialize running locally on a minikube cluster."
 menu:
   main:
     parent: "install-on-local-minikube"
+canonical: "/docs/self-managed-deployments/"
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first

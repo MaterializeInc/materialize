@@ -5,6 +5,7 @@ menu:
   main:
     parent: "installation"
 draft: true
+canonical: "/docs/self-managed-deployments/"
 ---
 
 The following provides steps for upgrading the Materialize operator and

@@ -8,6 +8,7 @@ menu:
     weight: 50
 aliases:
   - /installation/install-on-azure/appendix-azure-provider-configuration
+canonical: "/docs/self-managed-deployments/"
 ---
 
 When using the root `main.tf` file from the [Materialize on Azure Terraform

@@ -9,6 +9,7 @@ menu:
     identifier: "install-on-local-minikube"
     weight: 15
 disable_list: true
+canonical: "/docs/self-managed-deployments/"
 ---
 
 {{% self-managed/materialize-components-sentence %}}

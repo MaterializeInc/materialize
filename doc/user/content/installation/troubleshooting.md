@@ -7,6 +7,7 @@ menu:
   main:
     parent: "installation"
     weight: 90
+canonical: "/docs/self-managed-deployments/"
 ---
 
 ## Troubleshooting Kubernetes

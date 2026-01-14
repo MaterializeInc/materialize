@@ -5,6 +5,7 @@ menu:
   main:
     parent: access-control
     weight: 30
+canonical: "/docs/security/self-managed/"
 ---
 
 This tutorial walks you through managing roles in Materialize with [Terraform](https://www.terraform.io/). By the end of this tutorial you will:

@@ -8,6 +8,7 @@ menu:
     weight: 50
 aliases:
   - /installation/install-on-aws/appendix-aws-provider-configuration
+canonical: "/docs/self-managed-deployments/"
 ---
 
 ## Required variables

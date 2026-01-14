@@ -8,6 +8,7 @@ menu:
     parent: "installation"
     weight: 80
     identifier: "sm-operational-guidelines"
+canonical: "/docs/self-managed-deployments/"
 ---
 
 ## Recommended instance types
