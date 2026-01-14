@@ -832,6 +832,8 @@ def upload_results_to_test_analytics(
 
     for scenario_cls in scenario_classes:
         scenario_name = scenario_cls.__name__
+        if scenario_name not in latest_report_by_scenario_name:
+            continue
         report = latest_report_by_scenario_name[scenario_name]
 
         result_entries.append(
