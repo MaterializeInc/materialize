@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 #
 # config.skill.toml - Configuration overlay for generating Claude skill output.
-# Use with: hugo --config config.toml,config.skill.toml
+# Use with: hugo --config config.toml,config.skill.toml --disableKinds sitemap,robotsTXT,taxonomy
 
 # Output only the skill format (markdown), not HTML
 [outputs]
@@ -16,7 +16,13 @@
   section = ["skill"]
   page = ["skill"]
 
+# Exclude static files by excluding everything in the static mount
+[[module.mounts]]
+  source = "static"
+  target = "static"
+  excludeFiles = ["**", "*"]
+
 # Skill-specific parameters
 [params]
   # Sections to exclude from skill generation
-  excludeFromSkill = ["releases", "self-managed"]
+  excludeFromSkill = ["releases", "self-managed", "about", "get-started"]
