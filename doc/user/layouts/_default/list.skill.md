@@ -1,17 +1,20 @@
 {{- /* List/section template for Claude skill output */ -}}
+{{- $excludedSections := .Site.Params.excludeFromSkill | default slice -}}
+{{- if not (in $excludedSections .Section) -}}
 # {{ .Title }}
 {{ if .Description }}
 {{ .Description }}
 {{ end }}
 
-{{ .RawContent }}
+{{ .Content }}
 
 {{ range .Pages }}
-{{ if not (in (slice "releases" "self-managed") .Section) }}
+{{- if not (in $excludedSections .Section) }}
 ---
 
 ## {{ .Title }}
 
-{{ .RawContent }}
+{{ .Content }}
+{{ end -}}
 {{ end }}
-{{ end }}
+{{- end -}}
