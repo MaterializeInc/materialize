@@ -7,7 +7,7 @@ menu:
     weight: 1
 aliases:
   - /manage/monitor/prometheus-community
-canonical: "/docs/manage/monitor/self-managed/"
+canonical: "https://materialize.com/docs/manage/monitor/self-managed/"
 ---
 
 {{< warning >}}

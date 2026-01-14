@@ -6,7 +6,7 @@ menu:
     weight: 50
     name: "Release notes"
     identifier: "release-notes"
-canonical: "/docs/releases/"
+canonical: "https://materialize.com/docs/releases/"
 ---
 
 ## v25.2.16

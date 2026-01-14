@@ -6,7 +6,7 @@ menu:
     identifier: "release-versioning"
     parent: "release-notes"
     weight: 50
-canonical: "/docs/releases/"
+canonical: "https://materialize.com/docs/releases/"
 ---
 
 {{% self-managed/self-managed-editions-table %}}

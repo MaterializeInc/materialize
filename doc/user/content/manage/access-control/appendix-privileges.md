@@ -5,7 +5,7 @@ menu:
   main:
     parent: access-control
     weight: 95
-canonical: "/docs/security/self-managed/"
+canonical: "https://materialize.com/docs/security/self-managed/"
 ---
 
 {{< note >}}

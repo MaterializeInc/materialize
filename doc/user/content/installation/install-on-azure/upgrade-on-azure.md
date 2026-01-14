@@ -6,7 +6,7 @@ menu:
     parent: "install-on-azure"
     identifier: "upgrade-on-azure"
     weight: 10
-canonical: "/docs/self-managed-deployments/"
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 To upgrade your Materialize instances, upgrade the Materialize operator first

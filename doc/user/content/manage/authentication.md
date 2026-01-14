@@ -7,7 +7,7 @@ menu:
     name: Authentication
     identifier: authentication
     weight: 8
-canonical: "/docs/security/self-managed/"
+canonical: "https://materialize.com/docs/security/self-managed/"
 ---
 
 ## Configuring Authentication Type
