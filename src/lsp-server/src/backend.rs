@@ -77,6 +77,12 @@ pub struct Completions {
     /// Contains the completion items for
     /// after a FROM token.
     pub from: Vec<CompletionItem>,
+    /// Contains the completion items for
+    /// after a CREATE token.
+    pub create: Vec<CompletionItem>,
+    /// Contains the completion items for
+    /// after a DROP token.
+    pub drop: Vec<CompletionItem>,
 }
 
 /// The [Backend] struct implements the [LanguageServer] trait, and thus must provide implementations for its methods.
@@ -441,6 +447,8 @@ impl LanguageServer for Backend {
                             Token::Keyword(k) => match k {
                                 Keyword::Select => Some(k),
                                 Keyword::From => Some(k),
+                                Keyword::Create => Some(k),
+                                Keyword::Drop => Some(k),
                                 _ => None,
                             },
                             // Skip the rest for now.
@@ -463,6 +471,16 @@ impl LanguageServer for Backend {
                         let completions = self.completions.lock().await;
                         let from_completions = completions.from.clone();
                         Ok(Some(CompletionResponse::Array(from_completions)))
+                    }
+                    Keyword::Create => {
+                        let completions = self.completions.lock().await;
+                        let create_completions = completions.create.clone();
+                        Ok(Some(CompletionResponse::Array(create_completions)))
+                    }
+                    Keyword::Drop => {
+                        let completions = self.completions.lock().await;
+                        let drop_completions = completions.drop.clone();
+                        Ok(Some(CompletionResponse::Array(drop_completions)))
                     }
                     _ => Ok(None),
                 };
@@ -605,6 +623,8 @@ impl Backend {
     ///
     /// * SELECT
     /// * FROM
+    /// * CREATE
+    /// * DROP
     ///
     /// Use this function to build the completion items once,
     /// and avoid having to rebuild on every [LanguageServer::completion] call.
@@ -663,9 +683,45 @@ impl Backend {
             });
         });
 
+        let basic_objects = vec![
+            "CLUSTER",
+            "CONNECTION",
+            "DATABASE",
+            "MATERIALIZED VIEW",
+            "ROLE",
+            "SECRET",
+            "SCHEMA",
+            "SINK",
+            "SOURCE",
+            "VIEW",
+            "TABLE",
+        ];
+
+        let mut create_modifiers = vec!["OR REPLACE", "TEMP", "TEMPORARY"];
+        create_modifiers.extend(basic_objects.clone());
+        let create_completions = create_modifiers
+            .iter()
+            .map(|x| CompletionItem {
+                label: x.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            })
+            .collect();
+
+        let drop_completions = basic_objects
+            .iter()
+            .map(|x| CompletionItem {
+                label: x.to_string(),
+                kind: Some(CompletionItemKind::KEYWORD),
+                ..Default::default()
+            })
+            .collect();
+
         Completions {
             from: from_completions,
             select: select_completions,
+            create: create_completions,
+            drop: drop_completions,
         }
     }
 }
