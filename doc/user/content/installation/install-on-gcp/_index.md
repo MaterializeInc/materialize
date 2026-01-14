@@ -9,6 +9,7 @@ menu:
     parent: "installation"
     identifier: "install-on-gcp"
     weight: 40
+canonical: "/docs/self-managed-deployments/"
 ---
 
 {{% self-managed/materialize-components-sentence %}}

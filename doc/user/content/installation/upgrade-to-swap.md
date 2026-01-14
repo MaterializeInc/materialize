@@ -6,6 +6,7 @@ menu:
     parent: "installation"
     weight: 95
     identifier: "upgrade-to-swap"
+canonical: "/docs/self-managed-deployments/"
 ---
 
 {{< annotation type="Disambiguation" >}}

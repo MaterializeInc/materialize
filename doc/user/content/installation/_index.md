@@ -6,7 +6,7 @@ menu:
   main:
     identifier: "installation"
     weight: 5
-
+canonical: "/docs/self-managed-deployments/"
 ---
 
 You can install self-managed Materialize on a Kubernetes cluster running locally

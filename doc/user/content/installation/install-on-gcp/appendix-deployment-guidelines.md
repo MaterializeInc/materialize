@@ -6,6 +6,7 @@ menu:
     parent: "install-on-gcp"
     identifier: "gcp-deployment-guidelines"
     weight: 40
+canonical: "/docs/self-managed-deployments/"
 ---
 
 ## Recommended instance types

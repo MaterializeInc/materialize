@@ -8,6 +8,7 @@ menu:
     weight: 50
 aliases:
   - /installation/install-on-gcp/appendix-gcp-provider-configuration
+canonical: "/docs/self-managed-deployments/"
 ---
 
 ## Required variables

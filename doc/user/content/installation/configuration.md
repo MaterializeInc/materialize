@@ -7,6 +7,7 @@ menu:
   main:
     parent: "installation"
     weight: 70
+canonical: "/docs/self-managed-deployments/"
 ---
 
 ## Configure the Materialize operator

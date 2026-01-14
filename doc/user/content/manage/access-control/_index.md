@@ -13,6 +13,7 @@ menu:
     name: Access control
     identifier: 'access-control'
     weight: 10
+canonical: "/docs/security/self-managed/"
 ---
 
 {{< note >}}
