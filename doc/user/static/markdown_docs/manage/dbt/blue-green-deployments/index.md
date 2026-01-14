@@ -68,7 +68,7 @@ deployment environment (“green”) that is a clone of your production
 environment (“blue”), in order to validate the changes without causing
 unavailability. These environments are later swapped transparently.
 
-  
+
 
 1.  In `dbt_project.yml`, use the `deployment` variable to specify the
     cluster(s) and schema(s) that contain the changes you want to
@@ -160,7 +160,7 @@ We **strongly** recommend validating the results of the deployed changes
 on the deployment environment to ensure it’s safe to
 [cutover](#cutover-and-cleanup).
 
-  
+
 
 1.  After deploying the changes, the objects in the deployment cluster
     need to fully hydrate before you can safely cut over. Use the

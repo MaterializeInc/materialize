@@ -100,7 +100,7 @@ If you run into Avro serialization issues with the `KafkaWriter`, please
 reach out to [Striim support](https://striim.zendesk.com/) or the
 [Striim community](https://community.striim.com/community).
 
-  
+
 
 Once your Striim Cloud service is configured for CDC, **start the app**
 to begin streaming changes from your source relational database into the

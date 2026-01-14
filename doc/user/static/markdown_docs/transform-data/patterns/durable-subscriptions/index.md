@@ -40,8 +40,8 @@ external application following a connection disruption, you can:
 **PREVIEW** This feature is in **[private
 preview](https://materialize.com/preview-terms/)**. It is under active
 development and may have stability or performance issues. It isn't
-subject to our backwards compatibility guarantees.  
-  
+subject to our backwards compatibility guarantees.
+
 To enable this feature in your Materialize region, [contact our
 team](https://materialize.com/docs/support/).
 

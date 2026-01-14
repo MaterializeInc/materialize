@@ -893,9 +893,9 @@ href="https://github.com/MaterializeInc/terraform-google-materialize/releases/ta
 
         </div>
 
-        The command is run in background.  
-        - To list the background jobs, use `jobs`.  
-        - To bring back to foreground, use `fg %<job-number>`.  
+        The command is run in background.
+        - To list the background jobs, use `jobs`.
+        - To bring back to foreground, use `fg %<job-number>`.
         - To kill the background job, use `kill %<job-number>`.
 
     3.  Open a browser and navigate to <https://localhost:8080> (or, if
