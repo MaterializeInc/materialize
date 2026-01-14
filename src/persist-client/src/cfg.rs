@@ -129,6 +129,10 @@ pub struct PersistConfig {
     /// In Compactor::compact_and_apply_background, how many updates to encode or
     /// decode before voluntarily yielding the task.
     pub compaction_yield_after_n_updates: usize,
+    /// In Compactor::compact_and_apply_background, maximum time (in milliseconds)
+    /// to spend processing a single chunk before returning to allow yielding.
+    /// This prevents long-running synchronous work from blocking the runtime.
+    pub compaction_yield_after_ms: u64,
     /// Length of time after a writer's last operation after which the writer
     /// may be expired.
     pub writer_lease_duration: Duration,
@@ -175,6 +179,7 @@ impl PersistConfig {
             compaction_concurrency_limit: 5,
             compaction_queue_size: 20,
             compaction_yield_after_n_updates: 100_000,
+            compaction_yield_after_ms: 10,
             writer_lease_duration: 60 * Duration::from_secs(60),
             critical_downgrade_interval: Duration::from_secs(30),
             isolated_runtime_worker_threads: num_cpus::get(),

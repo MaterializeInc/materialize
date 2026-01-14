@@ -87,6 +87,7 @@ pub struct CompactRes<T> {
 pub struct CompactConfig {
     pub(crate) compaction_memory_bound_bytes: usize,
     pub(crate) compaction_yield_after_n_updates: usize,
+    pub(crate) compaction_yield_after_ms: u64,
     pub(crate) version: semver::Version,
     pub(crate) batch: BatchBuilderConfig,
     pub(crate) fetch_config: FetchConfig,
@@ -99,6 +100,7 @@ impl CompactConfig {
         CompactConfig {
             compaction_memory_bound_bytes: COMPACTION_MEMORY_BOUND_BYTES.get(value),
             compaction_yield_after_n_updates: value.compaction_yield_after_n_updates,
+            compaction_yield_after_ms: value.compaction_yield_after_ms,
             version: value.build_version.clone(),
             batch: BatchBuilderConfig::new(value, shard_id),
             fetch_config: FetchConfig::from_persist_config(value),
@@ -1031,6 +1033,7 @@ where
                     .next_chunk(
                         cfg.compaction_yield_after_n_updates,
                         cfg.batch.blob_target_size - total_bytes,
+                        Some(std::time::Duration::from_millis(cfg.compaction_yield_after_ms)),
                     )
                     .await?
                 else {
