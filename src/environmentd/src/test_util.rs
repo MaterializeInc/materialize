@@ -750,6 +750,8 @@ impl Listeners {
                     connection_context,
                     replica_http_locator: Default::default(),
                 },
+                // TODO (SangJunBak): Add a mock OIDC authenticator
+                oidc: None,
                 secrets_controller,
                 cloud_resource_controller: None,
                 tls: config.tls,

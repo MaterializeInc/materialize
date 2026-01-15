@@ -168,28 +168,6 @@ impl Authenticator {
         Ok(Some(Self::new(config, client, registry)))
     }
 
-    // /// Establishes a new authentication session.
-    // ///
-    // /// If successful, returns a handle to the authentication session.
-    // /// Otherwise, returns the authentication error.
-    // pub async fn authenticate(
-    //     &self,
-    //     expected_user: &str,
-    //     password: &str,
-    // ) -> Result<AuthSessionHandle, Error> {
-    //     let password: AppPassword = password.parse()?;
-    //     match self.authenticate_inner(expected_user, password).await {
-    //         Ok(handle) => {
-    //             tracing::debug!("authentication successful");
-    //             Ok(handle)
-    //         }
-    //         Err(e) => {
-    //             tracing::debug!(error = ?e, "authentication failed");
-    //             Err(e)
-    //         }
-    //     }
-    // }
-
     #[instrument(level = "debug", fields(client_id = %password.client_id))]
     async fn authenticate_inner(
         &self,
@@ -339,7 +317,7 @@ impl OidcAuthenticator for Authenticator {
     ///
     /// If `expected_user` is provided, the token's user name is additionally
     /// validated to match `expected_user`.
-    fn validate_access_token(
+    async fn validate_access_token(
         &self,
         token: &str,
         expected_user: Option<&str>,

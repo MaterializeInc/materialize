@@ -1005,7 +1005,7 @@ async fn auth(
                 (name, external_metadata_rx, None)
             }
             Some(Credentials::Token { token }) => {
-                let claims = frontegg.validate_access_token(&token, None)?;
+                let claims = frontegg.validate_access_token(&token, None).await?;
                 let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
                     user_id: claims.user_id,
                     admin: claims.is_admin,
@@ -1043,6 +1043,31 @@ async fn auth(
                 include_www_authenticate_header,
             });
         }
+        Authenticator::Oidc(oidc) => match creds {
+            Some(Credentials::Token { token }) => {
+                // Validate JWT token
+                let claims = oidc
+                    .validate_access_token(&token, None)
+                    .await
+                    .map_err(|_| AuthError::InvalidCredentials)?;
+                let name = claims.username().to_string();
+                (name, None, None)
+            }
+            Some(Credentials::Password { password, .. }) => {
+                // Allow JWT to be passed as password
+                let claims = oidc
+                    .validate_access_token(&password.0, None)
+                    .await
+                    .map_err(|_| AuthError::InvalidCredentials)?;
+                let name = claims.username().to_string();
+                (name, None, None)
+            }
+            None => {
+                return Err(AuthError::MissingHttpAuthentication {
+                    include_www_authenticate_header,
+                });
+            }
+        },
         Authenticator::None => {
             // If no authentication, use whatever is in the HTTP auth
             // header (without checking the password), or fall back to the

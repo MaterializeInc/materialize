@@ -52,7 +52,7 @@ pub trait OidcAuthenticator {
     ///
     /// If `expected_user` is provided, the token's user name is additionally
     /// validated to match `expected_user`.
-    fn validate_access_token(
+    async fn validate_access_token(
         &self,
         token: &str,
         expected_user: Option<&str>,

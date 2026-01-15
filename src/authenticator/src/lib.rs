@@ -7,13 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+pub mod oidc;
+
 use mz_adapter::Client as AdapterClient;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
+
+pub use oidc::{GenericOidcAuthenticator, OidcConfig, OidcError};
 
 #[derive(Debug, Clone)]
 pub enum Authenticator {
     Frontegg(FronteggAuthenticator),
     Password(AdapterClient),
     Sasl(AdapterClient),
+    Oidc(GenericOidcAuthenticator),
     None,
 }

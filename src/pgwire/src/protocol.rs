@@ -225,6 +225,59 @@ where
                 }
             }
         }
+        Authenticator::Oidc(oidc) => {
+            tracing::info!("OIDC authentication");
+            // OIDC authentication: JWT sent as password in cleartext flow
+            let jwt = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
+                }
+            };
+
+            tracing::info!("JWT: {}", jwt);
+
+            // Two steps:
+            // 1. Validate the JWT
+            // 2. Check the catalog to see if the user is a superuser
+            // 3. If the role doesn't exist, just create one.
+
+            let auth_response = oidc.authenticate(&user, &jwt).await;
+
+            match auth_response {
+                Ok(mut auth_session) => {
+                    // Create a session based on the auth session.
+                    //
+                    // In particular, it's important that the username come from the
+                    // auth session, as Frontegg may return an email address with
+                    // different casing than the user supplied via the pgwire
+                    // username field. We want to use the Frontegg casing as
+                    // canonical.
+                    let session = adapter_client.new_session(SessionConfig {
+                        conn_id: conn.conn_id().clone(),
+                        uuid: conn_uuid,
+                        user: auth_session.user().into(),
+                        client_ip: conn.peer_addr().clone(),
+                        external_metadata_rx: None,
+                        // TODO (oidc_auth): Add superuser status to internal_user_metadata from catalog.
+                        internal_user_metadata: None,
+                        helm_chart_version,
+                    });
+                    let expired = async move { auth_session.expired().await }.boxed();
+                    (session, expired.left_future())
+                }
+                Err(err) => {
+                    warn!(?err, "pgwire connection failed authentication");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_PASSWORD,
+                            "invalid password",
+                        ))
+                        .await;
+                }
+            }
+        }
         Authenticator::Password(adapter_client) => {
             let password = match request_cleartext_password(conn).await {
                 Ok(password) => Password(password),
@@ -443,6 +496,7 @@ where
             let auth_session = pending().right_future();
             (session, auth_session)
         }
+
         Authenticator::None => {
             let session = adapter_client.new_session(SessionConfig {
                 conn_id: conn.conn_id().clone(),
@@ -643,6 +697,48 @@ fn split_options(value: &str) -> Vec<String> {
         strs.push(current);
     }
     strs
+}
+
+enum PasswordRequestError {
+    InvalidPasswordError(ErrorResponse),
+    IoError(io::Error),
+}
+
+impl From<io::Error> for PasswordRequestError {
+    fn from(e: io::Error) -> Self {
+        PasswordRequestError::IoError(e)
+    }
+}
+
+/// Requests a cleartext password from a connection and returns it if it is valid.
+/// Sends an error response in the connection and returns None if the password
+/// is not valid.
+async fn request_cleartext_password<A>(
+    conn: &mut FramedConn<A>,
+) -> Result<String, PasswordRequestError>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    conn.send(BackendMessage::AuthenticationCleartextPassword)
+        .await?;
+    conn.flush().await?;
+
+    if let Some(message) = conn.recv().await? {
+        if let FrontendMessage::RawAuthentication(data) = message {
+            if let Some(FrontendMessage::Password { password }) =
+                decode_password(Cursor::new(&data)).ok()
+            {
+                return Ok(password);
+            }
+        }
+    }
+
+    Err(PasswordRequestError::InvalidPasswordError(
+        ErrorResponse::fatal(
+            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            "expected Password message",
+        ),
+    ))
 }
 
 #[derive(Debug)]
