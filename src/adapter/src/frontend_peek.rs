@@ -12,8 +12,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use itertools::{Either, Itertools};
-use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
-use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
@@ -38,7 +36,7 @@ use opentelemetry::trace::TraceContextExt;
 use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::{Catalog, CatalogState};
+use crate::catalog::Catalog;
 use crate::command::Command;
 use crate::coord::peek::{FastPathPlan, PeekPlan};
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
@@ -703,7 +701,6 @@ impl PeekClient {
                 };
                 let (determination, read_holds) = self
                     .frontend_determine_timestamp(
-                        catalog.state(),
                         session,
                         determine_bundle,
                         &select_plan.when,
@@ -1358,7 +1355,6 @@ impl PeekClient {
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
     pub(crate) async fn frontend_determine_timestamp(
         &mut self,
-        catalog_state: &CatalogState,
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
@@ -1368,10 +1364,6 @@ impl PeekClient {
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
         // this is copy-pasted from Coordinator
-
-        let constraint_based = ConstraintBasedTimestampSelection::from_str(
-            &CONSTRAINT_BASED_TIMESTAMP_SELECTION.get(catalog_state.system_config().dyncfgs()),
-        );
 
         let isolation_level = session.vars().transaction_isolation();
 
@@ -1393,7 +1385,6 @@ impl PeekClient {
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
-            &constraint_based,
             read_holds,
             upper.clone(),
         )?;
@@ -1407,7 +1398,9 @@ impl PeekClient {
                 },
                 isolation_level.as_str(),
                 &compute_instance.to_string(),
-                constraint_based.as_str(),
+                // The old timestamp selection has been removed, so `constraint_based` is
+                // permanently enabled.
+                "enabled",
             ])
             .inc();
         if !det.respond_immediately()
@@ -1426,7 +1419,6 @@ impl PeekClient {
                         oracle_read_ts,
                         real_time_recency_ts,
                         isolation_level,
-                        &constraint_based,
                         read_holds.clone(),
                         upper,
                     )?;
@@ -1435,7 +1427,9 @@ impl PeekClient {
                         .metrics()
                         .timestamp_difference_for_strict_serializable_ms(&[
                             compute_instance.to_string().as_ref(),
-                            constraint_based.as_str(),
+                            // The old timestamp selection has been removed, so `constraint_based` is
+                            // permanently enabled.
+                            "enabled",
                         ])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
