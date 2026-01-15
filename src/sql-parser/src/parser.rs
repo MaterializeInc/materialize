@@ -9921,6 +9921,7 @@ impl<'a> Parser<'a> {
                 CREATEDB,
                 CREATECLUSTER,
                 CREATENETWORKPOLICY,
+                CREATEDATAFLOW,
             ])? {
                 INSERT => Privilege::INSERT,
                 SELECT => Privilege::SELECT,
@@ -9932,6 +9933,7 @@ impl<'a> Parser<'a> {
                 CREATEDB => Privilege::CREATEDB,
                 CREATECLUSTER => Privilege::CREATECLUSTER,
                 CREATENETWORKPOLICY => Privilege::CREATENETWORKPOLICY,
+                CREATEDATAFLOW => Privilege::CREATEDATAFLOW,
                 _ => unreachable!(),
             },
         )

@@ -53,6 +53,8 @@ const CREATE_DB_CHAR: char = 'B';
 const CREATE_CLUSTER_CHAR: char = 'N';
 // compute network Policy
 const CREATE_NETWORK_POLICY_CHAR: char = 'P';
+// Dataflow
+const CREATE_DATAFLOW_CHAR: char = 'D';
 
 const INSERT_STR: &str = "INSERT";
 const SELECT_STR: &str = "SELECT";
@@ -64,6 +66,7 @@ const CREATE_ROLE_STR: &str = "CREATEROLE";
 const CREATE_DB_STR: &str = "CREATEDB";
 const CREATE_CLUSTER_STR: &str = "CREATECLUSTER";
 const CREATE_NETWORK_POLICY_STR: &str = "CREATENETWORKPOLICY";
+const CREATE_DATAFLOW_STR: &str = "CREATEDATAFLOW";
 
 /// The OID used to represent the PUBLIC role. See:
 /// <https://github.com/postgres/postgres/blob/29a0ccbce97978e5d65b8f96c85a00611bb403c4/src/include/utils/acl.h#L46>
@@ -94,6 +97,7 @@ bitflags! {
         const CREATE = 1 << 9;
 
         // Materialize custom privileges.
+        const CREATE_DATAFLOW = 1 << 28;
         const CREATE_CLUSTER = 1 << 29;
         const CREATE_DB = 1 << 30;
         const CREATE_ROLE = 1 << 31;
@@ -117,6 +121,7 @@ impl AclMode {
             CREATE_DB_STR => Ok(AclMode::CREATE_DB),
             CREATE_CLUSTER_STR => Ok(AclMode::CREATE_CLUSTER),
             CREATE_NETWORK_POLICY_STR => Ok(AclMode::CREATE_NETWORK_POLICY),
+            CREATE_DATAFLOW_STR => Ok(AclMode::CREATE_DATAFLOW),
             _ => Err(anyhow!("{}", s.quoted())),
         }
     }
@@ -166,6 +171,9 @@ impl AclMode {
         if self.contains(AclMode::CREATE_NETWORK_POLICY) {
             privileges.push(CREATE_NETWORK_POLICY_STR);
         }
+        if self.contains(AclMode::CREATE_DATAFLOW) {
+            privileges.push(CREATE_DATAFLOW_STR);
+        }
         privileges
     }
 }
@@ -187,6 +195,7 @@ impl FromStr for AclMode {
                 CREATE_DB_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DB),
                 CREATE_CLUSTER_CHAR => acl_mode.bitor_assign(AclMode::CREATE_CLUSTER),
                 CREATE_NETWORK_POLICY_CHAR => acl_mode.bitor_assign(AclMode::CREATE_NETWORK_POLICY),
+                CREATE_DATAFLOW_CHAR => acl_mode.bitor_assign(AclMode::CREATE_DATAFLOW),
                 _ => return Err(anyhow!("invalid privilege '{c}' in acl mode '{s}'")),
             }
         }
@@ -227,6 +236,9 @@ impl fmt::Display for AclMode {
         }
         if self.contains(AclMode::CREATE_NETWORK_POLICY) {
             write!(f, "{CREATE_NETWORK_POLICY_CHAR}")?;
+        }
+        if self.contains(AclMode::CREATE_DATAFLOW) {
+            write!(f, "{CREATE_DATAFLOW_CHAR}")?;
         }
         Ok(())
     }
