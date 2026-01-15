@@ -18,7 +18,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 from materialize.mzcompose.services.azurite import azure_blob_uri
-from materialize.mzcompose.services.gcs import gcs_blob_uri, gcs_emulator_host
+from materialize.mzcompose.services.gcs import gcs_blob_uri, gcs_emulator_host_http, gcs_emulator_host_grpc
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
@@ -188,7 +188,10 @@ class Testdrive(Service):
                     )
                     persist_blob_url = gcs_blob_uri()
                     environment.append(
-                        f"STORAGE_EMULATOR_HOST={gcs_emulator_host(address)}"
+                        f"STORAGE_EMULATOR_HOST={gcs_emulator_host_http(address)}"
+                    )
+                    environment.append(
+                        f"STORAGE_EMULATOR_HOST_GRPC={gcs_emulator_host_grpc(address)}"
                     )
                 elif blob_store_is_azure:
                     blob_store = "azurite"

@@ -48,9 +48,12 @@ pub struct GcsBlobConfig {
 
 impl GcsBlobConfig {
     const EXTERNAL_TESTS_GCS_BUCKET: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_GCS_BUCKET";
-    /// Environment variable to configure the GCS emulator endpoint.
+    /// Environment variable to configure the GCS emulator HTTP/REST endpoint.
     /// When set, the client will use anonymous credentials and connect to this endpoint.
     const STORAGE_EMULATOR_HOST: &'static str = "STORAGE_EMULATOR_HOST";
+    /// Environment variable to configure the GCS emulator gRPC endpoint.
+    /// Required when using Google's storage-testbench which serves gRPC on a separate port.
+    const STORAGE_EMULATOR_HOST_GRPC: &'static str = "STORAGE_EMULATOR_HOST_GRPC";
 
     /// Returns a new [GcsBlobConfig] for use in production.
     ///
@@ -60,6 +63,8 @@ impl GcsBlobConfig {
     ///
     /// If the `STORAGE_EMULATOR_HOST` environment variable is set, the client
     /// will connect to the specified emulator endpoint using anonymous credentials.
+    /// For Google's storage-testbench, also set `STORAGE_EMULATOR_HOST_GRPC` to
+    /// the gRPC endpoint (REST and gRPC run on different ports).
     pub async fn new(
         bucket: String,
         prefix: String,
@@ -68,6 +73,7 @@ impl GcsBlobConfig {
     ) -> Result<Self, ExternalError> {
         // Check if we should use an emulator
         let emulator_host = std::env::var(Self::STORAGE_EMULATOR_HOST).ok();
+        let emulator_host_grpc = std::env::var(Self::STORAGE_EMULATOR_HOST_GRPC).ok();
 
         let (storage_client, storage_control_client) = if let Some(ref endpoint) = emulator_host {
             info!("Using GCS emulator at {}", endpoint);
@@ -83,8 +89,13 @@ impl GcsBlobConfig {
                     ExternalError::from(anyhow!("GCS Storage builder error (emulator): {}", e))
                 })?;
 
+            // Use separate gRPC endpoint if provided (for storage-testbench),
+            // otherwise fall back to the same endpoint
+            let grpc_endpoint = emulator_host_grpc.as_ref().unwrap_or(endpoint);
+            info!("Using GCS emulator gRPC at {}", grpc_endpoint);
+
             let storage_control_client = StorageControl::builder()
-                .with_endpoint(endpoint)
+                .with_endpoint(grpc_endpoint)
                 .with_credentials(anon_creds)
                 .build()
                 .await
@@ -176,6 +187,12 @@ impl GcsBlob {
     fn get_path(&self, key: &str) -> String {
         format!("{}/{}", self.prefix, key)
     }
+
+    /// Returns the bucket path formatted for gRPC API calls.
+    /// The gRPC API requires bucket names in the format `projects/_/buckets/{bucket}`.
+    fn grpc_bucket(&self) -> String {
+        format!("projects/_/buckets/{}", self.bucket)
+    }
 }
 
 #[async_trait]
@@ -186,7 +203,7 @@ impl Blob for GcsBlob {
         let size = usize::try_from(
             self.storage_control_client
                 .get_object()
-                .set_bucket(&self.bucket)
+                .set_bucket(&self.grpc_bucket())
                 .set_object(&path)
                 .send()
                 .await
@@ -231,7 +248,7 @@ impl Blob for GcsBlob {
         let mut stream = self
             .storage_control_client
             .list_objects()
-            .set_parent(&self.bucket)
+            .set_parent(&self.grpc_bucket())
             .set_prefix(blob_key_prefix)
             .by_item();
         while let Some(response) = stream.next().await {
@@ -268,7 +285,7 @@ impl Blob for GcsBlob {
         match self
             .storage_control_client
             .get_object()
-            .set_bucket(&self.bucket)
+            .set_bucket(&self.grpc_bucket())
             .set_object(&path)
             .send()
             .await
@@ -277,7 +294,7 @@ impl Blob for GcsBlob {
                 let size = usize::try_from(obj.size).context("GCS sent negative size value")?;
                 self.storage_control_client
                     .delete_object()
-                    .set_bucket(&self.bucket)
+                    .set_bucket(&self.grpc_bucket())
                     .set_object(path)
                     .send()
                     .await
@@ -300,7 +317,7 @@ impl Blob for GcsBlob {
         let mut stream = self
             .storage_control_client
             .list_objects()
-            .set_parent(&self.bucket)
+            .set_parent(&self.grpc_bucket())
             .set_prefix(&path)
             .set_versions(true)
             .by_item();
@@ -325,7 +342,7 @@ impl Blob for GcsBlob {
                 Some(_) => {
                     self.storage_control_client
                         .restore_object()
-                        .set_bucket(&self.bucket)
+                        .set_bucket(&self.grpc_bucket())
                         .set_object(obj.name)
                         .set_generation(obj.generation)
                         .set_if_generation_match(0)

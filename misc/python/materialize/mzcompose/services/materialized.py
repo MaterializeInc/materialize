@@ -31,7 +31,7 @@ from materialize.mzcompose.service import (
     ServiceDependency,
 )
 from materialize.mzcompose.services.azurite import azure_blob_uri
-from materialize.mzcompose.services.gcs import gcs_blob_uri, gcs_emulator_host
+from materialize.mzcompose.services.gcs import gcs_blob_uri, gcs_emulator_host_http, gcs_emulator_host_grpc
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
@@ -210,7 +210,10 @@ class Materialized(Service):
                     blob_store if external_blob_store == True else external_blob_store
                 )
                 persist_blob_url = gcs_blob_uri()
-                environment += [f"STORAGE_EMULATOR_HOST={gcs_emulator_host(address)}"]
+                environment += [
+                    f"STORAGE_EMULATOR_HOST={gcs_emulator_host_http(address)}",
+                    f"STORAGE_EMULATOR_HOST_GRPC={gcs_emulator_host_grpc(address)}",
+                ]
             elif blob_store_is_azure:
                 blob_store = "azurite"
                 depends_graph[blob_store] = {"condition": "service_healthy"}

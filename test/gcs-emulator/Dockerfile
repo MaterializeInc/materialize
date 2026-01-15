@@ -7,9 +7,11 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# fake-gcs-server provides a GCS-compatible API for testing
-# https://github.com/fsouza/fake-gcs-server
-FROM fsouza/fake-gcs-server:1.52.3
+# Google's official storage-testbench provides both REST and gRPC APIs
+# https://github.com/googleapis/storage-testbench
+FROM gcr.io/cloud-devrel-public-resources/storage-testbench:v0.59.0
 
-# The default port is 4443
-EXPOSE 4443
+# HTTP/REST port
+EXPOSE 9000
+# gRPC port
+EXPOSE 9001
