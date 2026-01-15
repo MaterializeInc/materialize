@@ -16,7 +16,7 @@ both Cloud and Self-Managed.
 ## Cloud upgrade schedule
 
 In general, Materialize Cloud uses the following weekly schedule to upgrade all
-regions to the latest release:
+regions to the latest release, the listed times may vary based on operational needs:
 
 Region        | Day of week | Time
 --------------|-------------|-----------------------------
@@ -33,14 +33,13 @@ outside of business hours in the most representative time zone for the region.
 
 - Materialize may occasionally deploy unscheduled releases to fix urgent bugs.
 
+- Actual cutover time may fall outside of the upgrade window.
+
 - Releases may skip some weeks.
 
 - Upgrade windows follow any daylight saving time or summer time rules
 for their indicated time zone.
 {{< /note >}}
-
-You can find details about upcoming and current maintenance on the [status
-page](https://status.materialize.com). You can also use the [status page API](https://status.materialize.com/api) to programmatically access this information.
 
 [America/New_York]: https://time.is/New_York
 [Europe/Dublin]: https://time.is/Dublin
