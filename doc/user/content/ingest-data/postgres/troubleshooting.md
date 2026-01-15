@@ -23,3 +23,4 @@ common questions about PostgreSQL sources, see the [FAQ](/ingest-data/postgres/f
 | Guide | Description |
 |-------|-------------|
 | [Slot overcompacted](/ingest-data/postgres/slot-overcompacted/) | Resolve errors when PostgreSQL removes WAL data before Materialize can read it |
+| [Connection Closed](/ingest-data/postgres/connection-closed/) | Resolve unexpected networking connection terminations between Materialize and PostgreSQL |
