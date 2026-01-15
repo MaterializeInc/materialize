@@ -759,6 +759,10 @@ impl PgwireBalancer {
         // once before: https://github.com/pgbouncer/pgbouncer/pull/1058.
         // We will work to upstream a fix, but in the meantime, this early return avoids the issue entirely.
         if password.is_none() {
+            // Flush is required because with TLS, the startup message written above may be
+            // buffered in the SSL layer. Without flushing, the server never receives it,
+            // causing connection timeouts or "SSL SYSCALL error: EOF detected" errors.
+            mz_stream.flush().await?;
             return Ok(mz_stream);
         }
 
