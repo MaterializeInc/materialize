@@ -21,8 +21,8 @@ If you do not need durability or cross-cluster sharing, and you are primarily in
 
 ### Usage patterns
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
 ### Indexes
 

@@ -95,14 +95,14 @@ of the index.
 
 #### Best practices
 
-{{% views-indexes/index-best-practices %}}
+{{% include-from-yaml data="index_view_details" name="index-best-practices" %}}
 
 ### Usage patterns
 
 #### Indexes on views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
 #### Indexes and query optimizations
 
@@ -112,7 +112,7 @@ You might want to create indexes when...
     this case, you could create an index on the columns in the join condition.
 -   You want to speed up searches filtering by literal values or expressions.
 
-{{% views-indexes/index-query-optimization-specific-instances %}}
+{{% include-from-yaml data="index_view_details" name="index-query-optimization-specific-instances" %}}
 
 
 ## Examples

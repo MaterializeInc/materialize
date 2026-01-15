@@ -1,0 +1,94 @@
+- name: architecture-one-tier
+  content: |
+    If the [recommended three-tier
+    architecture](/manage/operational-guidelines/#three-tier-architecture)
+    is infeasible or unnecessary due to low volume or a **non**-production setup, a
+    one-tier architecture may suffice for your sources, compute objects,
+    and query serving needs.
+
+    ![Image of the 1-cluster-architecture
+    architecture](/images/1-tier-architecture.svg)
+
+    {{< yaml-table data="best_practices/one_tier_architecture" >}}
+
+    **Benefits of a one-tier architecture** include:
+
+    - Cost effective
+
+    **Limitations of a one-tier architecture** include:
+
+    - Sources, compute objects, and queries compete for cluster resources.
+
+    - [Blue/green
+      deployment](/manage/dbt/blue-green-deployments/) is
+      unsupported since sources would need to be dropped and recreated, putting strain on your upstream system during source recreation.
+
+      To support blue/green deployments, use a two-tier architecture by moving
+      compute objects to a new cluster (i.e., recreating compute objects in a new cluster).
+
+    - Cluster restarts require rehydration of the indexes on views.
+
+- name: architecture-two-tier
+  content: |
+    If the [recommended three-tier
+    architecture](/manage/operational-guidelines/#three-tier-architecture)
+    is infeasible or unnecessary due to low volume or a **non**-production setup, a
+    two-tier architecture may suffice. A two-tier architecture consists of:
+
+    ![Image of the 2-cluster architecture: Source cluster, Compute/Transform +
+    Serving cluster](/images/2-tier-architecture.svg)
+
+    {{< yaml-table data="best_practices/two_tier_architecture" >}}
+
+    Benefits of a two-tier architecture include:
+
+    - Support for [blue/green
+      deployments](/manage/dbt/blue-green-deployments/)
+
+    - More cost effective than a three-tier architecture.
+
+    However, with a two-tier architecture:
+
+    - Compute/transform operations and queries compete for the same cluster
+    resources.
+
+    - Cluster restarts require rehydration of the indexes on views.
+
+- name: architecture-three-tier
+  content: |
+    In production, use a three-tier architecture, if feasible.
+
+    ![Image of the 3-tier architecture: Source cluster(s), Compute/Transform
+    cluster(s), Serving cluster(s)](/images/3-tier-architecture.svg "3-tier
+    architecture")
+
+    A three-tier architecture consists of:
+
+    {{< yaml-table data="best_practices/three_tier_architecture" >}}
+
+    Benefits of a three-tier architecture include:
+
+    - Support for [blue/green
+      deployments](/manage/dbt/blue-green-deployments/)
+
+    - Independent scaling of each tier.
+
+- name: architecture-upsert-source
+  content: |
+    In addition, for upsert sources:
+
+    - Consider separating upsert sources from your other sources. Upsert sources
+      have higher resource requirements (since, for upsert sources, Materialize
+      maintains each key and associated last value for the key as well as to perform
+      deduplication). As such, if possible, use a separate source cluster for upsert
+      sources.
+
+    - Consider using a larger cluster size during snapshotting for upsert sources.
+      Once the snapshotting operation is complete, you can downsize the cluster to
+      align with the steady-state ingestion.
+
+- name: ingest-data-scheduling
+  content: |
+    If possible, schedule creating new sources during off-peak hours to mitigate
+    the impact of snapshotting on both the upstream system and the Materialize
+    cluster.

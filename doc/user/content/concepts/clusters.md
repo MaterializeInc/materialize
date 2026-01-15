@@ -92,7 +92,7 @@ The following provides some general guidelines for clusters. See also
 
 ### Three-tier architecture in production
 
-{{% best-practices/architecture/three-tier %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-three-tier" %}}
 
 See also [Operational guidelines](/manage/operational-guidelines/).
 

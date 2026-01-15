@@ -23,7 +23,7 @@ Syntax element | Description
 `<value>`               | The value to assign to the configuration parameter.
 **DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
-{{% configuration-parameters %}}
+{{< include-md file="shared-content/configuration-parameters.md" >}}
 
 ## Privileges
 
