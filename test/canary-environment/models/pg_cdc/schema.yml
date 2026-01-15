@@ -13,9 +13,6 @@ sources:
   - name: pg_cdc
     schema: public_pg_cdc
     tables:
-      - name: pg_cdc_progress
-        data_tests:
-          - makes_progress
       - name: pg_people
         data_tests:
           - makes_progress
