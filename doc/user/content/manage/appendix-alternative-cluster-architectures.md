@@ -14,8 +14,8 @@ two-tier or a one-tier architecture may suffice.
 
 ## Two-tier architecture
 
-{{% best-practices/architecture/two-tier %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-two-tier" %}}
 
 ## One-tier architecture
 
-{{% best-practices/architecture/one-tier %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-one-tier" %}}

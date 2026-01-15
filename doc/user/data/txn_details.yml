@@ -1,0 +1,45 @@
+- name: txn-details
+  content: |
+    [`BEGIN`](/sql/begin/) starts a transaction block. Once a transaction is started:
+
+    - Statements within the transaction are executed sequentially.
+
+    - A transaction ends with either a [`COMMIT`](/sql/commit/) or a
+      [`ROLLBACK`](/sql/rollback/) statement.
+
+      - If all transaction statements succeed and a [`COMMIT`](/sql/commit/) is
+      [issued](/sql/commit/#details), all changes are saved.
+
+      - If all transaction statements succeed and a [`ROLLBACK`](/sql/rollback/)
+      is issued, all changes are discarded.
+
+      - If an error occurs and either a [`COMMIT`](/sql/commit/) or a
+      [`ROLLBACK`](/sql/rollback/) is issued, all changes are discarded.
+
+- name: txn-insert-only
+  content: |
+    An **insert-only** transaction only contains [`INSERT`](/sql/insert/)
+    statements that insert into the **same** table.
+
+    On a successful [`COMMIT`](/sql/commit/), all statements from the
+    transaction are committed at the same timestamp.
+
+    ```mzsql
+    BEGIN;
+    INSERT INTO orders VALUES (11,current_timestamp,'brownie',10);
+
+    -- Subsequent INSERTs must write to sales_items table only
+    -- Otherwise, the COMMIT will error and roll back the transaction.
+
+    INSERT INTO orders VALUES (11,current_timestamp,'chocolate cake',1);
+    INSERT INTO orders VALUES (11,current_timestamp,'chocolate chip cookie',20);
+    COMMIT;
+    ```
+
+    If, within the transaction, a statement inserts into a table different from
+    that of the first statement, on [`COMMIT`](/sql/commit/), the transaction
+    encounters an **internal ERROR** and rolls back:
+
+    ```none
+    ERROR:  internal error, wrong set of locks acquired
+    ```

@@ -255,7 +255,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-cluster" %}}
 
 ### 2. Create a connection
 
@@ -309,15 +309,15 @@ your networking configuration.
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% include-from-yaml data="ingest_postgres" name="check-the-ingestion-status" %}}
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="right-size-the-cluster" %}}
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+{{% include-from-yaml data="ingest_postgres" name="next-steps" %}}
 
 ## Considerations
 

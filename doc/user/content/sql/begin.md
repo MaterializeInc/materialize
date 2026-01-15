@@ -6,7 +6,7 @@ menu:
     parent: "commands"
 ---
 
-{{% txns/txn-details %}}
+{{% include-from-yaml data="txn_details" name="txn-details" %}}
 
 Materialize only supports [**read-only** transactions](#read-only-transactions)
 or [**write-only** (specifically, insert-only)
@@ -150,7 +150,7 @@ statements.
 
 #### INSERT-only transactions
 
-{{% txns/txn-insert-only %}}
+{{% include-from-yaml data="txn_details" name="txn-insert-only" %}}
 
 ## See also
 

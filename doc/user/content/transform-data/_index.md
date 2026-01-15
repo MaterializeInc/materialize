@@ -14,7 +14,7 @@ aliases:
 With Materialize, you can use SQL to transform, deliver, and act on
 fast-changing data.
 
-{{% materialize-postgres-compatibility %}}
+{{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### SELECT statement
 

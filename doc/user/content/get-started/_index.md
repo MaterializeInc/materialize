@@ -50,7 +50,7 @@ SQL patterns enabled by streaming like [**Change Data Capture
 filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
-{{% materialize-postgres-compatibility %}}
+{{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### Real-time data ingestion
 

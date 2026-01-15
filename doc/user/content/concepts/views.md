@@ -145,9 +145,9 @@ See also:
 
 ## Indexed views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
 
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
 {{% include-md file="shared-content/mat-view-use-cases.md" %}}
 

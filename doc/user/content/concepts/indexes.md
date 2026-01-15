@@ -215,8 +215,8 @@ CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 
 ### Indexes on views vs. materialized views
 
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
+{{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 {{% include-md file="shared-content/mat-view-use-cases.md" %}}
 
 ### Indexes and query optimizations
@@ -229,11 +229,11 @@ query performance](/transform-data/optimization/), such as:
 - Provide fast random access for lookup queries (i.e., selecting individual
   keys).
 
-{{% views-indexes/index-query-optimization-specific-instances %}}
+{{% include-from-yaml data="index_view_details" name="index-query-optimization-specific-instances" %}}
 
 ### Best practices
 
-{{% views-indexes/index-best-practices %}}
+{{% include-from-yaml data="index_view_details" name="index-best-practices" %}}
 
 ## Related pages
 

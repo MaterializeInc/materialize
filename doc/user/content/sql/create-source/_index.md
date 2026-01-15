@@ -119,7 +119,7 @@ In production, if possible, use a dedicated cluster for
 [sources](/concepts/sources/); i.e., avoid putting sources on the same cluster
 that hosts compute objects, sinks, and/or serves queries.
 
-{{% best-practices/architecture/upsert-source %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-upsert-source" %}}
 
 
 ### Sizing a source

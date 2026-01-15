@@ -146,7 +146,8 @@ guidelines for upsert sources.
 
 ### Scheduling
 
-{{% best-practices/ingest-data/scheduling %}}
+{{% include-from-yaml data="best_practices_details"
+name="ingest-data-scheduling" %}}
 
 ### Dedicate a cluster for the sources
 

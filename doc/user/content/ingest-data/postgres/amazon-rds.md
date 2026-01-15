@@ -23,7 +23,7 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 ## Before you begin
 
-{{% postgres-direct/before-you-begin %}}
+{{% include-from-yaml data="ingest_postgres" name="before-you-begin" %}}
 
 ## A. Configure Amazon RDS
 
@@ -97,7 +97,7 @@ As a first step, you need to make sure logical replication is enabled.
 
 ### 2. Create a publication and a replication user
 
-{{% postgres-direct/create-a-publication-aws %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-publication-aws" %}}
 
 ## B. (Optional) Configure network security
 
@@ -373,7 +373,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-{{% postgres-direct/create-a-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="create-a-cluster" %}}
 
 ### 2. Create a connection
 
@@ -496,15 +496,15 @@ your networking configuration.
 
 ### 4. Monitor the ingestion status
 
-{{% postgres-direct/check-the-ingestion-status %}}
+{{% include-from-yaml data="ingest_postgres" name="check-the-ingestion-status" %}}
 
 ### 5. Right-size the cluster
 
-{{% postgres-direct/right-size-the-cluster %}}
+{{% include-from-yaml data="ingest_postgres" name="right-size-the-cluster" %}}
 
 ## D. Explore your data
 
-{{% postgres-direct/next-steps %}}
+{{% include-from-yaml data="ingest_postgres" name="next-steps" %}}
 
 ## Considerations
 

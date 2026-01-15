@@ -22,7 +22,7 @@ Syntax element | Description
 ---------------|------------
 `<config>`     | The configuration parameter's name.
 
-{{% configuration-parameters %}}
+{{< include-md file="shared-content/configuration-parameters.md" >}}
 
 ## Privileges
 

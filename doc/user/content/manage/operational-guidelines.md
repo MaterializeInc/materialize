@@ -20,7 +20,7 @@ production cluster(s) to run development workloads or non-production tasks.
 
 ### Three-tier architecture
 
-{{% best-practices/architecture/three-tier %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-three-tier" %}}
 
 #### Alternatives
 
@@ -35,7 +35,8 @@ architectures](/manage/appendix-alternative-cluster-architectures/) for details.
 
 ### Scheduling
 
-{{% best-practices/ingest-data/scheduling %}}
+{{% include-from-yaml data="best_practices_details"
+name="ingest-data-scheduling" %}}
 
 ### Separate cluster(s) for sources
 
@@ -43,7 +44,7 @@ In production, if possible, use a dedicated cluster for
 [sources](/concepts/sources/); i.e., avoid putting sources on the same cluster
 that hosts compute objects, sinks, and/or serves queries.
 
-{{% best-practices/architecture/upsert-source %}}
+{{% include-from-yaml data="best_practices_details" name="architecture-upsert-source" %}}
 
 See also [Production cluster architecture](#three-tier-architecture).
 
