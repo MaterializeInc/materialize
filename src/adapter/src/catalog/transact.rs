@@ -28,6 +28,7 @@ use mz_audit_log::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{NetworkPolicy, Transaction};
+use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, SourceReferences, StateDiff,
@@ -41,6 +42,7 @@ use mz_ore::now::EpochMillis;
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
 use mz_repr::network_policy_id::NetworkPolicyId;
+use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
@@ -485,6 +487,44 @@ impl Catalog {
         })
     }
 
+    /// Extracts optimized expressions from `Op::CreateItem` operations for views
+    /// and materialized views. These can be used to populate a `LocalExpressionCache`
+    /// to avoid re-optimization during `apply_updates`.
+    fn extract_expressions_from_ops(
+        ops: &[Op],
+        optimizer_features: &OptimizerFeatures,
+    ) -> BTreeMap<GlobalId, LocalExpressions> {
+        let mut exprs = BTreeMap::new();
+
+        for op in ops {
+            if let Op::CreateItem { item, .. } = op {
+                match item {
+                    CatalogItem::View(view) => {
+                        exprs.insert(
+                            view.global_id,
+                            LocalExpressions {
+                                local_mir: (*view.optimized_expr).clone(),
+                                optimizer_features: optimizer_features.clone(),
+                            },
+                        );
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        exprs.insert(
+                            mv.global_id_writes(),
+                            LocalExpressions {
+                                local_mir: (*mv.optimized_expr).clone(),
+                                optimizer_features: optimizer_features.clone(),
+                            },
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        exprs
+    }
+
     /// Performs the transaction described by `ops` and returns the new state of the catalog, if
     /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
     ///
@@ -549,6 +589,11 @@ impl Catalog {
             None => return Ok(None),
         };
 
+        // Extract optimized expressions from CreateItem ops to avoid re-optimization
+        // during apply_updates. We extract before the loop since `ops` is moved there.
+        let optimizer_features = OptimizerFeatures::from(state.system_config());
+        let cached_exprs = Self::extract_expressions_from_ops(&ops, &optimizer_features);
+
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
         let mut storage_collections_to_register = BTreeMap::new();
@@ -599,18 +644,22 @@ impl Catalog {
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
             op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
+                // Clone the cache so each apply_updates call has access to cached expressions.
+                // The cache uses `remove` semantics, so we need a fresh clone for each call.
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
                 let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
                     .to_mut()
-                    .apply_updates(op_updates.clone(), &mut LocalExpressionCache::Closed)
+                    .apply_updates(op_updates.clone(), &mut local_expr_cache)
                     .await;
             }
             updates.append(&mut op_updates);
         }
 
         if !updates.is_empty() {
+            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
                 .to_mut()
-                .apply_updates(updates.clone(), &mut LocalExpressionCache::Closed)
+                .apply_updates(updates.clone(), &mut local_expr_cache)
                 .await;
             let op_builtin_table_updates = state
                 .to_mut()
@@ -633,9 +682,10 @@ impl Catalog {
 
             let updates = tx.get_and_commit_op_updates();
             if !updates.is_empty() {
+                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
                 let (op_builtin_table_updates, op_catalog_updates) = state
                     .to_mut()
-                    .apply_updates(updates.clone(), &mut LocalExpressionCache::Closed)
+                    .apply_updates(updates.clone(), &mut local_expr_cache)
                     .await;
                 let op_builtin_table_updates = state
                     .to_mut()
