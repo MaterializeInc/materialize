@@ -15,6 +15,28 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+# v26.7
+*Released to Materialize Cloud: 2026-01-16* <br>
+*Released to Materialize Self-Managed: 2026-01-17* <br>
+
+v26.7 includes PostgreSQL compatibility improvements and Self-Managed documentation updates.
+
+# Features
+
+(No major new features in this release)
+
+# Improvements
+
+- Added the `attndims` column to `pg_attribute` with a null value, enabling compatibility with go-jet and other PostgreSQL client libraries that expect this column.
+
+- Fixed `pg_type.typelem` for named list types to correctly report their element types, improving compatibility with go-jet and similar tools.
+
+- Added documentation for the new `ManuallyPromote` upgrade rollout strategy in Self-Managed deployments.
+
+# Bug Fixes
+
+- Fixed an issue where type error messages could inadvertently expose constant values from queries, improving privacy by showing only type information.
+
 ## v26.6.0
 *Released to Materialize Cloud: 2026-01-08*<br>
 *Released to Materialize Self-Managed: 2026-01-09*<br>
