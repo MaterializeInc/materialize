@@ -17,8 +17,9 @@ for both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for
 details.
 
 - New Terraform modules for Self-Managed are now GA. For details, see [Terraform
-releases](/self-managed-deployments/release-versions/#terraform-releases). {{</
-note >}}
+releases](#terraform-releases).
+
+{{</ note >}}
 
 ## v26.8.0
 *Released to Materialize Cloud: 2026-01-22* <br>
@@ -314,6 +315,11 @@ See also Upgrade Notes for release specific notes.
 See also [Version specific upgrade
 notes](/self-managed-deployments/upgrading/#version-specific-upgrade-notes).
 
+## Terraform releases
+
+New Terraform modules for Self-Managed are now GA.
+
+{{< yaml-table data="self_managed/unified_terraform_versions" >}}
 
 ## See also
 
