@@ -1448,7 +1448,7 @@ class IcebergSink(Sink):
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:
-        return version > MzVersion.create(26, 6, 0)
+        return version > MzVersion.create(26, 7, 0)
 
     def version(self) -> ScenarioVersion:
         return ScenarioVersion.create(1, 0, 0)
