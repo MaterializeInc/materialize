@@ -16,10 +16,11 @@ sources:
       - name: sales
         data_tests:
           - makes_progress
-      - name: sales_progress
+      - name: sales_tbl
+      - name: customer
         data_tests:
           - makes_progress
-      - name: sales_tbl
+      - name: customer_tbl
 
 
 models:
