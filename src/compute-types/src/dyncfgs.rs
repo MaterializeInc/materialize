@@ -24,7 +24,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
-    false,
+    true,
     "Whether compute should use the new MV sink correction buffer implementation.",
 );
 
