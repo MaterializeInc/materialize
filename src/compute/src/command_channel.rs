@@ -77,6 +77,11 @@ impl Receiver {
             }
         }
     }
+
+    /// Returns whether the command channel is currently empty.
+    pub fn is_empty(&self) -> bool {
+        self.rx.is_empty()
+    }
 }
 
 /// Render the command channel dataflow.

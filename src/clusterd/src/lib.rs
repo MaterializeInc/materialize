@@ -45,6 +45,9 @@ use tracing::{error, info};
 
 mod usage_metrics;
 
+pub mod unified_config;
+pub mod unified_worker;
+
 const BUILD_INFO: BuildInfo = build_info!();
 
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));

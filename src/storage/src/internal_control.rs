@@ -164,7 +164,11 @@ impl InternalCommandReceiver {
     }
 }
 
-pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
+/// Sets up the internal command sequencer dataflow.
+///
+/// This creates a dataflow that sequences internal commands across all workers
+/// to ensure consistent ordering.
+pub fn setup_command_sequencer<'w, A: Allocate>(
     timely_worker: &'w mut TimelyWorker<A>,
 ) -> (InternalCommandSender, InternalCommandReceiver) {
     let (input_tx, input_rx) = mpsc::channel();

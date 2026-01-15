@@ -159,7 +159,7 @@ impl CommandReceiver {
 ///
 /// Tags responses with the current nonce, allowing receivers to filter out responses intended for
 /// previous client connections.
-pub(crate) struct ResponseSender {
+pub struct ResponseSender {
     /// The channel consuming responses.
     inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
@@ -169,7 +169,8 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    /// Create a new response sender.
+    pub fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -178,7 +179,7 @@ impl ResponseSender {
     }
 
     /// Set the cluster protocol nonce.
-    fn set_nonce(&mut self, nonce: Uuid) {
+    pub fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
     }
 

@@ -37,8 +37,14 @@ mz-storage = { path = "../storage" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
+mz-repr = { path = "../repr" }
+mz-rocksdb = { path = "../rocksdb" }
 mz-txn-wal = { path = "../txn-wal" }
+core_affinity = "0.8"
+crossbeam-channel = "0.5"
 nix = { version = "0.30.1", features = ["fs"] }
+timely = "0.25.1"
+uuid = "1"
 num_cpus = "1.17.0"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util"] }
