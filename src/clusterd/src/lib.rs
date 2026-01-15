@@ -169,6 +169,14 @@ struct Args {
     /// affinity might degrade dataflow performance rather than improving it.
     #[clap(long)]
     worker_core_affinity: bool,
+
+    /// EXPERIMENTAL: Use unified Timely runtime for compute and storage.
+    ///
+    /// When enabled, both compute and storage run within a single Timely runtime,
+    /// reducing resource usage and potentially improving performance. This is an
+    /// experimental feature and should be used with caution in production.
+    #[clap(long)]
+    unified_runtime: bool,
 }
 
 pub fn main() {
@@ -368,65 +376,134 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
-    // Start storage server.
-    let storage_client_builder = mz_storage::serve(
-        storage_timely_config,
-        &metrics_registry,
-        Arc::clone(&persist_clients),
-        txns_ctx.clone(),
-        Arc::clone(&tracing_handle),
-        SYSTEM_TIME.clone(),
-        connection_context.clone(),
-        StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
-    )
-    .await?;
-    info!(
-        "listening for storage controller connections on {}",
-        args.storage_controller_listen_addr
-    );
-    mz_ore::task::spawn(
-        || "storage_server",
-        transport::serve(
-            args.storage_controller_listen_addr,
-            BUILD_INFO.semver_version(),
-            grpc_host.clone(),
-            Duration::MAX,
-            storage_client_builder,
-            grpc_server_metrics.for_server("storage"),
-        ),
-    );
+    if args.unified_runtime {
+        // EXPERIMENTAL: Use unified Timely runtime for both compute and storage.
+        info!("using unified Timely runtime (experimental)");
 
-    // Start compute server.
-    let compute_client_builder = mz_compute::server::serve(
-        compute_timely_config,
-        &metrics_registry,
-        persist_clients,
-        txns_ctx,
-        tracing_handle,
-        ComputeInstanceContext {
-            scratch_directory: args.scratch_directory,
-            worker_core_affinity: args.worker_core_affinity,
-            connection_context,
-        },
-    )
-    .await?;
-    info!(
-        "listening for compute controller connections on {}",
-        args.compute_controller_listen_addr
-    );
-    mz_ore::task::spawn(
-        || "compute_server",
-        transport::serve(
-            args.compute_controller_listen_addr,
-            BUILD_INFO.semver_version(),
-            grpc_host.clone(),
-            Duration::MAX,
-            compute_client_builder,
-            grpc_server_metrics.for_server("compute"),
-        ),
-    );
+        // Use compute config for the unified runtime (workers should match)
+        if storage_timely_config.workers != compute_timely_config.workers {
+            anyhow::bail!(
+                "unified runtime requires same worker count for storage ({}) and compute ({})",
+                storage_timely_config.workers,
+                compute_timely_config.workers
+            );
+        }
 
-    // TODO: unify storage and compute servers to use one timely cluster.
+        let unified_client_builders = unified_config::serve(
+            compute_timely_config,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx,
+            tracing_handle,
+            SYSTEM_TIME.clone(),
+            connection_context.clone(),
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory.clone(),
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context,
+            },
+            StorageInstanceContext::new(
+                args.scratch_directory.clone(),
+                args.announce_memory_limit,
+            )?,
+        )
+        .await?;
+
+        info!(
+            "listening for storage controller connections on {}",
+            args.storage_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "unified_storage_server",
+            transport::serve(
+                args.storage_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                unified_client_builders.storage,
+                grpc_server_metrics.for_server("storage"),
+            ),
+        );
+
+        info!(
+            "listening for compute controller connections on {}",
+            args.compute_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "unified_compute_server",
+            transport::serve(
+                args.compute_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                unified_client_builders.compute,
+                grpc_server_metrics.for_server("compute"),
+            ),
+        );
+    } else {
+        // Use separate Timely runtimes for storage and compute (default behavior).
+
+        // Start storage server.
+        let storage_client_builder = mz_storage::serve(
+            storage_timely_config,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            SYSTEM_TIME.clone(),
+            connection_context.clone(),
+            StorageInstanceContext::new(
+                args.scratch_directory.clone(),
+                args.announce_memory_limit,
+            )?,
+        )
+        .await?;
+        info!(
+            "listening for storage controller connections on {}",
+            args.storage_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "storage_server",
+            transport::serve(
+                args.storage_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                storage_client_builder,
+                grpc_server_metrics.for_server("storage"),
+            ),
+        );
+
+        // Start compute server.
+        let compute_client_builder = mz_compute::server::serve(
+            compute_timely_config,
+            &metrics_registry,
+            persist_clients,
+            txns_ctx,
+            tracing_handle,
+            ComputeInstanceContext {
+                scratch_directory: args.scratch_directory,
+                worker_core_affinity: args.worker_core_affinity,
+                connection_context,
+            },
+        )
+        .await?;
+        info!(
+            "listening for compute controller connections on {}",
+            args.compute_controller_listen_addr
+        );
+        mz_ore::task::spawn(
+            || "compute_server",
+            transport::serve(
+                args.compute_controller_listen_addr,
+                BUILD_INFO.semver_version(),
+                grpc_host.clone(),
+                Duration::MAX,
+                compute_client_builder,
+                grpc_server_metrics.for_server("compute"),
+            ),
+        );
+    }
 
     // Block forever.
     future::pending().await

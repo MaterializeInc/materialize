@@ -5901,6 +5901,7 @@ name = "mz-clusterd"
 version = "26.8.0-dev.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
  "core_affinity",
