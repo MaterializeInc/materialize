@@ -114,12 +114,9 @@ impl GcsBlobConfig {
                 .await
                 .map_err(|e| ExternalError::from(anyhow!("GCS Storage builder error: {}", e)))?;
 
-            let storage_control_client = StorageControl::builder()
-                .build()
-                .await
-                .map_err(|e| {
-                    ExternalError::from(anyhow!("GCS StorageControl builder error: {}", e))
-                })?;
+            let storage_control_client = StorageControl::builder().build().await.map_err(|e| {
+                ExternalError::from(anyhow!("GCS StorageControl builder error: {}", e))
+            })?;
 
             (storage_client, storage_control_client)
         };
@@ -190,7 +187,7 @@ impl GcsBlob {
 
     /// Returns the bucket path formatted for gRPC API calls.
     /// The gRPC API requires bucket names in the format `projects/_/buckets/{bucket}`.
-    fn grpc_bucket(&self) -> String {
+    fn formatted_bucket_path(&self) -> String {
         format!("projects/_/buckets/{}", self.bucket)
     }
 }
@@ -200,23 +197,33 @@ impl Blob for GcsBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
 
-        let size = usize::try_from(
-            self.storage_control_client
-                .get_object()
-                .set_bucket(&self.grpc_bucket())
-                .set_object(&path)
-                .send()
-                .await
-                // TODO inspect_err
-                .context("GCS get_object err")?
-                .size,
-        )
-        .context("GCS sent negative size value")?;
+        let metadata = match self
+            .storage_control_client
+            .get_object()
+            .set_bucket(&self.formatted_bucket_path())
+            .set_object(&path)
+            .send()
+            .await
+        {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                if let Some(status) = e.status() {
+                    if status.code == Code::NotFound {
+                        return Ok(None);
+                    }
+                }
+                return Err(ExternalError::from(anyhow!(
+                    "GCS blob get get_object error: {:?}",
+                    e
+                )));
+            }
+        };
+        let size = usize::try_from(metadata.size).context("GCS sent negative size value")?;
         let mut buf: Vec<u8> = Vec::with_capacity(size);
 
         let mut stream = self
             .storage_client
-            .read_object(&self.bucket, path)
+            .read_object(&self.formatted_bucket_path(), path)
             .send()
             .await
             .context("GCS read_object err")?;
@@ -229,7 +236,10 @@ impl Blob for GcsBlob {
                             return Ok(None);
                         }
                     }
-                    return Err(ExternalError::from(anyhow!("GCS blob get error: {:?}", e)));
+                    return Err(ExternalError::from(anyhow!(
+                        "GCS blob get read_object error: {:?}",
+                        e
+                    )));
                 }
             };
             buf.extend_from_slice(&data[..])
@@ -248,7 +258,7 @@ impl Blob for GcsBlob {
         let mut stream = self
             .storage_control_client
             .list_objects()
-            .set_parent(&self.grpc_bucket())
+            .set_parent(&self.formatted_bucket_path())
             .set_prefix(blob_key_prefix)
             .by_item();
         while let Some(response) = stream.next().await {
@@ -271,7 +281,7 @@ impl Blob for GcsBlob {
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         self.storage_client
-            .write_object(&self.bucket, path, value)
+            .write_object(&self.formatted_bucket_path(), path, value)
             .send_unbuffered()
             .await
             .map_err(|e| ExternalError::from(anyhow!("GCS blob put error: {}", e)))?;
@@ -285,7 +295,7 @@ impl Blob for GcsBlob {
         match self
             .storage_control_client
             .get_object()
-            .set_bucket(&self.grpc_bucket())
+            .set_bucket(&self.formatted_bucket_path())
             .set_object(&path)
             .send()
             .await
@@ -294,7 +304,7 @@ impl Blob for GcsBlob {
                 let size = usize::try_from(obj.size).context("GCS sent negative size value")?;
                 self.storage_control_client
                     .delete_object()
-                    .set_bucket(&self.grpc_bucket())
+                    .set_bucket(&self.formatted_bucket_path())
                     .set_object(path)
                     .send()
                     .await
@@ -317,7 +327,7 @@ impl Blob for GcsBlob {
         let mut stream = self
             .storage_control_client
             .list_objects()
-            .set_parent(&self.grpc_bucket())
+            .set_parent(&self.formatted_bucket_path())
             .set_prefix(&path)
             .set_versions(true)
             .by_item();
@@ -342,7 +352,7 @@ impl Blob for GcsBlob {
                 Some(_) => {
                     self.storage_control_client
                         .restore_object()
-                        .set_bucket(&self.grpc_bucket())
+                        .set_bucket(&self.formatted_bucket_path())
                         .set_object(obj.name)
                         .set_generation(obj.generation)
                         .set_if_generation_match(0)
