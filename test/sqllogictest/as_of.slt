@@ -93,7 +93,7 @@ SELECT * FROM t;
 ----
 1
 
-query error Timestamp \(1\) is not valid for all inputs
+query error db error: ERROR: Timestamp \(1768481949666\) is not valid for all inputs: \[\]
 SELECT * FROM t AS OF 1
 
 # AS OF escapes linearizability, so this could choose a timestamp before the INSERT. We're just
