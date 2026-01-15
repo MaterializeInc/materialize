@@ -20,6 +20,13 @@ sources:
         data_tests:
           - makes_progress
       - name: sales_tbl
+      - name: customer
+        data_tests:
+          - makes_progress
+      - name: customer_progress
+        data_tests:
+          - makes_progress
+      - name: customer_tbl
 
 
 models:
