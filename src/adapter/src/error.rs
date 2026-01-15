@@ -256,6 +256,10 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
+    /// Attempt to apply a replacement to a sealed materialized view.
+    ReplaceMaterializedViewSealed {
+        name: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -432,6 +436,11 @@ impl AdapterError {
                 }
                 Some(lines.join("\n"))
             }
+            AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
+                "The materialized view has already computed its output until the end of time, \
+                 so replacing its definition would have no effect."
+                .into(),
+            ),
             _ => None,
         }
     }
@@ -671,6 +680,9 @@ impl AdapterError {
                 SqlState::INVALID_PASSWORD
             }
             AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            AdapterError::ReplaceMaterializedViewSealed { .. } => {
+                SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE
+            }
         }
     }
 
@@ -833,6 +845,12 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::InvalidTableMutationSelection => {
                 f.write_str("invalid selection: operation may only refer to user-defined tables")
+            }
+            AdapterError::ReplaceMaterializedViewSealed { name } => {
+                write!(
+                    f,
+                    "materialized view {name} is sealed and thus cannot be replaced"
+                )
             }
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
