@@ -622,7 +622,7 @@ impl DDLEvent {
     ///  2. ALTER TABLE .. DROP COLUMN
     ///
     /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
-    pub fn is_compatible(&self) -> bool {
+    pub fn is_compatible(&self, exclude_columns: &Vec<String>) -> bool {
         // TODO (maz): This is currently a basic check that doesn't take into account type changes.
         // At some point, we will need to move this to SqlServerTableDesc and expand it.
         let mut words = self.ddl_command.split_ascii_whitespace();
@@ -631,13 +631,31 @@ impl DDLEvent {
             words.next().map(str::to_ascii_lowercase).as_deref(),
         ) {
             (Some("alter"), Some("table")) => {
-                let mut peekable = words.peekable();
+                let mut peekable = words.multipeek();
                 let mut compatible = true;
                 while compatible && let Some(token) = peekable.next() {
                     compatible = match token.to_ascii_lowercase().as_str() {
-                        "alter" | "drop" => peekable
-                            .peek()
-                            .is_some_and(|next_tok| !next_tok.eq_ignore_ascii_case("column")),
+                        "alter" | "drop" => {
+                            let target = peekable.peek();
+                            match target {
+                                Some(t) if t.eq_ignore_ascii_case("column") => {
+                                    // Consume the "column" token
+                                    let col_name = peekable.peek();
+                                    if let Some(col_name) = col_name {
+                                        !exclude_columns
+                                            .iter()
+                                            .any(|excluded| excluded.eq_ignore_ascii_case(col_name))
+                                    } else {
+                                        // No column name found after "column" keyword
+                                        false
+                                    }
+                                }
+                                // No target token after "alter" or "drop"
+                                None => false,
+                                // Other targets are considered compatible
+                                _ => true,
+                            }
+                        }
                         _ => true,
                     }
                 }
