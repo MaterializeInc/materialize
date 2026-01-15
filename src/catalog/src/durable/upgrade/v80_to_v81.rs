@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_repr::adt::mz_acl_item::AclMode;
+
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::objects_v80 as v80;
 use crate::durable::upgrade::objects_v81 as v81;
@@ -18,8 +20,7 @@ use crate::durable::upgrade::objects_v81 as v81;
 pub fn upgrade(
     snapshot: Vec<v80::StateUpdateKind>,
 ) -> Vec<MigrationAction<v80::StateUpdateKind, v81::StateUpdateKind>> {
-    // CREATE_DATAFLOW privilege bit (1 << 28)
-    const CREATE_DATAFLOW_BIT: u64 = 1 << 28;
+    let create_dataflow_bit = AclMode::CREATE_DATAFLOW.bits();
 
     let mut migrations = Vec::new();
 
@@ -28,7 +29,7 @@ pub fn upgrade(
             // Check if PUBLIC already has CREATEDATAFLOW
             let public_has_createdataflow = cluster.value.privileges.iter().any(|item| {
                 matches!(item.grantee, v80::RoleId::Public)
-                    && (item.acl_mode.bitflags & CREATE_DATAFLOW_BIT) != 0
+                    && (item.acl_mode.bitflags & create_dataflow_bit) != 0
             });
 
             if !public_has_createdataflow {
@@ -41,7 +42,7 @@ pub fn upgrade(
                     grantee: v80::RoleId::Public,
                     grantor: v80::RoleId::System(1),
                     acl_mode: v80::AclMode {
-                        bitflags: CREATE_DATAFLOW_BIT,
+                        bitflags: create_dataflow_bit,
                     },
                 });
 
