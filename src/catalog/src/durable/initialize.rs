@@ -341,6 +341,20 @@ pub(crate) async fn initialize(
                 acl_mode: AclMode::USAGE,
             },
         },
+        // PUBLIC gets CREATEDATAFLOW on all clusters by default, so users can run
+        // queries that require dataflow rendering without explicit grants.
+        DefaultPrivilege {
+            object: DefaultPrivilegeObject {
+                role_id: RoleId::Public,
+                database_id: None,
+                schema_id: None,
+                object_type: mz_sql::catalog::ObjectType::Cluster,
+            },
+            acl_item: DefaultPrivilegeAclItem {
+                grantee: RoleId::Public,
+                acl_mode: AclMode::CREATE_DATAFLOW,
+            },
+        },
         DefaultPrivilege {
             object: DefaultPrivilegeObject {
                 role_id: RoleId::Public,
@@ -560,7 +574,7 @@ pub(crate) async fn initialize(
         MzAclItem {
             grantee: RoleId::Public,
             grantor: MZ_SYSTEM_ROLE_ID,
-            acl_mode: AclMode::USAGE,
+            acl_mode: AclMode::USAGE.union(AclMode::CREATE_DATAFLOW),
         },
         MzAclItem {
             grantee: MZ_SUPPORT_ROLE_ID,
@@ -639,7 +653,7 @@ pub(crate) async fn initialize(
                 object_id: ObjectId::Cluster(DEFAULT_USER_CLUSTER_ID).to_string(),
                 grantee_id: RoleId::Public.to_string(),
                 grantor_id: MZ_SYSTEM_ROLE_ID.to_string(),
-                privileges: AclMode::USAGE.to_string(),
+                privileges: AclMode::USAGE.union(AclMode::CREATE_DATAFLOW).to_string(),
             }),
         ),
     ]);

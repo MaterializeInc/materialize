@@ -9,6 +9,9 @@
 
 # Tests for the CREATEDATAFLOW privilege, which controls whether a user
 # can execute queries that require dataflow rendering (slow path) on a cluster.
+#
+# By default, PUBLIC has CREATEDATAFLOW on all clusters. This test demonstrates
+# how an admin can REVOKE it to restrict certain users from running slow-path queries.
 
 mode cockroach
 
@@ -32,7 +35,7 @@ CREATE CLUSTER test_cluster SIZE 'scale=1,workers=1';
 ----
 COMPLETE 0
 
-# Grant USAGE on cluster but NOT CREATEDATAFLOW
+# Grant USAGE on cluster to restricted_user
 simple conn=mz_system,user=mz_system
 GRANT USAGE ON CLUSTER test_cluster TO restricted_user;
 ----
@@ -66,35 +69,14 @@ GRANT SELECT ON TABLE test_table TO restricted_user;
 ----
 COMPLETE 0
 
-# Test GRANT CREATEDATAFLOW syntax
-simple conn=mz_system,user=mz_system
-GRANT CREATEDATAFLOW ON CLUSTER test_cluster TO restricted_user;
-----
-COMPLETE 0
-
-# Verify the privilege was granted by checking cluster privileges
+# Verify the cluster has default privileges including CREATEDATAFLOW for PUBLIC
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
 ----
-test_cluster  mz_support=U/mz_system
-test_cluster  mz_system=UCD/mz_system
-test_cluster  restricted_user=UD/mz_system
-
-# Test REVOKE CREATEDATAFLOW syntax
-simple conn=mz_system,user=mz_system
-REVOKE CREATEDATAFLOW ON CLUSTER test_cluster FROM restricted_user;
-----
-COMPLETE 0
-
-# Verify the privilege was revoked (restricted_user still has U from GRANT USAGE)
-query TT rowsort
-SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
-----
+test_cluster  =D/mz_system
 test_cluster  mz_support=U/mz_system
 test_cluster  mz_system=UCD/mz_system
 test_cluster  restricted_user=U/mz_system
-
-# Now test actual privilege enforcement
 
 # Set up for testing as restricted_user
 simple conn=restricted_user,user=restricted_user
@@ -102,40 +84,74 @@ SET CLUSTER = test_cluster;
 ----
 COMPLETE 0
 
-# Test constant query (fast path) - should succeed without CREATEDATAFLOW
+# Test constant query (fast path) - should always succeed
 simple conn=restricted_user,user=restricted_user
 SELECT 1 + 1;
 ----
 2
 COMPLETE 1
 
-# Test slow-path query without CREATEDATAFLOW - should fail
-# (Query on column y not covered by index on x requires dataflow)
+# Test slow-path query - should succeed because PUBLIC has CREATEDATAFLOW by default
+simple conn=restricted_user,user=restricted_user
+SELECT * FROM test_table WHERE y = 1;
+----
+COMPLETE 0
+
+# Now REVOKE CREATEDATAFLOW from PUBLIC to restrict all users
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDATAFLOW ON CLUSTER test_cluster FROM PUBLIC;
+----
+COMPLETE 0
+
+# Verify the privilege was revoked from PUBLIC
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
+----
+test_cluster  mz_support=U/mz_system
+test_cluster  mz_system=UCD/mz_system
+test_cluster  restricted_user=U/mz_system
+
+# Test slow-path query without CREATEDATAFLOW - should now fail
 simple conn=restricted_user,user=restricted_user
 SELECT * FROM test_table WHERE y = 1;
 ----
 db error: ERROR: permission denied for CLUSTER "test_cluster"
 DETAIL: The 'restricted_user' role needs CREATEDATAFLOW privileges on CLUSTER "test_cluster"
 
-# Grant CREATEDATAFLOW and try again
+# Fast-path queries should still work
+simple conn=restricted_user,user=restricted_user
+SELECT 1 + 1;
+----
+2
+COMPLETE 1
+
+# Grant CREATEDATAFLOW specifically to the restricted_user
 simple conn=mz_system,user=mz_system
 GRANT CREATEDATAFLOW ON CLUSTER test_cluster TO restricted_user;
 ----
 COMPLETE 0
 
-# Now the same query should succeed (empty result since table is empty)
+# Now the slow-path query should succeed again
 simple conn=restricted_user,user=restricted_user
 SELECT * FROM test_table WHERE y = 1;
 ----
 COMPLETE 0
 
-# Test REVOKE ALL on cluster removes CREATEDATAFLOW
+# Verify restricted_user now has CREATEDATAFLOW
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
+----
+test_cluster  mz_support=U/mz_system
+test_cluster  mz_system=UCD/mz_system
+test_cluster  restricted_user=UD/mz_system
+
+# Test REVOKE ALL removes CREATEDATAFLOW from restricted_user
 simple conn=mz_system,user=mz_system
 REVOKE ALL ON CLUSTER test_cluster FROM restricted_user;
 ----
 COMPLETE 0
 
-# Verify all privileges are revoked (restricted_user has no privileges left)
+# Verify all privileges are revoked from restricted_user
 query TT rowsort
 SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
 ----
