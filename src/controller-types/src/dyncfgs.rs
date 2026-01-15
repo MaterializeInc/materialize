@@ -68,6 +68,17 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
 );
 
+/// EXPERIMENTAL: Enable unified Timely runtime for compute and storage.
+///
+/// When enabled, both compute and storage run within a single Timely runtime
+/// in clusterd, reducing resource usage by eliminating one of the two runtimes.
+/// This is an experimental feature.
+pub const ENABLE_UNIFIED_RUNTIME: Config<bool> = Config::new(
+    "enable_unified_runtime",
+    false,
+    "EXPERIMENTAL: Enable unified Timely runtime for compute and storage in clusterd.",
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -80,4 +91,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
+        .add(&ENABLE_UNIFIED_RUNTIME)
 }

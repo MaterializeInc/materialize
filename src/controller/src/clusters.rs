@@ -27,7 +27,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_UNIFIED_RUNTIME,
+    TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -645,6 +646,9 @@ where
             ..Default::default()
         };
 
+        // EXPERIMENTAL: Read unified runtime feature flag
+        let enable_unified_runtime = ENABLE_UNIFIED_RUNTIME.get(&self.dyncfg);
+
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
         let mut memory_request = None;
@@ -730,6 +734,9 @@ where
                     }
                     if location.allocation.is_cc {
                         args.push("--is-cc".into());
+                    }
+                    if enable_unified_runtime {
+                        args.push("--unified-runtime".into());
                     }
 
                     // If swap is enabled, make the replica limit its own heap usage based on the
