@@ -1926,8 +1926,9 @@ impl CatalogState {
 ///
 /// # Panics
 ///
-/// This function assumes that all provided `updates` have the same timestamp
-/// and will panic otherwise.
+/// This function assumes that all provided `updates` have the same timestamp and will panic
+/// otherwise. It also requires that the provided `updates` are consolidated, i.e. all contained
+/// `StateUpdateKinds` are unique.
 fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     fn push_update<T>(
         update: T,
@@ -1944,6 +1945,13 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     soft_assert_no_log!(
         updates.iter().map(|update| update.ts).all_equal(),
         "all timestamps should be equal: {updates:?}"
+    );
+    soft_assert_no_log!(
+        {
+            let mut dedup = BTreeSet::new();
+            updates.iter().all(|update| dedup.insert(&update.kind))
+        },
+        "updates should be consolidated: {updates:?}"
     );
 
     // Partition updates by type so that we can weave different update types into the right spots.
@@ -2062,63 +2070,72 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     }
 
     /// Sort items by their dependencies using topological sort.
+    ///
+    /// # Panics
+    ///
+    /// This function requires that all provided items have unique item IDs.
     fn sort_items_topological(items: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
-        let mut topo: BTreeMap<
-            (mz_catalog::durable::Item, Timestamp, StateDiff),
-            BTreeSet<CatalogItemId>,
-        > = BTreeMap::default();
-        let existing: BTreeSet<_> = items.iter().map(|item| item.0.id).collect();
-
-        // Initialize our set of topological sort.
         tracing::debug!(?items, "sorting items by dependencies");
+
+        let all_item_ids: BTreeSet<_> = items.iter().map(|item| item.0.id).collect();
+
+        // For each item, the update that contains it.
+        let mut updates_by_id =
+            BTreeMap::<CatalogItemId, (mz_catalog::durable::Item, Timestamp, StateDiff)>::new();
+        // For each item, the number of unprocessed dependencies.
+        let mut in_degree = BTreeMap::<CatalogItemId, usize>::new();
+        // For each item, the IDs of items depending on it.
+        let mut dependents = BTreeMap::<CatalogItemId, Vec<CatalogItemId>>::new();
+        // Items that have no unprocessed dependencies.
+        let mut ready = Vec::new();
+
+        // Build the graph.
         for (item, ts, diff) in items.drain(..) {
+            let id = item.id;
             let statement = mz_sql::parse::parse(&item.create_sql)
                 .expect("valid create_sql")
                 .into_element()
                 .ast;
+
             let mut dependencies = mz_sql::names::dependencies(&statement)
                 .expect("failed to find dependencies of item");
-            // Be defensive and remove any possible self references.
-            dependencies.remove(&item.id);
-            // It's possible we're applying updates to an item where the
-            // dependency already exists and thus it's not in `items`.
-            dependencies.retain(|dep| existing.contains(dep));
+            // Remove any dependencies not contained in `items`.
+            // As a defensive measure, also remove any self-references.
+            dependencies.retain(|dep| all_item_ids.contains(dep) && *dep != id);
 
-            // Be defensive and ensure we're not clobbering any items.
-            assert_none!(topo.insert((item, ts, diff), dependencies));
+            let prev = updates_by_id.insert(id, (item, ts, diff));
+            assert_none!(prev);
+
+            in_degree.insert(id, dependencies.len());
+
+            for dep_id in &dependencies {
+                dependents.entry(*dep_id).or_default().push(id);
+            }
+
+            if dependencies.is_empty() {
+                ready.push(id);
+            }
         }
-        tracing::debug!(?topo, ?existing, "built topological sort",);
 
-        // Do a topological sort, pushing back into the provided Vec.
-        while !topo.is_empty() {
-            // Get all of the items with no dependencies.
-            let no_deps: Vec<_> = topo
-                .iter()
-                .filter_map(|(item, deps)| {
-                    if deps.is_empty() {
-                        Some(item.clone())
-                    } else {
-                        None
+        // Process items in topological order, pushing back into the provided Vec.
+        while let Some(id) = ready.pop() {
+            let update = updates_by_id.remove(&id).expect("must exist");
+            items.push(update);
+
+            if let Some(depts) = dependents.get(&id) {
+                for dept_id in depts {
+                    let deg = in_degree.get_mut(dept_id).expect("must exist");
+                    *deg -= 1;
+                    if *deg == 0 {
+                        ready.push(*dept_id);
                     }
-                })
-                .collect();
-
-            // Cycle in our graph!
-            if no_deps.is_empty() {
-                panic!("programming error, cycle in item dependencies");
+                }
             }
+        }
 
-            // Process all of the items with no dependencies.
-            for item in no_deps {
-                // Remove the item from our topological sort.
-                topo.remove(&item);
-                // Remove this item from anything that depends on it.
-                topo.values_mut().for_each(|deps| {
-                    deps.remove(&item.0.id);
-                });
-                // Push it back into our list as "completed".
-                items.push(item);
-            }
+        // Cycle detection: if we didn't process all items, there's a cycle.
+        if !updates_by_id.is_empty() {
+            panic!("programming error, cycle in item dependencies");
         }
     }
 
