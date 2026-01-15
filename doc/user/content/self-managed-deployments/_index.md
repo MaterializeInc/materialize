@@ -130,16 +130,18 @@ When you create a Materialize instance, the operator deploys three core componen
   **`environmentd`** runs as a Kubernetes pod and is the primary component of a
   Materialize instance. It houses the control plane and contains:
 
-  - **Adapter**: The SQL interface that handles client connections, query parsing, and planning
-  - **Storage Controller**: Maintains durable metadata for storage
-  - **Compute Controller**: Orchestrates compute resources and manages system state
+  - **Adapter**: The SQL interface that handles client connections, query parsing, and planning.
+  - **Storage Controller**: Maintains durable metadata for storage.
+  - **Compute Controller**: Orchestrates compute resources and manages system state.
 
   On startup, `environmentd` will create several built-in clusters.
 
-  When you connect to Materialize with a SQL client (e.g., `psql`), you're connecting to `environmentd`.
+- **balancerd**: A pgwire and http proxy that routes client connections to
+  `environmentd`. That is, when you connect to Materialize with a SQL client
+  (e.g., `psql`), the client connects  to `balancerd`, which routes the
+  connection to `environmentd` for handling.
 
-- **balancerd**: A pgwire and http proxy used to connect to environmentd,
-  deployed as a Deployment.
+   `balancerd` is deployed as a Kubernetes Deployment.
 - **console**: Web-based administration interface, deployed as a Deployment.
 
 ### Instance responsibilities
