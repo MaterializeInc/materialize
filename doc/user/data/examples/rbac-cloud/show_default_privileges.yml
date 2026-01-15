@@ -18,6 +18,9 @@
 
     {{< include-md
     file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+  test_results: |
+    PUBLIC <null> <null> cluster PUBLIC CREATEDATAFLOW
+    PUBLIC <null> <null> type PUBLIC USAGE
 
 - name: "for-service-account"
   description: |
@@ -37,6 +40,9 @@
 
     {{< include-md
     file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+  test_results: |
+    PUBLIC <null> <null> cluster PUBLIC CREATEDATAFLOW
+    PUBLIC <null> <null> type PUBLIC USAGE
 
 - name: "for-view-manager"
   description: |
@@ -54,6 +60,9 @@
 
     {{< include-md
     file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+  test_results: |
+    PUBLIC <null> <null> cluster PUBLIC CREATEDATAFLOW
+    PUBLIC <null> <null> type PUBLIC USAGE
 
 - name: "for-serving-index-manager"
   description: |
@@ -72,6 +81,9 @@
 
     {{< include-md
     file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+  test_results: |
+    PUBLIC <null> <null> cluster PUBLIC CREATEDATAFLOW
+    PUBLIC <null> <null> type PUBLIC USAGE
 
 - name: "for-data-reader"
   description: |
@@ -89,3 +101,6 @@
 
     {{< include-md
     file="shared-content/rbac-cloud/show-default-privileges-new-roles.md" >}}
+  test_results: |
+    PUBLIC <null> <null> cluster PUBLIC CREATEDATAFLOW
+    PUBLIC <null> <null> type PUBLIC USAGE
