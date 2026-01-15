@@ -14,9 +14,11 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
+use google_cloud_auth::credentials::anonymous;
 use google_cloud_gax::error::rpc::Code;
 use google_cloud_gax::paginator::ItemPaginator;
 use google_cloud_storage::client::{Storage, StorageControl};
+use tracing::info;
 use uuid::Uuid;
 
 use mz_dyncfg::ConfigSet;
@@ -46,28 +48,71 @@ pub struct GcsBlobConfig {
 
 impl GcsBlobConfig {
     const EXTERNAL_TESTS_GCS_BUCKET: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_GCS_BUCKET";
+    /// Environment variable to configure the GCS emulator endpoint.
+    /// When set, the client will use anonymous credentials and connect to this endpoint.
+    const STORAGE_EMULATOR_HOST: &'static str = "STORAGE_EMULATOR_HOST";
 
     /// Returns a new [GcsBlobConfig] for use in production.
     ///
     /// Stores objects in the given bucket prepended with the (possibly empty)
     /// prefix. GCS credentials and region must be available in the process or
     /// environment.
+    ///
+    /// If the `STORAGE_EMULATOR_HOST` environment variable is set, the client
+    /// will connect to the specified emulator endpoint using anonymous credentials.
     pub async fn new(
         bucket: String,
         prefix: String,
-        // TODO optional credentials?
-        // TODO override URL/endpoints?
         metrics: S3BlobMetrics,
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
-        let storage_client = Storage::builder()
-            .build()
-            .await
-            .map_err(|e| ExternalError::from(anyhow!("GCS Storage builder error: {}", e)))?;
-        let storage_control_client = StorageControl::builder()
-            .build()
-            .await
-            .map_err(|e| ExternalError::from(anyhow!("GCS StorageControl builder error: {}", e)))?;
+        // Check if we should use an emulator
+        let emulator_host = std::env::var(Self::STORAGE_EMULATOR_HOST).ok();
+
+        let (storage_client, storage_control_client) = if let Some(ref endpoint) = emulator_host {
+            info!("Using GCS emulator at {}", endpoint);
+            // Use anonymous credentials for the emulator
+            let anon_creds = anonymous::Builder::new().build();
+
+            let storage_client = Storage::builder()
+                .with_endpoint(endpoint)
+                .with_credentials(anon_creds.clone())
+                .build()
+                .await
+                .map_err(|e| {
+                    ExternalError::from(anyhow!("GCS Storage builder error (emulator): {}", e))
+                })?;
+
+            let storage_control_client = StorageControl::builder()
+                .with_endpoint(endpoint)
+                .with_credentials(anon_creds)
+                .build()
+                .await
+                .map_err(|e| {
+                    ExternalError::from(anyhow!(
+                        "GCS StorageControl builder error (emulator): {}",
+                        e
+                    ))
+                })?;
+
+            (storage_client, storage_control_client)
+        } else {
+            // Use default authentication for production
+            let storage_client = Storage::builder()
+                .build()
+                .await
+                .map_err(|e| ExternalError::from(anyhow!("GCS Storage builder error: {}", e)))?;
+
+            let storage_control_client = StorageControl::builder()
+                .build()
+                .await
+                .map_err(|e| {
+                    ExternalError::from(anyhow!("GCS StorageControl builder error: {}", e))
+                })?;
+
+            (storage_client, storage_control_client)
+        };
+
         Ok(GcsBlobConfig {
             metrics,
             storage_client,

@@ -7282,6 +7282,7 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures-util",
+ "google-cloud-auth",
  "google-cloud-gax",
  "google-cloud-storage",
  "itertools 0.14.0",

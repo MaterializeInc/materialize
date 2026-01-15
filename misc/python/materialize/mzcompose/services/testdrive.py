@@ -18,6 +18,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.gcs import gcs_blob_uri, gcs_emulator_host
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
@@ -56,6 +57,7 @@ class Testdrive(Service):
         external_metadata_store: bool = False,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
+        blob_store_is_gcs: bool = False,
         fivetran_destination: bool = False,
         fivetran_destination_url: str = "http://fivetran-destination:6874",
         fivetran_destination_files_path: str = "/share/tmp",
@@ -177,15 +179,33 @@ class Testdrive(Service):
 
         if set_persist_urls:
             if external_blob_store:
-                blob_store = "azurite" if blob_store_is_azure else "minio"
-                address = (
-                    blob_store if external_blob_store == True else external_blob_store
-                )
-                persist_blob_url = (
-                    azure_blob_uri(address)
-                    if blob_store_is_azure
-                    else minio_blob_uri(address)
-                )
+                if blob_store_is_gcs:
+                    blob_store = "gcs-emulator"
+                    address = (
+                        blob_store
+                        if external_blob_store == True
+                        else external_blob_store
+                    )
+                    persist_blob_url = gcs_blob_uri()
+                    environment.append(
+                        f"STORAGE_EMULATOR_HOST={gcs_emulator_host(address)}"
+                    )
+                elif blob_store_is_azure:
+                    blob_store = "azurite"
+                    address = (
+                        blob_store
+                        if external_blob_store == True
+                        else external_blob_store
+                    )
+                    persist_blob_url = azure_blob_uri(address)
+                else:
+                    blob_store = "minio"
+                    address = (
+                        blob_store
+                        if external_blob_store == True
+                        else external_blob_store
+                    )
+                    persist_blob_url = minio_blob_uri(address)
                 entrypoint.append(f"--persist-blob-url={persist_blob_url}")
             else:
                 entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")

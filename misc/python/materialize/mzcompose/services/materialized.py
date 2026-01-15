@@ -31,6 +31,7 @@ from materialize.mzcompose.service import (
     ServiceDependency,
 )
 from materialize.mzcompose.services.azurite import azure_blob_uri
+from materialize.mzcompose.services.gcs import gcs_blob_uri, gcs_emulator_host
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import METADATA_STORE
 
@@ -76,6 +77,7 @@ class Materialized(Service):
         external_metadata_store: str | bool = False,
         external_blob_store: str | bool = False,
         blob_store_is_azure: bool = False,
+        blob_store_is_gcs: bool = False,
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
@@ -201,14 +203,28 @@ class Materialized(Service):
         command += [f"--environment-id={environment_id}"]
 
         if external_blob_store:
-            blob_store = "azurite" if blob_store_is_azure else "minio"
-            depends_graph[blob_store] = {"condition": "service_healthy"}
-            address = blob_store if external_blob_store == True else external_blob_store
-            persist_blob_url = (
-                azure_blob_uri(address)
-                if blob_store_is_azure
-                else minio_blob_uri(address)
-            )
+            if blob_store_is_gcs:
+                blob_store = "gcs-emulator"
+                depends_graph[blob_store] = {"condition": "service_healthy"}
+                address = (
+                    blob_store if external_blob_store == True else external_blob_store
+                )
+                persist_blob_url = gcs_blob_uri()
+                environment += [f"STORAGE_EMULATOR_HOST={gcs_emulator_host(address)}"]
+            elif blob_store_is_azure:
+                blob_store = "azurite"
+                depends_graph[blob_store] = {"condition": "service_healthy"}
+                address = (
+                    blob_store if external_blob_store == True else external_blob_store
+                )
+                persist_blob_url = azure_blob_uri(address)
+            else:
+                blob_store = "minio"
+                depends_graph[blob_store] = {"condition": "service_healthy"}
+                address = (
+                    blob_store if external_blob_store == True else external_blob_store
+                )
+                persist_blob_url = minio_blob_uri(address)
 
         if persist_blob_url:
             command.append(f"--persist-blob-url={persist_blob_url}")
