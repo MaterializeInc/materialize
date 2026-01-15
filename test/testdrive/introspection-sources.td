@@ -113,8 +113,9 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 
 # Test that frontiers of introspection sources advance at all.
 
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM mz_introspection.mz_active_peeks AS OF 0
-contains: Timestamp (0) is not valid for all inputs
+contains:imestamp
 
 # Test that logged subscribe frontiers advance beyond 0.
 
