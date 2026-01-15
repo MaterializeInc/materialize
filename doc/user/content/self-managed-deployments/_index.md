@@ -122,9 +122,14 @@ resources.
 
 ### Components
 
-When you create a Materialize instance, the operator deploys three core components as Kubernetes resources:
+When you create a Materialize instance, the operator deploys three core
+components as Kubernetes resources:
 
-- **`environmentd`**: The main database control plane, deployed as a
+- **balancerd**: A pgwire and HTTP proxy that routes all Materialize client
+  connections to `environmentd` for handling. `balancerd` is deployed as a
+  Kubernetes Deployment.
+
+- **environmentd**: The main database control plane, deployed as a
   StatefulSet.
 
   **`environmentd`** runs as a Kubernetes pod and is the primary component of a
@@ -136,12 +141,6 @@ When you create a Materialize instance, the operator deploys three core componen
 
   On startup, `environmentd` will create several built-in clusters.
 
-- **balancerd**: A pgwire and http proxy that routes client connections to
-  `environmentd`. That is, when you connect to Materialize with a SQL client
-  (e.g., `psql`), the client connects  to `balancerd`, which routes the
-  connection to `environmentd` for handling.
-
-   `balancerd` is deployed as a Kubernetes Deployment.
 - **console**: Web-based administration interface, deployed as a Deployment.
 
 ### Instance responsibilities
