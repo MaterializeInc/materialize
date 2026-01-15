@@ -497,6 +497,7 @@ class Owners(Check):
                 owner_cluster1 mz_support=U/owner_role_01
                 owner_cluster1 owner_role_01=UCD/owner_role_01
                 owner_cluster2 =D/other_owner
+                owner_cluster2 mz_support=U/other_owner
                 owner_cluster2 other_owner=UCD/other_owner
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'owner_%'
