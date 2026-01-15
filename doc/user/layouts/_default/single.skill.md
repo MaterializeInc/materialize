@@ -6,5 +6,5 @@
 {{ .Description }}
 {{ end }}
 
-{{ .Content }}
+{{ .RenderShortcodes }}
 {{- end -}}

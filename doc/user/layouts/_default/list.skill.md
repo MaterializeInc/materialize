@@ -6,7 +6,7 @@
 {{ .Description }}
 {{ end }}
 
-{{ .Content }}
+{{ .RenderShortcodes }}
 
 {{ range .Pages }}
 {{- if not (in $excludedSections .Section) }}
@@ -14,7 +14,7 @@
 
 ## {{ .Title }}
 
-{{ .Content }}
+{{ .RenderShortcodes }}
 {{ end -}}
 {{ end }}
 {{- end -}}
