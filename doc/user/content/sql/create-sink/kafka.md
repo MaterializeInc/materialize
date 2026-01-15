@@ -15,9 +15,10 @@ same for Kafka and Redpanda broker. For simplicity, this page uses
 "Kafka" to refer to both Kafka and Redpanda.
 {{< /note >}}
 
-{{% create-sink/intro %}}
+`CREATE SINK` connects Materialize to an external system
+you want to write data to, and provides details about how to encode that data.
+
 To use a Kafka broker (and optionally a schema registry) as a sink, make sure that a connection that specifies access and authentication parameters to that broker already exists; otherwise, you first need to [create a connection](#creating-a-connection). Once created, a connection is **reusable** across multiple `CREATE SINK` and `CREATE SOURCE` statements.
-{{% /create-sink/intro %}}
 
 
 Sink source type      | Description
