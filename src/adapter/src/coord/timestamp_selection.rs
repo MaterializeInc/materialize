@@ -248,7 +248,6 @@ pub trait TimestampProvider {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         oracle_read_ts: Option<Timestamp>,
-        compute_instance: ComputeInstanceId,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
         timeline: &Option<Timeline>,
@@ -413,13 +412,9 @@ pub trait TimestampProvider {
             if !constraints.lower_bound().less_equal(&candidate)
                 || constraints.upper_bound().less_than(&candidate)
             {
-                // TODO: Generate a better error msg, which includes all the constraints.
-                coord_bail!(generate_timestamp_not_valid_error_msg(
-                    id_bundle,
-                    compute_instance,
-                    read_holds,
-                    candidate
-                ));
+                return Err(AdapterError::ImpossibleTimestampConstraints {
+                    constraints: constraints.display(timeline.as_ref()).to_string(),
+                });
             } else {
                 candidate
             }
@@ -444,7 +439,6 @@ pub trait TimestampProvider {
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
@@ -460,7 +454,6 @@ pub trait TimestampProvider {
             session,
             id_bundle,
             when,
-            compute_instance,
             timeline_context,
             oracle_read_ts,
             real_time_recency_ts,
@@ -475,7 +468,6 @@ pub trait TimestampProvider {
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
@@ -514,7 +506,6 @@ pub trait TimestampProvider {
             id_bundle,
             when,
             oracle_read_ts,
-            compute_instance,
             real_time_recency_ts,
             isolation_level,
             &timeline,
@@ -580,36 +571,6 @@ pub trait TimestampProvider {
     }
 }
 
-fn generate_timestamp_not_valid_error_msg(
-    id_bundle: &CollectionIdBundle,
-    compute_instance: ComputeInstanceId,
-    read_holds: &ReadHolds<mz_repr::Timestamp>,
-    candidate: mz_repr::Timestamp,
-) -> String {
-    let mut invalid = Vec::new();
-
-    if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-        for id in compute_ids {
-            let since = read_holds.since(id);
-            if !since.less_equal(&candidate) {
-                invalid.push((*id, since));
-            }
-        }
-    }
-
-    for id in id_bundle.storage_ids.iter() {
-        let since = read_holds.since(id);
-        if !since.less_equal(&candidate) {
-            invalid.push((*id, since));
-        }
-    }
-
-    format!(
-        "Timestamp ({}) is not valid for all inputs: {:?}",
-        candidate, invalid,
-    )
-}
-
 impl Coordinator {
     pub(crate) async fn oracle_read_ts(
         &self,
@@ -658,7 +619,6 @@ impl Coordinator {
             session,
             id_bundle,
             when,
-            compute_instance,
             timeline_context,
             oracle_read_ts,
             real_time_recency_ts,
@@ -688,7 +648,6 @@ impl Coordinator {
                     session,
                     id_bundle,
                     when,
-                    compute_instance,
                     timeline_context,
                     oracle_read_ts,
                     real_time_recency_ts,
@@ -979,15 +938,21 @@ mod constraints {
             if !self.lower.is_empty() {
                 writeln!(f, "lower:")?;
                 for (ts, reason) in &self.lower {
-                    let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
-                    writeln!(f, "  ({:?}): {:?}", reason, ts)?;
+                    let ts: Vec<_> = ts
+                        .iter()
+                        .map(|t| format!("{}", t.display(timeline)))
+                        .collect();
+                    writeln!(f, "  ({}): [{}]", reason, ts.join(", "))?;
                 }
             }
             if !self.upper.is_empty() {
                 writeln!(f, "upper:")?;
                 for (ts, reason) in &self.upper {
-                    let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
-                    writeln!(f, "  ({:?}): {:?}", reason, ts)?;
+                    let ts: Vec<_> = ts
+                        .iter()
+                        .map(|t| format!("{}", t.display(timeline)))
+                        .collect();
+                    writeln!(f, "  ({}): [{}]", reason, ts.join(", "))?;
                 }
             }
             Ok(())
@@ -1052,49 +1017,40 @@ mod constraints {
     pub enum Reason {
         /// A compute input at a compute instance.
         /// This is something like an index or view
-        /// that is mantained by compute.
+        /// that is maintained by compute.
         ComputeInput(Vec<(ComputeInstanceId, GlobalId)>),
         /// A storage input.
         StorageInput(Vec<GlobalId>),
         /// A specified isolation level and the timestamp it requires.
         IsolationLevel(IsolationLevel),
-        /// Real-time recency may constrains the timestamp from below.
+        /// Real-time recency may constrain the timestamp from below.
         RealTimeRecency,
         /// The query expressed its own constraint on the timestamp.
         QueryAsOf,
     }
 
-    impl Debug for Reason {
+    impl fmt::Display for Reason {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             match self {
-                Reason::ComputeInput(ids) => write_split_ids(f, "ComputeInput", ids),
-                Reason::StorageInput(ids) => write_split_ids(f, "StorageInput", ids),
+                Reason::ComputeInput(ids) => {
+                    let formatted: Vec<_> =
+                        ids.iter().map(|(c, g)| format!("({}, {})", c, g)).collect();
+                    write!(f, "Indexed inputs: [{}]", formatted.join(", "))
+                }
+                Reason::StorageInput(ids) => {
+                    let formatted: Vec<_> = ids.iter().map(|g| format!("{}", g)).collect();
+                    write!(f, "Storage inputs: [{}]", formatted.join(", "))
+                }
                 Reason::IsolationLevel(level) => {
-                    write!(f, "IsolationLevel({:?})", level)
+                    write!(f, "Isolation level: {:?}", level)
                 }
                 Reason::RealTimeRecency => {
-                    write!(f, "RealTimeRecency")
+                    write!(f, "Real-time recency")
                 }
                 Reason::QueryAsOf => {
-                    write!(f, "QueryAsOf")
+                    write!(f, "Query's AS OF")
                 }
             }
-        }
-    }
-
-    //TODO: This is a bit of a hack to make the debug output of constraints more readable.
-    //We should probably have a more structured way to do this.
-    fn write_split_ids<T: Debug>(f: &mut fmt::Formatter, label: &str, ids: &[T]) -> fmt::Result {
-        let (ids, rest) = if ids.len() > 10 {
-            ids.split_at(10)
-        } else {
-            let rest: &[T] = &[];
-            (ids, rest)
-        };
-        if rest.is_empty() {
-            write!(f, "{}({:?})", label, ids)
-        } else {
-            write!(f, "{}({:?}, ... {} more)", label, ids, rest.len())
         }
     }
 
@@ -1109,12 +1065,12 @@ mod constraints {
         ///
         /// The preference only relates to immediate query inputs,
         /// but it could be extended to transitive inputs as well.
-        /// For example, one could imagine prefering the freshest
+        /// For example, one could imagine preferring the freshest
         /// data known to be ingested into Materialize, under the
         /// premise that those answers should soon become available,
         /// and may be more fresh than the immediate inputs.
         FreshestAvailable,
-        /// Prefer the least valid timeastamp.
+        /// Prefer the least valid timestamp.
         ///
         /// This is useful when one has no expressed freshness
         /// constraints, and wants to minimally impact others.

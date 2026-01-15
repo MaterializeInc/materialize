@@ -31,15 +31,16 @@ contains:AS OF or UP TO should be castable to a (non-null) mz_timestamp value
 # (although testdrive will try), wait until SELECT fails with this error
 # (which will happen after t has been compacted) and then we should be
 # able to see the same failure with FETCH.
+# (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM t1 AS OF 0
-contains:Timestamp (0) is not valid for all inputs
+contains:imestamp
 
 > BEGIN
 
 > DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF 0;
 
 ! FETCH 1 c;
-contains:Timestamp (0) is not valid for all inputs
+contains:imestamp
 
 > COMMIT
 

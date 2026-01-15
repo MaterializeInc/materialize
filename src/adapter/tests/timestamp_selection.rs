@@ -149,7 +149,6 @@ impl TimestampProvider for Frontiers {
 struct Determine {
     id_bundle: IdBundle,
     when: String,
-    instance: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -284,7 +283,6 @@ fn test_timestamp_selection() {
                             &session,
                             &det.id_bundle.into(),
                             &parse_query_when(&det.when),
-                            det.instance.parse().unwrap(),
                             &TimelineContext::TimestampDependent,
                             oracle_read_ts,
                             None, /* real_time_recency_ts */

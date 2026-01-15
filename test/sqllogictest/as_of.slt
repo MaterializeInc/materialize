@@ -93,7 +93,8 @@ SELECT * FROM t;
 ----
 1
 
-query error db error: ERROR: Timestamp \(1768481949666\) is not valid for all inputs: \[\]
+# (The error msg's details are tested in `test_subscribe_basic`.)
+query error could not find a valid timestamp for the query
 SELECT * FROM t AS OF 1
 
 # AS OF escapes linearizability, so this could choose a timestamp before the INSERT. We're just
