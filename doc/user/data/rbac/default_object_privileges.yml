@@ -17,3 +17,17 @@ rows:
       When a [data type](/sql/types/) is created (regardless of the owner), all
       roles are granted the `USAGE` privilege. However, to use a data type, the
       role must also have `USAGE` privilege on the schema containing the type.
+
+  - "Default Privilege": "`CREATEDATAFLOW`"
+    "Object(s)": |
+      [`CLUSTER`](/concepts/clusters/)
+    "Object owner": |
+      `PUBLIC`
+    "Granted to": |
+      `PUBLIC`
+    Description: |
+      When a [cluster](/concepts/clusters/) is created (regardless of the owner),
+      all roles are granted the `CREATEDATAFLOW` privilege by default. This ensures
+      backwards compatibility and allows all users to execute queries that require
+      dataflow rendering. Administrators can revoke this privilege to restrict
+      users to only fast-path queries.

@@ -94,3 +94,28 @@ rows:
     Abbreviation: "`P`"
     Applies to: |
       - `SYSTEM`
+
+  - Privilege: "**CREATEDATAFLOW**"
+    Description: |
+
+      Permission to execute queries that require dataflow rendering on a cluster.
+
+      When a query cannot be satisfied by an existing index using a [fast path](/sql/explain-plan/#fast-path-queries),
+      Materialize must render a temporary dataflow on the cluster. This privilege controls
+      whether a role is allowed to trigger such dataflow rendering.
+
+      Queries that can be answered using existing indexes (with optional map-filter-project
+      operations) or constant queries (e.g., `SELECT 1 + 1`) do not require this privilege.
+
+      This privilege is useful in production environments to prevent users from accidentally
+      executing high-latency queries that require dataflow rendering, ensuring they only
+      run queries that can be satisfied by existing indexes.
+
+      {{< note >}}
+      The [persist fast-path optimization](/sql/explain-plan/#fast-path-queries) is still
+      available even without this privilege, as it does not render a dataflow.
+      {{</ note >}}
+
+    Abbreviation: "`D`"
+    Applies to: |
+      - `CLUSTER`

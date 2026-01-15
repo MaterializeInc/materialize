@@ -7,6 +7,7 @@ rows:
     Privileges: |
       - `USAGE`
       - `CREATE`
+      - `CREATEDATAFLOW`
 
   - Object: "`CONNECTION`"
     Privileges: |
