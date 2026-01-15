@@ -1541,6 +1541,11 @@ GRANT USAGE ON CLUSTER quickstart TO joe;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+GRANT CREATEDATAFLOW ON CLUSTER quickstart TO joe;
+----
+COMPLETE 0
+
 simple conn=joe,user=joe
 SELECT a::ty FROM t;
 ----

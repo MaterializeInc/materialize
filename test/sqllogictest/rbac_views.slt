@@ -135,25 +135,31 @@ query TTTT
 SELECT * FROM mz_internal.mz_show_cluster_privileges ORDER BY name, grantee
 ----
 materialize  PUBLIC  c  USAGE
+materialize  PUBLIC  c  CREATEDATAFLOW
 materialize  materialize  c  USAGE
 materialize  materialize  c  CREATE
+materialize  materialize  c  CREATEDATAFLOW
 materialize  r1  c  USAGE
 materialize  r3  c  USAGE
 materialize  r3  c  CREATE
 materialize  r4  c  CREATE
 mz_system  PUBLIC  quickstart  USAGE
+mz_system  PUBLIC  quickstart  CREATEDATAFLOW
 mz_system  materialize  quickstart  USAGE
 mz_system  materialize  quickstart  CREATE
+mz_system  materialize  quickstart  CREATEDATAFLOW
 
 simple conn=r1,user=r1
 SELECT * FROM mz_internal.mz_show_my_cluster_privileges ORDER BY name, grantee
 ----
 materialize,PUBLIC,c,USAGE
+materialize,PUBLIC,c,CREATEDATAFLOW
 materialize,r1,c,USAGE
 materialize,r3,c,USAGE
 materialize,r3,c,CREATE
 mz_system,PUBLIC,quickstart,USAGE
-COMPLETE 5
+mz_system,PUBLIC,quickstart,CREATEDATAFLOW
+COMPLETE 7
 
 # SHOW DATABASE PRIVILEGES
 
@@ -285,15 +291,19 @@ query TTTTTTT
 SELECT * FROM mz_internal.mz_show_all_privileges ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC  NULL  NULL  c  cluster  USAGE
+materialize  PUBLIC  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  materialize  NULL  NULL  c  cluster  USAGE
 materialize  materialize  NULL  NULL  c  cluster  CREATE
+materialize  materialize  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  r1  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  CREATE
 materialize  r4  NULL  NULL  c  cluster  CREATE
 mz_system  PUBLIC  NULL  NULL  quickstart  cluster  USAGE
+mz_system  PUBLIC  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 mz_system  materialize  NULL  NULL  quickstart  cluster  USAGE
 mz_system  materialize  NULL  NULL  quickstart  cluster  CREATE
+mz_system  materialize  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 materialize  PUBLIC  NULL  NULL  d  database  CREATE
 materialize  materialize  NULL  NULL  d  database  USAGE
 materialize  materialize  NULL  NULL  d  database  CREATE
@@ -340,10 +350,12 @@ simple conn=r1,user=r1
 SELECT * FROM mz_internal.mz_show_all_my_privileges ORDER BY object_type, database, schema, name, grantee
 ----
 materialize,PUBLIC,NULL,NULL,c,cluster,USAGE
+materialize,PUBLIC,NULL,NULL,c,cluster,CREATEDATAFLOW
 materialize,r1,NULL,NULL,c,cluster,USAGE
 materialize,r3,NULL,NULL,c,cluster,USAGE
 materialize,r3,NULL,NULL,c,cluster,CREATE
 mz_system,PUBLIC,NULL,NULL,quickstart,cluster,USAGE
+mz_system,PUBLIC,NULL,NULL,quickstart,cluster,CREATEDATAFLOW
 materialize,PUBLIC,NULL,NULL,d,database,CREATE
 materialize,r1,NULL,NULL,d,database,USAGE
 materialize,r1,NULL,NULL,d,database,CREATE
@@ -362,21 +374,25 @@ materialize,PUBLIC,materialize,public,t,table,INSERT
 materialize,r1,materialize,public,t,table,INSERT
 materialize,r1,materialize,public,t,table,SELECT
 materialize,r2,materialize,public,t,table,SELECT
-COMPLETE 23
+COMPLETE 25
 
 query TTTTTTT
 SELECT * FROM (SHOW PRIVILEGES) ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC  NULL  NULL  c  cluster  USAGE
+materialize  PUBLIC  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  materialize  NULL  NULL  c  cluster  USAGE
 materialize  materialize  NULL  NULL  c  cluster  CREATE
+materialize  materialize  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  r1  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  CREATE
 materialize  r4  NULL  NULL  c  cluster  CREATE
 mz_system  PUBLIC  NULL  NULL  quickstart  cluster  USAGE
+mz_system  PUBLIC  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 mz_system  materialize  NULL  NULL  quickstart  cluster  USAGE
 mz_system  materialize  NULL  NULL  quickstart  cluster  CREATE
+mz_system  materialize  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 materialize  PUBLIC  NULL  NULL  d  database  CREATE
 materialize  materialize  NULL  NULL  d  database  USAGE
 materialize  materialize  NULL  NULL  d  database  CREATE
@@ -423,23 +439,29 @@ query TTTTTTT
 SELECT * FROM (SHOW PRIVILEGES ON CLUSTERS) ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC  NULL  NULL  c  cluster  USAGE
+materialize  PUBLIC  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  materialize  NULL  NULL  c  cluster  USAGE
 materialize  materialize  NULL  NULL  c  cluster  CREATE
+materialize  materialize  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  r1  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  CREATE
 materialize  r4  NULL  NULL  c  cluster  CREATE
 mz_system  PUBLIC  NULL  NULL  quickstart  cluster  USAGE
+mz_system  PUBLIC  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 mz_system  materialize  NULL  NULL  quickstart  cluster  USAGE
 mz_system  materialize  NULL  NULL  quickstart  cluster  CREATE
+mz_system  materialize  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 
 query TTTTTTT
 SELECT * FROM (SHOW PRIVILEGES FOR r2) ORDER BY object_type, database, schema, name, grantee
 ----
 materialize  PUBLIC  NULL  NULL  c  cluster  USAGE
+materialize  PUBLIC  NULL  NULL  c  cluster  CREATEDATAFLOW
 materialize  r3  NULL  NULL  c  cluster  USAGE
 materialize  r3  NULL  NULL  c  cluster  CREATE
 mz_system  PUBLIC  NULL  NULL  quickstart  cluster  USAGE
+mz_system  PUBLIC  NULL  NULL  quickstart  cluster  CREATEDATAFLOW
 materialize  PUBLIC  NULL  NULL  d  database  CREATE
 materialize  r2  NULL  NULL  d  database  USAGE
 mz_system  PUBLIC  NULL  NULL  materialize  database  USAGE
@@ -479,6 +501,7 @@ COMPLETE 0
 query TTTTTT
 SELECT * FROM mz_internal.mz_show_default_privileges ORDER BY object_type, database, schema, grantee
 ----
+PUBLIC  NULL  NULL  cluster  PUBLIC  CREATEDATAFLOW
 materialize  materialize  s  connection  r3  USAGE
 r5  NULL  NULL  database  PUBLIC  CREATE
 PUBLIC  NULL  NULL  schema  r4  USAGE
@@ -491,17 +514,19 @@ PUBLIC  NULL  NULL  type  PUBLIC  USAGE
 simple conn=r1,user=r1
 SELECT * FROM mz_internal.mz_show_my_default_privileges ORDER BY object_type, database, schema, grantee
 ----
+PUBLIC,NULL,NULL,cluster,PUBLIC,CREATEDATAFLOW
 materialize,materialize,s,connection,r3,USAGE
 r5,NULL,NULL,database,PUBLIC,CREATE
 materialize,d,NULL,table,r1,UPDATE
 materialize,NULL,NULL,table,r1,INSERT
 materialize,NULL,NULL,table,r1,SELECT
 PUBLIC,NULL,NULL,type,PUBLIC,USAGE
-COMPLETE 6
+COMPLETE 7
 
 query TTTTTT
 SELECT * FROM (SHOW DEFAULT PRIVILEGES) ORDER BY object_type, database, schema, grantee
 ----
+PUBLIC  NULL  NULL  cluster  PUBLIC  CREATEDATAFLOW
 materialize  materialize  s  connection  r3  USAGE
 r5  NULL  NULL  database  PUBLIC  CREATE
 PUBLIC  NULL  NULL  schema  r4  USAGE
@@ -521,6 +546,7 @@ materialize  NULL         NULL  table       r1      SELECT
 query TTTTTT
 SELECT * FROM (SHOW DEFAULT PRIVILEGES FOR r1) ORDER BY object_type, database, schema, grantee
 ----
+PUBLIC  NULL  NULL  cluster  PUBLIC  CREATEDATAFLOW
 materialize  materialize  s  connection  r3  USAGE
 r5  NULL  NULL  database  PUBLIC  CREATE
 materialize  d  NULL  table  r1  UPDATE

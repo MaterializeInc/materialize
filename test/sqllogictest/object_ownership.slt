@@ -1892,6 +1892,7 @@ owner: owner of CLUSTER "clus"
 owner: privileges granted on CLUSTER "clus" to mz_support
 owner: privileges on CLUSTER "clus" granted by owner
 owner: privileges granted on CLUSTER "clus" to owner
+owner: privileges granted on CLUSTER "clus" to public
 owner: owner of CLUSTER REPLICA "r1"
 owner: privileges on SYSTEM granted by mz_system
 
@@ -1972,6 +1973,7 @@ owner: owner of CLUSTER "clus"
 owner: privileges granted on CLUSTER "clus" to mz_support
 owner: privileges on CLUSTER "clus" granted by owner
 owner: privileges granted on CLUSTER "clus" to owner
+owner: privileges granted on CLUSTER "clus" to public
 owner: owner of CLUSTER REPLICA "r1"
 owner: owner of CLUSTER REPLICA "r2"
 owner: privileges on SYSTEM granted by mz_system
@@ -1991,6 +1993,7 @@ owner: owner of CLUSTER "clus"
 owner: privileges granted on CLUSTER "clus" to mz_support
 owner: privileges on CLUSTER "clus" granted by owner
 owner: privileges granted on CLUSTER "clus" to owner
+owner: privileges granted on CLUSTER "clus" to public
 owner: owner of CLUSTER REPLICA "r1"
 owner: privileges on SYSTEM granted by mz_system
 

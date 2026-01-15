@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/debug.rs
-assertion_line: 233
 expression: test_trace
 ---
 Trace {
@@ -44,7 +43,7 @@ Trace {
                             AuditLogEventV1 {
                                 id: 2,
                                 event_type: Grant,
-                                object_type: Database,
+                                object_type: Cluster,
                                 user: None,
                                 occurred_at: EpochMillis {
                                     millis: 0,
@@ -54,8 +53,8 @@ Trace {
                                         role_id: "p",
                                         database_id: None,
                                         schema_id: None,
-                                        grantee_id: "s2",
-                                        privileges: "U",
+                                        grantee_id: "p",
+                                        privileges: "D",
                                     },
                                 ),
                             },
@@ -75,7 +74,7 @@ Trace {
                             AuditLogEventV1 {
                                 id: 3,
                                 event_type: Grant,
-                                object_type: Schema,
+                                object_type: Database,
                                 user: None,
                                 occurred_at: EpochMillis {
                                     millis: 0,
@@ -106,6 +105,37 @@ Trace {
                             AuditLogEventV1 {
                                 id: 4,
                                 event_type: Grant,
+                                object_type: Schema,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
+                                },
+                                details: AlterDefaultPrivilegeV1(
+                                    AlterDefaultPrivilegeV1 {
+                                        role_id: "p",
+                                        database_id: None,
+                                        schema_id: None,
+                                        grantee_id: "s2",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
+                        ),
+                    },
+                    (),
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    AuditLogKey {
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 5,
+                                event_type: Grant,
                                 object_type: Type,
                                 user: None,
                                 occurred_at: EpochMillis {
@@ -135,7 +165,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 5,
+                                id: 6,
                                 event_type: Create,
                                 object_type: Database,
                                 user: None,
@@ -163,7 +193,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 6,
+                                id: 7,
                                 event_type: Grant,
                                 object_type: Database,
                                 user: None,
@@ -193,7 +223,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 7,
+                                id: 8,
                                 event_type: Create,
                                 object_type: Schema,
                                 user: None,
@@ -226,7 +256,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 8,
+                                id: 9,
                                 event_type: Create,
                                 object_type: NetworkPolicy,
                                 user: None,
@@ -254,7 +284,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 9,
+                                id: 10,
                                 event_type: Create,
                                 object_type: Cluster,
                                 user: None,
@@ -282,7 +312,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 10,
+                                id: 11,
                                 event_type: Grant,
                                 object_type: Cluster,
                                 user: None,
@@ -294,7 +324,7 @@ Trace {
                                         object_id: "Cu1",
                                         grantee_id: "p",
                                         grantor_id: "s1",
-                                        privileges: "U",
+                                        privileges: "UD",
                                     },
                                 ),
                             },
@@ -312,7 +342,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 11,
+                                id: 12,
                                 event_type: Create,
                                 object_type: ClusterReplica,
                                 user: None,
@@ -355,7 +385,7 @@ Trace {
                     AuditLogKey {
                         event: V1(
                             AuditLogEventV1 {
-                                id: 12,
+                                id: 13,
                                 event_type: Grant,
                                 object_type: System,
                                 user: None,
@@ -403,7 +433,7 @@ Trace {
                                     1,
                                 ),
                                 acl_mode: AclMode {
-                                    bitflags: 256,
+                                    bitflags: 268435712,
                                 },
                             },
                             MzAclItem {
@@ -425,7 +455,7 @@ Trace {
                                     1,
                                 ),
                                 acl_mode: AclMode {
-                                    bitflags: 768,
+                                    bitflags: 268436224,
                                 },
                             },
                         ],
@@ -636,6 +666,26 @@ Trace {
                         role_id: Public,
                         database_id: None,
                         schema_id: None,
+                        object_type: Cluster,
+                        grantee: Public,
+                    },
+                    DefaultPrivilegesValue {
+                        privileges: AclMode {
+                            bitflags: 268435456,
+                        },
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    DefaultPrivilegesKey {
+                        role_id: Public,
+                        database_id: None,
+                        schema_id: None,
                         object_type: Database,
                         grantee: System(
                             2,
@@ -684,7 +734,7 @@ Trace {
                         name: "auditlog",
                     },
                     IdAllocValue {
-                        next_id: 13,
+                        next_id: 14,
                     },
                 ),
                 2,

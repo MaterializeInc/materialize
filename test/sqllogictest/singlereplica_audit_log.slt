@@ -139,67 +139,68 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 ----
 1  create  role  {"id":"u1","name":"materialize"}  NULL
 2  grant  cluster  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
-3  grant  database  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
-4  grant  schema  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
-5  grant  type  {"database_id":null,"grantee_id":"p","privileges":"U","role_id":"p","schema_id":null}  NULL
-6  create  database  {"id":"u1","name":"materialize"}  NULL
-7  grant  database  {"grantee_id":"p","grantor_id":"s1","object_id":"Du1","privileges":"U"}  NULL
-8  grant  database  {"grantee_id":"u1","grantor_id":"s1","object_id":"Du1","privileges":"UC"}  NULL
-9  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
-10  grant  schema  {"grantee_id":"u1","grantor_id":"s1","object_id":"Su1.u3","privileges":"UC"}  NULL
-11  create  network-policy  {"id":"u1","name":"default"}  NULL
-12  create  cluster  {"id":"u1","name":"quickstart"}  NULL
-13  grant  cluster  {"grantee_id":"p","grantor_id":"s1","object_id":"Cu1","privileges":"U"}  NULL
-14  grant  cluster  {"grantee_id":"u1","grantor_id":"s1","object_id":"Cu1","privileges":"UC"}  NULL
-15  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"quickstart","internal":false,"logical_size":"scale=1,workers=2","reason":"system","replica_id":"u1","replica_name":"r1"}  NULL
-16  grant  system  {"grantee_id":"s1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
-17  grant  system  {"grantee_id":"u1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
-18  alter  system  {"name":"enable_reduce_mfp_fusion","value":"on"}  mz_system
-19  alter  system  {"name":"unsafe_enable_unsafe_functions","value":"on"}  mz_system
-20  create  database  {"id":"u2","name":"test"}  materialize
-21  create  schema  {"database_name":"test","id":"u9","name":"public"}  materialize
-22  create  schema  {"database_name":"test","id":"u10","name":"sc1"}  materialize
-23  create  schema  {"database_name":"test","id":"u11","name":"sc2"}  materialize
-24  drop  schema  {"database_name":"test","id":"u10","name":"sc1"}  materialize
-25  drop  schema  {"database_name":"test","id":"u9","name":"public"}  materialize
-26  drop  schema  {"database_name":"test","id":"u11","name":"sc2"}  materialize
-27  drop  database  {"id":"u2","name":"test"}  materialize
-28  create  role  {"id":"u2","name":"foo"}  materialize
-29  drop  role  {"id":"u2","name":"foo"}  materialize
-30  create  cluster  {"id":"u2","name":"foo"}  materialize
-31  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","internal":false,"logical_size":"scale=1,workers=1","reason":"manual","replica_id":"u2","replica_name":"r"}  materialize
-32  create  materialized-view  {"cluster_id":"u1","database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
-33  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
-34  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
-35  create  index  {"cluster_id":"u1","database":"materialize","id":"u4","item":"t_primary_idx","schema":"public"}  materialize
-36  alter  view  {"id":"u2","new_name":{"database":"materialize","item":"renamed","schema":"public"},"old_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
-37  drop  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
-38  create  materialized-view  {"cluster_id":"u1","database":"materialize","id":"u5","item":"v2","schema":"public"}  materialize
-39  create  index  {"cluster_id":"u1","database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
-40  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
-41  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
-42  create  source  {"cluster_id":"u1","database":"materialize","id":"u7","item":"s","schema":"public","type":"load-generator"}  materialize
-43  drop  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
-44  create  source  {"cluster_id":"u1","database":"materialize","id":"u8","item":"multiplex","schema":"public","type":"load-generator"}  materialize
-45  create  table  {"database":"materialize","id":"u9","item":"accounts","schema":"public"}  materialize
-46  create  table  {"database":"materialize","id":"u10","item":"auctions","schema":"public"}  materialize
-47  create  table  {"database":"materialize","id":"u11","item":"bids","schema":"public"}  materialize
-48  create  table  {"database":"materialize","id":"u12","item":"organizations","schema":"public"}  materialize
-49  create  table  {"database":"materialize","id":"u13","item":"users","schema":"public"}  materialize
-50  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
-51  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
+3  grant  cluster  {"database_id":null,"grantee_id":"p","privileges":"D","role_id":"p","schema_id":null}  NULL
+4  grant  database  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
+5  grant  schema  {"database_id":null,"grantee_id":"s2","privileges":"U","role_id":"p","schema_id":null}  NULL
+6  grant  type  {"database_id":null,"grantee_id":"p","privileges":"U","role_id":"p","schema_id":null}  NULL
+7  create  database  {"id":"u1","name":"materialize"}  NULL
+8  grant  database  {"grantee_id":"p","grantor_id":"s1","object_id":"Du1","privileges":"U"}  NULL
+9  grant  database  {"grantee_id":"u1","grantor_id":"s1","object_id":"Du1","privileges":"UC"}  NULL
+10  create  schema  {"database_name":"materialize","id":"3","name":"public"}  NULL
+11  grant  schema  {"grantee_id":"u1","grantor_id":"s1","object_id":"Su1.u3","privileges":"UC"}  NULL
+12  create  network-policy  {"id":"u1","name":"default"}  NULL
+13  create  cluster  {"id":"u1","name":"quickstart"}  NULL
+14  grant  cluster  {"grantee_id":"p","grantor_id":"s1","object_id":"Cu1","privileges":"UD"}  NULL
+15  grant  cluster  {"grantee_id":"u1","grantor_id":"s1","object_id":"Cu1","privileges":"UCD"}  NULL
+16  create  cluster-replica  {"billed_as":null,"cluster_id":"u1","cluster_name":"quickstart","internal":false,"logical_size":"scale=1,workers=2","reason":"system","replica_id":"u1","replica_name":"r1"}  NULL
+17  grant  system  {"grantee_id":"s1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
+18  grant  system  {"grantee_id":"u1","grantor_id":"s1","object_id":"SYSTEM","privileges":"RBNP"}  NULL
+19  alter  system  {"name":"enable_reduce_mfp_fusion","value":"on"}  mz_system
+20  alter  system  {"name":"unsafe_enable_unsafe_functions","value":"on"}  mz_system
+21  create  database  {"id":"u2","name":"test"}  materialize
+22  create  schema  {"database_name":"test","id":"u9","name":"public"}  materialize
+23  create  schema  {"database_name":"test","id":"u10","name":"sc1"}  materialize
+24  create  schema  {"database_name":"test","id":"u11","name":"sc2"}  materialize
+25  drop  schema  {"database_name":"test","id":"u10","name":"sc1"}  materialize
+26  drop  schema  {"database_name":"test","id":"u9","name":"public"}  materialize
+27  drop  schema  {"database_name":"test","id":"u11","name":"sc2"}  materialize
+28  drop  database  {"id":"u2","name":"test"}  materialize
+29  create  role  {"id":"u2","name":"foo"}  materialize
+30  drop  role  {"id":"u2","name":"foo"}  materialize
+31  create  cluster  {"id":"u2","name":"foo"}  materialize
+32  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","internal":false,"logical_size":"scale=1,workers=1","reason":"manual","replica_id":"u2","replica_name":"r"}  materialize
+33  create  materialized-view  {"cluster_id":"u1","database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
+34  create  view  {"database":"materialize","id":"u2","item":"unmat","schema":"public"}  materialize
+35  create  table  {"database":"materialize","id":"u3","item":"t","schema":"public"}  materialize
+36  create  index  {"cluster_id":"u1","database":"materialize","id":"u4","item":"t_primary_idx","schema":"public"}  materialize
+37  alter  view  {"id":"u2","new_name":{"database":"materialize","item":"renamed","schema":"public"},"old_name":{"database":"materialize","item":"unmat","schema":"public"}}  materialize
+38  drop  materialized-view  {"database":"materialize","id":"u1","item":"v2","schema":"public"}  materialize
+39  create  materialized-view  {"cluster_id":"u1","database":"materialize","id":"u5","item":"v2","schema":"public"}  materialize
+40  create  index  {"cluster_id":"u1","database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
+41  drop  index  {"database":"materialize","id":"u6","item":"renamed_primary_idx","schema":"public"}  materialize
+42  drop  view  {"database":"materialize","id":"u2","item":"renamed","schema":"public"}  materialize
+43  create  source  {"cluster_id":"u1","database":"materialize","id":"u7","item":"s","schema":"public","type":"load-generator"}  materialize
+44  drop  source  {"database":"materialize","id":"u7","item":"s","schema":"public"}  materialize
+45  create  source  {"cluster_id":"u1","database":"materialize","id":"u8","item":"multiplex","schema":"public","type":"load-generator"}  materialize
+46  create  table  {"database":"materialize","id":"u9","item":"accounts","schema":"public"}  materialize
+47  create  table  {"database":"materialize","id":"u10","item":"auctions","schema":"public"}  materialize
+48  create  table  {"database":"materialize","id":"u11","item":"bids","schema":"public"}  materialize
+49  create  table  {"database":"materialize","id":"u12","item":"organizations","schema":"public"}  materialize
+50  create  table  {"database":"materialize","id":"u13","item":"users","schema":"public"}  materialize
+51  alter  cluster-replica  {"cluster_id":"u2","new_name":"s","old_name":"r","replica_id":"u2"}  materialize
 52  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
-53  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
-54  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","reason":"manual","replica_id":"u2","replica_name":"s"}  materialize
-55  drop  cluster  {"id":"u2","name":"bar"}  materialize
-56  alter  materialized-view  {"id":"u5","new_history":"'5m'","old_history":null}  materialize
-57  alter  materialized-view  {"id":"u5","new_history":null,"old_history":"FOR␠'5m'"}  materialize
-58  comment  materialized-view  {"id":"MaterializedView(User(5))","name":"materialize.public.v2"}  materialize
-59  create  connection  {"database":"materialize","id":"u14","item":"conn","schema":"public"}  materialize
-60  alter  connection  {"database":"materialize","id":"u14","item":"conn","schema":"public"}  materialize
-61  alter  system  {"name":"max_aws_privatelink_connections","value":"10"}  mz_system
-62  alter  system  {"name":"max_aws_privatelink_connections","value":null}  mz_system
-63  alter  system  null  mz_system
+53  comment  cluster  {"id":"Cluster(User(2))","name":"foo"}  materialize
+54  alter  cluster  {"id":"u2","new_name":"bar","old_name":"foo"}  materialize
+55  drop  cluster-replica  {"cluster_id":"u2","cluster_name":"bar","reason":"manual","replica_id":"u2","replica_name":"s"}  materialize
+56  drop  cluster  {"id":"u2","name":"bar"}  materialize
+57  alter  materialized-view  {"id":"u5","new_history":"'5m'","old_history":null}  materialize
+58  alter  materialized-view  {"id":"u5","new_history":null,"old_history":"FOR␠'5m'"}  materialize
+59  comment  materialized-view  {"id":"MaterializedView(User(5))","name":"materialize.public.v2"}  materialize
+60  create  connection  {"database":"materialize","id":"u14","item":"conn","schema":"public"}  materialize
+61  alter  connection  {"database":"materialize","id":"u14","item":"conn","schema":"public"}  materialize
+62  alter  system  {"name":"max_aws_privatelink_connections","value":"10"}  mz_system
+63  alter  system  {"name":"max_aws_privatelink_connections","value":null}  mz_system
+64  alter  system  null  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET unsafe_mock_audit_event_timestamp = 666
@@ -212,7 +213,7 @@ CREATE TABLE tt ()
 query ITTTTT
 SELECT id, event_type, object_type, details, user, occurred_at FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-65  create  table  {"database":"materialize","id":"u15","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
+66  create  table  {"database":"materialize","id":"u15","item":"tt","schema":"public"}  materialize  1970-01-01␠00:00:00.666+00
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET unsafe_mock_audit_event_timestamp
@@ -246,7 +247,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-69  grant  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
+70  grant  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
 
 simple conn=mz_system,user=mz_system
 REVOKE SELECT ON t FROM r1;
@@ -256,7 +257,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-70  revoke  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
+71  revoke  table  {"grantee_id":"u3","grantor_id":"u1","object_id":"Iu3","privileges":"r"}  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA public GRANT SELECT ON TABLES to PUBLIC;
@@ -266,7 +267,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-71  grant  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
+72  grant  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
 
 simple conn=mz_system,user=mz_system
 ALTER DEFAULT PRIVILEGES FOR ROLE r1 IN SCHEMA public REVOKE SELECT ON TABLES FROM PUBLIC;
@@ -276,7 +277,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-72  revoke  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
+73  revoke  table  {"database_id":"u1","grantee_id":"p","privileges":"r","role_id":"u3","schema_id":"u3"}  mz_system
 
 statement ok
 CREATE TABLE t1 (a INT);
@@ -289,7 +290,7 @@ COMPLETE 0
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-74  alter  table  {"new_owner_id":"u3","object_id":"Iu16","old_owner_id":"u1"}  mz_system
+75  alter  table  {"new_owner_id":"u3","object_id":"Iu16","old_owner_id":"u1"}  mz_system
 
 # Test events for auto-created users, which have the username only in the event details, but not the user column.
 simple conn=c,user=new_user
@@ -301,7 +302,7 @@ COMPLETE 1
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-75  create  role  {"id":"u4","name":"new_user"}  NULL
+76  create  role  {"id":"u4","name":"new_user"}  NULL
 
 # Test audit events for replacement materialized views
 
@@ -320,7 +321,7 @@ CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER test1 AS SELECT id FRO
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-81  create  materialized-view  {"cluster_id":"u3","database":"materialize","id":"u18","item":"rp","replacement_target_id":"u17","schema":"public"}  materialize
+82  create  materialized-view  {"cluster_id":"u3","database":"materialize","id":"u18","item":"rp","replacement_target_id":"u17","schema":"public"}  materialize
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
@@ -328,8 +329,8 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 2
 ----
-83  drop  materialized-view  {"database":"materialize","id":"u18","item":"rp","schema":"public"}  materialize
-82  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u18","item":"rp","schema":"public"},"schema":"public"}  materialize
+84  drop  materialized-view  {"database":"materialize","id":"u18","item":"rp","schema":"public"}  materialize
+83  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u18","item":"rp","schema":"public"},"schema":"public"}  materialize
 
 statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv IN CLUSTER test2 AS SELECT id FROM mz_tables
@@ -340,6 +341,6 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp2
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 ----
-87  drop  materialized-view  {"database":"materialize","id":"u19","item":"rp2","schema":"public"}  materialize
-86  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","new_cluster_id":"u4","old_cluster_id":"u3","schema":"public"}  materialize
-85  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u19","item":"rp2","schema":"public"},"schema":"public"}  materialize
+88  drop  materialized-view  {"database":"materialize","id":"u19","item":"rp2","schema":"public"}  materialize
+87  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","new_cluster_id":"u4","old_cluster_id":"u3","schema":"public"}  materialize
+86  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u19","item":"rp2","schema":"public"},"schema":"public"}  materialize

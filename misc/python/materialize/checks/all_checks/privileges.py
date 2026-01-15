@@ -264,8 +264,9 @@ class Privileges(Check):
 
                 > SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name LIKE 'privilege_cluster%'
                 privilege_cluster1 mz_support=U/materialize
-                privilege_cluster1 materialize=UC/materialize
-                privilege_cluster1 role_1=UC/materialize
+                privilege_cluster1 =D/materialize
+                privilege_cluster1 materialize=UCD/materialize
+                privilege_cluster1 role_1=UCD/materialize
 
                 > SELECT name, unnest(privileges)::text FROM mz_connections WHERE name LIKE 'privilege_%'
                 privilege_csr_conn1  materialize=U/materialize

@@ -13,6 +13,7 @@
     SHOW PRIVILEGES FOR "blue.berry@example.com";
   test_results: |
     mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
     mz_system PUBLIC <null> <null> quickstart cluster USAGE
     mz_system PUBLIC materialize <null> public schema USAGE
 
