@@ -26,3 +26,4 @@ mod upsert_continual_feedback;
 pub(crate) mod healthcheck;
 
 pub use server::serve;
+pub use storage_state::handle_internal_storage_command;

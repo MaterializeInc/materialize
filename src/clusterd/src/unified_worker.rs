@@ -23,13 +23,10 @@
 //! - Storage internal command sequencing for consistent dataflow rendering
 //! - Shared metrics and tracing infrastructure
 //!
-//! # Limitations (Prototype)
+//! # Remaining Work
 //!
-//! This is a prototype implementation. Full integration requires:
-//! - Refactoring storage `Worker::handle_internal_storage_command` to be callable
-//!   from outside the `Worker` struct
 //! - Unified introspection/logging infrastructure
-//! - Connection multiplexing or separate GRPC endpoints
+//! - Wire up to be usable from clusterd via a configuration flag
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
@@ -37,7 +34,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossbeam_channel::{select, TryRecvError};
+use crossbeam_channel::{TryRecvError, select};
 use mz_cluster::client::ClusterSpec;
 use mz_compute::command_channel;
 use mz_compute::compute_state::{ActiveComputeState, ComputeState};
@@ -49,10 +46,10 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage::internal_control::{self, DataflowParameters, InternalStorageCommand};
 use mz_storage::statistics::AggregatedStatistics;
+use mz_storage::storage_state::StorageState;
 use mz_storage::storage_state::async_storage_worker::{
     AsyncStorageWorker, AsyncStorageWorkerResponse,
 };
-use mz_storage::storage_state::StorageState;
 use mz_storage_client::client::{StorageCommand, StorageResponse};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_txn_wal::operator::TxnsContext;
@@ -172,10 +169,8 @@ impl ClusterSpec for UnifiedConfig {
         let (read_only_tx, read_only_rx) = watch::channel(true);
 
         // Create async worker for storage (handles persist operations asynchronously)
-        let async_worker = AsyncStorageWorker::new(
-            thread::current(),
-            Arc::clone(&self.persist_clients),
-        );
+        let async_worker =
+            AsyncStorageWorker::new(thread::current(), Arc::clone(&self.persist_clients));
 
         let cluster_memory_limit = self.storage_instance_context.cluster_memory_limit;
 
@@ -312,7 +307,8 @@ impl<'w, A: Allocate + 'static> UnifiedWorker<'w, A> {
             } else {
                 let next = last_compute_maintenance + compute_maintenance_interval;
                 let remaining = next.saturating_duration_since(now);
-                sleep_duration = Some(sleep_duration.map_or(remaining, |d: Duration| d.min(remaining)));
+                sleep_duration =
+                    Some(sleep_duration.map_or(remaining, |d: Duration| d.min(remaining)));
             }
 
             // Check storage maintenance
@@ -322,7 +318,8 @@ impl<'w, A: Allocate + 'static> UnifiedWorker<'w, A> {
             } else {
                 let next = last_storage_maintenance + storage_maintenance_interval;
                 let remaining = next.saturating_duration_since(now);
-                sleep_duration = Some(sleep_duration.map_or(remaining, |d: Duration| d.min(remaining)));
+                sleep_duration =
+                    Some(sleep_duration.map_or(remaining, |d: Duration| d.min(remaining)));
             }
 
             // Determine if we can park
@@ -331,11 +328,16 @@ impl<'w, A: Allocate + 'static> UnifiedWorker<'w, A> {
                 && self.storage_state.async_worker.is_empty();
 
             // Step the timely worker
-            let timer = self.compute_metrics.timely_step_duration_seconds.start_timer();
+            let timer = self
+                .compute_metrics
+                .timely_step_duration_seconds
+                .start_timer();
             if can_park {
                 // Include storage stats interval in sleep calculation
-                let stats_remaining = storage_stats_interval.saturating_sub(last_storage_stats_time.elapsed());
-                let park_duration = sleep_duration.map_or(stats_remaining, |d: Duration| d.min(stats_remaining));
+                let stats_remaining =
+                    storage_stats_interval.saturating_sub(last_storage_stats_time.elapsed());
+                let park_duration =
+                    sleep_duration.map_or(stats_remaining, |d: Duration| d.min(stats_remaining));
                 self.timely_worker.step_or_park(Some(park_duration));
             } else {
                 self.timely_worker.step();
@@ -384,10 +386,7 @@ impl<'w, A: Allocate + 'static> UnifiedWorker<'w, A> {
                 self.handle_storage_async_worker_response(response);
             }
 
-            // Handle storage internal commands
-            // NOTE: This is a simplified version. Full implementation requires
-            // refactoring storage Worker::handle_internal_storage_command to be
-            // accessible from here (it needs both StorageState and TimelyWorker).
+            // Handle storage internal commands (renders dataflows as needed)
             while let Some(command) = self.storage_state.internal_cmd_rx.try_recv() {
                 self.handle_internal_storage_command(command);
             }
@@ -411,9 +410,7 @@ impl<'w, A: Allocate + 'static> UnifiedWorker<'w, A> {
                 self.compute_context.clone(),
             ));
         }
-        self.activate_compute()
-            .unwrap()
-            .handle_compute_command(cmd);
+        self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
     fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
@@ -548,45 +545,13 @@ impl<'w, A: Allocate + 'static> UnifiedWorker<'w, A> {
     }
 
     fn handle_internal_storage_command(&mut self, command: InternalStorageCommand) {
-        // NOTE: This is a simplified stub. The full implementation requires
-        // porting the logic from storage Worker::handle_internal_storage_command,
-        // which includes dataflow rendering that needs access to both
-        // StorageState and TimelyWorker.
-        //
-        // For the prototype, we log the command but don't fully process it.
-        // Full implementation requires refactoring the storage crate to expose
-        // the internal command handling logic in a way that can be called from
-        // external code with separate StorageState and TimelyWorker references.
-        match command {
-            InternalStorageCommand::SuspendAndRestart { id, reason } => {
-                info!(
-                    "unified worker: would suspend and restart {id} due to: {reason}"
-                );
-            }
-            InternalStorageCommand::CreateIngestionDataflow { id, .. } => {
-                info!("unified worker: would create ingestion dataflow for {id}");
-            }
-            InternalStorageCommand::RunSinkDataflow(id, _) => {
-                info!("unified worker: would run sink dataflow for {id}");
-            }
-            InternalStorageCommand::DropDataflow(ref ids) => {
-                info!("unified worker: would drop dataflows {:?}", ids);
-            }
-            InternalStorageCommand::RunOneshotIngestion { ingestion_id, .. } => {
-                info!("unified worker: would run oneshot ingestion {ingestion_id}");
-            }
-            InternalStorageCommand::UpdateConfiguration { .. } => {
-                // Can be handled directly on StorageState
-                // self.storage_state.dataflow_parameters.update(storage_parameters);
-                info!("unified worker: would update configuration");
-            }
-            InternalStorageCommand::StatisticsUpdate { sources, sinks } => {
-                // Aggregate statistics from all workers
-                self.storage_state
-                    .aggregated_statistics
-                    .ingest(sources, sinks);
-            }
-        }
+        // Delegate to the storage crate's free function which handles all
+        // internal storage commands, including dataflow rendering.
+        mz_storage::handle_internal_storage_command(
+            self.timely_worker,
+            &mut self.storage_state,
+            command,
+        );
     }
 }
 

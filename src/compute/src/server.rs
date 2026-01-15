@@ -170,7 +170,10 @@ pub struct ResponseSender {
 
 impl ResponseSender {
     /// Create a new response sender.
-    pub fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    pub fn new(
+        inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
+        worker_id: usize,
+    ) -> Self {
         Self {
             inner,
             worker_id,
