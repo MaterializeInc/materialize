@@ -450,6 +450,11 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 }
 
 impl GlobalLirPlan {
+    /// Returns a reference to the peek plan.
+    pub fn peek_plan(&self) -> &PeekPlan {
+        &self.peek_plan
+    }
+
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (PeekPlan, DataflowMetainfo, SqlRelationType) {
         (self.peek_plan, self.df_meta, self.typ)

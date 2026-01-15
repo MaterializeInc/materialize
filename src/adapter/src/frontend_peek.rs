@@ -15,6 +15,7 @@ use itertools::{Either, Itertools};
 use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
+use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
@@ -845,30 +846,6 @@ impl PeekClient {
             }
         }
 
-        // Enum for branching among various execution steps after optimization
-        enum Execution {
-            Peek {
-                global_lir_plan: optimize::peek::GlobalLirPlan,
-                optimization_finished_at: EpochMillis,
-                plan_insights_optimizer_trace: Option<OptimizerTrace>,
-                insights_ctx: Option<Box<PlanInsightsContext>>,
-            },
-            CopyToS3 {
-                global_lir_plan: optimize::copy_to::GlobalLirPlan,
-                source_ids: BTreeSet<GlobalId>,
-            },
-            ExplainPlan {
-                df_meta: DataflowMetainfo,
-                explain_ctx: ExplainPlanContext,
-                optimizer: optimize::peek::Optimizer,
-                insights_ctx: Option<Box<PlanInsightsContext>>,
-            },
-            ExplainPushdown {
-                imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
-                determination: TimestampDetermination<Timestamp>,
-            },
-        }
-
         let source_ids_for_closure = source_ids.clone();
         let optimization_result = mz_ore::task::spawn_blocking(
             || "optimize peek",
@@ -1045,6 +1022,14 @@ impl PeekClient {
             self.log_lifecycle_event(*logging_id, StatementLifecycleEvent::OptimizationFinished);
         }
 
+        // Assert that read holds are correct for the execution plan
+        Self::assert_read_holds_correct(
+            &read_holds,
+            &optimization_result,
+            &determination,
+            target_cluster_id,
+        );
+
         // Handle the optimization result: either generate EXPLAIN output or continue with execution
         match optimization_result {
             Execution::ExplainPlan {
@@ -1203,65 +1188,6 @@ impl PeekClient {
                         .await?
                     }
                     PeekPlan::SlowPath(dataflow_plan) => {
-                        {
-                            // Assert that we have some read holds for all the imports of the dataflow.
-                            for id in dataflow_plan.desc.source_imports.keys() {
-                                soft_assert_or_log!(
-                                    read_holds.storage_holds.contains_key(id),
-                                    "missing read hold for the source import {}",
-                                    id
-                                );
-                            }
-                            for id in dataflow_plan.desc.index_imports.keys() {
-                                soft_assert_or_log!(
-                                    read_holds
-                                        .compute_ids()
-                                        .map(|(_instance, coll)| coll)
-                                        .contains(id),
-                                    "missing read hold for the index import {}",
-                                    id,
-                                );
-                            }
-
-                            // Also check the holds against the as_of.
-                            for (id, h) in read_holds.storage_holds.iter() {
-                                let as_of = dataflow_plan
-                                    .desc
-                                    .as_of
-                                    .clone()
-                                    .expect("dataflow has an as_of")
-                                    .into_element();
-                                soft_assert_or_log!(
-                                    h.since().less_equal(&as_of),
-                                    "storage read hold at {:?} for collection {} is not enough for as_of {:?}",
-                                    h.since(),
-                                    id,
-                                    as_of
-                                );
-                            }
-                            for ((instance, id), h) in read_holds.compute_holds.iter() {
-                                soft_assert_eq_or_log!(
-                                    *instance,
-                                    target_cluster_id,
-                                    "the read hold on {} is on the wrong cluster",
-                                    id
-                                );
-                                let as_of = dataflow_plan
-                                    .desc
-                                    .as_of
-                                    .clone()
-                                    .expect("dataflow has an as_of")
-                                    .into_element();
-                                soft_assert_or_log!(
-                                    h.since().less_equal(&as_of),
-                                    "compute read hold at {:?} for collection {} is not enough for as_of {:?}",
-                                    h.since(),
-                                    id,
-                                    as_of
-                                );
-                            }
-                        }
-
                         if let Some(logging_id) = &statement_logging_id {
                             self.log_set_transient_index_id(*logging_id, dataflow_plan.id);
                         }
@@ -1474,4 +1400,147 @@ impl PeekClient {
 
         Ok((det, read_holds))
     }
+
+    fn assert_read_holds_correct(
+        read_holds: &ReadHolds<Timestamp>,
+        execution: &Execution,
+        determination: &TimestampDetermination<Timestamp>,
+        target_cluster_id: ClusterId,
+    ) {
+        // Extract source_imports, index_imports, as_of, and execution_name based on Execution variant
+        let (source_imports, index_imports, as_of, execution_name): (
+            Vec<GlobalId>,
+            Vec<GlobalId>,
+            Timestamp,
+            &str,
+        ) = match execution {
+            Execution::Peek {
+                global_lir_plan, ..
+            } => match global_lir_plan.peek_plan() {
+                PeekPlan::FastPath(fast_path_plan) => {
+                    let (sources, indexes) = match fast_path_plan {
+                        FastPathPlan::Constant(..) => (vec![], vec![]),
+                        FastPathPlan::PeekExisting(_coll_id, idx_id, ..) => (vec![], vec![*idx_id]),
+                        FastPathPlan::PeekPersist(global_id, ..) => (vec![*global_id], vec![]),
+                    };
+                    (
+                        sources,
+                        indexes,
+                        determination.timestamp_context.timestamp_or_default(),
+                        "FastPath",
+                    )
+                }
+                PeekPlan::SlowPath(dataflow_plan) => {
+                    let as_of = dataflow_plan
+                        .desc
+                        .as_of
+                        .clone()
+                        .expect("dataflow has an as_of")
+                        .into_element();
+                    (
+                        dataflow_plan.desc.source_imports.keys().cloned().collect(),
+                        dataflow_plan.desc.index_imports.keys().cloned().collect(),
+                        as_of,
+                        "SlowPath",
+                    )
+                }
+            },
+            Execution::CopyToS3 {
+                global_lir_plan, ..
+            } => {
+                let df_desc = global_lir_plan.df_desc();
+                let as_of = df_desc
+                    .as_of
+                    .clone()
+                    .expect("dataflow has an as_of")
+                    .into_element();
+                (
+                    df_desc.source_imports.keys().cloned().collect(),
+                    df_desc.index_imports.keys().cloned().collect(),
+                    as_of,
+                    "CopyToS3",
+                )
+            }
+            Execution::ExplainPlan { .. } | Execution::ExplainPushdown { .. } => {
+                // No read holds assertions needed for EXPLAIN variants
+                return;
+            }
+        };
+
+        // Assert that we have some read holds for all the imports of the dataflow.
+        for id in source_imports.iter() {
+            soft_assert_or_log!(
+                read_holds.storage_holds.contains_key(id),
+                "[{}] missing read hold for the source import {}",
+                execution_name,
+                id
+            );
+        }
+        for id in index_imports.iter() {
+            soft_assert_or_log!(
+                read_holds
+                    .compute_ids()
+                    .map(|(_instance, coll)| coll)
+                    .contains(id),
+                "[{}] missing read hold for the index import {}",
+                execution_name,
+                id,
+            );
+        }
+
+        // Also check the holds against the as_of.
+        for (id, h) in read_holds.storage_holds.iter() {
+            soft_assert_or_log!(
+                h.since().less_equal(&as_of),
+                "[{}] storage read hold at {:?} for collection {} is not enough for as_of {:?}, determination: {:?}",
+                execution_name,
+                h.since(),
+                id,
+                as_of,
+                determination
+            );
+        }
+        for ((instance, id), h) in read_holds.compute_holds.iter() {
+            soft_assert_eq_or_log!(
+                *instance,
+                target_cluster_id,
+                "[{}] the read hold on {} is on the wrong cluster",
+                execution_name,
+                id
+            );
+            soft_assert_or_log!(
+                h.since().less_equal(&as_of),
+                "[{}] compute read hold at {:?} for collection {} is not enough for as_of {:?}, determination: {:?}",
+                execution_name,
+                h.since(),
+                id,
+                as_of,
+                determination
+            );
+        }
+    }
+}
+
+/// Enum for branching among various execution steps after optimization
+enum Execution {
+    Peek {
+        global_lir_plan: optimize::peek::GlobalLirPlan,
+        optimization_finished_at: EpochMillis,
+        plan_insights_optimizer_trace: Option<OptimizerTrace>,
+        insights_ctx: Option<Box<PlanInsightsContext>>,
+    },
+    CopyToS3 {
+        global_lir_plan: optimize::copy_to::GlobalLirPlan,
+        source_ids: BTreeSet<GlobalId>,
+    },
+    ExplainPlan {
+        df_meta: DataflowMetainfo,
+        explain_ctx: ExplainPlanContext,
+        optimizer: optimize::peek::Optimizer,
+        insights_ctx: Option<Box<PlanInsightsContext>>,
+    },
+    ExplainPushdown {
+        imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
+        determination: TimestampDetermination<Timestamp>,
+    },
 }
