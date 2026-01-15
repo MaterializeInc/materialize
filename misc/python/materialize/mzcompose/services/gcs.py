@@ -20,11 +20,6 @@ def gcs_blob_uri(bucket: str = "persist") -> str:
     return f"gcs://{bucket}/persist"
 
 
-def gcs_emulator_host_http(address: str = "gcs-emulator") -> str:
-    """Returns the HTTP/REST endpoint for the GCS emulator."""
-    return f"http://{address}:{GCS_HTTP_PORT}"
-
-
 def gcs_emulator_host_grpc(address: str = "gcs-emulator") -> str:
     """Returns the gRPC endpoint for the GCS emulator."""
     return f"http://{address}:{GCS_GRPC_PORT}"

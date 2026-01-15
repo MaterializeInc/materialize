@@ -48,11 +48,8 @@ pub struct GcsBlobConfig {
 
 impl GcsBlobConfig {
     const EXTERNAL_TESTS_GCS_BUCKET: &'static str = "MZ_PERSIST_EXTERNAL_STORAGE_TEST_GCS_BUCKET";
-    /// Environment variable to configure the GCS emulator HTTP/REST endpoint.
-    /// When set, the client will use anonymous credentials and connect to this endpoint.
-    const STORAGE_EMULATOR_HOST: &'static str = "STORAGE_EMULATOR_HOST";
     /// Environment variable to configure the GCS emulator gRPC endpoint.
-    /// Required when using Google's storage-testbench which serves gRPC on a separate port.
+    /// When set, the client will use anonymous credentials and connect to this endpoint.
     const STORAGE_EMULATOR_HOST_GRPC: &'static str = "STORAGE_EMULATOR_HOST_GRPC";
 
     /// Returns a new [GcsBlobConfig] for use in production.
@@ -61,10 +58,8 @@ impl GcsBlobConfig {
     /// prefix. GCS credentials and region must be available in the process or
     /// environment.
     ///
-    /// If the `STORAGE_EMULATOR_HOST` environment variable is set, the client
-    /// will connect to the specified emulator endpoint using anonymous credentials.
-    /// For Google's storage-testbench, also set `STORAGE_EMULATOR_HOST_GRPC` to
-    /// the gRPC endpoint (REST and gRPC run on different ports).
+    /// If the `STORAGE_EMULATOR_HOST_GRPC` environment variable is set, the client
+    /// will connect to the specified emulator gRPC endpoint using anonymous credentials.
     pub async fn new(
         bucket: String,
         prefix: String,
@@ -72,42 +67,38 @@ impl GcsBlobConfig {
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, ExternalError> {
         // Check if we should use an emulator
-        let emulator_host = std::env::var(Self::STORAGE_EMULATOR_HOST).ok();
         let emulator_host_grpc = std::env::var(Self::STORAGE_EMULATOR_HOST_GRPC).ok();
 
-        let (storage_client, storage_control_client) = if let Some(ref endpoint) = emulator_host {
-            info!("Using GCS emulator at {}", endpoint);
-            // Use anonymous credentials for the emulator
-            let anon_creds = anonymous::Builder::new().build();
+        let (storage_client, storage_control_client) =
+            if let Some(grpc_endpoint) = &emulator_host_grpc {
+                info!("Using GCS emulator gRPC at {}", grpc_endpoint);
+                // Use anonymous credentials for the emulator
+                let anon_creds = anonymous::Builder::new().build();
 
-            let storage_client = Storage::builder()
-                .with_endpoint(endpoint)
-                .with_credentials(anon_creds.clone())
-                .build()
-                .await
-                .map_err(|e| {
-                    ExternalError::from(anyhow!("GCS Storage builder error (emulator): {}", e))
-                })?;
+                // Both clients use gRPC
+                let storage_client = Storage::builder()
+                    .with_endpoint(grpc_endpoint)
+                    .with_credentials(anon_creds.clone())
+                    .build()
+                    .await
+                    .map_err(|e| {
+                        ExternalError::from(anyhow!("GCS Storage builder error (emulator): {}", e))
+                    })?;
 
-            // Use separate gRPC endpoint if provided (for storage-testbench),
-            // otherwise fall back to the same endpoint
-            let grpc_endpoint = emulator_host_grpc.as_ref().unwrap_or(endpoint);
-            info!("Using GCS emulator gRPC at {}", grpc_endpoint);
+                let storage_control_client = StorageControl::builder()
+                    .with_endpoint(grpc_endpoint)
+                    .with_credentials(anon_creds)
+                    .build()
+                    .await
+                    .map_err(|e| {
+                        ExternalError::from(anyhow!(
+                            "GCS StorageControl builder error (emulator): {}",
+                            e
+                        ))
+                    })?;
 
-            let storage_control_client = StorageControl::builder()
-                .with_endpoint(grpc_endpoint)
-                .with_credentials(anon_creds)
-                .build()
-                .await
-                .map_err(|e| {
-                    ExternalError::from(anyhow!(
-                        "GCS StorageControl builder error (emulator): {}",
-                        e
-                    ))
-                })?;
-
-            (storage_client, storage_control_client)
-        } else {
+                (storage_client, storage_control_client)
+            } else {
             // Use default authentication for production
             let storage_client = Storage::builder()
                 .build()
