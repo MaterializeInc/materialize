@@ -15,7 +15,7 @@
 {{- range $fields -}}
   {{- $field := .field -}}
   {{- $value := index $row $field | default "" -}}
-  {{- $cells = $cells | append ($value | plainify | replaceRE "\\|" "\\|" | replaceRE "\n" " ") -}}
+  {{- $cells = $cells | append ($value | replaceRE "\\|" "\\|" | replaceRE "\n" " ") -}}
 {{- end }}
 | {{ delimit $cells " | " }} |
 {{- end }}
