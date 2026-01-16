@@ -5,6 +5,7 @@ aliases:
   - /self-hosted/
   - /cloud_releases/
 disable_list: true
+canonical: "https://materialize.com/docs/self-managed-deployments/"
 ---
 
 Materialize is the live data layer for apps and AI agents.
