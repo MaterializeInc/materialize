@@ -12,7 +12,7 @@
 //! any external precautions/machinery.
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
@@ -24,7 +24,9 @@ use dec::Decimal;
 use mz_adapter_types::timestamp_oracle::{
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNECT_TIMEOUT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_SIZE,
     DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_MAX_WAIT, DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL,
-    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER, DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+    DEFAULT_PG_TIMESTAMP_ORACLE_CONNPOOL_TTL_STAGGER, DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_IDLE,
+    DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_INTERVAL,
+    DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_RETRIES, DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
 };
 use mz_ore::error::ErrorExt;
 use mz_ore::instrument;
@@ -193,6 +195,18 @@ pub struct DynamicConfig {
     /// amount of time that transmitted data may remain unacknowledged before
     /// the TCP connection is forcibly closed.
     pg_connection_pool_tcp_user_timeout: RwLock<Duration>,
+
+    /// The amount of idle time before a TCP keepalive packet is sent on
+    /// Postgres/CRDB connections.
+    pg_connection_pool_keepalives_idle: RwLock<Duration>,
+
+    /// The time interval between TCP keepalive probes on Postgres/CRDB
+    /// connections.
+    pg_connection_pool_keepalives_interval: RwLock<Duration>,
+
+    /// The maximum number of TCP keepalive probes that will be sent before
+    /// dropping a Postgres/CRDB connection.
+    pg_connection_pool_keepalives_retries: AtomicU32,
 }
 
 impl Default for DynamicConfig {
@@ -216,6 +230,15 @@ impl Default for DynamicConfig {
             ),
             pg_connection_pool_tcp_user_timeout: RwLock::new(
                 DEFAULT_PG_TIMESTAMP_ORACLE_TCP_USER_TIMEOUT,
+            ),
+            pg_connection_pool_keepalives_idle: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_IDLE,
+            ),
+            pg_connection_pool_keepalives_interval: RwLock::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_INTERVAL,
+            ),
+            pg_connection_pool_keepalives_retries: AtomicU32::new(
+                DEFAULT_PG_TIMESTAMP_ORACLE_KEEPALIVES_RETRIES,
             ),
         }
     }
@@ -261,6 +284,25 @@ impl DynamicConfig {
             .read()
             .expect("lock poisoned")
     }
+
+    fn keepalives_idle(&self) -> Duration {
+        *self
+            .pg_connection_pool_keepalives_idle
+            .read()
+            .expect("lock poisoned")
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        *self
+            .pg_connection_pool_keepalives_interval
+            .read()
+            .expect("lock poisoned")
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        self.pg_connection_pool_keepalives_retries
+            .load(Self::LOAD_ORDERING)
+    }
 }
 
 impl PostgresClientKnobs for PostgresTimestampOracleConfig {
@@ -286,6 +328,18 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 
     fn tcp_user_timeout(&self) -> Duration {
         self.dynamic.tcp_user_timeout()
+    }
+
+    fn keepalives_idle(&self) -> Duration {
+        self.dynamic.keepalives_idle()
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        self.dynamic.keepalives_interval()
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        self.dynamic.keepalives_retries()
     }
 }
 
@@ -316,6 +370,12 @@ pub struct PostgresTimestampOracleParameters {
     pub pg_connection_pool_connect_timeout: Option<Duration>,
     /// Configures `DynamicConfig::pg_connection_pool_tcp_user_timeout`.
     pub pg_connection_pool_tcp_user_timeout: Option<Duration>,
+    /// Configures `DynamicConfig::pg_connection_pool_keepalives_idle`.
+    pub pg_connection_pool_keepalives_idle: Option<Duration>,
+    /// Configures `DynamicConfig::pg_connection_pool_keepalives_interval`.
+    pub pg_connection_pool_keepalives_interval: Option<Duration>,
+    /// Configures `DynamicConfig::pg_connection_pool_keepalives_retries`.
+    pub pg_connection_pool_keepalives_retries: Option<u32>,
 }
 
 impl PostgresTimestampOracleParameters {
@@ -330,6 +390,9 @@ impl PostgresTimestampOracleParameters {
             pg_connection_pool_ttl_stagger: self_pg_connection_pool_ttl_stagger,
             pg_connection_pool_connect_timeout: self_pg_connection_pool_connect_timeout,
             pg_connection_pool_tcp_user_timeout: self_pg_connection_pool_tcp_user_timeout,
+            pg_connection_pool_keepalives_idle: self_pg_connection_pool_keepalives_idle,
+            pg_connection_pool_keepalives_interval: self_pg_connection_pool_keepalives_interval,
+            pg_connection_pool_keepalives_retries: self_pg_connection_pool_keepalives_retries,
         } = self;
         let Self {
             pg_connection_pool_max_size: other_pg_connection_pool_max_size,
@@ -338,6 +401,9 @@ impl PostgresTimestampOracleParameters {
             pg_connection_pool_ttl_stagger: other_pg_connection_pool_ttl_stagger,
             pg_connection_pool_connect_timeout: other_pg_connection_pool_connect_timeout,
             pg_connection_pool_tcp_user_timeout: other_pg_connection_pool_tcp_user_timeout,
+            pg_connection_pool_keepalives_idle: other_pg_connection_pool_keepalives_idle,
+            pg_connection_pool_keepalives_interval: other_pg_connection_pool_keepalives_interval,
+            pg_connection_pool_keepalives_retries: other_pg_connection_pool_keepalives_retries,
         } = other;
         if let Some(v) = other_pg_connection_pool_max_size {
             *self_pg_connection_pool_max_size = Some(v);
@@ -357,6 +423,15 @@ impl PostgresTimestampOracleParameters {
         if let Some(v) = other_pg_connection_pool_tcp_user_timeout {
             *self_pg_connection_pool_tcp_user_timeout = Some(v);
         }
+        if let Some(v) = other_pg_connection_pool_keepalives_idle {
+            *self_pg_connection_pool_keepalives_idle = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_keepalives_interval {
+            *self_pg_connection_pool_keepalives_interval = Some(v);
+        }
+        if let Some(v) = other_pg_connection_pool_keepalives_retries {
+            *self_pg_connection_pool_keepalives_retries = Some(v);
+        }
     }
 
     /// Applies the parameter values to the given in-memory config object.
@@ -375,6 +450,9 @@ impl PostgresTimestampOracleParameters {
             pg_connection_pool_ttl_stagger,
             pg_connection_pool_connect_timeout,
             pg_connection_pool_tcp_user_timeout,
+            pg_connection_pool_keepalives_idle,
+            pg_connection_pool_keepalives_interval,
+            pg_connection_pool_keepalives_retries,
         } = self;
         if let Some(pg_connection_pool_max_size) = pg_connection_pool_max_size {
             cfg.dynamic
@@ -420,6 +498,29 @@ impl PostgresTimestampOracleParameters {
                 .write()
                 .expect("lock poisoned");
             *timeout = *pg_connection_pool_tcp_user_timeout;
+        }
+        if let Some(pg_connection_pool_keepalives_idle) = pg_connection_pool_keepalives_idle {
+            let mut timeout = cfg
+                .dynamic
+                .pg_connection_pool_keepalives_idle
+                .write()
+                .expect("lock poisoned");
+            *timeout = *pg_connection_pool_keepalives_idle;
+        }
+        if let Some(pg_connection_pool_keepalives_interval) = pg_connection_pool_keepalives_interval
+        {
+            let mut timeout = cfg
+                .dynamic
+                .pg_connection_pool_keepalives_interval
+                .write()
+                .expect("lock poisoned");
+            *timeout = *pg_connection_pool_keepalives_interval;
+        }
+        if let Some(pg_connection_pool_keepalives_retries) = pg_connection_pool_keepalives_retries {
+            cfg.dynamic.pg_connection_pool_keepalives_retries.store(
+                *pg_connection_pool_keepalives_retries,
+                DynamicConfig::STORE_ORDERING,
+            );
         }
     }
 }

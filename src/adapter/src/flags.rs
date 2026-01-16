@@ -177,6 +177,9 @@ pub fn pg_timstamp_oracle_config(config: &SystemVars) -> PostgresTimestampOracle
         // oracle.
         pg_connection_pool_connect_timeout: Some(config.crdb_connect_timeout()),
         pg_connection_pool_tcp_user_timeout: Some(config.crdb_tcp_user_timeout()),
+        pg_connection_pool_keepalives_idle: Some(config.crdb_keepalives_idle()),
+        pg_connection_pool_keepalives_interval: Some(config.crdb_keepalives_interval()),
+        pg_connection_pool_keepalives_retries: Some(config.crdb_keepalives_retries()),
     }
 }
 

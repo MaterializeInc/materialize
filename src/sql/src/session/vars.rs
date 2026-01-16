@@ -78,7 +78,10 @@ use derivative::Derivative;
 use im::OrdMap;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
-use mz_persist_client::cfg::{CRDB_CONNECT_TIMEOUT, CRDB_TCP_USER_TIMEOUT};
+use mz_persist_client::cfg::{
+    CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
+    CRDB_TCP_USER_TIMEOUT,
+};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
@@ -1847,6 +1850,27 @@ impl SystemVars {
         ))
     }
 
+    /// Returns the `crdb_keepalives_idle` configuration parameter.
+    pub fn crdb_keepalives_idle(&self) -> Duration {
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_KEEPALIVES_IDLE.name(),
+        ))
+    }
+
+    /// Returns the `crdb_keepalives_interval` configuration parameter.
+    pub fn crdb_keepalives_interval(&self) -> Duration {
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_KEEPALIVES_INTERVAL.name(),
+        ))
+    }
+
+    /// Returns the `crdb_keepalives_retries` configuration parameter.
+    pub fn crdb_keepalives_retries(&self) -> u32 {
+        *self.expect_config_value(UncasedStr::new(
+            mz_persist_client::cfg::CRDB_KEEPALIVES_RETRIES.name(),
+        ))
+    }
+
     /// Returns the `storage_dataflow_max_inflight_bytes` configuration parameter.
     pub fn storage_dataflow_max_inflight_bytes(&self) -> Option<usize> {
         *self.expect_value(&STORAGE_DATAFLOW_MAX_INFLIGHT_BYTES)
@@ -2268,6 +2292,9 @@ pub fn is_pg_timestamp_oracle_config_var(name: &str) -> bool {
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL_STAGGER.name()
         || name == CRDB_CONNECT_TIMEOUT.name()
         || name == CRDB_TCP_USER_TIMEOUT.name()
+        || name == CRDB_KEEPALIVES_IDLE.name()
+        || name == CRDB_KEEPALIVES_INTERVAL.name()
+        || name == CRDB_KEEPALIVES_RETRIES.name()
 }
 
 /// Returns whether the named variable is a cluster scheduling config
