@@ -28,6 +28,7 @@ v26.7 improves compatibility with go-jet and includes bug fixes.
 
 ### Bug Fixes
 - Fixed an issue where type error messages could inadvertently expose constant values from queries.
+- The console reconnects more gracefully if the connection to the backend is interrupted
 
 ## v26.6.0
 *Released to Materialize Cloud: 2026-01-08*<br>
