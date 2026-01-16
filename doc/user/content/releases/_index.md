@@ -19,7 +19,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-01-16* <br>
 *Released to Materialize Cloud: 2026-01-17* <br>
 
-v26.7 improves compatibility with go-jet and includes bug fixes. 
+v26.7 improves compatibility with go-jet and includes bug fixes.
 
 ### Improvements
 
@@ -27,7 +27,7 @@ v26.7 improves compatibility with go-jet and includes bug fixes.
 - **Pretty print SQL in the console**: We've made it easier to read the definitions for views and materialized views in the console.
 
 ### Bug Fixes
-- Fixed an issue where type error messages could inadvertently expose constant values from queries
+- Fixed an issue where type error messages could inadvertently expose constant values from queries.
 
 ## v26.6.0
 *Released to Materialize Cloud: 2026-01-08*<br>
