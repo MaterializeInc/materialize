@@ -16,11 +16,11 @@
 #
 # Arguments: OUTPUT_DIR  Directory to output the skill files. The OUTPUT_DIR
 #   directory is cleaned before generation.
-#   Default: .claude/skills/materialize-docs. 
+#   Default: .claude/skills/materialize-docs.
 #   For publishing to the website,
 #   we will output to doc/user/static/markdown-docs directory.
 #
-# Examples: 
+# Examples:
 #   bin/gen-claude-skill                         # Generate to default location
 #   bin/gen-claude-skill /path/to/output         # Generate to custom location
 
