@@ -1,27 +1,28 @@
-# More Zero-Downtime Upgrades, Physical Isolation, High Availability
+# Zero-Downtime Upgrades, Physical Isolation, and High Availability
 
-We currently do zero-downtime upgrades, where we hydrate an `environmentd` and
-its `clusterd` processes at a new version before cutting over to that version.
-This makes it so that computation running on clusters is ready when we cut over
-and there is no downtime in processing, no lag in freshness. However, due to an
-implementation detail of how cutting over from one version to the next works
-(see context below) we have an interval of 10–30 seconds where an environment
-is not reachable by the user.
+Zero-downtime upgrades, high availability, and physical isolation are related
+goals that all require multiple `environmentd` instances to coexist and
+collaborate on shared durable state. One key insight connects them:
 
-This document proposes a design where we can achieve true zero-downtime
-upgrades for DML and DQL queries, with the caveat that we still have a window
-(about 10-30 seconds) where users cannot issue DDL.
+**Zero-downtime upgrades are high availability across two versions.**
 
-The long-term goal is to remove the caveats from zero-downtime upgrades and to
-remove downtime at all moments. The latter is usually tracked under the
-separate initiatives of _high availability_ and _physical isolation_. However,
-the engineering work that they all require overlaps and they thematically fit
-together so we also talk about them briefly below.
+The ultimate goal for zero-downtime upgrades is to have two versions of
+Materialize running concurrently, serving traffic with no downtime, where we
+can cut over network routes when we're confident the new version is ready. This
+will enable us to roll out a new version, observe its behavior, and abandon the
+update if something isn't right -- true flexibility in version management.
 
-The focus of this document is on improving zero-downtime upgrades in the short
-term, but I will describe below what the other initiatives entail, what
-engineering work is unique to each and what work overlaps, and sketch how we
-can achieve the long-term goal.
+This document proposes an incremental step toward that vision: a "lame-duck"
+upgrade procedure that achieves true zero-downtime for DML and DQL queries.
+This is not a detour from the end goal but a direct stepping stone: it requires
+us to build the foundational capabilities that all three initiatives need --
+running multiple `environmentd` instances with concurrent access to shared
+state.
+
+We currently have a brief window (10-30 seconds) where an environment is
+unreachable during upgrades (see Context for details). This proposal eliminates
+that unreachability for DML and DQL, with DDL seeing a brief window where it
+cannot proceed.
 
 ## Goals
 
@@ -105,13 +106,8 @@ availability and zero-downtime upgrades.
 
 ## Conceptual Framework: How These Initiatives Relate
 
-Zero-downtime upgrades, high availability, and physical isolation all require
-multiple `environmentd` instances to coexist and collaborate on shared durable
-state (the catalog). One neat insight is:
-
-**Zero-downtime upgrades are high availability across two versions.**
-
-This framing clarifies what makes each initiative unique:
+Given that zero-downtime upgrades are high availability across two versions,
+this framing clarifies what makes each initiative unique:
 
 | Initiative | # of Versions | Duration | Primary Challenge |
 |------------|---------------|----------|-------------------|
@@ -120,12 +116,14 @@ This framing clarifies what makes each initiative unique:
 | physical isolation | 1 (typically) | permanent | workload routing |
 
 All three share a common foundation: the ability to run multiple `environmentd`
-instances that can read/write shared state concurrently.
+instances that can read/write shared state concurrently. The work proposed in
+this document directly builds that foundation, making it a stepping stone toward
+the full vision rather than a parallel effort.
 
-## Proposal
+## Proposal (lame-duck upgrades)
 
-To reduce downtime during upgrades further, I propose that we change from our
-current upgrade procedure to this flow:
+As the next incremental milestone for zero-downtime upgrades, I propose that we
+change from our current upgrade procedure to this flow:
 
 1. New `environmentd` starts with higher `deploy_generation`/`version`
 2. Boots in read-only mode: opens catalog in read-only mode, spawns `clusterd`
@@ -157,25 +155,16 @@ version.
 
 Implicit in this proposal is that we initially still don't want to support DDL
 during the upgrade window. In addition to all the proposed work, this would
-require two additional large pieces of engineering work that I think are hard
-enough that we want to postpone them and instead deliver this incremental
-improvement to our upgrade procedure. I will expand on this future work below.
+require two additional pieces of engineering work. The lame-duck approach lets
+us deliver immediate value while building the foundation those pieces will need.
+I expand on this future work below.
 
 The proposed upgrade flow requires a number of changes across different
 components. I will sketch these below, but each of the sub-sections will
 require a small-ish design document of its own or at the very least a thorough
 GitHub issue.
 
-The required work is sectioned into work that is unique to zero-downtime
-upgrades, work that is shared with the other initiatives, and then lastly I
-will describe the work that is unique to future initiatives. The latter will be
-very sparse, because the focus of this document is the more immediate
-improvements to zero-downtime upgrades.
-
-## Work required for Zero-Downtime Upgrades (for DML/DQL)
-
-This section and the one about the shared foundation work describe that work
-that is required for this proposal.
+## Work required for Zero-Downtime Upgrades (lame-duck upgrades)
 
 ### Lame-Duck `environmentd` at Old Version
 
@@ -239,7 +228,8 @@ approach.
 ## Foundation Work (Required for This Proposal)
 
 The following changes are required for this proposal and form the foundation
-for High Availability and Physical Isolation:
+for working towards the full goal for zero-downtime upgrades, high
+availability, and physical isolation:
 
 ### Get Builtin Tables Ready for Concurrent Writers
 
@@ -300,7 +290,7 @@ down on the lame-duck deployment to give the new version room to work.
 
 TODO: Figure out how big the impact of the above-mentioned squabbling would be.
 
-### Critical Persist Handles with Concurrent Environmentd Instances
+### Critical Persist Handles for Concurrent Environmentd Instances
 
 `StorageCollections`, the component that is responsible for managing the
 critical since handles of storage collections, currently has a single critical
@@ -358,7 +348,7 @@ architecture](20231127_pv2_uci_logical_architecture.md), and there is ongoing
 work towards allowing the adapter to subscribe to catalog changes and apply
 their implications.
 
-## Work required for Zero-Downtime Upgrades (including DDL)
+## Work required for Zero-Downtime Upgrades (full vision)
 
 Beyond the ability for multiple actors to work with the durable catalog, for
 zero-downtime upgrades with DDL we need the ability for _multiple versions_ to
@@ -411,17 +401,18 @@ true zero downtime.
 
 ### True zero-downtime for everything, including DDL
 
-Lame-duck mode is a "deviation" from the end goal of true zero-downtime
-upgrades for all kinds of commands. One could say that we should instead try
-and deliver that end goal immediately.
+One could say that we should skip lame-duck mode and deliver the full vision of
+zero-downtime upgrades for all commands immediately.
 
-I think the proposal as described above is more feasible in the short term.
-True zero-downtime upgrades including DDL require us to solve two hard
-engineering problems:
+I think the lame-duck proposal is more feasible in the short term, and it
+directly builds toward that goal by establishing the foundation of concurrent
+`environmentd` instances. True zero-downtime upgrades including DDL require us
+to solve two additional hard engineering problems:
 - subscribing to and applying catalog changes
 - forward/backward compatibility for the catalog
 
-I think these are hard and we should focus on incrementally delivering value.
+These are hard problems, and the lame-duck approach lets us deliver value
+incrementally while making progress on the shared foundation.
 
 ## Open Questions
 
