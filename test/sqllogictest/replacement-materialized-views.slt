@@ -173,9 +173,6 @@ mv   other   (empty)
 
 # Test: usage errors
 
-statement error db error: ERROR: incompatible schemas
-CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b, 1 FROM t
-
 statement error db error: ERROR: cannot replace table t with materialized view rp
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR t AS SELECT a, b FROM t
 
@@ -249,6 +246,61 @@ SELECT object_sub_id, comment
 FROM mz_internal.mz_comments
 WHERE object_type = 'materialized-view'
 ----
+
+
+# Test: schema mismatch errors
+
+# missing column in replacement
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a FROM t
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: missing column "b" at position 2
+
+# extra column in replacement
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b, 1 as c FROM t
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: extra column "c" at position 3
+
+# name mismatch
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a AS c, b FROM t
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: column at position 1: name mismatch (target: "a", replacement: "c")
+
+# type mismatch
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a::text, b FROM t
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: column "a" at position 1: type mismatch (target: Int32, replacement: String)
+
+# nullability mismatch
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b FROM t WHERE a IS NOT NULL
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: column "a" at position 1: nullability mismatch (target: NULL, replacement: NOT NULL)
+
+# key mismatch
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT DISTINCT a, b FROM t
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: keys differ (target: (none), replacement: {a, b})
+
+# multiple mismatches
+simple
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT DISTINCT a, b AS c, 1 AS d FROM t WHERE a IS NOT NULL
+----
+db error: ERROR: replacement schema differs from target schema
+DETAIL: column "a" at position 1: nullability mismatch (target: NULL, replacement: NOT NULL)
+column at position 2: name mismatch (target: "b", replacement: "c")
+extra column "d" at position 3
+keys differ (target: (none), replacement: {a, c})
 
 
 statement ok
