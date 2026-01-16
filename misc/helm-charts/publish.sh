@@ -84,17 +84,31 @@ if [ $CHANGES_MADE -eq 1 ]; then
   cp $RELEASE_DIR/*.tgz gh-pages/
   # Update the repository index
   cd gh-pages
-  REPO_URL="https://materializeinc.github.io/materialize"
-  if [ -f index.yaml ]; then
-    helm repo index . --url "$REPO_URL" --merge index.yaml
-  else
-    helm repo index . --url "$REPO_URL"
-  fi
-  # Commit and push changes
   git add .
   git config user.email "noreply@materialize.com"
   git config user.name "Buildkite"
-  git commit -m "helm-charts: publish updated charts"
+  git commit -m "helm-charts: Publish $BUILDKITE_TAG"
+  REPO_URL="https://materializeinc.github.io/materialize"
+  helm repo index . --url "$REPO_URL"
+  # Fix up `created` timestamps
+  for i in *.tgz; do
+    # shellcheck disable=SC2016
+    i="$i" created="$(git log --diff-filter=A --format=%aI -1 -- "$i")" yq eval -i '
+        .entries |= with_entries(
+        .value |= map(
+          . as $item
+          | (
+              $item
+              | select(.urls[]? | contains(strenv(i)))
+              | .created = strenv(created)
+            )
+            // $item
+        )
+      )
+    ' index.yaml
+  done
+  git add index.yaml
+  git commit --amend --no-edit
   git --no-pager diff HEAD~
   run_if_not_dry git push origin $GITHUB_PAGES_BRANCH
   cd ..
