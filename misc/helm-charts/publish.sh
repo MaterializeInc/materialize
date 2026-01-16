@@ -259,17 +259,3 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   git --no-pager diff HEAD~
   run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
 fi
-
-if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
-  echo "--- Bumping versions in Terraform Nightly tests"
-  git fetch origin main
-  git checkout origin/main
-  git submodule update --init --recursive
-  sed -i "s|\"git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=${TERRAFORM_VERSION[terraform-aws-materialize]}\"|" test/terraform/aws-*/main.tf
-  sed -i "s|\"git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"|" test/terraform/azure-*/main.tf
-  sed -i "s|\"git::https://github.com/MaterializeInc/terraform-google-materialize.git?ref=.*\"|\"git::https://github.com/MaterializeInc/terraform-google-materialize.git?ref=${TERRAFORM_VERSION[terraform-google-materialize]}\"|" test/terraform/gcp-*/main.tf
-  git add test/terraform/*/main.tf
-  git commit -m "terraform tests: Bump to AWS ${TERRAFORM_VERSION[terraform-aws-materialize]}, GCP ${TERRAFORM_VERSION[terraform-google-materialize]}, Azure ${TERRAFORM_VERSION[terraform-azurerm-materialize]}"
-  git --no-pager diff HEAD~
-  run_if_not_dry git push origin HEAD:main
-fi
