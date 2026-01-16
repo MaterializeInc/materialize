@@ -272,6 +272,57 @@ ROLLBACK
 =>
 Rollback(RollbackStatement { chain: false })
 
+# ABORT is an alias for ROLLBACK (PostgreSQL compatibility)
+
+parse-statement
+ABORT
+----
+ROLLBACK
+=>
+Rollback(RollbackStatement { chain: false })
+
+parse-statement
+ABORT AND CHAIN
+----
+ROLLBACK AND CHAIN
+=>
+Rollback(RollbackStatement { chain: true })
+
+parse-statement
+ABORT AND NO CHAIN
+----
+ROLLBACK
+=>
+Rollback(RollbackStatement { chain: false })
+
+parse-statement
+ABORT WORK
+----
+ROLLBACK
+=>
+Rollback(RollbackStatement { chain: false })
+
+parse-statement
+ABORT TRANSACTION
+----
+ROLLBACK
+=>
+Rollback(RollbackStatement { chain: false })
+
+parse-statement
+ABORT WORK AND CHAIN
+----
+ROLLBACK AND CHAIN
+=>
+Rollback(RollbackStatement { chain: true })
+
+parse-statement
+ABORT TRANSACTION AND CHAIN
+----
+ROLLBACK AND CHAIN
+=>
+Rollback(RollbackStatement { chain: true })
+
 parse-statement
 RAISE DEBUG
 ----
