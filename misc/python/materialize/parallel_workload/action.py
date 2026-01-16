@@ -47,6 +47,7 @@ from materialize.parallel_workload.database import (
     MAX_CLUSTERS,
     MAX_COLUMNS,
     MAX_DBS,
+    MAX_ICEBERG_SINKS,
     MAX_INDEXES,
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
@@ -64,6 +65,7 @@ from materialize.parallel_workload.database import (
     Column,
     Database,
     DBObject,
+    IcebergSink,
     Index,
     KafkaSink,
     KafkaSource,
@@ -1006,7 +1008,39 @@ class RenameViewAction(Action):
         return True
 
 
-class RenameSinkAction(Action):
+class RenameIcebergSinkAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario != Scenario.Rename:
+            return False
+        with exe.db.lock:
+            if not exe.db.iceberg_sinks:
+                return False
+            try:
+                sink = self.rng.choice(exe.db.iceberg_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with sink.lock:
+            if sink not in exe.db.iceberg_sinks:
+                return False
+
+            old_name = str(sink)
+            sink.rename += 1
+            try:
+                exe.execute(
+                    f"ALTER SINK {old_name} RENAME TO {identifier(sink.name())}",
+                    # http=Http.RANDOM,  # Fails
+                )
+            except:
+                sink.rename -= 1
+                raise
+        return True
+
+
+class RenameKafkaSinkAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario != Scenario.Rename:
             return False
@@ -1057,6 +1091,59 @@ class ReplaceMaterializedViewAction(Action):
             )
         else:
             exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+        return True
+
+
+class AlterIcebergSinkFromAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
+            # Does not work reliably with kills, see database-issues#8421
+            return False
+        with exe.db.lock:
+            if not exe.db.iceberg_sinks:
+                return False
+            try:
+                sink = self.rng.choice(exe.db.iceberg_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with sink.lock, sink.base_object.lock:
+            if sink not in exe.db.iceberg_sinks:
+                return False
+
+            old_object = sink.base_object
+            if sink.key != "":
+                # key requires same column names, low chance of even having that
+                return False
+            else:
+                # Avro schema migration checking can be quite strict, and we need to be not only
+                # compatible with the latest object's schema but all previous schemas.
+                # Only allow a conservative case for now: where all types and names match.
+                objs = []
+                old_cols = {c.name(True): c.data_type for c in old_object.columns}
+                for o in exe.db.db_objects_without_views():
+                    if isinstance(old_object, WebhookSource):
+                        continue
+                    if isinstance(o, WebhookSource):
+                        continue
+                    new_cols = {c.name(True): c.data_type for c in o.columns}
+                    if old_cols == new_cols:
+                        objs.append(o)
+            if not objs:
+                return False
+            sink.base_object = self.rng.choice(objs)
+
+            try:
+                exe.execute(
+                    f"ALTER SINK {sink} SET FROM {sink.base_object}",
+                    # http=Http.RANDOM,  # Fails
+                )
+            except:
+                sink.base_object = old_object
+                raise
         return True
 
 
@@ -2730,6 +2817,74 @@ class DropSqlServerSourceAction(Action):
         return True
 
 
+class CreateIcebergSinkAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "BYTES format with non-encodable type",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if len(exe.db.iceberg_sinks) >= MAX_ICEBERG_SINKS:
+                return False
+            sink_id = exe.db.iceberg_sink_id
+            exe.db.iceberg_sink_id += 1
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with schema.lock, cluster.lock:
+            if schema not in exe.db.schemas:
+                return False
+            if cluster not in exe.db.clusters:
+                return False
+
+            sink = IcebergSink(
+                sink_id,
+                cluster,
+                schema,
+                self.rng.choice(exe.db.db_objects_without_views()),
+                self.rng,
+            )
+            sink.create(exe)
+            exe.db.iceberg_sinks.append(sink)
+        return True
+
+
+class DropIcebergSinkAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "still depended upon by",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.iceberg_sinks:
+                return False
+            try:
+                sink = self.rng.choice(exe.db.iceberg_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+        with sink.lock:
+            # Was dropped while we were acquiring lock
+            if sink not in exe.db.iceberg_sinks:
+                return False
+
+            query = f"DROP SINK {sink}"
+            exe.execute(query, http=Http.RANDOM)
+            exe.db.iceberg_sinks.remove(sink)
+        return True
+
+
 class CreateKafkaSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -2975,6 +3130,8 @@ ddl_action_list = ActionList(
         (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
         (DropKafkaSinkAction, 4),
+        (CreateIcebergSinkAction, 4),
+        (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
         # TODO: Reenable when database-issues#8237 is fixed
@@ -2995,12 +3152,14 @@ ddl_action_list = ActionList(
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),
         (RenameViewAction, 10),
-        (RenameSinkAction, 10),
+        (RenameKafkaSinkAction, 10),
+        (RenameIcebergSinkAction, 10),
         (SwapSchemaAction, 10),
         (ReplaceMaterializedViewAction, 20),
         (FlipFlagsAction, 2),
         # TODO: Reenable when database-issues#8813 is fixed.
         # (AlterTableAddColumnAction, 10),
+        (AlterIcebergSinkFromAction, 8),
         (AlterKafkaSinkFromAction, 8),
         # (TransactionIsolationAction, 1),
     ],

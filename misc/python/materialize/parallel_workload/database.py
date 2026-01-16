@@ -39,6 +39,7 @@ from materialize.data_ingest.field import Field
 from materialize.data_ingest.transaction import Transaction
 from materialize.data_ingest.workload import WORKLOADS
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.column import (
@@ -72,6 +73,7 @@ MAX_MYSQL_SOURCES = 5
 MAX_SQL_SERVER_SOURCES = 5
 MAX_POSTGRES_SOURCES = 5
 MAX_KAFKA_SINKS = 5
+MAX_ICEBERG_SINKS = 5
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -487,6 +489,56 @@ class KafkaSource(DBObject):
         self.executor.create(logging_exe=exe)
 
 
+class IcebergSink(DBObject):
+    sink_id: int
+    rename: int
+    cluster: "Cluster"
+    schema: Schema
+    base_object: DBObject
+    envelope: str
+    key: str
+
+    def __init__(
+        self,
+        sink_id: int,
+        cluster: "Cluster",
+        schema: Schema,
+        base_object: DBObject,
+        rng: random.Random,
+    ):
+        super().__init__()
+        self.sink_id = sink_id
+        self.cluster = cluster
+        self.schema = schema
+        self.base_object = base_object
+        self.envelope = rng.choice(["DEBEZIUM", "UPSERT"])
+        if self.envelope == "UPSERT" or rng.choice([True, False]):
+            key_cols = [
+                column
+                for column in rng.sample(
+                    base_object.columns, k=rng.randint(1, len(base_object.columns))
+                )
+            ]
+            key_col_names = [column.name(True) for column in key_cols]
+            self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
+        else:
+            self.key = ""
+        self.rename = 0
+
+    def name(self) -> str:
+        if self.rename:
+            return naughtify(f"icesink-{self.sink_id}-{self.rename}")
+        return naughtify(f"icesink-{self.sink_id}")
+
+    def __str__(self) -> str:
+        return f"{self.schema}.{identifier(self.name())}"
+
+    def create(self, exe: Executor) -> None:
+        table_name = f"icesink_topic{self.sink_id}"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table_name}') USING AWS CONNECTION aws_conn {self.key} ENVELOPE {self.envelope} WITH (COMMIT INTERVAL '1s')"
+        exe.execute(query)
+
+
 class KafkaSink(DBObject):
     sink_id: int
     rename: int
@@ -557,14 +609,14 @@ class KafkaSink(DBObject):
 
     def name(self) -> str:
         if self.rename:
-            return naughtify(f"sink-{self.sink_id}-{self.rename}")
-        return naughtify(f"sink-{self.sink_id}")
+            return naughtify(f"kafkasink-{self.sink_id}-{self.rename}")
+        return naughtify(f"kafkasink-{self.sink_id}")
 
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        topic = f"sink_topic{self.sink_id}"
+        topic = f"kafkasink_topic{self.sink_id}"
         maybe_partition = (
             f", TOPIC PARTITION COUNT {self.partition_count}, PARTITION BY {self.partition_key}"
             if self.partition_count
@@ -879,6 +931,8 @@ class Database:
     postgres_source_id: int
     sql_server_sources: list[SqlServerSource]
     sql_server_source_id: int
+    iceberg_sinks: list[IcebergSink]
+    iceberg_sink_id: int
     kafka_sinks: list[KafkaSink]
     kafka_sink_id: int
     s3_path: int
@@ -954,11 +1008,13 @@ class Database:
         self.mysql_sources = []
         self.postgres_sources = []
         self.sql_server_sources = []
+        self.iceberg_sinks = []
         self.kafka_sinks = []
         self.kafka_source_id = len(self.kafka_sources)
         self.mysql_source_id = len(self.mysql_sources)
         self.postgres_source_id = len(self.postgres_sources)
         self.sql_server_source_id = len(self.sql_server_sources)
+        self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
         self.lock = threading.Lock()
         self.sqlsmith_state = ""
@@ -1031,6 +1087,15 @@ class Database:
         )
         exe.execute(
             "CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL 'http://schema-registry:8081'"
+        )
+
+        iceberg_credentials = setup_polaris_for_iceberg(composition)
+        exe.execute(f"CREATE SECRET iceberg_secret AS '{iceberg_credentials[1]}'")
+        exe.execute(
+            f"CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_credentials[0]}', SECRET ACCESS KEY = SECRET iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');"
+        )
+        exe.execute(
+            "CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');"
         )
 
         exe.execute("CREATE SECRET pgpass AS 'postgres'")
