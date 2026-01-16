@@ -46,7 +46,7 @@ $ duckdb-execute name=iceberg
 CREATE SECRET s3_secret (TYPE S3, KEY_ID 'tduser', SECRET '${arg.s3-access-key}', ENDPOINT '${arg.aws-endpoint}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
 SET unsafe_enable_version_guessing = true;
 
-$ duckdb-query name=iceberg 
+$ duckdb-query name=iceberg
 SELECT a, b FROM iceberg_scan('s3://test-bucket/default_namespace/demo_table') ORDER BY a
 1 one
 2 two

@@ -567,13 +567,17 @@ where
                 if !initialized {
                     // We only start minting after we've reached as_of and resume_upper to avoid
                     // minting batches that would be immediately skipped.
+                    if observed_frontier.is_empty() {
+                        // Input stream closed before initialization completed
+                        return Ok(());
+                    }
                     if PartialOrder::less_equal(&observed_frontier, &resume_upper) || PartialOrder::less_equal(&observed_frontier, &as_of) {
                         continue;
                     }
 
                     let mut batch_descriptions = vec![];
                     let mut current_upper = observed_frontier.clone();
-                    let current_upper_ts = current_upper.as_option().unwrap().clone();
+                    let current_upper_ts = current_upper.as_option().expect("frontier not empty").clone();
 
                     // If we're resuming, create a catch-up batch from resume_upper to current frontier
                     if PartialOrder::less_than(&resume_upper, &current_upper) {
