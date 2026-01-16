@@ -705,7 +705,10 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        let mut mz_stream = TcpStream::connect(envd_addr)
+            .await
+            .inspect_err(|e| error!("Error connecting to environmentd {} - {:?}", envd_addr, e))?;
+
         let mut buf = BytesMut::new();
 
         let mut mz_stream = if internal_tls {
