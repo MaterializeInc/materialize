@@ -31,6 +31,16 @@ available:
 - [SQL clients](/integrations/sql-clients/)
 - [Client Libraries](/integrations/client-libraries/)
 
+See also the following integration guides for BI tools:
+
+- [Deepnote](/serve-results/bi-tools/deepnote/)
+- [Excel](/serve-results/bi-tools/excel/)
+- [Hex](/serve-results/bi-tools/hex/)
+- [Metabase](/serve-results/bi-tools/metabase/)
+- [Power BI](/serve-results/bi-tools/power-bi/)
+- [Tableau](/serve-results/bi-tools/tableau/)
+- [Looker](/serve-results/bi-tools/looker/)
+
 ## HTTP and WebSocket
 
 - [Connect to Materialize via HTTP](/integrations/http-api/)
