@@ -19,7 +19,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Self-Managed: 2026-01-16* <br>
 *Released to Materialize Cloud: 2026-01-17* <br>
 
-v26.7 improves compatibility with go-jet, and includes bug fixes. 
+v26.7 improves compatibility with go-jet and includes bug fixes. 
 
 ### Improvements
 
