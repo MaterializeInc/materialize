@@ -135,6 +135,7 @@ fn extract_sef_call(
                 offset: None,
             },
         as_of: None,
+        in_cluster: None,
     } = select
     else {
         return Ok(None);
