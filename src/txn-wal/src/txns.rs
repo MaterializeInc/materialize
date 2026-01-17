@@ -1502,9 +1502,9 @@ mod tests {
             let as_of = self.ts;
             debug!("start_read {:.9} as_of {}", data_id.to_string(), as_of);
             let (tx, mut rx) = oneshot::channel();
-            let subscribe = mz_ore::task::spawn_blocking(
+            let subscribe = mz_ore::task::spawn_local(
                 || format!("{:.9}-{}", data_id.to_string(), as_of),
-                move || {
+                async move {
                     let mut subscribe = DataSubscribe::new(
                         "test",
                         client,
@@ -1516,7 +1516,7 @@ mod tests {
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();
                     loop {
-                        subscribe.worker.step_or_park(None);
+                        subscribe.worker.step_or_park(None).await;
                         subscribe.capture_output();
                         let until = match rx.try_recv() {
                             Ok(ts) => ts,
@@ -1526,7 +1526,7 @@ mod tests {
                             Err(oneshot::error::TryRecvError::Closed) => 0,
                         };
                         while subscribe.progress() < until {
-                            subscribe.worker.step_or_park(None);
+                            subscribe.worker.step_or_park(None).await;
                             subscribe.capture_output();
                         }
                         return subscribe.output().clone();

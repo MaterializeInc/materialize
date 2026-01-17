@@ -4357,7 +4357,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.15.3",
+ "hashbrown 0.16.1",
  "serde",
  "serde_core",
 ]
@@ -9915,7 +9915,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -9935,7 +9935,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.111",
@@ -11424,10 +11424,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "clap",
  "futures",
  "mz-adapter-types",
  "mz-build-info",
  "mz-catalog",
+ "mz-cluster-client",
+ "mz-compute",
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",
@@ -11443,7 +11446,9 @@ dependencies = [
  "mz-server-core",
  "mz-service",
  "mz-sql",
+ "mz-storage",
  "mz-storage-types",
+ "mz-txn-wal",
  "snowglobe",
  "tempfile",
  "tokio-postgres",
@@ -11495,7 +11500,7 @@ checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
 [[package]]
 name = "snowglobe"
 version = "0.1.0"
-source = "git+https://github.com/teskje/snowglobe.git#9330c3c351a639b7e8a9cbcf16fbbc8702cae2e1"
+source = "git+https://github.com/teskje/snowglobe.git#4ec74328732e8980d0a56ee69b9e6c25a0661860"
 dependencies = [
  "argh",
  "libc",
@@ -11513,7 +11518,7 @@ dependencies = [
 [[package]]
 name = "snowglobe-macros"
 version = "0.1.0"
-source = "git+https://github.com/teskje/snowglobe.git#9330c3c351a639b7e8a9cbcf16fbbc8702cae2e1"
+source = "git+https://github.com/teskje/snowglobe.git#4ec74328732e8980d0a56ee69b9e6c25a0661860"
 dependencies = [
  "darling 0.23.0",
  "humantime",
@@ -11525,7 +11530,7 @@ dependencies = [
 [[package]]
 name = "snowglobe-proto"
 version = "0.1.0"
-source = "git+https://github.com/teskje/snowglobe.git#9330c3c351a639b7e8a9cbcf16fbbc8702cae2e1"
+source = "git+https://github.com/teskje/snowglobe.git#4ec74328732e8980d0a56ee69b9e6c25a0661860"
 dependencies = [
  "serde",
  "serde_json",
@@ -12110,8 +12115,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c60fbe7e39e5f8322db7d4844b37846a9bfd68a0c75e0fa7eef3aac86ffcada0"
+source = "git+https://github.com/teskje/timely-dataflow.git?branch=async#0d0d6211f0909dca44f0e4a447d5f2abd215b503"
 dependencies = [
  "bincode",
  "byteorder",
@@ -12125,19 +12129,18 @@ dependencies = [
  "timely_communication",
  "timely_container",
  "timely_logging",
+ "tokio",
 ]
 
 [[package]]
 name = "timely_bytes"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3f8afd75272b2c8be00e3574f03bd1e4492171ca11177787086b778821fba24"
+version = "0.25.1"
+source = "git+https://github.com/teskje/timely-dataflow.git?branch=async#0d0d6211f0909dca44f0e4a447d5f2abd215b503"
 
 [[package]]
 name = "timely_communication"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75b5b60a8d73a3a77f972be0a64272a1eefaeb110f13fb68cfb1e35052cbb8a6"
+version = "0.25.1"
+source = "git+https://github.com/teskje/timely-dataflow.git?branch=async#0d0d6211f0909dca44f0e4a447d5f2abd215b503"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12146,19 +12149,18 @@ dependencies = [
  "timely_bytes",
  "timely_container",
  "timely_logging",
+ "tokio",
 ]
 
 [[package]]
 name = "timely_container"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "524a15f40c2af7db3cba02b5b1622b23a1a83d4f632b598c1a238464415a5f68"
+version = "0.25.1"
+source = "git+https://github.com/teskje/timely-dataflow.git?branch=async#0d0d6211f0909dca44f0e4a447d5f2abd215b503"
 
 [[package]]
 name = "timely_logging"
-version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58f78bd5430d73a2e45d5c267c41cd3b32fe2dbedebece3d87d219fb0388e5a4"
+version = "0.25.1"
+source = "git+https://github.com/teskje/timely-dataflow.git?branch=async#0d0d6211f0909dca44f0e4a447d5f2abd215b503"
 dependencies = [
  "timely_container",
 ]

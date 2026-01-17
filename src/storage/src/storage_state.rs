@@ -81,7 +81,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crossbeam_channel::{RecvError, TryRecvError};
 use fail::fail_point;
 use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
@@ -109,6 +108,7 @@ use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
 use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 use tracing::{info, warn};
@@ -124,7 +124,7 @@ use crate::storage_state::async_storage_worker::{AsyncStorageWorker, AsyncStorag
 
 pub mod async_storage_worker;
 
-type CommandReceiver = crossbeam_channel::Receiver<StorageCommand>;
+type CommandReceiver = mpsc::UnboundedReceiver<StorageCommand>;
 type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 
 /// State maintained for each worker thread.
@@ -138,7 +138,7 @@ pub struct Worker<'w, A: Allocate> {
     pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
-    pub client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
+    pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
     /// The state associated with collection ingress and egress.
     pub storage_state: StorageState,
 }
@@ -147,7 +147,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
         timely_worker: &'w mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(Uuid, CommandReceiver, ResponseSender)>,
+        client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,
         connection_context: ConnectionContext,
@@ -415,9 +415,9 @@ impl StorageInstanceContext {
 
 impl<'w, A: Allocate> Worker<'w, A> {
     /// Waits for client connections and runs them to completion.
-    pub fn run(&mut self) {
-        while let Ok((_nonce, rx, tx)) = self.client_rx.recv() {
-            self.run_client(rx, tx);
+    pub async fn run(&mut self) {
+        while let Some((_nonce, rx, tx)) = self.client_rx.recv().await {
+            self.run_client(rx, tx).await;
         }
     }
 
@@ -427,9 +427,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// See the [module documentation](crate::storage_state) for this
     /// workers responsibilities, how it communicates with the other workers and
     /// how commands flow from the controller and through the workers.
-    fn run_client(&mut self, command_rx: CommandReceiver, response_tx: ResponseSender) {
+    async fn run_client(&mut self, mut command_rx: CommandReceiver, response_tx: ResponseSender) {
         // At this point, all workers are still reading from the command flow.
-        if self.reconcile(&command_rx).is_err() {
+        if self.reconcile(&mut command_rx).await.is_err() {
             return;
         }
 
@@ -479,9 +479,9 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 if let Some(sleep_duration) = sleep_duration {
                     park_duration = std::cmp::min(sleep_duration, park_duration);
                 }
-                self.timely_worker.step_or_park(Some(park_duration));
+                self.timely_worker.step_or_park(Some(park_duration)).await;
             } else {
-                self.timely_worker.step();
+                self.timely_worker.step().await;
             }
 
             // Rerport any dropped ids
@@ -958,8 +958,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
-        use tokio::sync::mpsc::error::TryRecvError;
-
         let mut to_remove = vec![];
 
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
@@ -993,7 +991,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Extract commands until `InitializationComplete`, and make the worker
     /// reflect those commands. If the worker can not be made to reflect the
     /// commands, return an error.
-    fn reconcile(&mut self, command_rx: &CommandReceiver) -> Result<(), RecvError> {
+    async fn reconcile(&mut self, command_rx: &mut CommandReceiver) -> Result<(), ()> {
         let worker_id = self.timely_worker.index();
 
         // To initialize the connection, we want to drain all commands until we
@@ -1001,7 +999,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         // target command state.
         let mut commands = vec![];
         loop {
-            match command_rx.recv()? {
+            match command_rx.recv().await.ok_or(())? {
                 StorageCommand::InitializationComplete => break,
                 command => commands.push(command),
             }

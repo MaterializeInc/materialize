@@ -11,7 +11,6 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::thread::Thread;
 
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
@@ -52,24 +51,14 @@ where
 pub struct TimelyContainer<C: ClusterSpec> {
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
-        crossbeam_channel::Sender<(
+        mpsc::UnboundedSender<(
             Uuid,
-            crossbeam_channel::Receiver<C::Command>,
+            mpsc::UnboundedReceiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
         )>,
     >,
     /// Thread guards that keep worker threads alive
-    worker_guards: WorkerGuards<()>,
-}
-
-impl<C: ClusterSpec> TimelyContainer<C> {
-    fn worker_threads(&self) -> Vec<Thread> {
-        self.worker_guards
-            .guards()
-            .iter()
-            .map(|h| h.thread().clone())
-            .collect()
-    }
+    _worker_guards: WorkerGuards<()>,
 }
 
 impl<C> ClusterClient<C>
@@ -92,7 +81,7 @@ where
         let mut command_txs = Vec::new();
         let mut response_rxs = Vec::new();
         for client_tx in &timely.client_txs {
-            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
             client_tx
@@ -103,11 +92,7 @@ where
             response_rxs.push(resp_rx);
         }
 
-        self.inner = Some(LocalClient::new_partitioned(
-            response_rxs,
-            command_txs,
-            timely.worker_threads(),
-        ));
+        self.inner = Some(LocalClient::new_partitioned(response_rxs, command_txs));
         Ok(())
     }
 }
@@ -159,7 +144,7 @@ where
 ///
 /// This trait is used to make the [`ClusterClient`] generic over the compute and storage cluster
 /// implementations.
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster command type.
     type Command: fmt::Debug + Send + TryIntoProtocolNonce;
@@ -167,12 +152,12 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     type Response: fmt::Debug + Send;
 
     /// Run the given Timely worker.
-    fn run_worker<A: Allocate + 'static>(
+    async fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<Self::Command>,
+            mpsc::UnboundedReceiver<Self::Command>,
             mpsc::UnboundedSender<Self::Response>,
         )>,
     );
@@ -181,11 +166,11 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     async fn build_cluster(
         &self,
         config: TimelyConfig,
-        tokio_executor: Handle,
+        _tokio_executor: Handle,
     ) -> Result<TimelyContainer<Self>, Error> {
         info!("Building timely container with config {config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
+            .map(|_| mpsc::unbounded_channel())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 
@@ -268,19 +253,19 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         }
 
         let spec = self.clone();
-        let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
-            let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
-                .take()
-                .unwrap();
-            spec.run_worker(timely_worker, client_rx);
-        })
-        .map_err(|e| anyhow!(e))?;
+        let worker_guards =
+            execute_from(builders, other, worker_config, async move |timely_worker| {
+                let timely_worker_index = timely_worker.index();
+                let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
+                    .take()
+                    .unwrap();
+                spec.run_worker(timely_worker, client_rx).await;
+            })
+            .map_err(|e| anyhow!(e))?;
 
         Ok(TimelyContainer {
             client_txs,
-            worker_guards,
+            _worker_guards: worker_guards,
         })
     }
 }

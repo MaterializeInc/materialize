@@ -75,10 +75,13 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 use futures::TryFutureExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
@@ -87,8 +90,10 @@ use regex::Regex;
 use timely::communication::allocator::zero_copy::allocator::TcpBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
+use timely::communication::allocator::zero_copy::stream::Stream as TimelyStream;
 use timely::communication::allocator::{GenericBuilder, PeerBuilder};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::ReadBuf;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tracing::{info, warn};
 
 /// Creates communication mesh from cluster config
@@ -115,53 +120,7 @@ where
         }
     };
 
-    if sockets
-        .iter()
-        .filter_map(|s| s.as_ref())
-        .all(|s| s.is_tcp())
-    {
-        let sockets = sockets
-            .into_iter()
-            .map(|s| s.map(|s| s.unwrap_tcp().into_std()).transpose())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(anyhow::Error::from)
-            .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
-    } else if sockets
-        .iter()
-        .filter_map(|s| s.as_ref())
-        .all(|s| s.is_unix())
-    {
-        let sockets = sockets
-            .into_iter()
-            .map(|s| s.map(|s| s.unwrap_unix().into_std()).transpose())
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(anyhow::Error::from)
-            .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner::<_, P, _>(sockets, process, workers, refill, builder_fn)
-    } else {
-        anyhow::bail!("cannot mix TCP and Unix streams");
-    }
-}
-
-fn initialize_networking_inner<S, P, PF>(
-    sockets: Vec<Option<S>>,
-    process: usize,
-    workers: usize,
-    refill: BytesRefill,
-    builder_fn: PF,
-) -> Result<(Vec<GenericBuilder>, Box<dyn Any + Send>), anyhow::Error>
-where
-    S: timely::communication::allocator::zero_copy::stream::Stream + 'static,
-    P: PeerBuilder,
-    PF: Fn(TcpBuilder<P::Peer>) -> GenericBuilder,
-{
-    for s in &sockets {
-        if let Some(s) = s {
-            s.set_nonblocking(false)
-                .context("failed to set socket to non-blocking")?;
-        }
-    }
+    let sockets = sockets.into_iter().map(|s| s.map(Socket)).collect();
 
     match initialize_networking_from_sockets::<_, P>(
         sockets,
@@ -178,6 +137,45 @@ where
             warn!(process, "failed to initialize network: {err}");
             Err(anyhow::Error::from(err).context("failed to initialize networking from sockets"))
         }
+    }
+}
+
+struct Socket(Stream);
+
+impl AsyncRead for Socket {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Socket {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+impl TimelyStream for Socket {
+    type ReadHalf = mz_ore::netio::StreamReadHalf;
+    type WriteHalf = mz_ore::netio::StreamWriteHalf;
+
+    fn split(self) -> (Self::ReadHalf, Self::WriteHalf) {
+        self.0.split()
     }
 }
 

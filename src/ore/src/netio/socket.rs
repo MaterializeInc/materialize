@@ -476,7 +476,9 @@ impl AsyncWrite for Stream {
 /// Read half of a [`Stream`], created by [`Stream::split`].
 #[derive(Debug)]
 pub enum StreamReadHalf {
+    /// Read half of a TCP stream.
     Tcp(tcp::OwnedReadHalf),
+    /// Read half of a Unix stream.
     Unix(unix::OwnedReadHalf),
 }
 
@@ -496,7 +498,9 @@ impl AsyncRead for StreamReadHalf {
 /// Write half of a [`Stream`], created by [`Stream::split`].
 #[derive(Debug)]
 pub enum StreamWriteHalf {
+    /// Write half of a TCP stream.
     Tcp(tcp::OwnedWriteHalf),
+    /// Write half of a Unix stream.
     Unix(unix::OwnedWriteHalf),
 }
 

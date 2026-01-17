@@ -24,7 +24,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::TryRecvError;
 use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
@@ -35,11 +34,13 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
 use timely::scheduling::{Scheduler, SyncActivator};
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TryRecvError;
 use uuid::Uuid;
 
 /// A sender pushing commands onto the command channel.
 pub struct Sender {
-    tx: crossbeam_channel::Sender<(ComputeCommand, Uuid)>,
+    tx: mpsc::UnboundedSender<(ComputeCommand, Uuid)>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
@@ -60,7 +61,7 @@ impl Sender {
 
 /// A receiver reading commands from the command channel.
 pub struct Receiver {
-    rx: crossbeam_channel::Receiver<(ComputeCommand, Uuid)>,
+    rx: mpsc::UnboundedReceiver<(ComputeCommand, Uuid)>,
 }
 
 impl Receiver {
@@ -68,7 +69,7 @@ impl Receiver {
     ///
     /// This returns `None` when there are currently no commands but there might be commands again
     /// in the future.
-    pub fn try_recv(&self) -> Option<(ComputeCommand, Uuid)> {
+    pub fn try_recv(&mut self) -> Option<(ComputeCommand, Uuid)> {
         match self.rx.try_recv() {
             Ok(msg) => Some(msg),
             Err(TryRecvError::Empty) => None,
@@ -81,8 +82,8 @@ impl Receiver {
 
 /// Render the command channel dataflow.
 pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Receiver) {
-    let (input_tx, input_rx) = crossbeam_channel::unbounded();
-    let (output_tx, output_rx) = crossbeam_channel::unbounded();
+    let (input_tx, mut input_rx) = mpsc::unbounded_channel();
+    let (output_tx, output_rx) = mpsc::unbounded_channel();
     let activator = Arc::new(Mutex::new(None));
 
     // TODO(teskje): This implementation relies on Timely channels preserving the order of their
@@ -115,8 +116,7 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
 
                     assert_eq!(worker_id, 0);
 
-                    let input: Vec<_> = input_rx.try_iter().collect();
-                    for (cmd, nonce) in input {
+                    while let Ok((cmd, nonce)) = input_rx.try_recv() {
                         let worker_cmds =
                             split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
                         output.session(&cap).give_iterator(worker_cmds);

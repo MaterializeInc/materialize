@@ -361,6 +361,7 @@ iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.g
 duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
 
 turmoil = { git = "https://github.com/teskje/turmoil.git", branch = "mz" }
+timely = { git = "https://github.com/teskje/timely-dataflow.git", branch = "async" }
 
 [patch.'https://github.com/tokio-rs/turmoil']
 turmoil = { git = "https://github.com/teskje/turmoil.git", branch = "mz" }
