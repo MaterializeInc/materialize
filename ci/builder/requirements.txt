@@ -56,6 +56,7 @@ ruamel.yaml==0.18.17
 ruff==0.0.292
 # Keep on 1.15 for Python 3.10 compatibility
 scipy==1.15.3
+scipy-stubs==1.15.3.0
 semver==3.0.4
 shtab==1.8.0
 sqlparse==0.5.5
