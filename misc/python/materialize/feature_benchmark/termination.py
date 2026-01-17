@@ -10,7 +10,7 @@
 import statistics
 
 import numpy as np
-from scipy import stats  # type: ignore
+from scipy import stats
 
 from materialize.feature_benchmark.measurement import Measurement
 
