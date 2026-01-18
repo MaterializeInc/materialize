@@ -19,7 +19,7 @@ ipympl==0.9.8
 ipywidgets==8.1.8
 junit-xml==1.9
 junitparser==4.0.2
-jupyterlab==4.5.1
+jupyterlab==4.5.2
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
@@ -72,7 +72,7 @@ types-setuptools==80.9.0.20251223
 types-toml==0.10.8.20240310
 typing-extensions==4.15.0
 xxhash==3.6.0
-yamllint==1.37.1
+yamllint==1.38.0
 confluent-kafka==2.6.1
 fastavro==1.12.1
 websocket-client==1.9.0
