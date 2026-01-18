@@ -37,7 +37,7 @@ tokio = "1.48.0"
 tokio-stream = "0.1.18"
 tokio-openssl = "0.6.5"
 tokio-util = { version = "0.7.18", features = ["codec"] }
-tokio-metrics = "0.4.6"
+tokio-metrics = "0.4.7"
 tracing = "0.1.44"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 uuid = { version = "1.19.0", features = ["v4"] }
