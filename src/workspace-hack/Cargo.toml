@@ -24,7 +24,7 @@ arrow = { version = "57.1.0", default-features = false, features = ["ffi", "pret
 arrow-array = { version = "57.1.0", default-features = false, features = ["ffi"] }
 arrow-cast = { version = "57.1.0", default-features = false, features = ["prettyprint"] }
 arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
-arrow-schema = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
@@ -168,7 +168,7 @@ arrow = { version = "57.1.0", default-features = false, features = ["ffi", "pret
 arrow-array = { version = "57.1.0", default-features = false, features = ["ffi"] }
 arrow-cast = { version = "57.1.0", default-features = false, features = ["prettyprint"] }
 arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
-arrow-schema = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
