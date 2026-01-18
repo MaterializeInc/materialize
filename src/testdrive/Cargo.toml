@@ -22,7 +22,7 @@ bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 duckdb = { version = "1.4.3", default-features = false, features = ["bundled", "native-tls"] }
-flate2 = "1.1.5"
+flate2 = "1.1.8"
 futures = "0.3.31"
 globset = "0.4.18"
 hex = "0.4.3"
