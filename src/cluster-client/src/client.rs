@@ -69,4 +69,8 @@ pub struct ClusterReplicaLocation {
     /// the replica. Connections from the controller to these addresses
     /// are sent commands, and send responses back.
     pub ctl_addrs: Vec<String>,
+    /// The network addresses of the internal HTTP endpoints for each process in
+    /// the replica. Used for proxying HTTP requests (profiling, metrics, tracing)
+    /// from environmentd to clusterd.
+    pub http_addrs: Vec<String>,
 }

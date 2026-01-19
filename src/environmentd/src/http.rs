@@ -44,6 +44,7 @@ use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_auth::password::Password;
+use mz_controller::ReplicaHttpLocator;
 use mz_authenticator::Authenticator;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
@@ -85,6 +86,7 @@ use crate::deployment::state::DeploymentStateHandle;
 use crate::http::sql::SqlError;
 
 mod catalog;
+mod cluster;
 mod console;
 mod memory;
 mod metrics;
@@ -120,6 +122,8 @@ pub struct HttpConfig {
     pub allowed_roles: AllowedRoles,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
+    /// Locator for cluster replica HTTP addresses, used for proxying requests.
+    pub replica_http_locator: Arc<ReplicaHttpLocator>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +170,7 @@ impl HttpServer {
             allowed_roles,
             internal_route_config,
             routes_enabled,
+            replica_http_locator,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_enabled = tls.is_some();
@@ -323,6 +328,18 @@ impl HttpServer {
                     routing::get(console::handle_internal_console),
                 )
                 .layer(Extension(console_config));
+
+            // Cluster HTTP proxy routes.
+            let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(
+                Arc::clone(&replica_http_locator),
+            ));
+            base_router = base_router
+                .route(
+                    "/api/cluster/:cluster_id/replica/:replica_id/process/:process/*path",
+                    routing::any(cluster::handle_cluster_proxy),
+                )
+                .layer(Extension(cluster_proxy_config));
+
             let leader_router = Router::new()
                 .route("/api/leader/status", routing::get(handle_leader_status))
                 .route("/api/leader/promote", routing::post(handle_leader_promote))

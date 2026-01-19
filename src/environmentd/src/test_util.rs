@@ -35,7 +35,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 
 use mz_auth::password::Password;
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_dyncfg::ConfigUpdates;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
@@ -748,6 +748,7 @@ impl Listeners {
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    replica_http_locator: Arc::new(ReplicaHttpLocator::new()),
                 },
                 secrets_controller,
                 cloud_resource_controller: None,

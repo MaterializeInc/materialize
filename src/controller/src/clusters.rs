@@ -408,16 +408,22 @@ where
         let compute_location: ClusterReplicaLocation;
         let metrics_task: Option<AbortOnDropHandle<()>>;
 
+        let http_addrs;
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addrs,
                 computectl_addrs,
             }) => {
+                // Unmanaged replicas don't have HTTP addresses available through
+                // the orchestrator, so we leave them empty.
+                http_addrs = Vec::new();
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: computectl_addrs,
+                    http_addrs: http_addrs.clone(),
                 };
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: storagectl_addrs,
+                    http_addrs: http_addrs.clone(),
                 };
                 metrics_task = None;
             }
@@ -431,15 +437,22 @@ where
                     m,
                     enable_worker_core_affinity,
                 )?;
+                http_addrs = service.addresses("internal-http");
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
+                    http_addrs: http_addrs.clone(),
                 };
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("computectl"),
+                    http_addrs: http_addrs.clone(),
                 };
                 metrics_task = Some(metrics_task_join_handle);
             }
         }
+
+        // Update the HTTP locator with the replica's HTTP addresses for proxying.
+        self.replica_http_locator
+            .update_addresses(cluster_id, replica_id, http_addrs);
 
         self.storage
             .connect_replica(cluster_id, replica_id, storage_location);
@@ -469,6 +482,10 @@ where
         // provisioned.
         self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
         self.metrics_tasks.remove(&replica_id);
+
+        // Remove HTTP addresses from the locator.
+        self.replica_http_locator
+            .remove_replica(cluster_id, replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
