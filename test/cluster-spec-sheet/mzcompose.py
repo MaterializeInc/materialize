@@ -111,6 +111,8 @@ SCENARIO_GROUPS = {
     "all": ALL_SCENARIOS,
 }
 
+REPLICA_SCALES = [1, 2, 4, 8, 12]
+
 
 class ConnectionHandler:
     def __init__(self, new_connection: Callable[[], psycopg.Connection]) -> None:
@@ -2273,7 +2275,6 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     parser.add_argument(
         "scenarios",
         nargs="*",
-        default=["all"],
         choices=ALL_SCENARIOS + list(SCENARIO_GROUPS.keys()),
         help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'environmentd'.",
     )
@@ -2281,7 +2282,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     args = parser.parse_args()
 
     scenarios: set[str] = set()
-    for s in args.scenarios:
+    for s in args.scenarios or ["all"]:
         if s in SCENARIO_GROUPS:
             scenarios.update(SCENARIO_GROUPS[s])
         else:
@@ -2601,9 +2602,20 @@ class CloudTarget(BenchTarget):
 
     def replica_size_for_scale(self, scale: int) -> str:
         """
-        Returns the replica size for a given scale.
+        Returns the replica size for a given scale
         """
-        return f"{scale}00cc"
+        return {
+            1: "M.1-micro",
+            2: "M.1-xsmall",
+            4: "M.1-small",
+            6: "M.1-medium",
+            8: "M.1-large",
+            12: "M.1-1.5xlarge",
+            16: "M.1-2xlarge",
+            24: "M.1-3xlarge",
+            32: "M.1-4xlarge",
+            64: "M.1-8xlarge",
+        }[scale]
 
 
 class DockerTarget(BenchTarget):
@@ -2631,15 +2643,14 @@ class DockerTarget(BenchTarget):
         self.composition.up("materialized")
 
     def new_connection(self) -> psycopg.Connection:
-        return self.composition.sql_connection()
+        return self.composition.sql_connection(user="mz_system", port=6877)
 
     def cleanup(self) -> None:
         print("Stopping local Materialize instance ...")
         self.composition.stop("materialized")
 
     def replica_size_for_scale(self, scale: int) -> str:
-        # 100cc == 2 workers
-        return f"scale=1,workers={2*scale}"
+        return f"scale=1,workers={scale}"
 
     def max_scale(self) -> int | None:
         return 16
@@ -2681,7 +2692,7 @@ def run_scenario_strong(
     for name in scenario.materialize_views():
         runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
 
-    for replica_scale in [1, 2, 4, 8, 16, 32]:
+    for replica_scale in REPLICA_SCALES:
         if replica_scale > max_scale:
             break
         replica_size = target.replica_size_for_scale(replica_scale)
@@ -2804,7 +2815,7 @@ def run_scenario_weak(
 
     initial_scale = scenario.scale
 
-    for replica_scale in [1, 2, 4, 8, 16, 32]:
+    for replica_scale in REPLICA_SCALES:
         if replica_scale > max_scale:
             break
         replica_size = target.replica_size_for_scale(replica_scale)
@@ -2910,19 +2921,20 @@ def analyze_cluster_results_file(file: str) -> None:
     print(f"--- Analyzing cluster results file {file} ...")
 
     def extract_cluster_size(s: str) -> float:
-        match = re.search(r"(\d+)(?:(cc)|(C))", s)
-        if match:
-            if match.group(2):  # 'cc' match
-                return float(match.group(1)) / 100.0
-            elif match.group(3):  # 'C' matches
-                return float(match.group(1))
-        match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
-        if match:
-            # We don't have credits in docker, so approximate it
-            # 100cc == 2 workers
-            if match.group(1) and match.group(2):
-                return float(match.group(1)) * float(match.group(2)) / 2
-        raise ValueError(f"Invalid cluster size format: {s}")
+        if s.startswith("scale=1,workers="):
+            return int(s.removeprefix("scale=1,workers="))
+        return {
+            "M.1-micro": 1,
+            "M.1-xsmall": 2,
+            "M.1-small": 4,
+            "M.1-medium": 6,
+            "M.1-large": 8,
+            "M.1-1.5xlarge": 12,
+            "M.1-2xlarge": 16,
+            "M.1-3xlarge": 24,
+            "M.1-4xlarge": 32,
+            "M.1-8xlarge": 64,
+        }[s]
 
     df = pd.read_csv(file)
     if df.empty:
