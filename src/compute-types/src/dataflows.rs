@@ -150,6 +150,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     pub fn import_source(&mut self, id: GlobalId, typ: SqlRelationType, monotonic: bool) {
         // Import the source with no linear operators applied to it.
         // They may be populated by whole-dataflow optimization.
+        // Similarly, we require the snapshot by default, though optimization may choose to skip it.
         self.source_imports.insert(
             id,
             SourceImport {
@@ -159,6 +160,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                     typ,
                 },
                 monotonic,
+                with_snapshot: true,
                 upper: Antichain::new(),
             },
         );
@@ -606,6 +608,8 @@ pub struct SourceImport<S: 'static = (), T = mz_repr::Timestamp> {
     pub desc: SourceInstanceDesc<S>,
     /// Whether the source will supply monotonic data.
     pub monotonic: bool,
+    /// Whether this import must include the snapshot data.
+    pub with_snapshot: bool,
     /// The initial known upper frontier for the source.
     pub upper: Antichain<T>,
 }

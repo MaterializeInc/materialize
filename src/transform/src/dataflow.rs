@@ -452,6 +452,57 @@ pub fn optimize_dataflow_monotonic(
     Ok(())
 }
 
+/// Determine whether we require snapshots from our durable source imports.
+/// (For example, these can often be skipped for simple subscribe queries.)
+pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
+    // For every global id, true iff we need a snapshot for that global ID.
+    // This is computed bottom-up: subscribes may or may not require a snapshot from their inputs,
+    // index exports definitely do, and objects-to-build require a snapshot from their inputs if
+    // either they need to provide a snapshot as output or they may need snapshots internally, eg. to
+    // compute a join.
+    let mut downstream_requires_snapshot = BTreeMap::new();
+
+    for (_id, export) in &dataflow.sink_exports {
+        *downstream_requires_snapshot
+            .entry(Id::Global(export.from))
+            .or_default() |= export.with_snapshot;
+    }
+    for (_id, (export, _typ)) in &dataflow.index_exports {
+        *downstream_requires_snapshot
+            .entry(Id::Global(export.on_id))
+            .or_default() |= true;
+    }
+    for BuildDesc { id: _, plan } in dataflow.objects_to_build.iter().rev() {
+        // For now, we treat all intermediate nodes as potentially requiring a snapshot.
+        // Walk the AST, marking anything depended on by a compute object as snapshot-required.
+        let mut todo = vec![(true, &plan.0)];
+        while let Some((requires_snapshot, expr)) = todo.pop() {
+            match expr {
+                MirRelationExpr::Get { id, .. } => {
+                    *downstream_requires_snapshot.entry(*id).or_default() |= requires_snapshot;
+                }
+                other => {
+                    todo.extend(other.children().rev().map(|c| (true, c)));
+                }
+            }
+        }
+    }
+    for (id, import) in &mut dataflow.source_imports {
+        let with_snapshot = downstream_requires_snapshot
+            .entry(Id::Global(*id))
+            .or_default();
+
+        // As above, fetch the snapshot if there are any transformations on the raw source data.
+        // (And we'll always need to check for things like temporal filters, since those allow
+        // snapshot data to affect diffs at times past the as-of.)
+        *with_snapshot |= import.desc.arguments.operators.is_some();
+
+        import.with_snapshot = *with_snapshot;
+    }
+
+    Ok(())
+}
+
 /// Restricts the indexes imported by `dataflow` to only the ones it needs.
 /// It also adds to the `DataflowMetainfo` how each index will be used.
 /// It also annotates global `Get`s with whether they will be reads from Persist or an index, plus

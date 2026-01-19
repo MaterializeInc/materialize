@@ -1528,6 +1528,7 @@ where
                 mz_compute_types::dataflows::SourceImport {
                     desc,
                     monotonic: import.monotonic,
+                    with_snapshot: import.with_snapshot,
                     upper: frontiers.write_frontier,
                 },
             );

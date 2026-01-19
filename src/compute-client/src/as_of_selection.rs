@@ -1108,6 +1108,7 @@ mod tests {
                     mz_compute_types::dataflows::SourceImport {
                         desc,
                         monotonic: Default::default(),
+                        with_snapshot: true,
                         upper: Default::default(),
                     },
                 )

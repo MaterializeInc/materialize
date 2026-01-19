@@ -259,7 +259,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let mut snapshot_mode = SnapshotMode::Include;
+                    let mut snapshot_mode = if import.with_snapshot {
+                        SnapshotMode::Include
+                    } else {
+                        SnapshotMode::Exclude
+                    };
                     let mut suppress_early_progress_as_of = dataflow.as_of.clone();
                     let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
                     if let Some(x) = ct_source_transformer.as_ref() {
