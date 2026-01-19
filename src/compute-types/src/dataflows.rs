@@ -30,7 +30,7 @@ use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DataflowDescription<P, S: 'static = (), T = mz_repr::Timestamp> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, (SourceInstanceDesc<S>, bool, Antichain<T>)>,
+    pub source_imports: BTreeMap<GlobalId, SourceImport<S, T>>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -152,15 +152,15 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         // They may be populated by whole-dataflow optimization.
         self.source_imports.insert(
             id,
-            (
-                SourceInstanceDesc {
+            SourceImport {
+                desc: SourceInstanceDesc {
                     storage_metadata: (),
                     arguments: SourceInstanceArguments { operators: None },
                     typ,
                 },
                 monotonic,
-                Antichain::new(),
-            ),
+                upper: Antichain::new(),
+            },
         );
     }
 
@@ -203,7 +203,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, (source, _monotonic, _upper)) in self.source_imports.iter() {
+        for (source_id, source_import) in self.source_imports.iter() {
+            let source = &source_import.desc;
             if source_id == id {
                 return source.typ.arity();
             }
@@ -230,8 +231,8 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         for BuildDesc { plan, .. } in &mut self.objects_to_build {
             r(plan)?;
         }
-        for (source_instance_desc, _, _upper) in self.source_imports.values_mut() {
-            let Some(mfp) = source_instance_desc.arguments.operators.as_mut() else {
+        for source_import in self.source_imports.values_mut() {
+            let Some(mfp) = source_import.desc.arguments.operators.as_mut() else {
                 continue;
             };
             for expr in mfp.expressions.iter_mut() {
@@ -538,8 +539,8 @@ where
         };
 
         let mut source_imports = self.source_imports.clone();
-        for (_source, _monotonic, upper) in source_imports.values_mut() {
-            *upper = Antichain::new();
+        for import in source_imports.values_mut() {
+            import.upper = Antichain::new();
         }
 
         let mut objects_to_build = self.objects_to_build.clone();
@@ -596,6 +597,17 @@ pub struct IndexImport {
     pub typ: SqlRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
+}
+
+/// Information about an imported source, and how it will be used by the dataflow.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SourceImport<S: 'static = (), T = mz_repr::Timestamp> {
+    /// Description of the source instance to import.
+    pub desc: SourceInstanceDesc<S>,
+    /// Whether the source will supply monotonic data.
+    pub monotonic: bool,
+    /// The initial known upper frontier for the source.
+    pub upper: Antichain<T>,
 }
 
 /// An association of a global identifier to an expression.

@@ -475,9 +475,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
             let monotonic_ids = dataflow
                 .source_imports
                 .iter()
-                .filter_map(
-                    |(id, (_, monotonic, _upper))| if *monotonic { Some(*id) } else { None },
-                )
+                .filter_map(|(id, source_import)| source_import.monotonic.then_some(*id))
                 .chain(
                     dataflow
                         .index_imports
@@ -533,7 +531,8 @@ impl<T: timely::progress::Timestamp> Plan<T> {
     fn refine_source_mfps(dataflow: &mut DataflowDescription<Self>) {
         // Extract MFPs from Get operators for sources, and extract what we can for the source.
         // For each source, we want to find `&mut MapFilterProject` for each `Get` expression.
-        for (source_id, (source, _monotonic, _upper)) in dataflow.source_imports.iter_mut() {
+        for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+            let source = &mut source_import.desc;
             let mut identity_present = false;
             let mut mfps = Vec::new();
             for build_desc in dataflow.objects_to_build.iter_mut() {

@@ -280,12 +280,12 @@ where
     pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections<T>) {
         for command in &mut self.commands {
             if let ComputeCommand::CreateDataflow(dataflow) = command {
-                for (id, (_, _, upper)) in dataflow.source_imports.iter_mut() {
+                for (id, import) in dataflow.source_imports.iter_mut() {
                     let frontiers = storage_collections
                         .collection_frontiers(*id)
                         .expect("collection exists");
 
-                    *upper = frontiers.write_frontier;
+                    import.upper = frontiers.write_frontier;
                 }
             }
         }

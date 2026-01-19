@@ -362,7 +362,8 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) -> Result<(), Transfor
     )?;
 
     // Push predicate information into the SourceDesc.
-    for (source_id, (source, _monotonic, _upper)) in dataflow.source_imports.iter_mut() {
+    for (source_id, source_import) in dataflow.source_imports.iter_mut() {
+        let source = &mut source_import.desc;
         if let Some(list) = predicates.remove(&Id::Global(*source_id)) {
             if !list.is_empty() {
                 // Canonicalize the order of predicates, for stable plans.
@@ -421,8 +422,8 @@ pub fn optimize_dataflow_monotonic(
     ctx: &mut TransformCtx,
 ) -> Result<(), TransformError> {
     let mut monotonic_ids = BTreeSet::new();
-    for (source_id, (_source, is_monotonic, _upper)) in dataflow.source_imports.iter() {
-        if *is_monotonic {
+    for (source_id, source_import) in dataflow.source_imports.iter() {
+        if source_import.monotonic {
             monotonic_ids.insert(source_id.clone());
         }
     }

@@ -232,16 +232,19 @@ pub fn build_compute_dataflow<A: Allocate>(
 
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
-            for (source_id, (source, _monotonic, upper)) in dataflow.source_imports.iter() {
+            for (source_id, import) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
-                    let mut mfp = source.arguments.operators.clone().map(|mut ops| {
+                    let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
                         // If enabled, we read from Persist with a `RelationDesc` that
                         // omits uneeded columns.
                         if apply_demands {
                             let demands = ops.demand();
-                            let new_desc =
-                                source.storage_metadata.relation_desc.apply_demand(&demands);
+                            let new_desc = import
+                                .desc
+                                .storage_metadata
+                                .relation_desc
+                                .apply_demand(&demands);
                             let new_arity = demands.len();
                             let remap: BTreeMap<_, _> = demands
                                 .into_iter()
@@ -272,7 +275,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         *source_id,
                         Arc::clone(&compute_state.persist_clients),
                         &compute_state.txns_ctx,
-                        source.storage_metadata.clone(),
+                        import.desc.storage_metadata.clone(),
                         read_schema,
                         dataflow.as_of.clone(),
                         snapshot_mode,
@@ -308,7 +311,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             output_probe.clone(),
                             slack,
                             limit,
-                            upper.clone(),
+                            import.upper.clone(),
                             name.clone(),
                         );
                         ok_stream = stream;
