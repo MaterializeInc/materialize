@@ -153,7 +153,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
-use crate::sink::correction::Correction;
+use crate::sink::correction::{Correction, Logging};
 use crate::sink::refresh::apply_refresh;
 
 impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
@@ -767,7 +767,21 @@ mod write {
         let worker_id = scope.index();
 
         let name = operator_name(sink_id, "write");
-        let mut op = OperatorBuilder::new(name, scope);
+        let mut op = OperatorBuilder::new(name, scope.clone());
+
+        let mut logging = None;
+        if let (Some(compute_logger), Some(differential_logger)) = (
+            scope.logger_for("materialize/compute"),
+            scope.logger_for("differential/arrange"),
+        ) {
+            let operator_info = op.operator_info();
+            logging = Some(Logging::new(
+                compute_logger,
+                differential_logger.into(),
+                operator_info.global_id,
+                operator_info.address.to_vec(),
+            ));
+        }
 
         let (batches_output, batches_output_stream) =
             op.new_output::<CapacityContainerBuilder<_>>();
@@ -799,6 +813,7 @@ mod write {
                 worker_id,
                 writer,
                 sink_metrics,
+                logging,
                 as_of,
                 &worker_config,
             );
@@ -919,6 +934,7 @@ mod write {
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
             metrics: SinkMetrics,
+            logging: Option<Logging>,
             as_of: Antichain<Timestamp>,
             worker_config: &ConfigSet,
         ) -> Self {
@@ -933,8 +949,13 @@ mod write {
                 worker_id,
                 persist_writer,
                 corrections: OkErr::new(
-                    Correction::new(metrics.clone(), worker_metrics.clone(), worker_config),
-                    Correction::new(metrics, worker_metrics, worker_config),
+                    Correction::new(
+                        metrics.clone(),
+                        worker_metrics.clone(),
+                        logging.clone(),
+                        worker_config,
+                    ),
+                    Correction::new(metrics, worker_metrics, logging, worker_config),
                 ),
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
