@@ -426,6 +426,10 @@ where
                     http_addrs: http_addrs.clone(),
                 };
                 metrics_task = None;
+
+                // Register unmanaged replica (no HTTP addresses available).
+                self.replica_http_locator
+                    .register_unmanaged(cluster_id, replica_id);
             }
             ReplicaLocation::Managed(m) => {
                 let (service, metrics_task_join_handle) = self.provision_replica(
@@ -447,12 +451,15 @@ where
                     http_addrs: http_addrs.clone(),
                 };
                 metrics_task = Some(metrics_task_join_handle);
+
+                // Register the service for HTTP proxying. TCP addresses are
+                // queried lazily via tcp_addresses() since they may not be
+                // available immediately (the process orchestrator allocates
+                // TCP proxy ports asynchronously).
+                self.replica_http_locator
+                    .register_service(cluster_id, replica_id, Arc::from(service));
             }
         }
-
-        // Update the HTTP locator with the replica's HTTP addresses for proxying.
-        self.replica_http_locator
-            .update_addresses(cluster_id, replica_id, http_addrs);
 
         self.storage
             .connect_replica(cluster_id, replica_id, storage_location);

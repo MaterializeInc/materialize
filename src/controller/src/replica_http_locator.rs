@@ -15,9 +15,10 @@
 //! tracing) without requiring direct network access to the clusterd pods.
 
 use std::collections::BTreeMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_orchestrator::Service;
 
 /// Tracks HTTP addresses for cluster replica processes.
 ///
@@ -25,10 +26,25 @@ use mz_controller_types::{ClusterId, ReplicaId};
 /// process has its own HTTP endpoint. This struct maintains an in-memory
 /// mapping that is updated by the controller when replicas are provisioned
 /// or dropped.
-#[derive(Debug, Default)]
+///
+/// For managed replicas, we store a reference to the orchestrator's Service
+/// object and query `tcp_addresses()` lazily. This is necessary because the
+/// process orchestrator allocates TCP proxy ports asynchronously, so the
+/// addresses may not be available immediately after `ensure_service()` returns.
+#[derive(Default)]
 pub struct ReplicaHttpLocator {
-    /// Maps (cluster_id, replica_id) -> list of HTTP addresses (one per process)
-    addresses: RwLock<BTreeMap<(ClusterId, ReplicaId), Vec<String>>>,
+    /// Maps (cluster_id, replica_id) -> Service reference or static addresses.
+    /// For managed replicas, we store the Service and call tcp_addresses() lazily.
+    /// For unmanaged replicas, we store None (they don't have HTTP addresses).
+    services: RwLock<BTreeMap<(ClusterId, ReplicaId), Option<Arc<dyn Service>>>>,
+}
+
+impl std::fmt::Debug for ReplicaHttpLocator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplicaHttpLocator")
+            .field("services", &"<services>")
+            .finish()
+    }
 }
 
 impl ReplicaHttpLocator {
@@ -39,43 +55,54 @@ impl ReplicaHttpLocator {
 
     /// Returns the HTTP address for a specific process of a replica.
     ///
-    /// Returns `None` if the replica is not found or the process index is out of bounds.
+    /// Returns `None` if the replica is not found, the process index is out of
+    /// bounds, or the addresses are not yet available.
     pub fn get_http_addr(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         process: usize,
     ) -> Option<String> {
-        let guard = self.addresses.read().expect("lock poisoned");
-        guard
-            .get(&(cluster_id, replica_id))
-            .and_then(|addrs| addrs.get(process).cloned())
+        let guard = self.services.read().expect("lock poisoned");
+        let service = guard.get(&(cluster_id, replica_id))?.as_ref()?;
+        let addrs = service.tcp_addresses("internal-http");
+        addrs.get(process).cloned()
     }
 
     /// Returns the number of processes for a replica, or `None` if not found.
     pub fn process_count(&self, cluster_id: ClusterId, replica_id: ReplicaId) -> Option<usize> {
-        let guard = self.addresses.read().expect("lock poisoned");
-        guard.get(&(cluster_id, replica_id)).map(|addrs| addrs.len())
+        let guard = self.services.read().expect("lock poisoned");
+        let service = guard.get(&(cluster_id, replica_id))?.as_ref()?;
+        Some(service.tcp_addresses("internal-http").len())
     }
 
-    /// Updates the HTTP addresses for a replica.
+    /// Registers a service for a managed replica.
     ///
-    /// Called by the controller when a replica is provisioned.
-    pub fn update_addresses(
+    /// Called by the controller when a managed replica is provisioned.
+    /// The TCP addresses will be queried lazily via `tcp_addresses()`.
+    pub fn register_service(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        addrs: Vec<String>,
+        service: Arc<dyn Service>,
     ) {
-        let mut guard = self.addresses.write().expect("lock poisoned");
-        guard.insert((cluster_id, replica_id), addrs);
+        let mut guard = self.services.write().expect("lock poisoned");
+        guard.insert((cluster_id, replica_id), Some(service));
     }
 
-    /// Removes address information for a replica.
+    /// Registers an unmanaged replica (which has no HTTP addresses).
+    ///
+    /// Called by the controller when an unmanaged replica is created.
+    pub fn register_unmanaged(&self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        let mut guard = self.services.write().expect("lock poisoned");
+        guard.insert((cluster_id, replica_id), None);
+    }
+
+    /// Removes a replica from the locator.
     ///
     /// Called by the controller when a replica is dropped.
     pub fn remove_replica(&self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let mut guard = self.addresses.write().expect("lock poisoned");
+        let mut guard = self.services.write().expect("lock poisoned");
         guard.remove(&(cluster_id, replica_id));
     }
 }
