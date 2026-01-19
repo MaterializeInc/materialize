@@ -390,10 +390,12 @@ impl PeekClient {
             // The frontend will handle statement logging for the error.
             self.call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
                 .await;
-            return Err(AdapterError::concurrent_dependency_drop_from_peek_error(
-                err,
-                compute_instance,
-            ));
+            return Err(
+                AdapterError::concurrent_dependency_drop_from_instance_peek_error(
+                    err,
+                    compute_instance,
+                ),
+            );
         }
 
         let peek_response_stream = Coordinator::create_peek_response_stream(
