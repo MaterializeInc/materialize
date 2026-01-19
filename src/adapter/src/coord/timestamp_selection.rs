@@ -633,9 +633,6 @@ impl Coordinator {
                 },
                 isolation_level.as_str(),
                 &compute_instance.to_string(),
-                // The old timestamp selection has been removed, so `constraint_based` is
-                // permanently enabled.
-                "enabled",
             ])
             .inc();
         if !det.respond_immediately()
@@ -657,12 +654,7 @@ impl Coordinator {
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms
-                        .with_label_values(&[
-                            compute_instance.to_string().as_ref(),
-                            // The old timestamp selection has been removed, so `constraint_based` is
-                            // permanently enabled.
-                            "enabled",
-                        ])
+                        .with_label_values(&[compute_instance.to_string().as_str()])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
                         )));
