@@ -182,7 +182,7 @@ impl TimestampProvider for Coordinator {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawTimestampDetermination<T> {
     pub timestamp: T,
-    pub constraints: Option<Constraints>,
+    pub constraints: Constraints,
     pub session_oracle_read_ts: Option<T>,
 }
 
@@ -422,7 +422,7 @@ pub trait TimestampProvider {
 
         Ok(RawTimestampDetermination {
             timestamp: constraint_candidate,
-            constraints: Some(constraints),
+            constraints,
             session_oracle_read_ts,
         })
     }
@@ -706,7 +706,7 @@ pub struct TimestampDetermination<T> {
     pub real_time_recency_ts: Option<T>,
     /// The constraints used by the constraint based solver.
     /// See the [`constraints`] module for more information.
-    pub constraints: Option<Constraints>,
+    pub constraints: Constraints,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -878,11 +878,9 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             )?;
         }
 
-        if let Some(constraints) = &self.determination.constraints {
-            writeln!(f, "")?;
-            writeln!(f, "binding constraints:")?;
-            write!(f, "{}", constraints.display(timeline))?;
-        }
+        writeln!(f, "")?;
+        writeln!(f, "binding constraints:")?;
+        write!(f, "{}", self.determination.constraints.display(timeline))?;
 
         Ok(())
     }
