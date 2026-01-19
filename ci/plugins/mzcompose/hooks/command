@@ -92,6 +92,8 @@ ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
 echo "$TEST_DESC"
 
 cleanup() {
+  # Keep running, even on failures
+  set +e
   # Don't run the cleanup function twice
   trap - EXIT
   # Keep running cleanup, even if we get cancelled
@@ -137,11 +139,11 @@ cleanup() {
       K8S_CLUSTER_NAME=kind
       K8S_CONTEXT="kind-$K8S_CLUSTER_NAME"
       for pod in $(kubectl get pods -o name -n materialize | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
-          kubectl logs --prefix=true "$pod" -n materialize &>> kubectl-get-logs.log || true
-          kubectl logs --previous --prefix=true "$pod" -n materialize &>> kubectl-get-logs-previous.log || true
+          kubectl logs --prefix=true "$pod" -n materialize &>> kubectl-get-logs.log
+          kubectl logs --previous --prefix=true "$pod" -n materialize &>> kubectl-get-logs-previous.log
       done
-      kubectl get events -n materialize > kubectl-get-events.log || true
-      kubectl get all -n materialize > kubectl-get-all.log || true
+      kubectl get events -n materialize > kubectl-get-events.log
+      kubectl get all -n materialize > kubectl-get-all.log
       kubectl describe all -n materialize | awk '
         BEGIN { redact=0 }
         /^[[:space:]]*Environment:/ {
@@ -159,15 +161,15 @@ cleanup() {
           }
         }
         { print }
-      ' > kubectl-describe-all.log || true
-      kubectl get pods -o wide -n materialize > kubectl-pods-with-nodes.log || true
+      ' > kubectl-describe-all.log
+      kubectl get pods -o wide -n materialize > kubectl-pods-with-nodes.log
 
       for pod in $(kubectl get pods -o name -n materialize-environment | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
-          kubectl logs --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-environment.log || true
-          kubectl logs --previous --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-previous-environment.log || true
+          kubectl logs --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-environment.log
+          kubectl logs --previous --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-previous-environment.log
       done
-      kubectl get events -n materialize-environment > kubectl-get-events-environment.log || true
-      kubectl get all -n materialize-environment > kubectl-get-all-environment.log || true
+      kubectl get events -n materialize-environment > kubectl-get-events-environment.log
+      kubectl get all -n materialize-environment > kubectl-get-all-environment.log
       kubectl describe all -n materialize-environment | awk '
         BEGIN { redact=0 }
         /^[[:space:]]*Environment:/ {
@@ -185,8 +187,8 @@ cleanup() {
           }
         }
         { print }
-      ' > kubectl-describe-all-environment.log || true
-      kubectl get pods -o wide -n materialize-environment > kubectl-pods-with-nodes-environment.log || true
+      ' > kubectl-describe-all-environment.log
+      kubectl get pods -o wide -n materialize-environment > kubectl-pods-with-nodes-environment.log
 
       mapfile -t artifacts < <(printf "kubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-logs-environment.log\nkubectl-get-logs-previous-environment.log\nkubectl-get-events-environment.log\nkubectl-get-all-environment.log\nkubectl-describe-all-environment.log\nkubectl-pods-with-nodes-environment.log\n")
       artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
@@ -194,39 +196,39 @@ cleanup() {
       unset artifacts
   fi
 
-  mv "$cores" . || true
+  mv "$cores" .
 
   if find cores -name 'core.*' | grep -q .; then
       # Best effort attempt to fetch interesting executables to get backtrace of core files
-      mzcompose cp sqllogictest:/usr/local/bin/sqllogictest cores/ || true
-      mzcompose cp sqllogictest:/usr/local/bin/clusterd cores/ || true
-      mzcompose cp materialized:/usr/local/bin/environmentd cores/ || true
-      mzcompose cp materialized:/usr/local/bin/clusterd cores/ || true
-      mzcompose cp materialized:/usr/local/bin/materialized cores/ || true
-      mzcompose cp balancerd:/usr/local/bin/balancerd cores/ || true
-      mzcompose cp testdrive:/usr/local/bin/testdrive cores/ || true
+      mzcompose cp sqllogictest:/usr/local/bin/sqllogictest cores/
+      mzcompose cp sqllogictest:/usr/local/bin/clusterd cores/
+      mzcompose cp materialized:/usr/local/bin/environmentd cores/
+      mzcompose cp materialized:/usr/local/bin/clusterd cores/
+      mzcompose cp materialized:/usr/local/bin/materialized cores/
+      mzcompose cp balancerd:/usr/local/bin/balancerd cores/
+      mzcompose cp testdrive:/usr/local/bin/testdrive cores/
   fi
 
   if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
       ci_uncollapsed_heading ":docker: Fetching binaries for coverage"
       # Not all tests contain all of these containers:
-      mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/sqllogictest coverage/ || true
-      mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/clusterd coverage/ || true
-      mzcompose --mz-quiet cp materialized:/usr/local/bin/materialized coverage/ || true
-      mzcompose --mz-quiet cp mz_1:/usr/local/bin/materialized coverage/ || true
-      mzcompose --mz-quiet cp mz_this:/usr/local/bin/materialized coverage/ || true
-      mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/ || true
-      mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/ || true
+      mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/sqllogictest coverage/
+      mzcompose --mz-quiet cp sqllogictest:/usr/local/bin/clusterd coverage/
+      mzcompose --mz-quiet cp materialized:/usr/local/bin/materialized coverage/
+      mzcompose --mz-quiet cp mz_1:/usr/local/bin/materialized coverage/
+      mzcompose --mz-quiet cp mz_this:/usr/local/bin/materialized coverage/
+      mzcompose --mz-quiet cp testdrive:/usr/local/bin/testdrive coverage/
+      mzcompose --mz-quiet cp balancerd:/usr/local/bin/balancerd coverage/
   fi
 
   echo "Downing docker containers"
   if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
-    mzcompose down --volumes || true
+    mzcompose down --volumes
   else
     # Ignore failures, we still want the rest of the cleanup
     bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes || {
-        sudo systemctl restart docker || true
-        bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes || true
+        sudo systemctl restart docker
+        bin/ci-builder run "$builder" timeout 60s bin/mzcompose --find "$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION" down --timeout=1 --volumes
     }
   fi
 
@@ -234,14 +236,14 @@ cleanup() {
   find cores -name 'core.*' | while read -r core; do
       exe=$(echo "$core" | sed -e "s/core\.\(.*\)\.[0-9]*/\1/" -e "s/.*\!//")
       # Core dumps can take a while to be written, so if extracting the info fails, try again later
-      bin/ci-builder run "$builder" gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run "$builder" gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || true)
+      bin/ci-builder run "$builder" gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt || (sleep 2m; bin/ci-builder run "$builder" gdb --batch -ex "bt full" -ex "thread apply all bt" -ex "quit" cores/"$exe" "$core" > "$core".txt)
       buildkite-agent artifact upload "$core".txt
   done
   # can be huge, clean up
   rm -rf cores
 
   echo "Compressing parallel-workload-queries.log"
-  bin/ci-builder run "$builder" zstd --rm parallel-workload-queries.log || true
+  bin/ci-builder run "$builder" zstd --rm parallel-workload-queries.log
 
   mapfile -t artifacts < <(printf "run.log\nservices.log\njournalctl-merge.log\nnetstat-ant.log\nnetstat-panelot.log\nps-aux.log\ndocker-inspect.log\n"; find . -name 'junit_*.xml' -printf '%P\n'; find . -maxdepth 1 -name 'mz_debug_*.log' -printf '%P\n'; find . -maxdepth 1 -name 'slt*.diff' -printf '%P\n')
   artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
@@ -260,7 +262,7 @@ cleanup() {
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
   {
-    buildkite-agent artifact upload "$artifacts_str" || true
+    buildkite-agent artifact upload "$artifacts_str"
   } &
   wait
   ci_unimportant_heading "Annotating errors"
@@ -287,10 +289,10 @@ cleanup() {
           # shellcheck disable=SC2044
           for i in $(find . -name '*.profraw'); do
               echo "$i"
-              cp "$i" profraws/ || true
-              rm -f "$i" || true
+              cp "$i" profraws/
+              rm -f "$i"
               if ! bin/ci-builder run stable rust-profdata merge -o /dev/null "profraws/$(basename "$i")"; then
-                  rm -f "profraws/$(basename "$i")" || true
+                  rm -f "profraws/$(basename "$i")"
               fi
           done
           find profraws -name '*.profraw' -exec bin/ci-builder run stable rust-profdata merge -sparse -o coverage/"$BUILDKITE_JOB_ID".profdata {} +
@@ -337,7 +339,7 @@ cleanup() {
   # that have just exited on their own because of the
   # "shared-fate" mechanism employed by Mz clusters
   sudo systemctl restart docker; docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
-  killall -9 clusterd || true # There might be remaining processes from a cargo-test run
+  killall -9 clusterd # There might be remaining processes from a cargo-test run
 
   if [ ! -s services.log ] \
     && [ "$BUILDKITE_LABEL" != "Maelstrom coverage of persist" ] \

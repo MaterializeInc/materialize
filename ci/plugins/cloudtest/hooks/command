@@ -74,6 +74,8 @@ TEST_CMD="bin/pytest ${run_args[*]}"
 ci_uncollapsed_heading "cloudtest: Running \`$TEST_CMD\`"
 
 cleanup() {
+  # Keep running, even on failures
+  set +e
   # Don't run the cleanup function twice
   trap - EXIT
   # Keep running cleanup, even if we get cancelled
@@ -92,11 +94,11 @@ cleanup() {
       ci_uncollapsed_heading "cloudtest: Fetching binaries for coverage"
       mkdir -p coverage/
       chmod 777 coverage/
-      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd || true
-      kubectl cp environmentd-0:/coverage coverage/ || true
+      kubectl cp environmentd-0:/usr/local/bin/environmentd coverage/environmentd
+      kubectl cp environmentd-0:/coverage coverage/
       for pod in $(kubectl get pods -o name | grep -E 'cluster-'); do
-        kubectl cp "$pod":/coverage coverage/ || true # Could get deleted
-        kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd || true
+        kubectl cp "$pod":/coverage coverage/ # Could get deleted
+        kubectl cp "$pod":/usr/local/bin/clusterd coverage/clusterd
       done
 
       ci_unimportant_heading "cloudtest: Generate coverage information"
@@ -131,11 +133,11 @@ cleanup() {
 
   ci_unimportant_heading "cloudtest: Uploading logs..."
   for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
-    kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
-    kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+    kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log
+    kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log
   done
-  kubectl get events > kubectl-get-events.log || true
-  kubectl get all > kubectl-get-all.log || true
+  kubectl get events > kubectl-get-events.log
+  kubectl get all > kubectl-get-all.log
   kubectl describe all | awk '
     BEGIN { redact=0 }
     /^[[:space:]]*Environment:/ {
@@ -153,12 +155,12 @@ cleanup() {
       }
     }
     { print }
-  ' > kubectl-describe-all.log || true
-  kubectl get pods -o wide > kubectl-pods-with-nodes.log || true
+  ' > kubectl-describe-all.log
+  kubectl get pods -o wide > kubectl-pods-with-nodes.log
 
-  kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
-  kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true
-  kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || true
+  kubectl -n kube-system get events > kubectl-get-events-kube-system.log
+  kubectl -n kube-system get all > kubectl-get-all-kube-system.log
+  kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log
 
   # shellcheck disable=SC2024
   sudo journalctl --merge --since "$STEP_START_TIMESTAMP" > journalctl-merge.log
