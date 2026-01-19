@@ -16,7 +16,7 @@ In Materialize, you can create:
   write to the tables ([`INSERT`], [`UPDATE`], [`DELETE`]).
 
 -  ***Private Preview***. Read-only tables from [PostgreSQL sources (new
-  syntax)](/sql/create-source/postgres-v2/). Users cannot be write ([`INSERT`],
+  syntax)](/sql/create-source/postgres-v2/). Users cannot write ([`INSERT`],
   [`UPDATE`], [`DELETE`]) to these tables. These tables are populated by [data
   ingestion from a source](/ingest-data/postgres/). {{% include-example file="examples/create_table/example_postgres_table"
 example="syntax-version-requirement" %}}
