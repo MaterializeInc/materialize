@@ -17,7 +17,6 @@ use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
 use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
-use mz_compute_client::controller::instance::PeekError;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
@@ -719,21 +718,43 @@ impl AdapterError {
         }
     }
 
-    pub fn concurrent_dependency_drop_from_peek_error(
-        e: PeekError,
+    pub fn concurrent_dependency_drop_from_instance_peek_error(
+        e: mz_compute_client::controller::instance::PeekError,
         compute_instance: ComputeInstanceId,
     ) -> AdapterError {
+        use mz_compute_client::controller::instance::PeekError::*;
         match e {
-            PeekError::ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",
                 dependency_id: id.to_string(),
             },
-            PeekError::InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
+            InstanceShutDown => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "cluster",
                 dependency_id: compute_instance.to_string(),
             },
-            e @ PeekError::ReadHoldIdMismatch(_) => AdapterError::internal("peek error", e),
-            e @ PeekError::ReadHoldInsufficient(_) => AdapterError::internal("peek error", e),
+            e @ ReadHoldIdMismatch(_) => AdapterError::internal("instance peek error", e),
+            e @ ReadHoldInsufficient(_) => AdapterError::internal("instance peek error", e),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_peek_error(
+        e: mz_compute_client::controller::error::PeekError,
+    ) -> AdapterError {
+        use mz_compute_client::controller::error::PeekError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            e @ SinceViolation(_) => AdapterError::internal("peek error", e),
         }
     }
 

@@ -59,7 +59,6 @@ use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
-use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse};
 
 /// A peek is a request to read data from a maintained arrangement.
@@ -851,7 +850,7 @@ impl crate::coord::Coordinator {
                 target_replica,
                 rows_tx,
             )
-            .unwrap_or_terminate("cannot fail to peek");
+            .map_err(AdapterError::concurrent_dependency_drop_from_peek_error)?;
 
         let duration_histogram = self.metrics.row_set_finishing_seconds();
 
