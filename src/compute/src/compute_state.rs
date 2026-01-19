@@ -345,7 +345,7 @@ impl ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub(crate) struct ActiveComputeState<'a, A: Allocate> {
+pub struct ActiveComputeState<'a, A: Allocate> {
     /// The underlying Timely worker.
     pub timely_worker: &'a mut TimelyWorker<A>,
     /// The compute state itself.
@@ -800,7 +800,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Report per-worker metrics.
-    pub(crate) fn report_metrics(&self) {
+    pub fn report_metrics(&self) {
         if let Some(expiration) = self.compute_state.replica_expiration.as_option() {
             let now = Duration::from_millis(mz_ore::now::SYSTEM_TIME()).as_secs_f64();
             let expiration = Duration::from_millis(<u64>::from(expiration)).as_secs_f64();
@@ -990,7 +990,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     /// Checks for dataflow expiration. Panics if we're past the replica expiration time.
-    pub(crate) fn check_expiration(&self) {
+    pub fn check_expiration(&self) {
         let now = mz_ore::now::SYSTEM_TIME();
         if self.compute_state.replica_expiration.less_than(&now.into()) {
             let now_datetime = mz_ore::now::to_datetime(now);

@@ -5892,8 +5892,11 @@ name = "mz-clusterd"
 version = "26.9.0-dev.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
+ "core_affinity",
+ "crossbeam-channel",
  "fail",
  "futures",
  "hyper 1.8.1",
@@ -5913,6 +5916,8 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-prof-http",
+ "mz-repr",
+ "mz-rocksdb",
  "mz-service",
  "mz-storage",
  "mz-storage-client",
@@ -5922,9 +5927,11 @@ dependencies = [
  "nix 0.30.1",
  "num_cpus",
  "serde",
+ "timely",
  "tokio",
  "tower 0.5.3",
  "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

@@ -567,288 +567,10 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     /// Entry point for applying an internal storage command.
+    ///
+    /// This delegates to the free function [`handle_internal_storage_command`].
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
-        match internal_cmd {
-            InternalStorageCommand::SuspendAndRestart { id, reason } => {
-                info!(
-                    "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
-                    self.timely_worker.index(),
-                    self.timely_worker.peers(),
-                );
-
-                let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
-                if let Some(ingestion_description) = maybe_ingestion {
-                    // Yank the token of the previously existing source dataflow.Note that this
-                    // token also includes any source exports/subsources.
-                    let maybe_token = self.storage_state.source_tokens.remove(&id);
-                    if maybe_token.is_none() {
-                        // Something has dropped the source. Make sure we don't
-                        // accidentally re-create it.
-                        return;
-                    }
-
-                    // This needs to be done by one worker, which will
-                    // broadcasts a `CreateIngestionDataflow` command to all
-                    // workers based on the response that contains the
-                    // resumption upper.
-                    //
-                    // Doing this separately on each worker could lead to
-                    // differing resume_uppers which might lead to all kinds of
-                    // mayhem.
-                    //
-                    // TODO(aljoscha): If we ever become worried that this is
-                    // putting undue pressure on worker 0 we can pick the
-                    // designated worker for a source/sink based on `id.hash()`.
-                    if self.timely_worker.index() == 0 {
-                        for (id, _) in ingestion_description.source_exports.iter() {
-                            self.storage_state
-                                .aggregated_statistics
-                                .advance_global_epoch(*id);
-                        }
-                        self.storage_state
-                            .async_worker
-                            .update_ingestion_frontiers(id, ingestion_description);
-                    }
-
-                    // Continue with other commands.
-                    return;
-                }
-
-                let maybe_sink = self.storage_state.exports.get(&id).cloned();
-                if let Some(sink_description) = maybe_sink {
-                    // Yank the token of the previously existing sink
-                    // dataflow.
-                    let maybe_token = self.storage_state.sink_tokens.remove(&id);
-
-                    if maybe_token.is_none() {
-                        // Something has dropped the sink. Make sure we don't
-                        // accidentally re-create it.
-                        return;
-                    }
-
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
-                    if self.timely_worker.index() == 0 {
-                        self.storage_state
-                            .aggregated_statistics
-                            .advance_global_epoch(id);
-                        self.storage_state
-                            .async_worker
-                            .update_sink_frontiers(id, sink_description);
-                    }
-
-                    // Continue with other commands.
-                    return;
-                }
-
-                if !self
-                    .storage_state
-                    .ingestions
-                    .values()
-                    .any(|v| v.source_exports.contains_key(&id))
-                {
-                    // Our current approach to dropping a source results in a race between shard
-                    // finalization (which happens in the controller) and dataflow shutdown (which
-                    // happens in clusterd). If a source is created and dropped fast enough -or the
-                    // two commands get sufficiently delayed- then it's possible to receive a
-                    // SuspendAndRestart command for an unknown source. We cannot assert that this
-                    // never happens but we log an error here to track how often this happens.
-                    warn!(
-                        "got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}"
-                    );
-                }
-            }
-            InternalStorageCommand::CreateIngestionDataflow {
-                id: ingestion_id,
-                mut ingestion_description,
-                as_of,
-                mut resume_uppers,
-                mut source_resume_uppers,
-            } => {
-                info!(
-                    ?as_of,
-                    ?resume_uppers,
-                    "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
-                    self.timely_worker.index(),
-                    self.timely_worker.peers(),
-                );
-
-                // We initialize statistics before we prune finished exports. We
-                // still want to export statistics for these, plus the rendering
-                // machinery will get confused if there are not at least
-                // statistics for the "main" source.
-                for (export_id, export) in ingestion_description.source_exports.iter() {
-                    let resume_upper = resume_uppers[export_id].clone();
-                    self.storage_state.aggregated_statistics.initialize_source(
-                        *export_id,
-                        ingestion_id,
-                        resume_upper.clone(),
-                        || {
-                            SourceStatistics::new(
-                                *export_id,
-                                self.storage_state.timely_worker_index,
-                                &self.storage_state.metrics.source_statistics,
-                                ingestion_id,
-                                &export.storage_metadata.data_shard,
-                                export.data_config.envelope.clone(),
-                                resume_upper,
-                            )
-                        },
-                    );
-                }
-
-                let finished_exports: BTreeSet<GlobalId> = resume_uppers
-                    .iter()
-                    .filter(|(_, frontier)| frontier.is_empty())
-                    .map(|(id, _)| *id)
-                    .collect();
-
-                resume_uppers.retain(|id, _| !finished_exports.contains(id));
-                source_resume_uppers.retain(|id, _| !finished_exports.contains(id));
-                ingestion_description
-                    .source_exports
-                    .retain(|id, _| !finished_exports.contains(id));
-
-                for id in ingestion_description.collection_ids() {
-                    // If there is already a shared upper, we re-use it, to make
-                    // sure that parties that are already using the shared upper
-                    // can continue doing so.
-                    let source_upper = self
-                        .storage_state
-                        .source_uppers
-                        .entry(id.clone())
-                        .or_insert_with(|| {
-                            Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())))
-                        });
-
-                    let mut source_upper = source_upper.borrow_mut();
-                    if !source_upper.is_empty() {
-                        source_upper.clear();
-                        source_upper.insert(mz_repr::Timestamp::minimum());
-                    }
-                }
-
-                // If all subsources of the source are finished, we can skip rendering entirely.
-                // Also, if `as_of` is empty, the dataflow has been finalized, so we can skip it as
-                // well.
-                //
-                // TODO(guswynn|petrosagg): this is a bit hacky, and is a consequence of storage state
-                // management being a bit of a mess. we should clean this up and remove weird if
-                // statements like this.
-                if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
-                    tracing::info!(
-                        ?resume_uppers,
-                        ?as_of,
-                        "worker {}/{} skipping building ingestion dataflow \
-                        for {ingestion_id} because the ingestion is finished",
-                        self.timely_worker.index(),
-                        self.timely_worker.peers(),
-                    );
-                    return;
-                }
-
-                crate::render::build_ingestion_dataflow(
-                    self.timely_worker,
-                    &mut self.storage_state,
-                    ingestion_id,
-                    ingestion_description,
-                    as_of,
-                    resume_uppers,
-                    source_resume_uppers,
-                );
-            }
-            InternalStorageCommand::RunOneshotIngestion {
-                ingestion_id,
-                collection_id,
-                collection_meta,
-                request,
-            } => {
-                crate::render::build_oneshot_ingestion_dataflow(
-                    self.timely_worker,
-                    &mut self.storage_state,
-                    ingestion_id,
-                    collection_id,
-                    collection_meta,
-                    request,
-                );
-            }
-            InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
-                info!(
-                    "worker {}/{} trying to (re-)start sink {sink_id}",
-                    self.timely_worker.index(),
-                    self.timely_worker.peers(),
-                );
-
-                {
-                    // If there is already a shared write frontier, we re-use it, to
-                    // make sure that parties that are already using the shared
-                    // frontier can continue doing so.
-                    let sink_write_frontier = self
-                        .storage_state
-                        .sink_write_frontiers
-                        .entry(sink_id.clone())
-                        .or_insert_with(|| Rc::new(RefCell::new(Antichain::new())));
-
-                    let mut sink_write_frontier = sink_write_frontier.borrow_mut();
-                    sink_write_frontier.clear();
-                    sink_write_frontier.insert(mz_repr::Timestamp::minimum());
-                }
-                self.storage_state
-                    .aggregated_statistics
-                    .initialize_sink(sink_id, || {
-                        SinkStatistics::new(
-                            sink_id,
-                            self.storage_state.timely_worker_index,
-                            &self.storage_state.metrics.sink_statistics,
-                        )
-                    });
-
-                crate::render::build_export_dataflow(
-                    self.timely_worker,
-                    &mut self.storage_state,
-                    sink_id,
-                    sink_description,
-                );
-            }
-            InternalStorageCommand::DropDataflow(ids) => {
-                for id in &ids {
-                    // Clean up per-source / per-sink state.
-                    self.storage_state.source_uppers.remove(id);
-                    self.storage_state.source_tokens.remove(id);
-
-                    self.storage_state.sink_tokens.remove(id);
-
-                    self.storage_state.aggregated_statistics.deinitialize(*id);
-                }
-            }
-            InternalStorageCommand::UpdateConfiguration { storage_parameters } => {
-                self.storage_state
-                    .dataflow_parameters
-                    .update(storage_parameters.clone());
-                self.storage_state
-                    .storage_configuration
-                    .update(storage_parameters);
-
-                // Clear out the updates as we no longer forward them to anyone else to process.
-                // We clone `StorageState::storage_configuration` many times during rendering
-                // and want to avoid cloning these unused updates.
-                self.storage_state
-                    .storage_configuration
-                    .parameters
-                    .dyncfg_updates = Default::default();
-
-                // Remember the maintenance interval locally to avoid reading it from the config set on
-                // every server iteration.
-                self.storage_state.server_maintenance_interval =
-                    STORAGE_SERVER_MAINTENANCE_INTERVAL
-                        .get(self.storage_state.storage_configuration.config_set());
-            }
-            InternalStorageCommand::StatisticsUpdate { sources, sinks } => self
-                .storage_state
-                .aggregated_statistics
-                .ingest(sources, sinks),
-        }
+        handle_internal_storage_command(self.timely_worker, &mut self.storage_state, internal_cmd)
     }
 
     /// Emit information about write frontier progress, along with information that should
@@ -1280,6 +1002,298 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         Ok(())
+    }
+}
+
+/// Handles an internal storage command.
+///
+/// This is the core logic for processing internal storage commands that may
+/// render dataflows. It is extracted as a free function so it can be called
+/// from both the storage `Worker` and from external code (like a unified
+/// compute+storage worker).
+///
+/// # Arguments
+/// * `timely_worker` - The Timely worker for rendering dataflows
+/// * `storage_state` - The storage state containing all storage-related data
+/// * `internal_cmd` - The internal command to process
+pub fn handle_internal_storage_command<A: Allocate>(
+    timely_worker: &mut TimelyWorker<A>,
+    storage_state: &mut StorageState,
+    internal_cmd: InternalStorageCommand,
+) {
+    match internal_cmd {
+        InternalStorageCommand::SuspendAndRestart { id, reason } => {
+            info!(
+                "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
+                timely_worker.index(),
+                timely_worker.peers(),
+            );
+
+            let maybe_ingestion = storage_state.ingestions.get(&id).cloned();
+            if let Some(ingestion_description) = maybe_ingestion {
+                // Yank the token of the previously existing source dataflow. Note that this
+                // token also includes any source exports/subsources.
+                let maybe_token = storage_state.source_tokens.remove(&id);
+                if maybe_token.is_none() {
+                    // Something has dropped the source. Make sure we don't
+                    // accidentally re-create it.
+                    return;
+                }
+
+                // This needs to be done by one worker, which will
+                // broadcasts a `CreateIngestionDataflow` command to all
+                // workers based on the response that contains the
+                // resumption upper.
+                //
+                // Doing this separately on each worker could lead to
+                // differing resume_uppers which might lead to all kinds of
+                // mayhem.
+                //
+                // TODO(aljoscha): If we ever become worried that this is
+                // putting undue pressure on worker 0 we can pick the
+                // designated worker for a source/sink based on `id.hash()`.
+                if timely_worker.index() == 0 {
+                    for (id, _) in ingestion_description.source_exports.iter() {
+                        storage_state
+                            .aggregated_statistics
+                            .advance_global_epoch(*id);
+                    }
+                    storage_state
+                        .async_worker
+                        .update_ingestion_frontiers(id, ingestion_description);
+                }
+
+                // Continue with other commands.
+                return;
+            }
+
+            let maybe_sink = storage_state.exports.get(&id).cloned();
+            if let Some(sink_description) = maybe_sink {
+                // Yank the token of the previously existing sink
+                // dataflow.
+                let maybe_token = storage_state.sink_tokens.remove(&id);
+
+                if maybe_token.is_none() {
+                    // Something has dropped the sink. Make sure we don't
+                    // accidentally re-create it.
+                    return;
+                }
+
+                // This needs to be broadcast by one worker and go through
+                // the internal command fabric, to ensure consistent
+                // ordering of dataflow rendering across all workers.
+                if timely_worker.index() == 0 {
+                    storage_state.aggregated_statistics.advance_global_epoch(id);
+                    storage_state
+                        .async_worker
+                        .update_sink_frontiers(id, sink_description);
+                }
+
+                // Continue with other commands.
+                return;
+            }
+
+            if !storage_state
+                .ingestions
+                .values()
+                .any(|v| v.source_exports.contains_key(&id))
+            {
+                // Our current approach to dropping a source results in a race between shard
+                // finalization (which happens in the controller) and dataflow shutdown (which
+                // happens in clusterd). If a source is created and dropped fast enough -or the
+                // two commands get sufficiently delayed- then it's possible to receive a
+                // SuspendAndRestart command for an unknown source. We cannot assert that this
+                // never happens but we log an error here to track how often this happens.
+                warn!(
+                    "got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}"
+                );
+            }
+        }
+        InternalStorageCommand::CreateIngestionDataflow {
+            id: ingestion_id,
+            mut ingestion_description,
+            as_of,
+            mut resume_uppers,
+            mut source_resume_uppers,
+        } => {
+            info!(
+                ?as_of,
+                ?resume_uppers,
+                "worker {}/{} trying to (re-)start ingestion {ingestion_id}",
+                timely_worker.index(),
+                timely_worker.peers(),
+            );
+
+            // We initialize statistics before we prune finished exports. We
+            // still want to export statistics for these, plus the rendering
+            // machinery will get confused if there are not at least
+            // statistics for the "main" source.
+            for (export_id, export) in ingestion_description.source_exports.iter() {
+                let resume_upper = resume_uppers[export_id].clone();
+                storage_state.aggregated_statistics.initialize_source(
+                    *export_id,
+                    ingestion_id,
+                    resume_upper.clone(),
+                    || {
+                        SourceStatistics::new(
+                            *export_id,
+                            storage_state.timely_worker_index,
+                            &storage_state.metrics.source_statistics,
+                            ingestion_id,
+                            &export.storage_metadata.data_shard,
+                            export.data_config.envelope.clone(),
+                            resume_upper,
+                        )
+                    },
+                );
+            }
+
+            let finished_exports: BTreeSet<GlobalId> = resume_uppers
+                .iter()
+                .filter(|(_, frontier)| frontier.is_empty())
+                .map(|(id, _)| *id)
+                .collect();
+
+            resume_uppers.retain(|id, _| !finished_exports.contains(id));
+            source_resume_uppers.retain(|id, _| !finished_exports.contains(id));
+            ingestion_description
+                .source_exports
+                .retain(|id, _| !finished_exports.contains(id));
+
+            for id in ingestion_description.collection_ids() {
+                // If there is already a shared upper, we re-use it, to make
+                // sure that parties that are already using the shared upper
+                // can continue doing so.
+                let source_upper = storage_state
+                    .source_uppers
+                    .entry(id.clone())
+                    .or_insert_with(|| {
+                        Rc::new(RefCell::new(Antichain::from_elem(Timestamp::minimum())))
+                    });
+
+                let mut source_upper = source_upper.borrow_mut();
+                if !source_upper.is_empty() {
+                    source_upper.clear();
+                    source_upper.insert(mz_repr::Timestamp::minimum());
+                }
+            }
+
+            // If all subsources of the source are finished, we can skip rendering entirely.
+            // Also, if `as_of` is empty, the dataflow has been finalized, so we can skip it as
+            // well.
+            //
+            // TODO(guswynn|petrosagg): this is a bit hacky, and is a consequence of storage state
+            // management being a bit of a mess. we should clean this up and remove weird if
+            // statements like this.
+            if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
+                tracing::info!(
+                    ?resume_uppers,
+                    ?as_of,
+                    "worker {}/{} skipping building ingestion dataflow \
+                    for {ingestion_id} because the ingestion is finished",
+                    timely_worker.index(),
+                    timely_worker.peers(),
+                );
+                return;
+            }
+
+            crate::render::build_ingestion_dataflow(
+                timely_worker,
+                storage_state,
+                ingestion_id,
+                ingestion_description,
+                as_of,
+                resume_uppers,
+                source_resume_uppers,
+            );
+        }
+        InternalStorageCommand::RunOneshotIngestion {
+            ingestion_id,
+            collection_id,
+            collection_meta,
+            request,
+        } => {
+            crate::render::build_oneshot_ingestion_dataflow(
+                timely_worker,
+                storage_state,
+                ingestion_id,
+                collection_id,
+                collection_meta,
+                request,
+            );
+        }
+        InternalStorageCommand::RunSinkDataflow(sink_id, sink_description) => {
+            info!(
+                "worker {}/{} trying to (re-)start sink {sink_id}",
+                timely_worker.index(),
+                timely_worker.peers(),
+            );
+
+            {
+                // If there is already a shared write frontier, we re-use it, to
+                // make sure that parties that are already using the shared
+                // frontier can continue doing so.
+                let sink_write_frontier = storage_state
+                    .sink_write_frontiers
+                    .entry(sink_id.clone())
+                    .or_insert_with(|| Rc::new(RefCell::new(Antichain::new())));
+
+                let mut sink_write_frontier = sink_write_frontier.borrow_mut();
+                sink_write_frontier.clear();
+                sink_write_frontier.insert(mz_repr::Timestamp::minimum());
+            }
+            storage_state
+                .aggregated_statistics
+                .initialize_sink(sink_id, || {
+                    SinkStatistics::new(
+                        sink_id,
+                        storage_state.timely_worker_index,
+                        &storage_state.metrics.sink_statistics,
+                    )
+                });
+
+            crate::render::build_export_dataflow(
+                timely_worker,
+                storage_state,
+                sink_id,
+                sink_description,
+            );
+        }
+        InternalStorageCommand::DropDataflow(ids) => {
+            for id in &ids {
+                // Clean up per-source / per-sink state.
+                storage_state.source_uppers.remove(id);
+                storage_state.source_tokens.remove(id);
+
+                storage_state.sink_tokens.remove(id);
+
+                storage_state.aggregated_statistics.deinitialize(*id);
+            }
+        }
+        InternalStorageCommand::UpdateConfiguration { storage_parameters } => {
+            storage_state
+                .dataflow_parameters
+                .update(storage_parameters.clone());
+            storage_state
+                .storage_configuration
+                .update(storage_parameters);
+
+            // Clear out the updates as we no longer forward them to anyone else to process.
+            // We clone `StorageState::storage_configuration` many times during rendering
+            // and want to avoid cloning these unused updates.
+            storage_state
+                .storage_configuration
+                .parameters
+                .dyncfg_updates = Default::default();
+
+            // Remember the maintenance interval locally to avoid reading it from the config set on
+            // every server iteration.
+            storage_state.server_maintenance_interval = STORAGE_SERVER_MAINTENANCE_INTERVAL
+                .get(storage_state.storage_configuration.config_set());
+        }
+        InternalStorageCommand::StatisticsUpdate { sources, sinks } => {
+            storage_state.aggregated_statistics.ingest(sources, sinks);
+        }
     }
 }
 

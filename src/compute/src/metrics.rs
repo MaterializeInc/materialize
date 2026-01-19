@@ -243,7 +243,7 @@ pub struct WorkerMetrics {
     /// maintenance completes
     pub(crate) arrangement_maintenance_active_info: UIntGauge,
     /// Histogram of Timely step timings.
-    pub(crate) timely_step_duration_seconds: Histogram,
+    pub timely_step_duration_seconds: Histogram,
     /// Histogram of persist peek durations.
     pub(crate) persist_peek_seconds: Histogram,
     /// Histogram of stashed peek durations.

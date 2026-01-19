@@ -6153,3 +6153,149 @@ def workflow_github_9961(c: Composition):
 
         # database-issues#9961 causes this command to crash envd.
         c.sql("CREATE REPLACEMENT MATERIALIZED VIEW rpl FOR mv AS SELECT * FROM t")
+
+
+def workflow_test_unified_runtime(c: Composition):
+    """Test that the unified Timely runtime works correctly.
+
+    This test verifies that when enable_unified_runtime is enabled,
+    managed clusters are provisioned with the --unified-runtime flag
+    and can execute both compute and storage workloads correctly.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "postgres")
+
+    # Enable the unified runtime feature flag
+    c.sql(
+        "ALTER SYSTEM SET enable_unified_runtime = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Create a managed cluster - this will be provisioned with --unified-runtime
+    c.sql(
+        """
+        CREATE CLUSTER unified_test SIZE 'scale=1,workers=1';
+        SET cluster = unified_test;
+        """
+    )
+
+    # Wait for the cluster to be ready
+    c.sql("SELECT 1")
+
+    # Test compute workload: Create a table and materialized view
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW mv AS SELECT sum(a) FROM t;
+        """
+    )
+
+    # Verify compute results
+    result = c.sql_query("SELECT * FROM mv")
+    assert result == [(6,)], f"Expected [(6,)], got {result}"
+
+    # Test storage workload with Postgres source
+    # Set up postgres for replication
+    c.testdrive(
+        dedent(
+            """
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER USER postgres WITH replication;
+            DROP SCHEMA IF EXISTS public CASCADE;
+            CREATE SCHEMA public;
+
+            DROP PUBLICATION IF EXISTS mz_source;
+            CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+            CREATE TABLE pg_table (id INTEGER PRIMARY KEY, value TEXT);
+            INSERT INTO pg_table VALUES (1, 'one'), (2, 'two'), (3, 'three');
+            ALTER TABLE pg_table REPLICA IDENTITY FULL;
+            """
+        )
+    )
+
+    # Create postgres source in Materialize
+    c.sql(
+        """
+        CREATE SECRET pgpass AS 'postgres';
+        CREATE CONNECTION pg TO POSTGRES (
+            HOST postgres,
+            DATABASE postgres,
+            USER postgres,
+            PASSWORD SECRET pgpass
+        );
+        CREATE SOURCE pg_source
+            IN CLUSTER unified_test
+            FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+        CREATE TABLE pg_table_mz FROM SOURCE pg_source (REFERENCE pg_table);
+        """
+    )
+
+    # Wait for postgres source to catch up
+    for _ in range(30):
+        result = c.sql_query("SELECT count(*) FROM pg_table_mz")
+        if result == [(3,)]:
+            break
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(f"Postgres source didn't catch up, got {result}")
+
+    # Verify postgres data
+    result = c.sql_query("SELECT id, value FROM pg_table_mz ORDER BY id")
+    assert result == [(1, "one"), (2, "two"), (3, "three")], f"Unexpected result: {result}"
+
+    # Test compute on storage data: Create MV from postgres source
+    c.sql(
+        """
+        CREATE MATERIALIZED VIEW pg_mv AS
+            SELECT count(*) as cnt, max(id) as max_id FROM pg_table_mz;
+        """
+    )
+
+    result = c.sql_query("SELECT * FROM pg_mv")
+    assert result == [(3, 3)], f"Expected [(3, 3)], got {result}"
+
+    # Test ongoing replication: Insert more data in postgres
+    c.testdrive(
+        dedent(
+            """
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            INSERT INTO pg_table VALUES (4, 'four'), (5, 'five');
+            """
+        )
+    )
+
+    # Wait for MV to update with new data
+    for _ in range(30):
+        result = c.sql_query("SELECT * FROM pg_mv")
+        if result == [(5, 5)]:
+            break
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(f"MV didn't update with postgres changes, got {result}")
+
+    # Test join between table and postgres source
+    c.sql(
+        """
+        CREATE MATERIALIZED VIEW join_mv AS
+            SELECT t.a, pg.value
+            FROM t
+            JOIN pg_table_mz pg ON t.a = pg.id;
+        """
+    )
+
+    result = c.sql_query("SELECT * FROM join_mv ORDER BY a")
+    assert result == [(1, "one"), (2, "two"), (3, "three")], f"Unexpected join result: {result}"
+
+    # Test that we can create indexes (compute-managed)
+    c.sql("CREATE INDEX idx ON t (a)")
+    result = c.sql_query("SELECT a FROM t WHERE a > 1 ORDER BY a")
+    assert result == [(2,), (3,)], f"Expected [(2,), (3,)], got {result}"
+
+    # Cleanup
+    c.sql("DROP CLUSTER unified_test CASCADE")
+
+    print("Unified runtime test passed!")
