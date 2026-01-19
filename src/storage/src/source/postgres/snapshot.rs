@@ -753,8 +753,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         data.flat_map(|data| data.drain())
                     {
                         let output = &table_info
-                            .get(&oid)
-                            .and_then(|outputs| outputs.get(&output_index))
+                            .get(oid)
+                            .and_then(|outputs| outputs.get(output_index))
                             .expect("table_info contains all outputs");
 
                         let event = event
