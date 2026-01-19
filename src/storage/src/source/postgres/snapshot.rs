@@ -216,6 +216,8 @@ struct SnapshotInfo {
     /// Estimated number of blocks (pages) for each table, keyed by OID.
     /// This is derived from `pg_class.relpages` and used to partition ctid ranges.
     table_block_counts: BTreeMap<u32, u64>,
+    /// The current upstream schema of each table.
+    upstream_info: BTreeMap<u32, PostgresTableDesc>,
 }
 
 /// Represents a ctid range that a worker should snapshot.
@@ -502,9 +504,57 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         table_oids.iter().map(|&oid| (oid, 0u64)).collect()
                     };
 
+                    report_snapshot_size(&client, &tables_to_snapshot, metrics, &config, &export_statistics).await?;
+
+                    let upstream_info = {
+                        // As part of retrieving the schema info, RLS policies are checked to ensure the
+                        // snapshot can successfully read the tables. RLS policy errors are treated as
+                        // transient, as the customer can simply add the BYPASSRLS to the PG account
+                        // used by MZ.
+                        match retrieve_schema_info(
+                            &connection_config,
+                            &config.config.connection_context,
+                            &connection.publication,
+                            &table_oids)
+                            .await
+                        {
+                            // If the replication stream cannot be obtained in a definite way there is
+                            // nothing else to do. These errors are not retractable.
+                            Err(PostgresError::PublicationMissing(publication)) => {
+                                let err = DefiniteError::PublicationDropped(publication);
+                                for (oid, outputs) in tables_to_snapshot.iter() {
+                                    // Produce a definite error here and then exit to ensure
+                                    // a missing publication doesn't generate a transient
+                                    // error and restart this dataflow indefinitely.
+                                    //
+                                    // We pick `u64::MAX` as the LSN which will (in
+                                    // practice) never conflict any previously revealed
+                                    // portions of the TVC.
+                                    for output_index in outputs.keys() {
+                                        let update = (
+                                            (*oid, *output_index, Err(err.clone().into())),
+                                            MzOffset::from(u64::MAX),
+                                            Diff::ONE,
+                                        );
+                                        raw_handle.give_fueled(&data_cap_set[0], update).await;
+                                    }
+                                }
+
+                                definite_error_handle.give(
+                                    &definite_error_cap_set[0],
+                                    ReplicationError::Definite(Rc::new(err)),
+                                );
+                                return Ok(());
+                            },
+                            Err(e) => Err(TransientError::from(e))?,
+                            Ok(i) => i,
+                        }
+                    };
+
                     let snapshot_info = SnapshotInfo {
                         snapshot_id,
                         snapshot_lsn,
+                        upstream_info,
                         table_block_counts,
                     };
                     trace!(
@@ -554,64 +604,13 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 snapshot_id,
                 snapshot_lsn,
                 table_block_counts,
+                upstream_info,
             } = snapshot_info;
 
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
                 trace!(%id, "timely-{worker_id} using snapshot id {snapshot_id:?}");
                 use_snapshot(&client, &snapshot_id).await?;
-            }
-
-
-            let upstream_info = {
-                let table_oids = tables_to_snapshot.keys().copied().collect::<Vec<_>>();
-                // As part of retrieving the schema info, RLS policies are checked to ensure the
-                // snapshot can successfully read the tables. RLS policy errors are treated as
-                // transient, as the customer can simply add the BYPASSRLS to the PG account
-                // used by MZ.
-                match retrieve_schema_info(
-                    &connection_config,
-                    &config.config.connection_context,
-                    &connection.publication,
-                    &table_oids)
-                    .await
-                {
-                    // If the replication stream cannot be obtained in a definite way there is
-                    // nothing else to do. These errors are not retractable.
-                    Err(PostgresError::PublicationMissing(publication)) => {
-                        let err = DefiniteError::PublicationDropped(publication);
-                        for (oid, outputs) in tables_to_snapshot.iter() {
-                            // Produce a definite error here and then exit to ensure
-                            // a missing publication doesn't generate a transient
-                            // error and restart this dataflow indefinitely.
-                            //
-                            // We pick `u64::MAX` as the LSN which will (in
-                            // practice) never conflict any previously revealed
-                            // portions of the TVC.
-                            for output_index in outputs.keys() {
-                                let update = (
-                                    (*oid, *output_index, Err(err.clone().into())),
-                                    MzOffset::from(u64::MAX),
-                                    Diff::ONE,
-                                );
-                                raw_handle.give_fueled(&data_cap_set[0], update).await;
-                            }
-                        }
-
-                        definite_error_handle.give(
-                            &definite_error_cap_set[0],
-                            ReplicationError::Definite(Rc::new(err)),
-                        );
-                        return Ok(());
-                    },
-                    Err(e) => Err(TransientError::from(e))?,
-                    Ok(i) => i,
-                }
-            };
-
-            // Only the snapshot leader reports table sizes to avoid duplicate statistics.
-            if is_snapshot_leader {
-                report_snapshot_size(&client, &tables_to_snapshot, metrics, &config, &export_statistics).await?;
             }
 
             for (&oid, outputs) in tables_to_snapshot.iter() {
@@ -693,7 +692,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     }
                     // final update for snapshot_staged, using the staged values as the total is an estimate
                     export_statistics[&(oid, output_index)].set_snapshot_records_staged(snapshot_staged);
-                    export_statistics[&(oid, output_index)].set_snapshot_records_known(snapshot_staged);
                 }
             }
 
