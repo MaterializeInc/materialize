@@ -232,7 +232,7 @@ class Owners(Check):
                  owner_schema9  | owner_role_01
 
                 $ psql-execute command="\\dt owner_t*"
-                \\             List of relations
+                \\               List of tables
                  Schema |   Name    | Type  |     Owner
                 --------+-----------+-------+---------------
                  public | owner_t1  | table | owner_role_01
@@ -248,7 +248,7 @@ class Owners(Check):
                  public | owner_t9  | table | owner_role_01
 
                 $ psql-execute command="\\di owner_i*"
-                \\                   List of relations
+                \\                    List of indexes
                  Schema |   Name    | Type  |     Owner     |   Table
                 --------+-----------+-------+---------------+-----------
                  public | owner_i1  | index | owner_role_01 | owner_t1
@@ -264,7 +264,7 @@ class Owners(Check):
                  public | owner_i9  | index | owner_role_01 | owner_t9
 
                 $ psql-execute command="\\dv owner_v*"
-                \\             List of relations
+                \\               List of views
                  Schema |   Name    | Type |     Owner
                 --------+-----------+------+---------------
                  public | owner_v1  | view | owner_role_01
