@@ -816,19 +816,19 @@ test_table ""
 > CREATE TABLE tester2.test_table (a int)
 
 $ psql-execute command="\dt tester.*"
-\             List of relations
+\              List of tables
  Schema |    Name    | Type  |    Owner
 --------+------------+-------+-------------
  tester | test_table | table | materialize
 
 $ psql-execute command="\dt tester.test_table"
-\             List of relations
+\              List of tables
  Schema |    Name    | Type  |    Owner
 --------+------------+-------+-------------
  tester | test_table | table | materialize
 
 $ psql-execute command="\dt *.test_table"
-\             List of relations
+\               List of tables
  Schema  |    Name    | Type  |    Owner
 ---------+------------+-------+-------------
  tester  | test_table | table | materialize
