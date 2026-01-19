@@ -10,6 +10,8 @@
     {% endif %}
     <li><a href="/memory">memory visualization</a></li>
     <li><a href="/hierarchical-memory">hierarchical memory visualization</a></li>
-    <li><a href="/clusters">cluster replicas</a></li>
+    {% if internal %}
+        <li><a href="/clusters">cluster replicas</a></li>
+    {% endif %}
 </ul>
 {% endblock %}

@@ -44,8 +44,8 @@ use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
 use mz_auth::password::Password;
-use mz_controller::ReplicaHttpLocator;
 use mz_authenticator::Authenticator;
+use mz_controller::ReplicaHttpLocator;
 use mz_frontegg_auth::Error as FronteggError;
 use mz_http_util::DynamicFilterTarget;
 use mz_ore::cast::u64_to_usize;
@@ -203,7 +203,7 @@ impl HttpServer {
                 .route(
                     "/",
                     routing::get(move || async move {
-                        root::handle_home(routes_enabled.profiling).await
+                        root::handle_home(routes_enabled.profiling, routes_enabled.internal).await
                     }),
                 )
                 .route("/api/sql", routing::post(sql::handle_sql))
@@ -330,9 +330,9 @@ impl HttpServer {
                 .layer(Extension(console_config));
 
             // Cluster HTTP proxy routes.
-            let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(
-                Arc::clone(&replica_http_locator),
-            ));
+            let cluster_proxy_config = Arc::new(cluster::ClusterProxyConfig::new(Arc::clone(
+                &replica_http_locator,
+            )));
             base_router = base_router
                 .route("/clusters", routing::get(cluster::handle_clusters))
                 .route(

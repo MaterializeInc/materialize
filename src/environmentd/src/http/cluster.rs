@@ -103,10 +103,12 @@ async fn handle_cluster_proxy_inner(
         .get_http_addr(cluster_id, replica_id, process)
         .ok_or_else(|| {
             // Provide more specific error logging
-            if config.locator.process_count(cluster_id, replica_id).is_none() {
-                tracing::debug!(
-                    "Replica {cluster_id}/{replica_id} not found for HTTP proxy"
-                );
+            if config
+                .locator
+                .process_count(cluster_id, replica_id)
+                .is_none()
+            {
+                tracing::debug!("Replica {cluster_id}/{replica_id} not found for HTTP proxy");
             } else {
                 tracing::debug!(
                     "Process {process} out of range for replica {cluster_id}/{replica_id}"

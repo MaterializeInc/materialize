@@ -20,13 +20,15 @@ struct HomeTemplate<'a> {
     version: &'a str,
     build_sha: &'static str,
     profiling: bool,
+    internal: bool,
 }
 
-pub async fn handle_home(profiling: bool) -> impl IntoResponse {
+pub async fn handle_home(profiling: bool, internal: bool) -> impl IntoResponse {
     mz_http_util::template_response(HomeTemplate {
         version: BUILD_INFO.version,
         build_sha: BUILD_INFO.sha,
         profiling,
+        internal,
     })
 }
 
