@@ -31,6 +31,7 @@ use hyper_util::rt::TokioExecutor;
 use mz_controller::ReplicaHttpLocator;
 use mz_controller_types::{ClusterId, ReplicaId};
 
+use crate::BUILD_INFO;
 use crate::http::AuthedClient;
 
 /// Configuration for the cluster HTTP proxy.
@@ -59,7 +60,7 @@ pub(crate) async fn handle_cluster_proxy_root(
     config: Extension<Arc<ClusterProxyConfig>>,
     req: Request<Body>,
 ) -> Result<Response, StatusCode> {
-    handle_cluster_proxy_inner(cluster_id, replica_id, process, String::new(), config, req).await
+    handle_cluster_proxy_inner(cluster_id, replica_id, process, "", config, req).await
 }
 
 /// Proxy handler for cluster replica HTTP endpoints.
@@ -74,26 +75,26 @@ pub(crate) async fn handle_cluster_proxy(
     config: Extension<Arc<ClusterProxyConfig>>,
     req: Request<Body>,
 ) -> Result<Response, StatusCode> {
-    handle_cluster_proxy_inner(cluster_id, replica_id, process, path, config, req).await
+    handle_cluster_proxy_inner(cluster_id, replica_id, process, &path, config, req).await
 }
 
 async fn handle_cluster_proxy_inner(
     cluster_id: String,
     replica_id: String,
     process: usize,
-    path: String,
+    path: &str,
     config: Extension<Arc<ClusterProxyConfig>>,
     mut req: Request<Body>,
 ) -> Result<Response, StatusCode> {
     // Parse cluster ID
     let cluster_id: ClusterId = cluster_id.parse().map_err(|_| {
-        tracing::debug!("Invalid cluster_id: {}", cluster_id);
+        tracing::debug!("Invalid cluster_id: {cluster_id}");
         StatusCode::BAD_REQUEST
     })?;
 
     // Parse replica ID
     let replica_id: ReplicaId = replica_id.parse().map_err(|_| {
-        tracing::debug!("Invalid replica_id: {}", replica_id);
+        tracing::debug!("Invalid replica_id: {replica_id}");
         StatusCode::BAD_REQUEST
     })?;
 
@@ -101,31 +102,17 @@ async fn handle_cluster_proxy_inner(
     let http_addr = config
         .locator
         .get_http_addr(cluster_id, replica_id, process)
-        .ok_or_else(|| {
-            // Provide more specific error logging
-            if config
-                .locator
-                .process_count(cluster_id, replica_id)
-                .is_none()
-            {
-                tracing::debug!("Replica {cluster_id}/{replica_id} not found for HTTP proxy");
-            } else {
-                tracing::debug!(
-                    "Process {process} out of range for replica {cluster_id}/{replica_id}"
-                );
-            }
-            StatusCode::NOT_FOUND
-        })?;
+        .ok_or(StatusCode::NOT_FOUND)?;
 
     // Build target URI, preserving query string if present
     let path_query = if let Some(query) = req.uri().query() {
-        format!("/{}?{}", path, query)
+        format!("/{path}?{query}")
     } else {
-        format!("/{}", path)
+        format!("/{path}")
     };
 
-    let uri = Uri::try_from(format!("http://{}{}", http_addr, path_query)).map_err(|e| {
-        tracing::debug!("Invalid URI: {}", e);
+    let uri = Uri::try_from(format!("http://{http_addr}{path_query}")).map_err(|e| {
+        tracing::debug!("Invalid URI: {e}");
         StatusCode::BAD_REQUEST
     })?;
 
@@ -174,39 +161,26 @@ struct ClustersTemplate<'a> {
 /// Handler for the clusters overview page.
 ///
 /// Displays a table of all cluster replicas with links to their HTTP endpoints.
-pub(crate) async fn handle_clusters(
-    client: AuthedClient,
-    config: Extension<Arc<ClusterProxyConfig>>,
-) -> impl IntoResponse {
-    // Get replica IDs from the locator
-    let replica_ids = config.locator.list_replicas();
-
+pub(crate) async fn handle_clusters(client: AuthedClient) -> impl IntoResponse {
     // Look up names from the catalog
     let catalog = client.client.catalog_snapshot("clusters_page").await;
 
     let mut replicas = Vec::new();
-    for (cluster_id, replica_id, process_count) in replica_ids {
-        let (cluster_name, replica_name) = match catalog.try_get_cluster(cluster_id) {
-            Some(cluster) => {
-                let replica_name = cluster
-                    .replicas()
-                    .find(|r| r.replica_id == replica_id)
-                    .map(|r| r.name.clone())
-                    .unwrap_or_else(|| replica_id.to_string());
-                (cluster.name.clone(), replica_name)
-            }
-            None => (cluster_id.to_string(), replica_id.to_string()),
-        };
-
-        replicas.push(ReplicaInfo {
-            cluster_name,
-            replica_name,
-            cluster_id: cluster_id.to_string(),
-            replica_id: replica_id.to_string(),
-            process_count,
-            process_indices: (0..process_count).collect(),
-        });
+    for cluster in catalog.clusters() {
+        for replica in cluster.replicas() {
+            let process_count = replica.config.location.num_processes();
+            replicas.push(ReplicaInfo {
+                cluster_name: cluster.name.clone(),
+                replica_name: replica.name.clone(),
+                cluster_id: cluster.id.to_string(),
+                replica_id: replica.replica_id.to_string(),
+                process_count,
+                process_indices: (0..process_count).collect(),
+            });
+        }
     }
+
+    let _ = catalog;
 
     // Sort by cluster name, then replica name
     replicas.sort_by(|a, b| {
@@ -216,7 +190,7 @@ pub(crate) async fn handle_clusters(
     });
 
     mz_http_util::template_response(ClustersTemplate {
-        version: crate::BUILD_INFO.version,
+        version: BUILD_INFO.version,
         replicas,
     })
 }

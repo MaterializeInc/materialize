@@ -3402,7 +3402,9 @@ def workflow_test_cluster_http_proxy(c: Composition) -> None:
     # Find the internal-http port of the test cluster from logs.
     logs = c.invoke("logs", "materialized", capture=True).stdout
     clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
-    assert clusterd_port is not None, f"Could not find internal-http port for {cluster_id}"
+    assert (
+        clusterd_port is not None
+    ), f"Could not find internal-http port for {cluster_id}"
 
     # Wait a bit to let the replica fully start.
     time.sleep(2)
@@ -3416,9 +3418,7 @@ def workflow_test_cluster_http_proxy(c: Composition) -> None:
     # The proxy is accessible on port 6878 (internal HTTP) at:
     # /api/cluster/{cluster_id}/replica/{replica_id}/process/{process}/*path
     proxy_url = f"localhost:6878/api/cluster/{cluster_id}/replica/{replica_id}/process/0/metrics"
-    proxy_metrics = c.exec(
-        "materialized", "curl", proxy_url, capture=True
-    ).stdout
+    proxy_metrics = c.exec("materialized", "curl", proxy_url, capture=True).stdout
 
     # Verify that both return metrics data (non-empty).
     assert len(direct_metrics) > 0, "Direct metrics fetch returned empty response"
@@ -3514,10 +3514,18 @@ def workflow_test_clusters_page(c: Composition) -> None:
     # Verify that following the process link returns content (not 404).
     process_root_url = f"localhost:6878{expected_link}"
     process_root_page = c.exec(
-        "materialized", "curl", "-s", "-w", "%{http_code}", process_root_url, capture=True
+        "materialized",
+        "curl",
+        "-s",
+        "-w",
+        "%{http_code}",
+        process_root_url,
+        capture=True,
     ).stdout
     # The response should end with 200 status code.
-    assert process_root_page.endswith("200"), f"Process root URL returned non-200: {process_root_page[-20:]}"
+    assert process_root_page.endswith(
+        "200"
+    ), f"Process root URL returned non-200: {process_root_page[-20:]}"
 
     print("Clusters page test passed")
 

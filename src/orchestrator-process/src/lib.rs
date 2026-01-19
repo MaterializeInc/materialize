@@ -1224,12 +1224,8 @@ impl Service for ProcessService {
 
         states
             .iter()
-            .filter_map(|state| {
-                state
-                    .tcp_proxy_addrs
-                    .get(port)
-                    .map(|addr| addr.to_string())
-            })
+            .filter_map(|state| state.tcp_proxy_addrs.get(port))
+            .map(|addr| addr.to_string())
             .collect()
     }
 }

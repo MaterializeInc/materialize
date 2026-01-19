@@ -408,28 +408,18 @@ where
         let compute_location: ClusterReplicaLocation;
         let metrics_task: Option<AbortOnDropHandle<()>>;
 
-        let http_addrs;
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
                 storagectl_addrs,
                 computectl_addrs,
             }) => {
-                // Unmanaged replicas don't have HTTP addresses available through
-                // the orchestrator, so we leave them empty.
-                http_addrs = Vec::new();
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: computectl_addrs,
-                    http_addrs: http_addrs.clone(),
                 };
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: storagectl_addrs,
-                    http_addrs: http_addrs.clone(),
                 };
                 metrics_task = None;
-
-                // Register unmanaged replica (no HTTP addresses available).
-                self.replica_http_locator
-                    .register_unmanaged(cluster_id, replica_id);
             }
             ReplicaLocation::Managed(m) => {
                 let (service, metrics_task_join_handle) = self.provision_replica(
@@ -441,14 +431,11 @@ where
                     m,
                     enable_worker_core_affinity,
                 )?;
-                http_addrs = service.addresses("internal-http");
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
-                    http_addrs: http_addrs.clone(),
                 };
                 compute_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("computectl"),
-                    http_addrs: http_addrs.clone(),
                 };
                 metrics_task = Some(metrics_task_join_handle);
 
@@ -456,8 +443,11 @@ where
                 // queried lazily via tcp_addresses() since they may not be
                 // available immediately (the process orchestrator allocates
                 // TCP proxy ports asynchronously).
-                self.replica_http_locator
-                    .register_service(cluster_id, replica_id, Arc::from(service));
+                self.replica_http_locator.register_replica(
+                    cluster_id,
+                    replica_id,
+                    Arc::from(service),
+                );
             }
         }
 

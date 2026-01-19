@@ -1023,7 +1023,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         cloud_resource_reader,
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
-    let replica_http_locator = Arc::new(ReplicaHttpLocator::new());
+    let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
         build_info: &BUILD_INFO,
         orchestrator,

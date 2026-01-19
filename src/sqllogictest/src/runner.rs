@@ -1165,7 +1165,7 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_name_prefix: None,
                 },
                 connection_context,
-                replica_http_locator: Arc::new(ReplicaHttpLocator::new()),
+                replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
             },
             secrets_controller,
             cloud_resource_controller: None,
