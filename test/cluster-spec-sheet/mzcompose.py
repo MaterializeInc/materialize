@@ -212,7 +212,7 @@ class ScenarioRunner:
         category: str,
         name: str,
         setup: list[str],
-        query: list[str],
+        query: list[str | tuple[str, list[tuple]]],
         after: list[str] = [],
         repetitions: int = 1,
         size_of_index: str | None = None,
@@ -229,7 +229,13 @@ class ScenarioRunner:
                 time.sleep(setup_delay)
                 start_time = time.time()
                 for query_part in query:
-                    self.run_query(query_part)
+                    if isinstance(query_part, str):
+                        self.run_query(query_part)
+                    else:
+                        q = query_part[0]
+                        expected = query_part[1]
+                        actual = self.run_query(q, fetch=True)
+                        assert actual == expected, f"Expected {expected}, got {actual}"
                 end_time = time.time()
                 if size_of_index:
                     # We need to wait for the introspection source to catch up.
@@ -2040,7 +2046,7 @@ class SourceIngestionScenario(Scenario):
                 "CREATE SOURCE pg_source IN CLUSTER c FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (tbl AS pg_table);",
                 # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
                 # "CREATE TABLE pg_table FROM SOURCE qa_cluster_spec_sheet_pg_source (REFERENCE tbl);",
-                "SELECT count(*) FROM pg_table;",
+                ("SELECT count(*) FROM pg_table;", [(50000000,)]),
             ],
         )
 
@@ -2052,7 +2058,7 @@ class SourceIngestionScenario(Scenario):
                 "CREATE SOURCE mysql_source IN CLUSTER c FROM MYSQL CONNECTION mysql_conn FOR TABLES (admin.tbl AS mysql_table);",
                 # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
                 # "CREATE TABLE mysql_table FROM SOURCE mysql_source (REFERENCE admin.tbl);",
-                "SELECT count(*) FROM mysql_table;",
+                ("SELECT count(*) FROM mysql_table;", [(50000000,)]),
             ],
         )
 
@@ -2064,7 +2070,7 @@ class SourceIngestionScenario(Scenario):
                 "CREATE SOURCE kafka_table IN CLUSTER c FROM KAFKA CONNECTION kafka_conn (TOPIC 'qa_cluster_spec_sheet_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;",
                 # TODO: Use `CREATE TABLE FROM SOURCE` once supported in prod.
                 # "CREATE TABLE kafka_table FROM SOURCE kafka_source;",
-                "SELECT count(*) FROM kafka_table;",
+                ("SELECT count(*) FROM kafka_table;", [(50000000,)]),
             ],
         )
 
