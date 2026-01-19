@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use askama::Template;
 use axum::Extension;
 use axum::body::Body;
 use axum::extract::Path;
@@ -29,6 +30,8 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use mz_controller::ReplicaHttpLocator;
 use mz_controller_types::{ClusterId, ReplicaId};
+
+use crate::http::AuthedClient;
 
 /// Configuration for the cluster HTTP proxy.
 pub struct ClusterProxyConfig {
@@ -123,4 +126,71 @@ pub(crate) async fn handle_cluster_proxy(
             );
             StatusCode::BAD_GATEWAY
         })
+}
+
+/// Information about a replica for the clusters page template.
+pub struct ReplicaInfo {
+    pub cluster_name: String,
+    pub replica_name: String,
+    pub cluster_id: String,
+    pub replica_id: String,
+    pub process_count: usize,
+    pub process_indices: Vec<usize>,
+}
+
+#[derive(Template)]
+#[template(path = "clusters.html")]
+struct ClustersTemplate<'a> {
+    version: &'a str,
+    replicas: Vec<ReplicaInfo>,
+}
+
+/// Handler for the clusters overview page.
+///
+/// Displays a table of all cluster replicas with links to their HTTP endpoints.
+pub(crate) async fn handle_clusters(
+    client: AuthedClient,
+    config: Extension<Arc<ClusterProxyConfig>>,
+) -> impl IntoResponse {
+    // Get replica IDs from the locator
+    let replica_ids = config.locator.list_replicas();
+
+    // Look up names from the catalog
+    let catalog = client.client.catalog_snapshot("clusters_page").await;
+
+    let mut replicas = Vec::new();
+    for (cluster_id, replica_id, process_count) in replica_ids {
+        let (cluster_name, replica_name) = match catalog.try_get_cluster(cluster_id) {
+            Some(cluster) => {
+                let replica_name = cluster
+                    .replicas()
+                    .find(|r| r.replica_id == replica_id)
+                    .map(|r| r.name.clone())
+                    .unwrap_or_else(|| replica_id.to_string());
+                (cluster.name.clone(), replica_name)
+            }
+            None => (cluster_id.to_string(), replica_id.to_string()),
+        };
+
+        replicas.push(ReplicaInfo {
+            cluster_name,
+            replica_name,
+            cluster_id: cluster_id.to_string(),
+            replica_id: replica_id.to_string(),
+            process_count,
+            process_indices: (0..process_count).collect(),
+        });
+    }
+
+    // Sort by cluster name, then replica name
+    replicas.sort_by(|a, b| {
+        a.cluster_name
+            .cmp(&b.cluster_name)
+            .then_with(|| a.replica_name.cmp(&b.replica_name))
+    });
+
+    mz_http_util::template_response(ClustersTemplate {
+        version: crate::BUILD_INFO.version,
+        replicas,
+    })
 }

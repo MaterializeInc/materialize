@@ -33,7 +33,7 @@ use mz_orchestrator::Service;
 /// addresses may not be available immediately after `ensure_service()` returns.
 #[derive(Default)]
 pub struct ReplicaHttpLocator {
-    /// Maps (cluster_id, replica_id) -> Service reference or static addresses.
+    /// Maps (cluster_id, replica_id) -> Service reference.
     /// For managed replicas, we store the Service and call tcp_addresses() lazily.
     /// For unmanaged replicas, we store None (they don't have HTTP addresses).
     services: RwLock<BTreeMap<(ClusterId, ReplicaId), Option<Arc<dyn Service>>>>,
@@ -104,5 +104,23 @@ impl ReplicaHttpLocator {
     pub fn remove_replica(&self, cluster_id: ClusterId, replica_id: ReplicaId) {
         let mut guard = self.services.write().expect("lock poisoned");
         guard.remove(&(cluster_id, replica_id));
+    }
+
+    /// Lists all registered replica IDs.
+    ///
+    /// Returns a list of (cluster_id, replica_id, process_count) tuples.
+    /// Use the catalog to look up human-readable names.
+    pub fn list_replicas(&self) -> Vec<(ClusterId, ReplicaId, usize)> {
+        let guard = self.services.read().expect("lock poisoned");
+        guard
+            .iter()
+            .map(|((cluster_id, replica_id), service)| {
+                let process_count = service
+                    .as_ref()
+                    .map(|s| s.tcp_addresses("internal-http").len())
+                    .unwrap_or(0);
+                (*cluster_id, *replica_id, process_count)
+            })
+            .collect()
     }
 }
