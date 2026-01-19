@@ -6153,3 +6153,33 @@ def workflow_github_9961(c: Composition):
 
         # database-issues#9961 causes this command to crash envd.
         c.sql("CREATE REPLACEMENT MATERIALIZED VIEW rpl FOR mv AS SELECT * FROM t")
+
+
+def workflow_github_10018(c: Composition):
+    """Regression test for database-issues#10018."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Set up an MV that depends on an item with a higher catalog ID.
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv1 AS SELECT a FROM t;
+        CREATE MATERIALIZED VIEW mv2 AS SELECT a FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv1 AS SELECT a FROM mv2;
+        ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp;
+        """
+    )
+
+    result = c.sql_query("SHOW CREATE MATERIALIZED VIEW mv1")
+    assert "mv2" in result[0][1], result
+
+    # Restart envd. This used to panic due to incorrect item ordering during bootstrap.
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify the system is functional after restart.
+    c.sql("INSERT INTO t VALUES (1)")
+    result = c.sql_query("SELECT * FROM mv1")
+    assert result[0][0] == 1, result
