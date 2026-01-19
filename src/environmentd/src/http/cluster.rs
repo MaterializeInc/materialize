@@ -49,6 +49,19 @@ impl ClusterProxyConfig {
     }
 }
 
+/// Proxy handler for cluster replica HTTP endpoints (root path).
+///
+/// Route: `/api/cluster/:cluster_id/replica/:replica_id/process/:process/`
+///
+/// This handler handles requests to the root of a clusterd process's HTTP endpoint.
+pub(crate) async fn handle_cluster_proxy_root(
+    Path((cluster_id, replica_id, process)): Path<(String, String, usize)>,
+    config: Extension<Arc<ClusterProxyConfig>>,
+    req: Request<Body>,
+) -> Result<Response, StatusCode> {
+    handle_cluster_proxy_inner(cluster_id, replica_id, process, String::new(), config, req).await
+}
+
 /// Proxy handler for cluster replica HTTP endpoints.
 ///
 /// Route: `/api/cluster/:cluster_id/replica/:replica_id/process/:process/*path`
@@ -58,6 +71,17 @@ impl ClusterProxyConfig {
 /// and each process has its own HTTP endpoint.
 pub(crate) async fn handle_cluster_proxy(
     Path((cluster_id, replica_id, process, path)): Path<(String, String, usize, String)>,
+    config: Extension<Arc<ClusterProxyConfig>>,
+    req: Request<Body>,
+) -> Result<Response, StatusCode> {
+    handle_cluster_proxy_inner(cluster_id, replica_id, process, path, config, req).await
+}
+
+async fn handle_cluster_proxy_inner(
+    cluster_id: String,
+    replica_id: String,
+    process: usize,
+    path: String,
     config: Extension<Arc<ClusterProxyConfig>>,
     mut req: Request<Body>,
 ) -> Result<Response, StatusCode> {

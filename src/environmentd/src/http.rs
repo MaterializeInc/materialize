@@ -336,6 +336,10 @@ impl HttpServer {
             base_router = base_router
                 .route("/clusters", routing::get(cluster::handle_clusters))
                 .route(
+                    "/api/cluster/:cluster_id/replica/:replica_id/process/:process/",
+                    routing::any(cluster::handle_cluster_proxy_root),
+                )
+                .route(
                     "/api/cluster/:cluster_id/replica/:replica_id/process/:process/*path",
                     routing::any(cluster::handle_cluster_proxy),
                 )

@@ -3462,6 +3462,66 @@ def workflow_test_cluster_http_proxy(c: Composition) -> None:
     print(f"HTTP proxy test passed: {len(direct_parsed)} metrics matched")
 
 
+def workflow_test_clusters_page(c: Composition) -> None:
+    """
+    Test that the /clusters page displays expected replica information.
+
+    This test verifies that the clusters overview page correctly shows
+    cluster and replica names, IDs, and process links.
+    """
+
+    c.up("materialized")
+
+    # Create a managed cluster with a custom replica name.
+    c.sql(
+        """
+        CREATE CLUSTER test_cluster REPLICAS (test_replica (SIZE 'scale=1,workers=1'));
+        SET cluster = test_cluster;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """
+    )
+
+    # Get cluster_id and replica_id from SQL.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test_cluster'")[
+        0
+    ][0]
+    replica_id = c.sql_query(
+        f"SELECT id FROM mz_cluster_replicas WHERE cluster_id = '{cluster_id}'"
+    )[0][0]
+
+    # Wait a bit to let the replica fully start and register with the locator.
+    time.sleep(2)
+
+    # Fetch the clusters page.
+    clusters_page = c.exec(
+        "materialized", "curl", "localhost:6878/clusters", capture=True
+    ).stdout
+
+    # Verify that the page contains expected content.
+    assert "Cluster Replicas" in clusters_page, "Page title not found"
+    assert "test_cluster" in clusters_page, "Cluster name not found in page"
+    assert "test_replica" in clusters_page, "Replica name not found in page"
+    assert cluster_id in clusters_page, f"Cluster ID {cluster_id} not found in page"
+    assert replica_id in clusters_page, f"Replica ID {replica_id} not found in page"
+
+    # Verify process links are present (the replica has scale=1, so process 0).
+    expected_link = f"/api/cluster/{cluster_id}/replica/{replica_id}/process/0/"
+    assert expected_link in clusters_page, f"Process link {expected_link} not found"
+
+    # Verify the process link is clickable (check for href attribute).
+    assert f'href="{expected_link}"' in clusters_page, "Process link not clickable"
+
+    # Verify that following the process link returns content (not 404).
+    process_root_url = f"localhost:6878{expected_link}"
+    process_root_page = c.exec(
+        "materialized", "curl", "-s", "-w", "%{http_code}", process_root_url, capture=True
+    ).stdout
+    # The response should end with 200 status code.
+    assert process_root_page.endswith("200"), f"Process root URL returned non-200: {process_root_page[-20:]}"
+
+    print("Clusters page test passed")
+
+
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make
