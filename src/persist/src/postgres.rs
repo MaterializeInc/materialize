@@ -185,6 +185,18 @@ impl PostgresConsensusConfig {
             fn tcp_user_timeout(&self) -> Duration {
                 Duration::ZERO
             }
+
+            fn keepalives_idle(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+
+            fn keepalives_interval(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn keepalives_retries(&self) -> u32 {
+                5
+            }
         }
 
         let dyncfg = ConfigSet::default().add(&USE_POSTGRES_TUNED_QUERIES);

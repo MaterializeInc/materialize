@@ -305,6 +305,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
         .add(&crate::cfg::CRDB_CONNECT_TIMEOUT)
         .add(&crate::cfg::CRDB_TCP_USER_TIMEOUT)
+        .add(&crate::cfg::CRDB_KEEPALIVES_IDLE)
+        .add(&crate::cfg::CRDB_KEEPALIVES_INTERVAL)
+        .add(&crate::cfg::CRDB_KEEPALIVES_RETRIES)
         .add(&crate::cfg::USE_CRITICAL_SINCE_TXN)
         .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
@@ -442,6 +445,28 @@ pub const CRDB_TCP_USER_TIMEOUT: Config<Duration> = Config::new(
     connection is forcibly closed.",
 );
 
+pub const CRDB_KEEPALIVES_IDLE: Config<Duration> = Config::new(
+    "crdb_keepalives_idle",
+    Duration::from_secs(10),
+    "\
+    The amount of idle time before a TCP keepalive packet is sent on CRDB \
+    connections.",
+);
+
+pub const CRDB_KEEPALIVES_INTERVAL: Config<Duration> = Config::new(
+    "crdb_keepalives_interval",
+    Duration::from_secs(5),
+    "The time interval between TCP keepalive probes on CRDB connections.",
+);
+
+pub const CRDB_KEEPALIVES_RETRIES: Config<u32> = Config::new(
+    "crdb_keepalives_retries",
+    5,
+    "\
+    The maximum number of TCP keepalive probes that will be sent before \
+    dropping a CRDB connection.",
+);
+
 /// Migrate the txns code to use the critical since when opening a new read handle.
 pub const USE_CRITICAL_SINCE_TXN: Config<bool> = Config::new(
     "persist_use_critical_since_txn",
@@ -568,6 +593,18 @@ impl PostgresClientKnobs for PersistConfig {
 
     fn tcp_user_timeout(&self) -> Duration {
         CRDB_TCP_USER_TIMEOUT.get(self)
+    }
+
+    fn keepalives_idle(&self) -> Duration {
+        CRDB_KEEPALIVES_IDLE.get(self)
+    }
+
+    fn keepalives_interval(&self) -> Duration {
+        CRDB_KEEPALIVES_INTERVAL.get(self)
+    }
+
+    fn keepalives_retries(&self) -> u32 {
+        CRDB_KEEPALIVES_RETRIES.get(self)
     }
 }
 
