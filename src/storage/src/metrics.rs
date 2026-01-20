@@ -74,6 +74,9 @@ pub struct StorageMetrics {
     // doesn't do anything to let you pinpoint _which_ operator or worker isn't
     // yielding, but it should hopefully alert us when there is something to
     // look at.
+    //
+    // This mirrors an equivalent metric in the compute server
+    // (`mz_compute::metrics::ComputeMetrics`).
     timely_step_duration_seconds: HistogramVec,
 }
 
@@ -88,6 +91,10 @@ impl StorageMetrics {
             sink_defs: sink::SinkMetricDefs::register_with(registry),
             source_statistics: SourceStatisticsMetricDefs::register_with(registry),
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
+            // NB: This metric must have the same name, help text, and label
+            // names as the equivalent metric in `mz_compute::metrics`, as
+            // Prometheus requires identical metadata for metrics with the same
+            // name.
             timely_step_duration_seconds: registry.register(metric!(
                 name: "mz_timely_step_duration_seconds",
                 help: "The time spent in each step_or_park call",

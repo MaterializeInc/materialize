@@ -54,6 +54,9 @@ pub struct ComputeMetrics {
     // doesn't do anything to let you pinpoint _which_ operator or worker isn't
     // yielding, but it should hopefully alert us when there is something to
     // look at.
+    //
+    // There is an equivalent metric in the storage server
+    // (`mz_storage::metrics::StorageMetrics`).
     timely_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
     stashed_peek_seconds: HistogramVec,
