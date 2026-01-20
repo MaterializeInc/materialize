@@ -765,7 +765,7 @@ class OperationalDataMesh(Scenario):
                       FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                       ENVELOPE DEBEZIUM;
 
-                    $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="30s"
+                    $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 
                     #$ kafka-verify-topic sink=sink
 
