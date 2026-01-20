@@ -546,16 +546,11 @@ def run_once(
 
             if not target:
                 print(
-                    "~~~ Resetting materialized to prevent interference between scenarios"
+                    "~~~ Resetting services to prevent interference between scenarios"
                 )
-                c.kill("cockroach", "materialized", "testdrive", "minio")
-                c.rm(
-                    "cockroach",
-                    "materialized",
-                    "testdrive",
-                    "minio",
-                    destroy_volumes=True,
-                )
+                services = service_names + ["cockroach", "testdrive", "minio"]
+                c.kill(*services)
+                c.rm(*services, destroy_volumes=True)
                 c.rm_volumes("mzdata")
 
     return stats, failures
