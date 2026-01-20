@@ -160,6 +160,13 @@ where
     }
 
     let user = params.remove("user").unwrap_or_else(String::new);
+    let options = parse_options(params.get("options").unwrap_or(&String::new()));
+
+    // If oidc_auth_enabled exists as an option, return its value and filter it from
+    // the remaining options.
+    // TODO (SangJunBak): Use oidc_auth_enabled boolean to implement OIDC flow instead of
+    // OIDC authenticator kind.
+    let (_oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
 
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
@@ -499,7 +506,7 @@ where
     let system_vars = adapter_client.get_system_vars().await;
     for (name, value) in params {
         let settings = match name.as_str() {
-            "options" => match parse_options(&value) {
+            "options" => match &options {
                 Ok(opts) => opts,
                 Err(()) => {
                     session.add_notice(AdapterNotice::BadStartupSetting {
@@ -509,7 +516,7 @@ where
                     continue;
                 }
             },
-            _ => vec![(name, value)],
+            _ => &vec![(name, value)],
         };
         for (key, val) in settings {
             const LOCAL: bool = false;
@@ -517,13 +524,12 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) =
-                session
-                    .vars_mut()
-                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
+            if let Err(err) = session
+                .vars_mut()
+                .set(&system_vars, key, VarInput::Flat(val), LOCAL)
             {
                 session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key,
+                    name: key.clone(),
                     reason: err.to_string(),
                 });
             }
@@ -599,6 +605,31 @@ where
             conn.flush().await
         }
     }
+}
+
+/// Gets `oidc_auth_enabled` from options if it exists.
+/// Returns options with oidc_auth_enabled extracted
+/// and the oidc_auth_enabled value.
+fn extract_oidc_auth_enabled_from_options(
+    options: Result<Vec<(String, String)>, ()>,
+) -> (bool, Result<Vec<(String, String)>, ()>) {
+    let options = match options {
+        Ok(opts) => opts,
+        Err(_) => return (false, options),
+    };
+
+    let mut new_options = Vec::new();
+    let mut oidc_auth_enabled = false;
+
+    for (k, v) in options {
+        if k == "oidc_auth_enabled" {
+            oidc_auth_enabled = v.parse::<bool>().unwrap_or(false);
+        } else {
+            new_options.push((k, v));
+        }
+    }
+
+    (oidc_auth_enabled, Ok(new_options))
 }
 
 /// Returns (name, value) session settings pairs from an options value.
@@ -3037,6 +3068,86 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_extract_oidc_auth_enabled_from_options() {
+        struct TestCase {
+            input: Result<Vec<(&'static str, &'static str)>, ()>,
+            expect_enabled: bool,
+            expect_options: Result<Vec<(&'static str, &'static str)>, ()>,
+        }
+        let tests = vec![
+            // Empty options
+            TestCase {
+                input: Ok(vec![]),
+                expect_enabled: false,
+                expect_options: Ok(vec![]),
+            },
+            // Error input passthrough
+            TestCase {
+                input: Err(()),
+                expect_enabled: false,
+                expect_options: Err(()),
+            },
+            // oidc_auth_enabled=true
+            TestCase {
+                input: Ok(vec![("oidc_auth_enabled", "true")]),
+                expect_enabled: true,
+                expect_options: Ok(vec![]),
+            },
+            // oidc_auth_enabled=false
+            TestCase {
+                input: Ok(vec![("oidc_auth_enabled", "false")]),
+                expect_enabled: false,
+                expect_options: Ok(vec![]),
+            },
+            // Invalid oidc_auth_enabled value defaults to false
+            TestCase {
+                input: Ok(vec![("oidc_auth_enabled", "invalid")]),
+                expect_enabled: false,
+                expect_options: Ok(vec![]),
+            },
+            // No oidc_auth_enabled, other options preserved
+            TestCase {
+                input: Ok(vec![("key1", "val1"), ("key2", "val2")]),
+                expect_enabled: false,
+                expect_options: Ok(vec![("key1", "val1"), ("key2", "val2")]),
+            },
+            // Mixed: oidc_auth_enabled with other options
+            TestCase {
+                input: Ok(vec![
+                    ("key1", "val1"),
+                    ("oidc_auth_enabled", "true"),
+                    ("key2", "val2"),
+                ]),
+                expect_enabled: true,
+                expect_options: Ok(vec![("key1", "val1"), ("key2", "val2")]),
+            },
+        ];
+        for test in tests {
+            let input = test.input.map(|r| {
+                r.into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            });
+            let (got_enabled, got_options) = extract_oidc_auth_enabled_from_options(input.clone());
+            let expect_options = test.expect_options.map(|r| {
+                r.into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            });
+            assert_eq!(
+                got_enabled, test.expect_enabled,
+                "enabled mismatch for input: {:?}",
+                input
+            );
+            assert_eq!(
+                got_options, expect_options,
+                "options mismatch for input: {:?}",
+                input
+            );
         }
     }
 }
