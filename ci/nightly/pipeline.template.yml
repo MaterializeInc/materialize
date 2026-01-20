@@ -2502,8 +2502,10 @@ steps:
     label: "Workload Replay"
     depends_on: build-aarch64
     timeout_in_minutes: 120
+    parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
           composition: workload-replay
+          args: [--factor-initial-data=0.01]
     agents:
       queue: hetzner-aarch64-16cpu-32gb

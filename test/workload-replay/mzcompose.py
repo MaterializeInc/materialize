@@ -22,6 +22,7 @@ import posixpath
 import random
 import re
 import string
+import subprocess
 import threading
 import time
 import urllib.parse
@@ -470,7 +471,7 @@ SERVICES = [
         ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_ADVERTISED_LISTENERS=HOST://127.0.0.1:30123,PLAINTEXT://kafka:9092",
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
@@ -513,8 +514,11 @@ def update_recorded_workloads_repo() -> None:
     else:
         path.mkdir(exist_ok=True)
         if ui.env_is_truthy("CI"):
-            github_token = os.environ["GITHUB_TOKEN"]
-            spawn.runv(
+            github_token = (
+                os.getenv("GITHUB_TOKEN")
+                or os.environ["GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"]
+            )
+            subprocess.run(
                 [
                     "git",
                     "clone",
@@ -630,7 +634,61 @@ def to_sql_server_data_type(typ: str) -> str:
     return typ
 
 
-# TODO: Distribution of values should be long tail by default, not random
+def long_tail_rank(n: int = 10_000, a: float = 1.2) -> int:
+    x = int((random.paretovariate(a) - 1.0) * 3) + 1
+    return max(1, min(n, x))
+
+
+def long_tail_int(lo: int, hi: int) -> int:
+    if lo > hi:
+        lo, hi = hi, lo
+
+    r = long_tail_rank(n=100_000, a=1.25)
+    mag = int(math.log2(r + 1) ** 4)
+
+    if random.random() < 0.80:
+        hot = [0, 1, -1, 2, -2, 10, -10, 100, -100]
+        val = random.choice(hot)
+    else:
+        val = mag
+        if lo < 0 and hi > 0:
+            val *= random.choice([-1, 1])
+
+    return max(lo, min(hi, val))
+
+
+def long_tail_float(lo: float, hi: float) -> float:
+    if lo > hi:
+        lo, hi = hi, lo
+
+    if random.random() < 0.85:
+        base = random.gauss(0.0, 1.0)
+    else:
+        r = long_tail_rank(n=1_000_000, a=1.15)
+        base = (math.log(r + 1) ** 3) * random.choice([-1.0, 1.0])
+
+    span = hi - lo
+    x = base / (abs(base) + 10.0)
+    val = (x + 1.0) / 2.0 * span + lo
+    return max(lo, min(hi, val))
+
+
+def long_tail_choice(values: list[Any], hot_prob: float = 0.85) -> Any:
+    if not values:
+        raise ValueError("empty values")
+    if random.random() < hot_prob:
+        return random.choice(values[: min(8, len(values))])
+    return random.choice(values)
+
+
+def long_tail_text(chars: str, max_len: int, hot_pool: list[str]) -> str:
+    if random.random() < 0.90 and hot_pool:
+        return random.choice(hot_pool)
+
+    length = min(max_len, max(1, long_tail_rank(n=max_len, a=1.3)))
+    return "".join(random.choice(chars) for _ in range(length))
+
+
 class Column:
     def __init__(self, name: str, typ: str, nullable: bool, default: Any):
         self.name = name
@@ -639,18 +697,31 @@ class Column:
         self.default = default
         self.chars = string.ascii_letters + string.digits
 
-    def avro_type(self) -> str:
+        self._hot_strings = [
+            f"{name}_a",
+            f"{name}_b",
+            f"{name}_c",
+            "foo",
+            "bar",
+            "baz",
+            "0",
+            "1",
+            "NULL",
+        ]
+
+    def avro_type(self) -> str | list[str]:
+        result = self.typ
         if self.typ in ("text", "bytea", "character", "character varying"):
-            return "string"
+            result = "string"
         elif self.typ in ("smallint", "integer", "uint2", "uint4"):
-            return "int"
+            result = "int"
         elif self.typ in ("bigint", "uint8"):
-            return "long"
+            result = "long"
         elif self.typ in ("double precision", "numeric"):
-            return "double"
+            result = "double"
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
-            return "long"
-        return self.typ
+            result = "long"
+        return ["null", result] if self.nullable else result
 
     def kafka_value(self) -> Any:
         if self.default and random.randrange(10) == 0 and self.default != "NULL":
@@ -659,65 +730,94 @@ class Column:
             return None
 
         if self.typ == "boolean":
-            return random.choice([True, False])
+            return random.random() < 0.2
+
         elif self.typ == "smallint":
-            return random.randrange(-32768, 32767)
+            return long_tail_int(-32768, 32767)
         elif self.typ == "integer":
-            return random.randrange(-2147483648, 2147483647)
+            return long_tail_int(-2147483648, 2147483647)
         elif self.typ == "bigint":
-            return random.randrange(-9223372036854775808, 9223372036854775807)
+            return long_tail_int(-9223372036854775808, 9223372036854775807)
+
         elif self.typ == "uint2":
-            return random.randrange(0, 65535)
+            return long_tail_int(0, 65535)
         elif self.typ == "uint4":
-            return random.randrange(0, 4294967295)
+            return long_tail_int(0, 4294967295)
         elif self.typ == "uint8":
-            return random.randrange(0, 18446744073709551615)
+            return long_tail_int(0, 18446744073709551615)
+
         elif self.typ in ("float", "double precision", "numeric"):
-            return random.uniform(-1_000_000_000, 1_000_000_000_00)
+            return long_tail_float(-1_000_000_000.0, 1_000_000_000.0)
+
         elif self.typ in ("text", "bytea"):
-            return literal("".join(random.choice(self.chars) for _ in range(100)))
+            return literal(long_tail_text(self.chars, 100, self._hot_strings))
+
         elif self.typ in ("character", "character varying"):
-            # TODO: Get the actual max length
-            return literal("".join(random.choice(self.chars) for _ in range(10)))
+            return literal(long_tail_text(self.chars, 10, self._hot_strings))
+
         elif self.typ == "uuid":
             return str(uuid.UUID(int=random.getrandbits(128), version=4))
+
         elif self.typ == "jsonb":
-            result = {f"key{key}": str(random.randint(-100, 100)) for key in range(20)}
+            result = {f"key{key}": str(long_tail_int(-100, 100)) for key in range(20)}
             return json.dumps(result)
+
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
-            return random.randrange(0, 9223372036854775807)
+            now = 1700000000000  # doesn't need to be exact
+            if random.random() < 0.9:
+                return now + long_tail_int(-86_400_000, 86_400_000)
+            else:
+                return random.randrange(0, 9223372036854775807)
+
         elif self.typ == "mz_timestamp":
-            return literal(
-                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            year = long_tail_choice(
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
             )
+            return literal(
+                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+
         elif self.typ == "date":
-            return literal(
-                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            year = long_tail_choice(
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
             )
+            return literal(
+                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+
         elif self.typ == "time":
+            if random.random() < 0.8:
+                common = ["00:00:00.000000", "12:00:00.000000", "23:59:59.000000"]
+                return literal(random.choice(common))
             return literal(
                 f"{random.randrange(0, 24)}:{random.randrange(0, 60)}:{random.randrange(0, 60)}.{random.randrange(0, 1000000)}"
             )
+
         elif self.typ == "int2range":
-            val1 = str(random.randrange(-2147483648, 2147483647))
-            val2 = str(random.randrange(-2147483648, 2147483647))
-            return literal(f"[{val1},{val2})")
+            a = str(long_tail_int(-32768, 32767))
+            b = str(long_tail_int(-32768, 32767))
+            return literal(f"[{a},{b})")
+
         elif self.typ == "int4range":
-            val1 = str(random.randrange(-2147483648, 2147483647))
-            val2 = str(random.randrange(-2147483648, 2147483647))
-            return literal(f"[{val1},{val2})")
+            a = str(long_tail_int(-2147483648, 2147483647))
+            b = str(long_tail_int(-2147483648, 2147483647))
+            return literal(f"[{a},{b})")
+
         elif self.typ == "int8range":
-            val1 = str(random.randrange(-9223372036854775808, 9223372036854775807))
-            val2 = str(random.randrange(-9223372036854775808, 9223372036854775807))
-            return literal(f"[{val1},{val2})")
+            a = str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            b = str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            return literal(f"[{a},{b})")
+
         elif self.typ == "map":
-            return {str(i): str(random.randint(-100, 100)) for i in range(0, 20)}
+            return {str(i): str(long_tail_int(-100, 100)) for i in range(0, 20)}
+
         elif self.typ == "text[]":
             values = [
-                literal("".join(random.choice(self.chars) for _ in range(100)))
-                for i in range(0, 5)
+                literal(long_tail_text(self.chars, 100, self._hot_strings))
+                for _ in range(5)
             ]
             return literal(f"{{{', '.join(values)}}}")
+
         else:
             raise ValueError(f"Unhandled data type {self.typ}")
 
@@ -728,70 +828,99 @@ class Column:
             return "NULL"
 
         if self.typ == "boolean":
-            return random.choice(["true", "false"])
+            return "true" if (random.random() < 0.2) else "false"
+
         elif self.typ == "smallint":
-            return str(random.randrange(-32768, 32767))
+            return str(long_tail_int(-32768, 32767))
         elif self.typ == "integer":
-            return str(random.randrange(-2147483648, 2147483647))
+            return str(long_tail_int(-2147483648, 2147483647))
         elif self.typ == "bigint":
-            return str(random.randrange(-9223372036854775808, 9223372036854775807))
+            return str(long_tail_int(-9223372036854775808, 9223372036854775807))
+
         elif self.typ == "uint2":
-            return str(random.randrange(0, 65535))
+            return str(long_tail_int(0, 65535))
         elif self.typ == "uint4":
-            return str(random.randrange(0, 4294967295))
+            return str(long_tail_int(0, 4294967295))
         elif self.typ == "uint8":
-            return str(random.randrange(0, 18446744073709551615))
+            return str(long_tail_int(0, 18446744073709551615))
+
         elif self.typ in ("float", "double precision", "numeric"):
-            return str(random.uniform(-1_000_000_000, 1_000_000_000_00))
+            return str(long_tail_float(-1_000_000_000.0, 1_000_000_000.0))
+
         elif self.typ in ("text", "bytea"):
-            return literal("".join(random.choice(self.chars) for _ in range(100)))
+            return literal(long_tail_text(self.chars, 100, self._hot_strings))
+
         elif self.typ in ("character", "character varying"):
-            # TODO: Get the actual max length
-            return literal("".join(random.choice(self.chars) for _ in range(10)))
+            return literal(long_tail_text(self.chars, 10, self._hot_strings))
+
         elif self.typ == "uuid":
             return str(uuid.UUID(int=random.getrandbits(128), version=4))
+
         elif self.typ == "jsonb":
-            result = {f"key{key}": str(random.randint(-100, 100)) for key in range(20)}
+            result = {f"key{key}": str(long_tail_int(-100, 100)) for key in range(20)}
             return f"'{json.dumps(result)}'::jsonb"
+
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
-            return literal(
-                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            year = long_tail_choice(
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
             )
+            return literal(
+                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+
         elif self.typ == "mz_timestamp":
-            return literal(
-                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            year = long_tail_choice(
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
             )
+            return literal(
+                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+
         elif self.typ == "date":
-            return literal(
-                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            year = long_tail_choice(
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
             )
+            return literal(
+                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+
         elif self.typ == "time":
+            if random.random() < 0.8:
+                return literal(
+                    random.choice(
+                        ["00:00:00.000000", "12:00:00.000000", "23:59:59.000000"]
+                    )
+                )
             return literal(
                 f"{random.randrange(0, 24)}:{random.randrange(0, 60)}:{random.randrange(0, 60)}.{random.randrange(0, 1000000)}"
             )
+
         elif self.typ == "int2range":
-            val1 = str(random.randrange(-2147483648, 2147483647))
-            val2 = str(random.randrange(-2147483648, 2147483647))
-            return literal(f"[{val1},{val2})")
+            a = str(long_tail_int(-32768, 32767))
+            b = str(long_tail_int(-32768, 32767))
+            return literal(f"[{a},{b})")
+
         elif self.typ == "int4range":
-            val1 = str(random.randrange(-2147483648, 2147483647))
-            val2 = str(random.randrange(-2147483648, 2147483647))
-            return literal(f"[{val1},{val2})")
+            a = str(long_tail_int(-2147483648, 2147483647))
+            b = str(long_tail_int(-2147483648, 2147483647))
+            return literal(f"[{a},{b})")
+
         elif self.typ == "int8range":
-            val1 = str(random.randrange(-9223372036854775808, 9223372036854775807))
-            val2 = str(random.randrange(-9223372036854775808, 9223372036854775807))
-            return literal(f"[{val1},{val2})")
+            a = str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            b = str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            return literal(f"[{a},{b})")
+
         elif self.typ == "map":
-            values = [
-                f"'{i}' => {str(random.randint(-100, 100))}" for i in range(0, 20)
-            ]
+            values = [f"'{i}' => {str(long_tail_int(-100, 100))}" for i in range(0, 20)]
             return literal(f"{{{', '.join(values)}}}")
+
         elif self.typ == "text[]":
             values = [
-                literal("".join(random.choice(self.chars) for _ in range(100)))
-                for i in range(0, 5)
+                literal(long_tail_text(self.chars, 100, self._hot_strings))
+                for _ in range(5)
             ]
             return literal(f"{{{', '.join(values)}}}")
+
         else:
             raise ValueError(f"Unhandled data type {self.typ}")
 
@@ -804,7 +933,6 @@ def ingest_webhook(
     source: dict[str, Any],
     num_rows: int,
 ) -> None:
-    # TODO: Also in continuous
     url = f"http://127.0.0.1:{c.port('materialized', 6876)}/api/webhook/{urllib.parse.quote(db, safe='')}/{urllib.parse.quote(schema, safe='')}/{urllib.parse.quote(name, safe='')}"
     body_column = None
     headers_column = None
@@ -909,21 +1037,29 @@ def ingest(
                 {
                     "name": field.name,
                     "type": field.avro_type(),
+                    **({"default": field.default} if field.default is not None else {}),
                 }
                 for field in columns[1:]
             ],
         }
 
+        key_field = columns[0]
         key_schema = {
             "type": "record",
-            "name": topic + "_key",
-            "namespace": "com.materialize",
-            "fields": [{"name": columns[0].name, "type": columns[0].avro_type()}],
+            "name": "Key",
+            "namespace": topic,
+            "fields": [
+                {
+                    "name": key_field.name,
+                    "type": key_field.avro_type(),
+                    **(
+                        {"default": key_field.default}
+                        if key_field.default is not None
+                        else {}
+                    ),
+                }
+            ],
         }
-
-        kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
-
-        AdminClient(kafka_conf)
 
         schema_registry_conf = {
             "url": f"http://127.0.0.1:{c.default_port('schema-registry')}"
@@ -946,6 +1082,7 @@ def ingest(
         serialization_context = SerializationContext(topic, MessageField.VALUE)
         key_serialization_context = SerializationContext(topic, MessageField.KEY)
 
+        kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
         producer = confluent_kafka.Producer(kafka_conf)
         for row in batch_values_kafka:
             producer.produce(
@@ -1217,6 +1354,8 @@ def run_create_objects(
                     raise ValueError(f"Unhandled connection type {connection['type']}")
 
     print("Creating sources")
+    kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
+    admin_client = AdminClient(kafka_conf)
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for name, source in items["sources"].items():
@@ -1323,11 +1462,7 @@ def run_create_objects(
 
                 if source["type"] == "kafka":
                     topic = get_kafka_topic(source)
-                    kafka_conf = {
-                        "bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"
-                    }
-                    a = AdminClient(kafka_conf)
-                    a.create_topics(
+                    admin_client.create_topics(
                         [
                             confluent_kafka.admin.NewTopic(  # type: ignore
                                 topic, num_partitions=1, replication_factor=1
@@ -1341,6 +1476,14 @@ def run_create_objects(
                     #     source["create_sql"],
                     #     flags=re.IGNORECASE | re.DOTALL,
                     # )
+
+                    # Have to wait for topics to be created before creating sources/tables using them
+                    while True:
+                        md = admin_client.list_topics(timeout=2)
+                        if topic in md.topics and md.topics[topic].error is None:
+                            break
+                        print(f"Waiting for topic: {topic}")
+                        time.sleep(1)
 
                 # if source["type"] == "mysql":
                 #    # TODO: This is weird, shouldn't it be part of the create_sql?
@@ -1444,7 +1587,7 @@ def run_create_objects(
 def create_initial_data(
     c: Composition, workload: dict[str, Any], factor_initial_data: float
 ) -> None:
-    batch_size = 1000
+    batch_size = 2000
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
             for name, table in items["tables"].items():
@@ -1481,32 +1624,6 @@ def create_initial_data(
                     )
                 print()
             for name, source in items["sources"].items():
-                for child_name, child in source.get("children", {}).items():
-                    num_rows = int(child["messages_total"] * factor_initial_data)
-                    if not num_rows:
-                        continue
-                    data_columns = [
-                        Column(c["name"], c["type"], c["nullable"], c["default"])
-                        for c in child["columns"]
-                    ]
-                    print(
-                        f"Creating {num_rows} rows for {db}.{schema}.{name}->{child_name}:"
-                    )
-                    for start in range(0, num_rows, batch_size):
-                        progress = min(start + batch_size, num_rows)
-                        print(
-                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                            end="\r",
-                            flush=True,
-                        )
-                        ingest(
-                            c,
-                            child,
-                            source,
-                            data_columns,
-                            min(batch_size, num_rows - start),
-                        )
-                    print()
                 if source["type"] == "webhook":
                     num_rows = int(source["messages_total"] * factor_initial_data)
                     print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
@@ -1526,6 +1643,57 @@ def create_initial_data(
                             min(batch_size, num_rows - start),
                         )
                     print()
+                elif not source.get("children", {}):
+                    num_rows = int(source["messages_total"] * factor_initial_data)
+                    if not num_rows:
+                        continue
+                    data_columns = [
+                        Column(c["name"], c["type"], c["nullable"], c["default"])
+                        for c in source["columns"]
+                    ]
+                    print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
+                    for start in range(0, num_rows, batch_size):
+                        progress = min(start + batch_size, num_rows)
+                        print(
+                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                            end="\r",
+                            flush=True,
+                        )
+                        ingest(
+                            c,
+                            source,
+                            source,
+                            data_columns,
+                            min(batch_size, num_rows - start),
+                        )
+                    print()
+                else:
+                    for child_name, child in source.get("children", {}).items():
+                        num_rows = int(child["messages_total"] * factor_initial_data)
+                        if not num_rows:
+                            continue
+                        data_columns = [
+                            Column(c["name"], c["type"], c["nullable"], c["default"])
+                            for c in child["columns"]
+                        ]
+                        print(
+                            f"Creating {num_rows} rows for {db}.{schema}.{name}->{child_name}:"
+                        )
+                        for start in range(0, num_rows, batch_size):
+                            progress = min(start + batch_size, num_rows)
+                            print(
+                                f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                                end="\r",
+                                flush=True,
+                            )
+                            ingest(
+                                c,
+                                child,
+                                source,
+                                data_columns,
+                                min(batch_size, num_rows - start),
+                            )
+                        print()
 
 
 def create_ingestions(
@@ -1605,23 +1773,22 @@ def create_ingestions(
                         )
                     )
 
-                for child_name, child in source.get("children", {}).items():
-                    if "messages_second" not in child:
+                if not source.get("children", {}):
+                    if "messages_second" not in source:
                         continue
-                    rate = math.ceil(child["messages_second"] * factor_ingestions)
+                    rate = math.ceil(source["messages_second"] * factor_ingestions)
                     if not rate:
                         continue
 
                     data_columns = [
                         Column(c["name"], c["type"], c["nullable"], c["default"])
-                        for c in child["columns"]
+                        for c in source["columns"]
                     ]
-                    pretty_name = f"{db}.{schema}.{name}->{child_name}"
+                    pretty_name = f"{db}.{schema}.{name}"
                     print(f"Starting {rate} ing./s for {pretty_name}")
 
-                    def continuous_ingestion(
+                    def continuous_ingestion_source(
                         source: dict[str, Any],
-                        child: dict[str, Any],
                         pretty_name: str,
                         data_columns: list[Column],
                         rate: int,
@@ -1635,7 +1802,7 @@ def create_ingestions(
                                 stats["total"] += 1
                                 ingest(
                                     c,
-                                    child,
+                                    source,
                                     source,
                                     data_columns,
                                     min(batch_size, rate),
@@ -1658,17 +1825,83 @@ def create_ingestions(
 
                     threads.append(
                         PropagatingThread(
-                            target=continuous_ingestion,
+                            target=continuous_ingestion_source,
                             name=f"ingest-{pretty_name}",
                             args=(
                                 source,
-                                child,
                                 pretty_name,
                                 data_columns,
                                 rate,
                             ),
                         )
                     )
+                else:
+                    for child_name, child in source.get("children", {}).items():
+                        if "messages_second" not in child:
+                            continue
+                        rate = math.ceil(child["messages_second"] * factor_ingestions)
+                        if not rate:
+                            continue
+
+                        data_columns = [
+                            Column(c["name"], c["type"], c["nullable"], c["default"])
+                            for c in child["columns"]
+                        ]
+                        pretty_name = f"{db}.{schema}.{name}->{child_name}"
+                        print(f"Starting {rate} ing./s for {pretty_name}")
+
+                        def continuous_ingestion_child(
+                            source: dict[str, Any],
+                            child: dict[str, Any],
+                            pretty_name: str,
+                            data_columns: list[Column],
+                            rate: int,
+                        ) -> None:
+                            nonlocal stop_event
+                            try:
+                                while not stop_event.is_set():
+                                    start_time = time.time()
+                                    if verbose:
+                                        print(
+                                            f"Ingesting {rate} rows for {pretty_name}"
+                                        )
+                                    stats["total"] += 1
+                                    ingest(
+                                        c,
+                                        child,
+                                        source,
+                                        data_columns,
+                                        min(batch_size, rate),
+                                    )
+                                    time_to_sleep = (start_time + 1) - time.time()
+                                    if time_to_sleep > 0:
+                                        stop_event.wait(timeout=time_to_sleep)
+                                        if stop_event.is_set():
+                                            return
+                                    else:
+                                        stats["slow"] += 1
+                                        if verbose:
+                                            print(f"Can't keep up: {pretty_name}")
+                            except Exception as e:
+                                stats["failed"] += 1
+                                print(f"Failed: {pretty_name}")
+                                print(e)
+                                stop_event.set()
+                                raise
+
+                        threads.append(
+                            PropagatingThread(
+                                target=continuous_ingestion_child,
+                                name=f"ingest-{pretty_name}",
+                                args=(
+                                    source,
+                                    child,
+                                    pretty_name,
+                                    data_columns,
+                                    rate,
+                                ),
+                            )
+                        )
     return threads
 
 
@@ -1885,6 +2118,8 @@ def test(
             for thread in threads:
                 thread.join()
             print_stats(stats)
+    else:
+        print("No continuous ingestions or queries defined, skipping phase")
 
     # TODO: Measure performance
 
@@ -1894,24 +2129,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--factor-initial-data",
         type=float,
         default=1,
-        help="factor for initial data generation",
+        help="scale factor for initial data generation",
     )
     parser.add_argument(
         "--factor-ingestions",
         type=float,
         default=1,
-        help="factor for runtime data ingestion rate",
+        help="scale factor for runtime data ingestion rate",
     )
     parser.add_argument(
         "--factor-queries",
         type=float,
         default=1,
-        help="factor for runtime queries",
+        help="scale factor for runtime queries",
     )
     parser.add_argument(
         "--runtime",
         type=int,
-        default=3600,
+        default=1200,
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(
