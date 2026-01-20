@@ -671,11 +671,17 @@ impl PgwireBalancer {
             .tenant
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
-        let Ok(mut mz_stream) =
-            Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls).await
-        else {
-            return Ok(());
-        };
+
+        let mut mz_stream =
+            match Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls)
+                .await
+            {
+                Ok(mz_stream) => mz_stream,
+                Err(e) => {
+                    error!("Error in init_stream: {:?}", e);
+                    return Ok(());
+                }
+            };
 
         let mut client_counter = CountingConn::new(conn.inner_mut());
 
