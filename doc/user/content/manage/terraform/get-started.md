@@ -37,8 +37,9 @@ provide:
 
 {{< warning >}}
 Switching between Materialize Cloud and self-managed configuration **breaks your
-Terraform state file**. Choose your deployment type during initial setup and do
-not change it afterward.
+Terraform state file**. Ensure that your initial configuration
+matches your intended deployment type, and do not switch to a
+different deployment type afterward.
 {{< /warning >}}
 
 {{< tabs >}}
@@ -71,7 +72,7 @@ provider "materialize" {
 }
 ```
 
-### Creating service accounts
+#### Creating service accounts
 
 **Minimum requirements:** `terraform-provider-materialize` v0.8.1+
 
@@ -116,7 +117,7 @@ output "production_dashboard_password" {
 
 {{</ tab >}}
 
-{{< tab "Self-managed" >}}
+{{< tab "Self-managed Materialize" >}}
 ### Self-managed Materialize
 
 Configure the provider with connection parameters similar to a standard
@@ -150,7 +151,7 @@ provider "materialize" {
 }
 ```
 
-### Provider configuration parameters
+#### Provider configuration parameters
 
 | Parameter | Description | Environment Variable | Default |
 |-----------|-------------|---------------------|---------|
