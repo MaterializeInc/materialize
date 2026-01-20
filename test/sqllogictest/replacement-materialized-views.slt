@@ -305,3 +305,18 @@ keys differ (target: (none), replacement: {a, c})
 
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE;
+
+
+# Test: attempting to replace constant MVs gives a helpful error
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT 1
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT 2
+
+simple
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+----
+db error: ERROR: materialized view mv is sealed and thus cannot be replaced
+DETAIL: The materialized view has already computed its output until the end of time, so replacing its definition would have no effect.

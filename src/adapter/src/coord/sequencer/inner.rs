@@ -31,7 +31,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument};
+use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -98,11 +98,11 @@ use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
-    AlterConnectionValidationReady, AlterSinkReadyContext, Coordinator,
-    CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, ExplainContext,
-    Message, NetworkPolicyError, PendingRead, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    PlanValidity, StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
-    validate_ip_with_policy_rules,
+    AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
+    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
+    ExplainContext, Message, NetworkPolicyError, PendingRead, PendingReadTxn, PendingTxn,
+    PendingTxnResponse, PlanValidity, StageResult, Staged, StagedContext, TargetCluster,
+    WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -4649,21 +4649,128 @@ impl Coordinator {
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
 
+    /// Prepares to apply a replacement materialized view.
     #[instrument]
-    pub(super) async fn sequence_alter_materialized_view_apply_replacement(
+    pub(super) async fn sequence_alter_materialized_view_apply_replacement_prepare(
         &mut self,
-        ctx: &ExecuteContext,
+        ctx: ExecuteContext,
         plan: AlterMaterializedViewApplyReplacementPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan;
+    ) {
+        // To ensure there is no time gap in the output, we can only apply a replacement if the
+        // target's write frontier has caught up to the replacement dataflow's write frontier. This
+        // might not be the case initially, so we have to wait. To this end, we install a watch set
+        // waiting for the target MV's write frontier to advance sufficiently.
+        //
+        // Note that the replacement's dataflow is not performing any writes, so it can only be
+        // ahead of the target initially due to as-of selection. Once the target has caught up, the
+        // replacement's write frontier is always <= the target's.
 
-        // TODO(alter-mv): Wait until there is overlap between the old MV's write frontier and the
-        // new MV's as-of, to ensure no times are skipped.
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan.clone();
+
+        let plan_validity = PlanValidity::new(
+            self.catalog().transient_revision(),
+            BTreeSet::from_iter([id, replacement_id]),
+            None,
+            None,
+            ctx.session().role_metadata().clone(),
+        );
+
+        let target = self.catalog.get_entry(&id);
+        let target_gid = target.latest_global_id();
+
+        let replacement = self.catalog.get_entry(&replacement_id);
+        let replacement_gid = replacement.latest_global_id();
+
+        let target_upper = self
+            .controller
+            .storage_collections
+            .collection_frontiers(target_gid)
+            .expect("target MV exists")
+            .write_frontier;
+        let replacement_upper = self
+            .controller
+            .compute
+            .collection_frontiers(replacement_gid, replacement.cluster_id())
+            .expect("replacement MV exists")
+            .write_frontier;
+
+        info!(
+            %id, %replacement_id, ?target_upper, ?replacement_upper,
+            "preparing materialized view replacement application",
+        );
+
+        let Some(replacement_upper_ts) = replacement_upper.into_option() else {
+            // A replacement's write frontier can only become empty if the target's write frontier
+            // has advanced to the empty frontier. In this case the MV is sealed for all times and
+            // applying the replacement wouldn't have any effect. We use this opportunity to alert
+            // the user by returning an error, rather than applying the useless replacement.
+            soft_assert_or_log!(
+                target_upper.is_empty(),
+                "replacement frontier is empty but target frontier is not: {:?}",
+                target_upper.elements(),
+            );
+            ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
+                name: target.name().item.clone(),
+            }));
+            return;
+        };
+
+        // A watch set resolves when the watched objects' frontier becomes _greater_ than the
+        // specified timestamp. Since we only need to wait until the target frontier is >= the
+        // replacement's frontier, we can step back the timestamp.
+        let replacement_upper_ts = replacement_upper_ts.step_back().unwrap_or(Timestamp::MIN);
+
+        // TODO(database-issues#9820): If the target MV is dropped while we are waiting for
+        // progress, the watch set never completes and neither does the `ALTER MATERIALIZED VIEW`
+        // command.
+        self.install_storage_watch_set(
+            ctx.session().conn_id().clone(),
+            BTreeSet::from_iter([target_gid]),
+            replacement_upper_ts,
+            WatchSetResponse::AlterMaterializedViewReady(AlterMaterializedViewReadyContext {
+                ctx: Some(ctx),
+                otel_ctx: OpenTelemetryContext::obtain(),
+                plan,
+                plan_validity,
+            }),
+        )
+        .expect("target collection exists");
+    }
+
+    /// Finishes applying a replacement materialized view after the frontier wait completed.
+    #[instrument]
+    pub async fn sequence_alter_materialized_view_apply_replacement_finish(
+        &mut self,
+        mut ctx: AlterMaterializedViewReadyContext,
+    ) {
+        ctx.otel_ctx.attach_as_parent();
+
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = ctx.plan;
+
+        // We avoid taking the DDL lock for `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT`
+        // commands, see `Coordinator::must_serialize_ddl`. We therefore must assume that the
+        // world has arbitrarily changed since we performed planning, and we must re-assert
+        // that it still matches our requirements.
+        if let Err(err) = ctx.plan_validity.check(self.catalog()) {
+            ctx.retire(Err(err));
+            return;
+        }
+
+        info!(
+            %id, %replacement_id,
+            "finishing materialized view replacement application",
+        );
 
         let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
-        self.catalog_transact(Some(ctx.session()), ops).await?;
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::MaterializedView))
+        match self
+            .catalog_transact(Some(ctx.ctx().session_mut()), ops)
+            .await
+        {
+            Ok(()) => ctx.retire(Ok(ExecuteResponse::AlteredObject(
+                ObjectType::MaterializedView,
+            ))),
+            Err(err) => ctx.retire(Err(err)),
+        }
     }
 
     pub(super) async fn statistics_oracle(

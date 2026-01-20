@@ -411,6 +411,10 @@ impl Coordinator {
                         WatchSetResponse::AlterSinkReady(ctx) => {
                             self.sequence_alter_sink_finish(ctx).await;
                         }
+                        WatchSetResponse::AlterMaterializedViewReady(ctx) => {
+                            self.sequence_alter_materialized_view_apply_replacement_finish(ctx)
+                                .await;
+                        }
                     }
                 }
             }

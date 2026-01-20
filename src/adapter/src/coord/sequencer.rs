@@ -541,10 +541,8 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterMaterializedViewApplyReplacement(plan) => {
-                    let result = self
-                        .sequence_alter_materialized_view_apply_replacement(&ctx, plan)
+                    self.sequence_alter_materialized_view_apply_replacement_prepare(ctx, plan)
                         .await;
-                    ctx.retire(result);
                 }
                 Plan::AlterNetworkPolicy(plan) => {
                     let res = self

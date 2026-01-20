@@ -4657,6 +4657,7 @@ pub async fn load_remote_system_parameters(
 pub enum WatchSetResponse {
     StatementDependenciesReady(StatementLoggingId, StatementLifecycleEvent),
     AlterSinkReady(AlterSinkReadyContext),
+    AlterMaterializedViewReady(AlterMaterializedViewReadyContext),
 }
 
 #[derive(Debug)]
@@ -4682,6 +4683,35 @@ impl AlterSinkReadyContext {
 }
 
 impl Drop for AlterSinkReadyContext {
+    fn drop(&mut self) {
+        if let Some(ctx) = self.ctx.take() {
+            ctx.retire(Err(AdapterError::Canceled));
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AlterMaterializedViewReadyContext {
+    ctx: Option<ExecuteContext>,
+    otel_ctx: OpenTelemetryContext,
+    plan: plan::AlterMaterializedViewApplyReplacementPlan,
+    plan_validity: PlanValidity,
+}
+
+impl AlterMaterializedViewReadyContext {
+    fn ctx(&mut self) -> &mut ExecuteContext {
+        self.ctx.as_mut().expect("only cleared on drop")
+    }
+
+    fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
+        self.ctx
+            .take()
+            .expect("only cleared on drop")
+            .retire(result);
+    }
+}
+
+impl Drop for AlterMaterializedViewReadyContext {
     fn drop(&mut self) {
         if let Some(ctx) = self.ctx.take() {
             ctx.retire(Err(AdapterError::Canceled));

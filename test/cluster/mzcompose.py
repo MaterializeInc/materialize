@@ -6183,3 +6183,77 @@ def workflow_github_10018(c: Composition):
     c.sql("INSERT INTO t VALUES (1)")
     result = c.sql_query("SELECT * FROM mv1")
     assert result[0][0] == 1, result
+
+
+def workflow_test_mv_apply_replacement_wait(c: Composition) -> None:
+    """
+    Test that ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT waits for the target
+    MV's write frontier to advance beyond the replacement's write frontier
+    before committing.
+    """
+
+    c.up("materialized")
+
+    c.sql(
+        """
+        CREATE CLUSTER stalled SIZE 'scale=1,workers=1', REPLICATION FACTOR 0;
+        CREATE CLUSTER running SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
+
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1);
+
+        CREATE MATERIALIZED VIEW mv1 IN CLUSTER stalled AS SELECT a FROM t;
+        CREATE MATERIALIZED VIEW mv2 IN CLUSTER running AS SELECT a + 1 AS a FROM t;
+        """
+    )
+
+    # Wait for the since of mv2 to be greater than the upper of mv1.
+    for _ in range(10):
+        time.sleep(1)
+        mv1_upper = c.sql_query(
+            """
+            SELECT write_frontier
+            FROM mz_internal.mz_frontiers
+            JOIN mz_materialized_views ON id = object_id
+            WHERE name = 'mv1'
+            """
+        )[0][0]
+        mv2_since = c.sql_query(
+            """
+            SELECT read_frontier
+            FROM mz_internal.mz_frontiers
+            JOIN mz_materialized_views ON id = object_id
+            WHERE name = 'mv2'
+            """
+        )[0][0]
+        if int(mv2_since) > int(mv1_upper):
+            break
+    else:
+        raise RuntimeError("mv2's since didn't advance beyond mv1's upper")
+
+    # Create a replacement. It's as-of will be derived from mv2's since.
+    c.sql(
+        """
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv1
+        IN CLUSTER running
+        AS SELECT a FROM mv2
+        """
+    )
+
+    # Applying the replacement should now block.
+
+    def apply_replacement():
+        c.sql("ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp")
+
+    thread = Thread(target=apply_replacement)
+    thread.start()
+
+    time.sleep(3)
+    assert thread.is_alive(), "APPLY REPLACEMENT should block"
+
+    # Allowing mv1 to make progress should unblock the APPLY REPLACEMENT.
+
+    c.sql("ALTER CLUSTER stalled SET (REPLICATION FACTOR 1)")
+
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "APPLY REPLACEMENT should have completed"
