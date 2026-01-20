@@ -21,7 +21,7 @@ name="materialize-intro" %}}
   from v25 to v26, you must [upgrade first to
   v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216)
 
-- **New Terraforms for Self-Managed!** For details, see [Terraform releases](/self-managed-deployments/release-versions/#terraform-releases).
+- **New Terraforms for Self-Managed!** For details, see [Terraform releases](/releases/terraform-releases/).
 
 {{</ callout >}}
 
