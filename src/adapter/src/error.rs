@@ -246,7 +246,7 @@ pub enum AdapterError {
     UnreadableSinkCollection,
     /// User sessions have been blocked.
     UserSessionsDisallowed,
-    /// This use session has been deneid by a NetworkPolicy.
+    /// This use session has been denied by a NetworkPolicy.
     NetworkPolicyDenied(NetworkPolicyError),
     /// Something attempted a write (to catalog, storage, tables, etc.) while in
     /// read-only mode.
@@ -256,6 +256,10 @@ pub enum AdapterError {
     AuthenticationError(AuthenticationError),
     /// Schema of a replacement is incompatible with the target.
     ReplacementSchemaMismatch(RelationDescDiff),
+    /// Could not find a valid timestamp satisfying all constraints.
+    ImpossibleTimestampConstraints {
+        constraints: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -416,7 +420,7 @@ impl AdapterError {
                         if keys.is_empty() {
                             "(none)".to_string()
                         } else {
-                           keys.iter()
+                            keys.iter()
                                 .map(|key| {
                                     let cols = key.iter().map(|c| c.as_str()).join(", ");
                                     format!("{{{cols}}}")
@@ -431,6 +435,9 @@ impl AdapterError {
                     ));
                 }
                 Some(lines.join("\n"))
+            }
+            AdapterError::ImpossibleTimestampConstraints { constraints } => {
+                Some(format!("Constraints:\n{}", constraints))
             }
             _ => None,
         }
@@ -671,6 +678,8 @@ impl AdapterError {
                 SqlState::INVALID_PASSWORD
             }
             AdapterError::AuthenticationError(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            // similar to AbsurdSubscribeBounds
+            AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
         }
     }
 
@@ -1034,6 +1043,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ReplacementSchemaMismatch(_) => {
                 write!(f, "replacement schema differs from target schema")
+            }
+            AdapterError::ImpossibleTimestampConstraints { .. } => {
+                write!(f, "could not find a valid timestamp for the query")
             }
         }
     }

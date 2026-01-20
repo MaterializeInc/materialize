@@ -87,12 +87,12 @@ impl Metrics {
             determine_timestamp: registry.register(metric!(
                 name: "mz_determine_timestamp",
                 help: "The total number of calls to determine_timestamp.",
-                var_labels:["respond_immediately", "isolation_level", "compute_instance", "determination_method"],
+                var_labels:["respond_immediately", "isolation_level", "compute_instance"],
             )),
             timestamp_difference_for_strict_serializable_ms: registry.register(metric!(
                 name: "mz_timestamp_difference_for_strict_serializable_ms",
                 help: "Difference in timestamp in milliseconds for running in strict serializable vs serializable isolation level.",
-                var_labels:["compute_instance", "determination_method"],
+                var_labels:["compute_instance"],
                 buckets: histogram_milliseconds_buckets(1., 8000.),
             )),
             commands: registry.register(metric!(

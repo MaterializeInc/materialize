@@ -16,19 +16,14 @@ use chrono::{DateTime, Utc};
 use constraints::Constraints;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
-use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
-use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastLossy;
-use mz_ore::soft_assert_eq_or_log;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
-use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{Level, event};
 
 use crate::AdapterError;
 use crate::catalog::CatalogState;
@@ -187,7 +182,7 @@ impl TimestampProvider for Coordinator {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawTimestampDetermination<T> {
     pub timestamp: T,
-    pub constraints: Option<Constraints>,
+    pub constraints: Constraints,
     pub session_oracle_read_ts: Option<T>,
 }
 
@@ -244,164 +239,6 @@ pub trait TimestampProvider {
                 ))
     }
 
-    /// Determines the timestamp for a query using the classical logic (as opposed to constraint-based).
-    fn determine_timestamp_classical(
-        session: &Session,
-        read_holds: &ReadHolds<Timestamp>,
-        id_bundle: &CollectionIdBundle,
-        when: &QueryWhen,
-        oracle_read_ts: Option<Timestamp>,
-        compute_instance: ComputeInstanceId,
-        real_time_recency_ts: Option<Timestamp>,
-        isolation_level: &IsolationLevel,
-        timeline: &Option<Timeline>,
-        largest_not_in_advance_of_upper: Timestamp,
-        since: &Antichain<Timestamp>,
-    ) -> Result<RawTimestampDetermination<Timestamp>, AdapterError> {
-        let mut session_oracle_read_ts = None;
-        // Each involved trace has a validity interval `[since, upper)`.
-        // The contents of a trace are only guaranteed to be correct when
-        // accumulated at a time greater or equal to `since`, and they
-        // are only guaranteed to be currently present for times not
-        // greater or equal to `upper`.
-        //
-        // The plan is to first determine a timestamp, based on the requested
-        // timestamp policy, and then determine if it can be satisfied using
-        // the compacted arrangements we have at hand. It remains unresolved
-        // what to do if it cannot be satisfied (perhaps the query should use
-        // a larger timestamp and block, perhaps the user should intervene).
-
-        {
-            // TODO: We currently split out getting the oracle timestamp because
-            // it's a potentially expensive call, but a call that can be done in an
-            // async task. TimestampProvider is not Send (nor Sync), so we cannot do
-            // the call to `determine_timestamp_for` (including the oracle call) on
-            // an async task. If/when TimestampProvider can become Send, we can fold
-            // the call to the TimestampOracle back into this function.
-            //
-            // We assert here that the logic that determines the oracle timestamp
-            // matches our expectations.
-
-            if timeline.is_some() && Self::needs_linearized_read_ts(isolation_level, when) {
-                assert!(
-                    oracle_read_ts.is_some(),
-                    "should get a timestamp from the oracle for linearized timeline {:?} but didn't",
-                    timeline
-                );
-            }
-        }
-
-        // Initialize candidate to the minimum correct time.
-        let mut candidate = Timestamp::minimum();
-
-        if let Some(ts) = when.advance_to_timestamp() {
-            candidate.join_assign(&ts);
-        }
-
-        if when.advance_to_since() {
-            // Note: This `advance_by` is a no-op if the given frontier is `[]`.
-            candidate.advance_by(since.borrow());
-        }
-
-        // If we've acquired a read timestamp from the timestamp oracle, use it
-        // as the new lower bound for the candidate.
-        // In Strong Session Serializable, we ignore the oracle timestamp for now, unless we need
-        // to use it.
-        if let Some(timestamp) = &oracle_read_ts {
-            if isolation_level != &IsolationLevel::StrongSessionSerializable
-                || when.must_advance_to_timeline_ts()
-            {
-                candidate.join_assign(timestamp);
-            }
-        }
-
-        // We advance to the upper in the following scenarios:
-        // - The isolation level is Serializable and the `when` allows us to advance to upper (ex:
-        //   queries with no AS OF). We avoid using the upper in Strict Serializable to prevent
-        //   reading source data that is being written to in the future.
-        // - The isolation level is Strict Serializable but there is no timelines and the `when`
-        //   allows us to advance to upper.
-        if when.can_advance_to_upper()
-            && (isolation_level == &IsolationLevel::Serializable || timeline.is_none())
-        {
-            candidate.join_assign(&largest_not_in_advance_of_upper);
-        }
-
-        if let Some(real_time_recency_ts) = real_time_recency_ts {
-            if !(session.vars().real_time_recency()
-                && isolation_level == &IsolationLevel::StrictSerializable)
-            {
-                // Erring on the side of caution, lets bail out here.
-                // This should never happen in practice, as the real time recency timestamp should
-                // only be supplied when real time recency is enabled.
-                coord_bail!(
-                    "real time recency timestamp should only be supplied when real time recency \
-                            is enabled and the isolation level is strict serializable"
-                );
-            }
-            candidate.join_assign(&real_time_recency_ts);
-        }
-
-        if isolation_level == &IsolationLevel::StrongSessionSerializable {
-            if let Some(timeline) = &timeline {
-                if let Some(oracle) = session.get_timestamp_oracle(timeline) {
-                    let session_ts = oracle.read_ts();
-                    candidate.join_assign(&session_ts);
-                    session_oracle_read_ts = Some(session_ts);
-                }
-            }
-
-            // When advancing the read timestamp under Strong Session Serializable, there is a
-            // trade-off to make between freshness and latency. We can choose a timestamp close the
-            // `upper`, but then later queries might block if the `upper` is too far into the
-            // future. We can chose a timestamp close to the current time, but then we may not be
-            // getting results that are as fresh as possible. As a heuristic, we choose the minimum
-            // of now and the upper, where we use the global timestamp oracle read timestamp as a
-            // proxy for now. If upper > now, then we choose now and prevent blocking future
-            // queries. If upper < now, then we choose the upper and prevent blocking the current
-            // query.
-            if when.can_advance_to_upper() && when.can_advance_to_timeline_ts() {
-                let mut advance_to = largest_not_in_advance_of_upper;
-                if let Some(oracle_read_ts) = oracle_read_ts {
-                    advance_to = std::cmp::min(advance_to, oracle_read_ts);
-                }
-                candidate.join_assign(&advance_to);
-            }
-        }
-
-        // If the timestamp is greater or equal to some element in `since` we are
-        // assured that the answer will be correct.
-        //
-        // It's ok for this timestamp to be larger than the current timestamp of
-        // the timestamp oracle. For Strict Serializable queries, the Coord will
-        // linearize the query by holding back the result until the timestamp
-        // oracle catches up.
-        let timestamp = if since.less_equal(&candidate) {
-            event!(
-                Level::DEBUG,
-                conn_id = format!("{}", session.conn_id()),
-                since = format!("{since:?}"),
-                largest_not_in_advance_of_upper = format!("{largest_not_in_advance_of_upper}"),
-                timestamp = format!("{candidate}")
-            );
-            candidate
-        } else {
-            // This can happen not just when the query has AS OF, but also when the passed in
-            // `since` is `[]`.
-            coord_bail!(generate_timestamp_not_valid_error_msg(
-                id_bundle,
-                compute_instance,
-                read_holds,
-                candidate
-            ));
-        };
-        Ok(RawTimestampDetermination {
-            timestamp,
-            constraints: None,
-            session_oracle_read_ts,
-        })
-    }
-
     /// Uses constraints and preferences to determine a timestamp for a query.
     /// Returns the determined timestamp, the constraints that were applied, and
     /// session_oracle_read_ts.
@@ -411,7 +248,6 @@ pub trait TimestampProvider {
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         oracle_read_ts: Option<Timestamp>,
-        compute_instance: ComputeInstanceId,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
         timeline: &Option<Timeline>,
@@ -576,13 +412,9 @@ pub trait TimestampProvider {
             if !constraints.lower_bound().less_equal(&candidate)
                 || constraints.upper_bound().less_than(&candidate)
             {
-                // TODO: Generate a better error msg, which includes all the constraints.
-                coord_bail!(generate_timestamp_not_valid_error_msg(
-                    id_bundle,
-                    compute_instance,
-                    read_holds,
-                    candidate
-                ));
+                return Err(AdapterError::ImpossibleTimestampConstraints {
+                    constraints: constraints.display(timeline.as_ref()).to_string(),
+                });
             } else {
                 candidate
             }
@@ -590,7 +422,7 @@ pub trait TimestampProvider {
 
         Ok(RawTimestampDetermination {
             timestamp: constraint_candidate,
-            constraints: Some(constraints),
+            constraints,
             session_oracle_read_ts,
         })
     }
@@ -607,12 +439,10 @@ pub trait TimestampProvider {
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-        constraint_based: &ConstraintBasedTimestampSelection,
     ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
@@ -624,12 +454,10 @@ pub trait TimestampProvider {
             session,
             id_bundle,
             when,
-            compute_instance,
             timeline_context,
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
-            constraint_based,
             read_holds,
             upper,
         )
@@ -640,12 +468,10 @@ pub trait TimestampProvider {
         session: &Session,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
-        compute_instance: ComputeInstanceId,
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-        constraint_based: &ConstraintBasedTimestampSelection,
         read_holds: ReadHolds<Timestamp>,
         upper: Antichain<Timestamp>,
     ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
@@ -674,110 +500,17 @@ pub trait TimestampProvider {
             });
         }
 
-        let raw_determination = match constraint_based {
-            ConstraintBasedTimestampSelection::Disabled => Self::determine_timestamp_classical(
-                session,
-                &read_holds,
-                id_bundle,
-                when,
-                oracle_read_ts,
-                compute_instance,
-                real_time_recency_ts,
-                isolation_level,
-                &timeline,
-                largest_not_in_advance_of_upper,
-                &since,
-            )?,
-            ConstraintBasedTimestampSelection::Enabled => {
-                Self::determine_timestamp_via_constraints(
-                    session,
-                    &read_holds,
-                    id_bundle,
-                    when,
-                    oracle_read_ts,
-                    compute_instance,
-                    real_time_recency_ts,
-                    isolation_level,
-                    &timeline,
-                    largest_not_in_advance_of_upper,
-                )?
-            }
-            ConstraintBasedTimestampSelection::Verify => {
-                let classical_determination = Self::determine_timestamp_classical(
-                    session,
-                    &read_holds,
-                    id_bundle,
-                    when,
-                    oracle_read_ts,
-                    compute_instance,
-                    real_time_recency_ts,
-                    isolation_level,
-                    &timeline,
-                    largest_not_in_advance_of_upper,
-                    &since,
-                );
-
-                let constraint_determination = Self::determine_timestamp_via_constraints(
-                    session,
-                    &read_holds,
-                    id_bundle,
-                    when,
-                    oracle_read_ts,
-                    compute_instance,
-                    real_time_recency_ts,
-                    isolation_level,
-                    &timeline,
-                    largest_not_in_advance_of_upper,
-                );
-
-                match (classical_determination, constraint_determination) {
-                    (Ok(classical_determination), Ok(constraint_determination)) => {
-                        soft_assert_eq_or_log!(
-                            classical_determination.timestamp,
-                            constraint_determination.timestamp,
-                            "timestamp determination mismatch"
-                        );
-                        if classical_determination.timestamp != constraint_determination.timestamp {
-                            tracing::info!(
-                                "timestamp constrains: {:?}",
-                                constraint_determination.constraints
-                            );
-                        }
-                        RawTimestampDetermination {
-                            timestamp: classical_determination.timestamp,
-                            constraints: constraint_determination.constraints,
-                            session_oracle_read_ts: classical_determination.session_oracle_read_ts,
-                        }
-                    }
-                    (Err(classical_determination_err), Err(_constraint_determination_err)) => {
-                        // This is ok: The errors don't have to exactly match.
-                        return Err(classical_determination_err);
-                    }
-                    (Ok(classical_determination), Err(constraint_determination_err)) => {
-                        event!(
-                            Level::ERROR,
-                            classical = ?classical_determination,
-                            constraint_based = ?constraint_determination_err,
-                            "classical timestamp determination succeeded, but constraint-based failed"
-                        );
-                        RawTimestampDetermination {
-                            timestamp: classical_determination.timestamp,
-                            constraints: classical_determination.constraints,
-                            session_oracle_read_ts: classical_determination.session_oracle_read_ts,
-                        }
-                    }
-                    (Err(classical_determination_err), Ok(constraint_determination)) => {
-                        event!(
-                            Level::ERROR,
-                            classical = ?classical_determination_err,
-                            constraint_based = ?constraint_determination,
-                            "classical timestamp determination failed, but constraint-based succeeded"
-                        );
-                        return Err(classical_determination_err);
-                    }
-                }
-            }
-        };
+        let raw_determination = Self::determine_timestamp_via_constraints(
+            session,
+            &read_holds,
+            id_bundle,
+            when,
+            oracle_read_ts,
+            real_time_recency_ts,
+            isolation_level,
+            &timeline,
+            largest_not_in_advance_of_upper,
+        )?;
 
         let timestamp_context = TimestampContext::from_timeline_context(
             raw_determination.timestamp,
@@ -838,36 +571,6 @@ pub trait TimestampProvider {
     }
 }
 
-fn generate_timestamp_not_valid_error_msg(
-    id_bundle: &CollectionIdBundle,
-    compute_instance: ComputeInstanceId,
-    read_holds: &ReadHolds<mz_repr::Timestamp>,
-    candidate: mz_repr::Timestamp,
-) -> String {
-    let mut invalid = Vec::new();
-
-    if let Some(compute_ids) = id_bundle.compute_ids.get(&compute_instance) {
-        for id in compute_ids {
-            let since = read_holds.since(id);
-            if !since.less_equal(&candidate) {
-                invalid.push((*id, since));
-            }
-        }
-    }
-
-    for id in id_bundle.storage_ids.iter() {
-        let since = read_holds.since(id);
-        if !since.less_equal(&candidate) {
-            invalid.push((*id, since));
-        }
-    }
-
-    format!(
-        "Timestamp ({}) is not valid for all inputs: {:?}",
-        candidate, invalid,
-    )
-}
-
 impl Coordinator {
     pub(crate) async fn oracle_read_ts(
         &self,
@@ -911,22 +614,15 @@ impl Coordinator {
         ),
         AdapterError,
     > {
-        let constraint_based = ConstraintBasedTimestampSelection::from_str(
-            &CONSTRAINT_BASED_TIMESTAMP_SELECTION
-                .get(self.catalog_state().system_config().dyncfgs()),
-        );
-
         let isolation_level = session.vars().transaction_isolation();
         let (det, read_holds) = self.determine_timestamp_for(
             session,
             id_bundle,
             when,
-            compute_instance,
             timeline_context,
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
-            &constraint_based,
         )?;
         self.metrics
             .determine_timestamp
@@ -937,7 +633,6 @@ impl Coordinator {
                 },
                 isolation_level.as_str(),
                 &compute_instance.to_string(),
-                constraint_based.as_str(),
             ])
             .inc();
         if !det.respond_immediately()
@@ -950,21 +645,16 @@ impl Coordinator {
                     session,
                     id_bundle,
                     when,
-                    compute_instance,
                     timeline_context,
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
-                    &constraint_based,
                 )?;
 
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
                     self.metrics
                         .timestamp_difference_for_strict_serializable_ms
-                        .with_label_values(&[
-                            compute_instance.to_string().as_ref(),
-                            constraint_based.as_str(),
-                        ])
+                        .with_label_values(&[compute_instance.to_string().as_str()])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
                         )));
@@ -1016,7 +706,7 @@ pub struct TimestampDetermination<T> {
     pub real_time_recency_ts: Option<T>,
     /// The constraints used by the constraint based solver.
     /// See the [`constraints`] module for more information.
-    pub constraints: Option<Constraints>,
+    pub constraints: Constraints,
 }
 
 impl<T: TimestampManipulation> TimestampDetermination<T> {
@@ -1188,11 +878,9 @@ impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulatio
             )?;
         }
 
-        if let Some(constraints) = &self.determination.constraints {
-            writeln!(f, "")?;
-            writeln!(f, "binding constraints:")?;
-            write!(f, "{}", constraints.display(timeline))?;
-        }
+        writeln!(f, "")?;
+        writeln!(f, "binding constraints:")?;
+        write!(f, "{}", self.determination.constraints.display(timeline))?;
 
         Ok(())
     }
@@ -1240,15 +928,21 @@ mod constraints {
             if !self.lower.is_empty() {
                 writeln!(f, "lower:")?;
                 for (ts, reason) in &self.lower {
-                    let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
-                    writeln!(f, "  ({:?}): {:?}", reason, ts)?;
+                    let ts: Vec<_> = ts
+                        .iter()
+                        .map(|t| format!("{}", t.display(timeline)))
+                        .collect();
+                    writeln!(f, "  ({}): [{}]", reason, ts.join(", "))?;
                 }
             }
             if !self.upper.is_empty() {
                 writeln!(f, "upper:")?;
                 for (ts, reason) in &self.upper {
-                    let ts = ts.iter().map(|t| t.display(timeline)).collect::<Vec<_>>();
-                    writeln!(f, "  ({:?}): {:?}", reason, ts)?;
+                    let ts: Vec<_> = ts
+                        .iter()
+                        .map(|t| format!("{}", t.display(timeline)))
+                        .collect();
+                    writeln!(f, "  ({}): [{}]", reason, ts.join(", "))?;
                 }
             }
             Ok(())
@@ -1313,49 +1007,40 @@ mod constraints {
     pub enum Reason {
         /// A compute input at a compute instance.
         /// This is something like an index or view
-        /// that is mantained by compute.
+        /// that is maintained by compute.
         ComputeInput(Vec<(ComputeInstanceId, GlobalId)>),
         /// A storage input.
         StorageInput(Vec<GlobalId>),
         /// A specified isolation level and the timestamp it requires.
         IsolationLevel(IsolationLevel),
-        /// Real-time recency may constrains the timestamp from below.
+        /// Real-time recency may constrain the timestamp from below.
         RealTimeRecency,
         /// The query expressed its own constraint on the timestamp.
         QueryAsOf,
     }
 
-    impl Debug for Reason {
+    impl fmt::Display for Reason {
         fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
             match self {
-                Reason::ComputeInput(ids) => write_split_ids(f, "ComputeInput", ids),
-                Reason::StorageInput(ids) => write_split_ids(f, "StorageInput", ids),
+                Reason::ComputeInput(ids) => {
+                    let formatted: Vec<_> =
+                        ids.iter().map(|(c, g)| format!("({}, {})", c, g)).collect();
+                    write!(f, "Indexed inputs: [{}]", formatted.join(", "))
+                }
+                Reason::StorageInput(ids) => {
+                    let formatted: Vec<_> = ids.iter().map(|g| format!("{}", g)).collect();
+                    write!(f, "Storage inputs: [{}]", formatted.join(", "))
+                }
                 Reason::IsolationLevel(level) => {
-                    write!(f, "IsolationLevel({:?})", level)
+                    write!(f, "Isolation level: {:?}", level)
                 }
                 Reason::RealTimeRecency => {
-                    write!(f, "RealTimeRecency")
+                    write!(f, "Real-time recency")
                 }
                 Reason::QueryAsOf => {
-                    write!(f, "QueryAsOf")
+                    write!(f, "Query's AS OF")
                 }
             }
-        }
-    }
-
-    //TODO: This is a bit of a hack to make the debug output of constraints more readable.
-    //We should probably have a more structured way to do this.
-    fn write_split_ids<T: Debug>(f: &mut fmt::Formatter, label: &str, ids: &[T]) -> fmt::Result {
-        let (ids, rest) = if ids.len() > 10 {
-            ids.split_at(10)
-        } else {
-            let rest: &[T] = &[];
-            (ids, rest)
-        };
-        if rest.is_empty() {
-            write!(f, "{}({:?})", label, ids)
-        } else {
-            write!(f, "{}({:?}, ... {} more)", label, ids, rest.len())
         }
     }
 
@@ -1370,12 +1055,12 @@ mod constraints {
         ///
         /// The preference only relates to immediate query inputs,
         /// but it could be extended to transitive inputs as well.
-        /// For example, one could imagine prefering the freshest
+        /// For example, one could imagine preferring the freshest
         /// data known to be ingested into Materialize, under the
         /// premise that those answers should soon become available,
         /// and may be more fresh than the immediate inputs.
         FreshestAvailable,
-        /// Prefer the least valid timeastamp.
+        /// Prefer the least valid timestamp.
         ///
         /// This is useful when one has no expressed freshness
         /// constraints, and wants to minimally impact others.

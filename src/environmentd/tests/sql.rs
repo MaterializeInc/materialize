@@ -507,15 +507,6 @@ fn test_subscribe_basic() {
 
     server.enable_feature_flags(&["enable_index_options", "enable_logical_compaction_window"]);
 
-    let mut sys_client = server.connect_internal(postgres::NoTls).unwrap();
-
-    sys_client
-        .execute(
-            "ALTER SYSTEM SET constraint_based_timestamp_selection = 'verify'",
-            &[],
-        )
-        .unwrap();
-
     // Create a table with disabled compaction.
     client_writes
         .batch_execute("CREATE TABLE t (data text) WITH (RETAIN HISTORY FOR '1000 hours')")
@@ -649,10 +640,26 @@ fn test_subscribe_basic() {
         }
     };
 
-    assert!(
-        err.unwrap_db_error()
-            .message()
-            .starts_with("Timestamp (1) is not valid for all inputs")
+    let err = err.unwrap_db_error();
+    assert_eq!(
+        err.message(),
+        "could not find a valid timestamp for the query"
+    );
+    let detail = err.detail().expect("error should have detail");
+    // Replace timestamps and GlobalIds with placeholders for comparison
+    let detail = Regex::new(r"\s*\d+ \([^)]+\)")
+        .unwrap()
+        .replace_all(detail, "<TIMESTAMP>");
+    let detail = Regex::new(r"u\d+").unwrap().replace_all(&detail, "<ID>");
+    let expected_detail = "Constraints:
+lower:
+  (Storage inputs: [<ID>]): [<TIMESTAMP>]
+upper:
+  (Query's AS OF): [<TIMESTAMP>]
+";
+    assert_eq!(
+        detail, expected_detail,
+        "detail mismatch:\ngot:\n{detail}\nexpected:\n{expected_detail}"
     );
 }
 
@@ -1254,8 +1261,8 @@ source materialize.public.t1 (u1, storage):
 
 binding constraints:
 lower:
-  (StorageInput([User(1)])): [<TIMESTAMP>]
-  (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
+  (Storage inputs: [u1]): [<TIMESTAMP>]
+  (Isolation level: StrictSerializable): [<TIMESTAMP>]\n";
 
     let row = client
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
