@@ -228,9 +228,15 @@ data up until the progress message is complete, so you can:
 continuous query against Materialize in your application code:
 
    ```mzsql
-   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp>;
+   SUBSCRIBE (<your query>) WITH (PROGRESS, SNAPSHOT false) AS OF <last_progress_mz_timestamp - 1>;
    ```
 
+   Note the subtraction of one from the last received progress timestamp. The
+   `AS OF` timestamp specifies the time of the snapshot, but since we've set
+   `SNAPSHOT false` we'll only get updates for times stricly greater than the
+   `AS OF` timestamp. By subtracting one we ensure we see the events that happened
+   at exactly the last progress timestamp.
+      
    In a similar way, as results come in continuously, buffer the latest results
    in memory until you receive a [progress](/sql/subscribe#progress) message. At that point,
    the data up until the progress message is complete, so you can:
