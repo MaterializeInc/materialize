@@ -116,4 +116,26 @@ c cherry wild
 d date ajwa
 e elderberry montypython
 
+$ sql-server-execute name=sql-server
+CREATE TABLE bar (id BIGINT IDENTITY(1,1), name VARCHAR(16), value VARCHAR(32), age BIGINT, location VARCHAR(32), meta_col VARCHAR(32));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'bar', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO bar VALUES ('a', 'apple', 5, 'orchard', 'blah'), ('b', 'banana', 7, 'tree', 'blahblah');
+
+> CREATE TABLE bar1 FROM SOURCE sql_server_src (REFERENCE dbo.bar) WITH (EXCLUDE COLUMNS = (meta_col, name));
+
+$ sql-server-execute name=sql-server
+ALTER TABLE bar DROP COLUMN meta_col;
+
+# Dropping an excluded column is okay
+> SELECT * FROM bar1;
+1 apple 5 orchard
+2 banana 7 tree
+
+$ sql-server-execute name=sql-server
+ALTER TABLE bar DROP COLUMN name, location;
+
+# Dropping a non-excluded column stalls the source
+! SELECT * FROM bar1;
+contains:Incompatible schema change
+
 > DROP SOURCE sql_server_src CASCADE;

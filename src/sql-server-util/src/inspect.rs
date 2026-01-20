@@ -639,16 +639,28 @@ impl DDLEvent {
                             let target = peekable.peek();
                             match target {
                                 Some(t) if t.eq_ignore_ascii_case("column") => {
-                                    // Consume the "column" token
-                                    let col_name = peekable.peek();
-                                    if let Some(col_name) = col_name {
-                                        !exclude_columns
-                                            .iter()
-                                            .any(|excluded| excluded.eq_ignore_ascii_case(col_name))
-                                    } else {
-                                        // No column name found after "column" keyword
-                                        false
+                                    let mut all_excluded = true;
+                                    while true && let Some(tok) = peekable.peek() {
+                                        // Consume the "column" token
+                                        match tok.to_ascii_lowercase().as_str() {
+                                            "if" | "exists" => continue,
+                                            col_name => {
+                                                println!("Checking column '{col_name}' against exclude list");
+                                                // If the column is in the exclude list, then it is okay to alter/drop it
+                                                if !exclude_columns
+                                                    .iter()
+                                                    .any(|excluded| excluded.eq_ignore_ascii_case(col_name.trim_end_matches(","))) {
+                                                    all_excluded = false;
+                                                    break;
+                                                }
+                                                // If this is the only column, then we can break the while loop
+                                                if !col_name.ends_with(",") {
+                                                    break;
+                                                }
+                                            }
+                                        };
                                     }
+                                    all_excluded
                                 }
                                 // No target token after "alter" or "drop"
                                 None => false,
