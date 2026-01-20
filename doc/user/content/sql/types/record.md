@@ -17,7 +17,7 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/record" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/record" example="syntax" %}}
 
 ## Details
 

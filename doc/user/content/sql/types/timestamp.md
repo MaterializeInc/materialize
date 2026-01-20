@@ -38,7 +38,7 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/timestamp" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/timestamp" example="syntax" %}}
 
 ## Details
 

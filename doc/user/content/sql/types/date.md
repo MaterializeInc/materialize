@@ -20,7 +20,7 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/date" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/date" example="syntax" %}}
 
 ## Details
 

@@ -19,7 +19,7 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/map" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/map" example="syntax" %}}
 
 ## Map functions + operators
 

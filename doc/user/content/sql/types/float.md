@@ -34,7 +34,7 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/float" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/float" example="syntax" %}}
 
 ## Details
 

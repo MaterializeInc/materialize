@@ -23,11 +23,11 @@ Detail | Info
 
 ### Numeric values
 
-{{% include-syntax file="sql_types/numeric" example="syntax-value" %}}
+{{% include-syntax file="examples/sql_types/numeric" example="syntax-value" %}}
 
 ### Numeric definitions
 
-{{% include-syntax file="sql_types/numeric" example="syntax-definition" %}}
+{{% include-syntax file="examples/sql_types/numeric" example="syntax-definition" %}}
 
 ## Details
 
