@@ -1521,6 +1521,7 @@ impl CatalogState {
                     let handle = mz_ore::task::spawn_blocking(
                         || "parse view",
                         move || {
+                            std::thread::sleep(std::time::Duration::from_millis(2000));
                             span.in_scope(|| {
                                 let res = task_state.parse_item_inner(
                                     global_id,
