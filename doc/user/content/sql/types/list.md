@@ -17,7 +17,7 @@ be other lists, known as "layered lists."
 
 ## Syntax
 
-{{% include-syntax file="sql_types/list" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/list" example="syntax" %}}
 
 ## List functions + operators
 

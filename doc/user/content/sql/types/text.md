@@ -24,7 +24,7 @@ Detail | Info
 
 ### Standard
 
-{{% include-syntax file="sql_types/text" example="syntax-standard" %}}
+{{% include-syntax file="examples/sql_types/text" example="syntax-standard" %}}
 
 To escape a single quote character (`'`) in a standard string literal, write two
 adjacent single quotes:
@@ -45,7 +45,7 @@ All other characters are taken literally.
 A string literal that is preceded by an `e` or `E` is an "escape" string
 literal:
 
-{{% include-syntax file="sql_types/text" example="syntax-escape" %}}
+{{% include-syntax file="examples/sql_types/text" example="syntax-escape" %}}
 
 Escape string literals follow the same rules as standard string literals, except
 that backslash character (`\`) starts an escape sequence. The following escape

@@ -13,7 +13,7 @@ result in a loss of precision in certain uses. Using [`EXTRACT`](../extract) is 
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/date_part" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/date_part" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                          | Description
 ----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

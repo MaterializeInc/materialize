@@ -11,7 +11,7 @@ converted to months.
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/justify_days" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/justify_days" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

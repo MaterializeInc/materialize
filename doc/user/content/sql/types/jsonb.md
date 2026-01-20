@@ -23,7 +23,7 @@ implementation of `json`.
 
 ## Syntax
 
-{{% include-syntax file="sql_types/jsonb" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/jsonb" example="syntax" %}}
 
 ## `jsonb` functions + operators
 

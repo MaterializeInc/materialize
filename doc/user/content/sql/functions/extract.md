@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/extract" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/extract" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                    | Description
 ----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

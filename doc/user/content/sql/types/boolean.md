@@ -20,7 +20,7 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/boolean" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/boolean" example="syntax" %}}
 
 ## Details
 

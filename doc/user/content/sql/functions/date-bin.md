@@ -33,7 +33,7 @@ strides, rather than only unit times.
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/date_bin" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/date_bin" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

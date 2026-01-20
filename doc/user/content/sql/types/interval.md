@@ -24,15 +24,15 @@ Detail | Info
 
 ## Syntax
 
-{{% include-syntax file="sql_types/interval" example="syntax" %}}
+{{% include-syntax file="examples/sql_types/interval" example="syntax" %}}
 
 ### `time_expr` syntax
 
-{{% include-syntax file="sql_types/interval" example="syntax-time-expr" %}}
+{{% include-syntax file="examples/sql_types/interval" example="syntax-time-expr" %}}
 
 ### `time_unit` syntax
 
-{{% include-syntax file="sql_types/interval" example="syntax-time-unit" %}}
+{{% include-syntax file="examples/sql_types/interval" example="syntax-time-unit" %}}
 
 ## Details
 
