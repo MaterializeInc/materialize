@@ -28,7 +28,7 @@ terraform {
 }
 ```
 
-## Configuration
+## Authentication and Configuration
 
 The provider auto-detects your deployment type based on the configuration you
 provide:
