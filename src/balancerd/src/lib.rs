@@ -71,7 +71,7 @@ use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 use tower::Service;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
@@ -706,35 +706,46 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
+        info!("Before connect to envd");
         let mut mz_stream = Retry::default()
-            .max_duration(Duration::from_secs(10))
+            .max_duration(Duration::from_secs(30))
             .retry_async(|_| async { TcpStream::connect(envd_addr).await })
             .await?;
+        info!("After connect to envd");
         let mut buf = BytesMut::new();
 
         let mut mz_stream = if internal_tls {
+            info!("Before FrontendStartupMessage::SslRequest.encode");
             FrontendStartupMessage::SslRequest.encode(&mut buf)?;
+            info!("Before mz_stream.write_all");
             mz_stream.write_all(&buf).await?;
             buf.clear();
             let mut maybe_ssl_request_response = [0u8; 1];
+            info!("Before netio::read_exact_or_eof maybe_ssl_request_response");
             let nread =
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
+                info!("Got ssl response");
                 // do a TLS handshake
                 let mut builder =
                     SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
                 // environmentd doesn't yet have a cert we trust, so for now disable verification.
                 builder.set_verify(SslVerifyMode::NONE);
+                info!("Building SSL object");
                 let mut ssl = builder
                     .build()
                     .configure()?
                     .into_ssl(&envd_addr.to_string())?;
+                info!("ssl.set_connect_state");
                 ssl.set_connect_state();
+                info!("Conn::Ssl");
                 Conn::Ssl(SslStream::new(ssl, mz_stream)?)
             } else {
+                info!("Conn::Unencrypted");
                 Conn::Unencrypted(mz_stream)
             }
         } else {
+            info!("Conn::Unencrypted");
             Conn::Unencrypted(mz_stream)
         };
 
@@ -743,7 +754,9 @@ impl PgwireBalancer {
             version: VERSION_3,
             params,
         };
+        info!("startup.encode");
         startup.encode(&mut buf)?;
+        info!("mz_stream.write_all");
         mz_stream.write_all(&buf).await?;
         let client_stream = conn.inner_mut();
 
@@ -763,6 +776,7 @@ impl PgwireBalancer {
         // once before: https://github.com/pgbouncer/pgbouncer/pull/1058.
         // We will work to upstream a fix, but in the meantime, this early return avoids the issue entirely.
         if password.is_none() {
+            info!("password is None, returning stream early");
             return Ok(mz_stream);
         }
 
@@ -770,6 +784,7 @@ impl PgwireBalancer {
         // Otherwise start shuffling bytes. message type (len 1, 'R') + message len (len 4, 8_i32) +
         // auth type (len 4, 3_i32).
         let mut maybe_auth_frame = [0; 1 + 4 + 4];
+        info!("netio::read_exact_or_eof maybe_auth_frame");
         let nread = netio::read_exact_or_eof(&mut mz_stream, &mut maybe_auth_frame).await?;
         // 'R' for auth message, 0008 for message length, 0003 for password cleartext variant.
         // See: https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-AUTHENTICATIONCLEARTEXTPASSWORD
@@ -778,18 +793,23 @@ impl PgwireBalancer {
             && maybe_auth_frame == AUTH_PASSWORD_CLEARTEXT
             && password.is_some()
         {
+            info!("auth password cleartext");
             // If we got exactly a cleartext password request and have one, send it.
             let Some(password) = password else {
                 unreachable!("verified some above");
             };
             let password = FrontendMessage::Password { password };
             buf.clear();
+            info!("password.encode");
             password.encode(&mut buf)?;
+            info!("mz_stream.write_all (password)");
             mz_stream.write_all(&buf).await?;
+            info!("mz_stream.flush (password)");
             mz_stream.flush().await?;
         } else {
             // Otherwise pass on the bytes we just got. This *might* even be a password request, but
             // we don't have a password. In which case it can be forwarded up to the client.
+            info!("client_stream.write_all (no password?)");
             client_stream.write_all(&maybe_auth_frame[0..nread]).await?;
         }
 
@@ -1231,7 +1251,7 @@ impl mz_server_core::Server for HttpsBalancer {
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
 
                 let mut mz_stream = Retry::default()
-                    .max_duration(Duration::from_secs(10))
+                    .max_duration(Duration::from_secs(30))
                     .retry_async(|_| async { TcpStream::connect(resolved.addr).await })
                     .await?;
 
