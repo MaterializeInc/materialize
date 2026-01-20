@@ -638,10 +638,11 @@ impl DDLEvent {
                         "alter" | "drop" => {
                             let target = peekable.peek();
                             match target {
+                                // Targeting a column
                                 Some(t) if t.eq_ignore_ascii_case("column") => {
                                     let mut all_excluded = true;
                                     while true && let Some(tok) = peekable.peek() {
-                                        // Consume the "column" token
+                                        // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
                                         match tok.to_ascii_lowercase().as_str() {
                                             "if" | "exists" => continue,
                                             col_name => {
@@ -654,7 +655,7 @@ impl DDLEvent {
                                                     all_excluded = false;
                                                     break;
                                                 }
-                                                // If this is the only column, then we can break the while loop
+                                                // If this is the only/last column, then we can break out of the while loop
                                                 if !col_name.ends_with(",") {
                                                     break;
                                                 }
