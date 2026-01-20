@@ -55,6 +55,26 @@ By default, the message key is encoded using the same format as the message valu
 
 For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
 {{< /tab >}}
+
+{{< tab "Iceberg" >}}
+
+{{< public-preview />}}
+
+```mzsql
+CREATE SINK [IF NOT EXISTS] <sink_name>
+  [IN CLUSTER <cluster_name>]
+  FROM <item_name>
+  INTO ICEBERG CATALOG CONNECTION <catalog_connection> (
+    NAMESPACE = '<namespace>',
+    TABLE = '<table>'
+  )
+  USING AWS CONNECTION <aws_connection>
+  KEY ( <key_col> [, ...] ) [NOT ENFORCED]
+  WITH (COMMIT INTERVAL = '<interval>')
+```
+
+For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
+{{< /tab >}}
 {{< /tabs >}}
 
 ## Best practices
