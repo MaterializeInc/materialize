@@ -649,7 +649,9 @@ impl DDLEvent {
                                                 // If the column is in the exclude list, then it is okay to alter/drop it
                                                 if !exclude_columns.iter().any(|excluded| {
                                                     excluded.eq_ignore_ascii_case(
-                                                        col_name.trim_matches([',', '[', ']', '"'].as_ref()),
+                                                        col_name.trim_matches(
+                                                            [',', '[', ']', '"'].as_ref(),
+                                                        ),
                                                     )
                                                 }) {
                                                     all_excluded = false;
@@ -1029,17 +1031,65 @@ mod tests {
 
         let exclude_columns = vec!["col1".to_string(), "col2".to_string()];
 
-        test_case("ALTER TABLE my_table ALTER COLUMN col1 INT", &exclude_columns, true);
-        test_case("ALTER TABLE my_table DROP COLUMN col2", &exclude_columns, true);
-        test_case("ALTER TABLE my_table ALTER COLUMN col3 INT", &exclude_columns, false);
-        test_case("ALTER TABLE my_table DROP COLUMN col4 INT", &exclude_columns, false);
-        test_case("CREATE INDEX idx_my_index ON my_table(col1)", &exclude_columns, true);
-        test_case("DROP INDEX idx_my_index ON my_table", &exclude_columns, true);
-        test_case("ALTER TABLE my_table ADD COLUMN col5 INT", &exclude_columns, true);
-        test_case("ALTER TABLE my_table DROP COLUMN col1, col2", &exclude_columns, true);
-        test_case("ALTER TABLE my_table DROP COLUMN col3, col2", &exclude_columns, false);
-        test_case("ALTER TABLE my_table DROP COLUMN col3, col4", &exclude_columns, false);
-        test_case("ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2", &exclude_columns, true);
-        test_case("ALTER TABLE my_table DROP CONSTRAINT constraint_name", &exclude_columns, true);
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col1 INT",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col2",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col3 INT",
+            &exclude_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col4 INT",
+            &exclude_columns,
+            false,
+        );
+        test_case(
+            "CREATE INDEX idx_my_index ON my_table(col1)",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "DROP INDEX idx_my_index ON my_table",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ADD COLUMN col5 INT",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1, col2",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col2",
+            &exclude_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col4",
+            &exclude_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP CONSTRAINT constraint_name",
+            &exclude_columns,
+            true,
+        );
     }
 }

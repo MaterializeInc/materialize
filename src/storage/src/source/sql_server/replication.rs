@@ -20,6 +20,7 @@ use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::SqlServerCdcMetrics;
@@ -109,7 +110,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // Export statistics for a given capture instance
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
             // Maps the exclude columns for each output index so we can check whether schema updates are valid on a per-output basis
-            let mut exclude_columns: BTreeMap<u64, &Vec<String>> = BTreeMap::new();
+            let mut exclude_columns: HashMap<u64, &Vec<String>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
