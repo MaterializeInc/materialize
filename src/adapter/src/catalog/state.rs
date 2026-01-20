@@ -2226,22 +2226,7 @@ impl CatalogState {
     /// For an [`ObjectId`] gets the corresponding [`CommentObjectId`].
     pub(super) fn get_comment_id(&self, object_id: ObjectId) -> CommentObjectId {
         match object_id {
-            ObjectId::Item(item_id) => {
-                let entry = self.get_entry(&item_id);
-                match entry.item_type() {
-                    CatalogItemType::Table => CommentObjectId::Table(item_id),
-                    CatalogItemType::Source => CommentObjectId::Source(item_id),
-                    CatalogItemType::Sink => CommentObjectId::Sink(item_id),
-                    CatalogItemType::View => CommentObjectId::View(item_id),
-                    CatalogItemType::MaterializedView => CommentObjectId::MaterializedView(item_id),
-                    CatalogItemType::Index => CommentObjectId::Index(item_id),
-                    CatalogItemType::Func => CommentObjectId::Func(item_id),
-                    CatalogItemType::Connection => CommentObjectId::Connection(item_id),
-                    CatalogItemType::Type => CommentObjectId::Type(item_id),
-                    CatalogItemType::Secret => CommentObjectId::Secret(item_id),
-                    CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(item_id),
-                }
-            }
+            ObjectId::Item(item_id) => self.get_entry(&item_id).comment_object_id(),
             ObjectId::Role(role_id) => CommentObjectId::Role(role_id),
             ObjectId::Database(database_id) => CommentObjectId::Database(database_id),
             ObjectId::Schema((database, schema)) => CommentObjectId::Schema((database, schema)),
