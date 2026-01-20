@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License included in
+# the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with the Business
+# Source License, use of this software will be governed by the Apache License,
+# Version 2.0.
+#
+# gen-claude-skill -- Generate a Claude Code skill bundle from the
+# documentation.
+#
+# Usage: bin/gen-claude-skill [OUTPUT_DIR]
+#
+# Arguments: OUTPUT_DIR  Directory to output the skill files. The OUTPUT_DIR
+#   directory is cleaned before generation.
+#   Default: .claude/skills/materialize-docs.
+#   For publishing to the website,
+#   we will output to doc/user/static/markdown-docs directory.
+#
+# Examples:
+#   bin/gen-claude-skill                         # Generate to default location
+#   bin/gen-claude-skill /path/to/output         # Generate to custom location
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+# For publishing to the website, we will output to doc/user/static/markdown-docs
+# directory. The OUTPUT_DIR directory is cleaned before generation.
+OUTPUT_DIR="${1:-.claude/skills/materialize-docs}"
+
+# Ensure output directory exists
+mkdir -p "$OUTPUT_DIR"
+
+echo "Generating Claude skill from documentation..."
+echo "Output directory: $OUTPUT_DIR"
+
+# Build documentation with skill output format
+cd doc/user
+hugo --config config.toml,config.skill.toml \
+     --disableKinds sitemap,robotsTXT,taxonomy \
+     --destination "../../$OUTPUT_DIR" \
+     --cleanDestinationDir \
+     --gc \
+     --quiet
+
+cd ../..
+
+# Rename the home page to SKILL.md (Claude skill convention)
+if [[ -f "$OUTPUT_DIR/index.md" ]]; then
+    mv "$OUTPUT_DIR/index.md" "$OUTPUT_DIR/SKILL.md"
+fi
+
+# Count generated files
+FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
+
+echo "Done! Generated $FILE_COUNT markdown files."
+echo "Skill entry point: $OUTPUT_DIR/SKILL.md"
