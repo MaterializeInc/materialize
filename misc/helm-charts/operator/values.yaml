@@ -187,11 +187,18 @@ operator:
       analytics: 0
 
   # -- Node selector to use for the operator pod
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Affinity to use for the operator pod
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
   affinity: {}
   # -- Tolerations to use for the operator pod
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
   tolerations: {}
+  # @notationType -- k8s/resources
   resources:
     # -- Resources requested by the operator for CPU and memory
     requests:
@@ -209,11 +216,18 @@ operator:
 
 environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Affinity to use for environmentd pods spawned by the operator
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
   affinity: {}
   # -- Tolerations to use for environmentd pods spawned by the operator
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
   tolerations: {}
+  # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for environmentd's CPU and memory
     # if not set in the Materialize CR
@@ -229,29 +243,46 @@ environmentd:
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Additional node selector to use for clusterd pods when using an LVM scratch disk.
   # This will be merged with the values in `nodeSelector`.
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{"materialize.cloud/scratch-fs": "true"}``
   scratchfsNodeSelector:
     materialize.cloud/scratch-fs: "true"
   # -- Additional node selector to use for clusterd pods when using swap.
   # This will be merged with the values in `nodeSelector`.
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{"materialize.cloud/swap": "true"}``
   swapNodeSelector:
     materialize.cloud/swap: "true"
   # -- Affinity to use for clusterd pods spawned by the operator
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
   affinity: {}
   # -- Tolerations to use for clusterd pods spawned by the operator
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
   tolerations: {}
 
 balancerd:
   # -- Flag to indicate whether to create balancerd pods for the environments
   enabled: true
   # -- Node selector to use for balancerd pods spawned by the operator
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Affinity to use for balancerd pods spawned by the operator
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
   affinity: {}
   # -- Tolerations to use for balancerd pods spawned by the operator
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
   tolerations: {}
+  # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for balancerd's CPU and memory
     # if not set in the Materialize CR
@@ -269,11 +300,18 @@ console:
   # -- Override the mapping of environmentd versions to console versions
   imageTagMapOverride: {}
   # -- Node selector to use for console pods spawned by the operator
+  # @notationType -- k8s/nodeSelector
+  # @default -- ``{}``
   nodeSelector: {}
   # -- Affinity to use for console pods spawned by the operator
+  # @notationType -- k8s/affinity
+  # @default -- ``{}``
   affinity: {}
   # -- Tolerations to use for console pods spawned by the operator
+  # @notationType -- k8s/tolerations
+  # @default -- ``{}``
   tolerations: {}
+  # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for the console's CPU and memory
     # if not set in the Materialize CR

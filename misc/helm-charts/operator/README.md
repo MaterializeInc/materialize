@@ -115,8 +115,8 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |
-| `clusterd.scratchfsNodeSelector` | Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/scratch-fs":"true"}`` |
-| `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/swap":"true"}`` |
+| `clusterd.scratchfsNodeSelector` | Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/scratch-fs": "true"}`` |
+| `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/swap": "true"}`` |
 | `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``{}`` |
 | `console.affinity` | Affinity to use for console pods spawned by the operator | ``{}`` |
 | `console.defaultResources.limits` | Default resource limits for the console's CPU and memory if not set in the Materialize CR | ``{"memory":"256Mi"}`` |
