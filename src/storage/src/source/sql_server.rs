@@ -57,7 +57,7 @@ struct SourceOutputInfo {
     /// The basis for the resumption LSN when snapshotting.
     initial_lsn: Lsn,
     /// The columns in the upstream table that have been excluded from this source.
-    exclude_columns: Vec<String>,
+    excluded_columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -155,7 +155,7 @@ impl SourceRender for SqlServerSourceConnection {
                 resume_upper: Antichain::from_iter(resume_upper),
                 partition_index: u64::cast_from(idx),
                 initial_lsn: details.initial_lsn,
-                exclude_columns: details.exclude_columns.clone(),
+                excluded_columns: details.exclude_columns.clone(),
             };
             source_outputs.insert(*id, output_info);
         }

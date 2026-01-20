@@ -120,7 +120,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .or_default()
                     .push(output.partition_index);
 
-                exclude_columns.insert(output.partition_index, &output.exclude_columns);
+                exclude_columns.insert(output.partition_index, &output.excluded_columns);
 
                 if *output.resume_upper == [Lsn::minimum()] {
                     capture_instance_to_snapshot

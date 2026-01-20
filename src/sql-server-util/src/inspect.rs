@@ -641,7 +641,7 @@ impl DDLEvent {
                                 // Targeting a column
                                 Some(t) if t.eq_ignore_ascii_case("column") => {
                                     let mut all_excluded = true;
-                                    while true && let Some(tok) = peekable.peek() {
+                                    while let Some(tok) = peekable.peek() {
                                         // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
                                         match tok.to_ascii_lowercase().as_str() {
                                             "if" | "exists" => continue,
@@ -649,7 +649,7 @@ impl DDLEvent {
                                                 // If the column is in the exclude list, then it is okay to alter/drop it
                                                 if !exclude_columns.iter().any(|excluded| {
                                                     excluded.eq_ignore_ascii_case(
-                                                        col_name.trim_end_matches(","),
+                                                        col_name.trim_matches([',', '[', ']', '"'].as_ref()),
                                                     )
                                                 }) {
                                                     all_excluded = false;
@@ -1004,4 +1004,42 @@ pub async fn validate_source_privileges<'a>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::test;
+
+    use super::DDLEvent;
+
+    #[test]
+    fn test_ddl_event_is_compatible() {
+        fn test_case(ddl_command: &str, exclude_columns: &Vec<String>, expected: bool) {
+            let ddl_event = DDLEvent {
+                lsn: Default::default(),
+                ddl_command: ddl_command.into(),
+            };
+            let result = ddl_event.is_compatible(exclude_columns);
+            assert_eq!(
+                result, expected,
+                "DDL command '{}' with exclude_columns {:?} expected to be {}, got {}",
+                ddl_command, exclude_columns, expected, result
+            );
+        }
+
+        let exclude_columns = vec!["col1".to_string(), "col2".to_string()];
+
+        test_case("ALTER TABLE my_table ALTER COLUMN col1 INT", &exclude_columns, true);
+        test_case("ALTER TABLE my_table DROP COLUMN col2", &exclude_columns, true);
+        test_case("ALTER TABLE my_table ALTER COLUMN col3 INT", &exclude_columns, false);
+        test_case("ALTER TABLE my_table DROP COLUMN col4 INT", &exclude_columns, false);
+        test_case("CREATE INDEX idx_my_index ON my_table(col1)", &exclude_columns, true);
+        test_case("DROP INDEX idx_my_index ON my_table", &exclude_columns, true);
+        test_case("ALTER TABLE my_table ADD COLUMN col5 INT", &exclude_columns, true);
+        test_case("ALTER TABLE my_table DROP COLUMN col1, col2", &exclude_columns, true);
+        test_case("ALTER TABLE my_table DROP COLUMN col3, col2", &exclude_columns, false);
+        test_case("ALTER TABLE my_table DROP COLUMN col3, col4", &exclude_columns, false);
+        test_case("ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2", &exclude_columns, true);
+        test_case("ALTER TABLE my_table DROP CONSTRAINT constraint_name", &exclude_columns, true);
+    }
 }
