@@ -17,7 +17,7 @@ to as "hopping windows" in other systems.
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/date_bin_hopping" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/date_bin_hopping" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

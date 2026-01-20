@@ -11,7 +11,7 @@ converted to days.
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/justify_hours" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/justify_hours" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

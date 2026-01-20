@@ -10,7 +10,7 @@ menu:
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/csv_extract" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/csv_extract" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------

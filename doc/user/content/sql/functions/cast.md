@@ -10,13 +10,13 @@ The `cast` function and operator return a value converted to the specified [type
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/cast" example="syntax-function" %}}
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-function" %}}
 
-{{% include-syntax file="sql_functions/cast" example="syntax-operator" %}}
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-operator" %}}
 
 The following special syntax is permitted if _val_ is a string literal:
 
-{{% include-syntax file="sql_functions/cast" example="syntax-literal" %}}
+{{% include-syntax file="examples/sql_functions/cast" example="syntax-literal" %}}
 
 ### Return value
 

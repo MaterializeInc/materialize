@@ -13,7 +13,7 @@ adjustment.
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/justify_interval" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/justify_interval" example="syntax" %}}
 
 Parameter | Type                                                                                                                                                                                            | Description
 ----------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------

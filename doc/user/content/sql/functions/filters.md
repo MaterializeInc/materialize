@@ -12,7 +12,7 @@ Temporal filters cannot be used in aggregate function filters.
 
 ## Syntax
 
-{{% include-syntax file="sql_functions/filters" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/filters" example="syntax" %}}
 
 ## Examples
 

@@ -12,9 +12,9 @@ menu:
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/timezone" example="syntax-timezone" %}}
+{{% include-syntax file="examples/sql_functions/timezone" example="syntax-timezone" %}}
 
-{{% include-syntax file="sql_functions/timezone" example="syntax-at-time-zone" %}}
+{{% include-syntax file="examples/sql_functions/timezone" example="syntax-at-time-zone" %}}
 
 Parameter | Type | Description
 ----------|------|------------

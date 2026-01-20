@@ -11,7 +11,7 @@ an encoded string.
 
 ## Signatures
 
-{{% include-syntax file="sql_functions/length" example="syntax" %}}
+{{% include-syntax file="examples/sql_functions/length" example="syntax" %}}
 
 Parameter | Type | Description
 ----------|------|------------
