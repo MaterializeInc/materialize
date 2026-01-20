@@ -33,6 +33,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::user::InternalUserMetadata;
 use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
@@ -51,8 +52,8 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
-    SASLChallengeResponse, SASLVerifyProofResponse,
+    CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
+    SASLVerifyProofResponse,
 };
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
@@ -160,15 +161,15 @@ impl Client {
         &self,
         user: &String,
         password: &Password,
-    ) -> Result<AuthResponse, AdapterError> {
+    ) -> Result<(), AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticatePassword {
             role_name: user.to_string(),
             password: Some(password.clone()),
             tx,
         });
-        let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        rx.await.expect("sender dropped")?;
+        Ok(())
     }
 
     pub async fn generate_sasl_challenge(
@@ -265,6 +266,7 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            superuser_attribute,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -287,6 +289,15 @@ impl Client {
         };
 
         let session = client.session();
+
+        // Apply the superuser attribute to the session's user if
+        // it exists.
+        if let Some(superuser_attribute) = superuser_attribute {
+            session.apply_internal_user_metadata(InternalUserMetadata {
+                superuser: superuser_attribute,
+            });
+        }
+
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
         for (name, val) in session_defaults {
@@ -444,7 +455,6 @@ Issue a SQL query to get started. Need help?
             user: SUPPORT_USER.name.clone(),
             client_ip: None,
             external_metadata_rx: None,
-            internal_user_metadata: None,
             helm_chart_version: None,
         });
         let mut session_client = self.startup(session).await?;

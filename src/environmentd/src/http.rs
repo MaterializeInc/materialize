@@ -54,7 +54,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
-use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
+use mz_repr::user::ExternalUserMetadata;
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind, HttpRoutesEnabled};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
@@ -550,11 +550,9 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
                 )));
             }
         };
-        let superuser = matches!(username.as_str(), SYSTEM_USER_NAME);
         req.extensions_mut().insert(AuthedUser {
             name: username,
             external_metadata_rx: None,
-            internal_metadata: Some(InternalUserMetadata { superuser }),
         });
     }
     Ok(next.run(req).await)
@@ -572,7 +570,6 @@ enum ConnProtocol {
 pub struct AuthedUser {
     name: String,
     external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
-    internal_metadata: Option<InternalUserMetadata>,
 }
 
 pub struct AuthedClient {
@@ -601,7 +598,6 @@ impl AuthedClient {
             user: user.name,
             client_ip: Some(peer_addr),
             external_metadata_rx: user.external_metadata_rx,
-            internal_user_metadata: user.internal_metadata,
             helm_chart_version,
         });
         let connection_guard = active_connection_counter.allocate_connection(session.user())?;
@@ -764,12 +760,9 @@ pub async fn handle_login(
     let Ok(adapter_client) = adapter_client_rx.clone().await else {
         return StatusCode::INTERNAL_SERVER_ERROR;
     };
-    let auth_response = match adapter_client.authenticate(&username, &password).await {
-        Ok(auth_response) => auth_response,
-        Err(err) => {
-            warn!(?err, "HTTP login failed authentication");
-            return StatusCode::UNAUTHORIZED;
-        }
+    if let Err(err) = adapter_client.authenticate(&username, &password).await {
+        warn!(?err, "HTTP login failed authentication");
+        return StatusCode::UNAUTHORIZED;
     };
 
     // Create session data
@@ -777,9 +770,6 @@ pub async fn handle_login(
         username,
         created_at: SystemTime::now(),
         last_activity: SystemTime::now(),
-        internal_metadata: InternalUserMetadata {
-            superuser: auth_response.superuser,
-        },
     };
     // Store session data
     let session = session.and_then(|Extension(session)| Some(session));
@@ -836,7 +826,6 @@ async fn http_auth(
             req.extensions_mut().insert(AuthedUser {
                 name: session_data.username,
                 external_metadata_rx: None,
-                internal_metadata: Some(session_data.internal_metadata),
             });
             return Ok(next.run(req).await);
         }
@@ -996,13 +985,13 @@ async fn auth(
     allowed_roles: AllowedRoles,
     include_www_authenticate_header: bool,
 ) -> Result<AuthedUser, AuthError> {
-    let (name, external_metadata_rx, internal_metadata) = match authenticator {
+    let (name, external_metadata_rx) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
                 let auth_session = frontegg.authenticate(&username, &password.0).await?;
                 let name = auth_session.user().into();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                (name, external_metadata_rx, None)
+                (name, external_metadata_rx)
             }
             Some(Credentials::Token { token }) => {
                 let claims = frontegg.validate_access_token(&token, None).await?;
@@ -1010,7 +999,7 @@ async fn auth(
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 });
-                (claims.user, Some(external_metadata_rx), None)
+                (claims.user, Some(external_metadata_rx))
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1020,14 +1009,11 @@ async fn auth(
         },
         Authenticator::Password(adapter_client) => match creds {
             Some(Credentials::Password { username, password }) => {
-                let auth_response = adapter_client
+                adapter_client
                     .authenticate(&username, &password)
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
-                let internal_metadata = InternalUserMetadata {
-                    superuser: auth_response.superuser,
-                };
-                (username, None, Some(internal_metadata))
+                (username, None)
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1051,7 +1037,7 @@ async fn auth(
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
                 let name = claims.username().to_string();
-                (name, None, None)
+                (name, None)
             }
             Some(Credentials::Password { password, .. }) => {
                 // Allow JWT to be passed as password
@@ -1060,7 +1046,7 @@ async fn auth(
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
                 let name = claims.username().to_string();
-                (name, None, None)
+                (name, None)
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1076,7 +1062,7 @@ async fn auth(
                 Some(Credentials::Password { username, .. }) => username,
                 _ => HTTP_DEFAULT_USER.name.to_owned(),
             };
-            (name, None, None)
+            (name, None)
         }
     };
 
@@ -1085,7 +1071,6 @@ async fn auth(
     Ok(AuthedUser {
         name,
         external_metadata_rx,
-        internal_metadata,
     })
 }
 
@@ -1152,7 +1137,6 @@ pub struct TowerSessionData {
     username: String,
     created_at: SystemTime,
     last_activity: SystemTime,
-    internal_metadata: InternalUserMetadata,
 }
 
 #[cfg(test)]

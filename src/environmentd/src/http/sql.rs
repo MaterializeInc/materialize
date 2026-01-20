@@ -311,7 +311,6 @@ pub async fn handle_sql_ws(
                 Some(AuthedUser {
                     name: session_data.username,
                     external_metadata_rx: None,
-                    internal_metadata: Some(session_data.internal_metadata),
                 })
             } else {
                 None

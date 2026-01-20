@@ -42,7 +42,6 @@ use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
     VERSIONS,
 };
-use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
     CatalogItemId, ColumnIndex, Datum, RelationDesc, RowArena, RowIterator, RowRef,
     SqlRelationType, SqlScalarType,
@@ -208,7 +207,6 @@ where
                         user: auth_session.user().into(),
                         client_ip: conn.peer_addr().clone(),
                         external_metadata_rx: Some(auth_session.external_metadata_rx()),
-                        internal_user_metadata: None,
                         helm_chart_version,
                     });
                     let expired = async move { auth_session.expired().await }.boxed();
@@ -238,11 +236,6 @@ where
 
             tracing::info!("JWT: {}", jwt);
 
-            // Two steps:
-            // 1. Validate the JWT
-            // 2. Check the catalog to see if the user is a superuser
-            // 3. If the role doesn't exist, just create one.
-
             let auth_response = oidc.authenticate(&user, &jwt).await;
 
             match auth_response {
@@ -260,8 +253,6 @@ where
                         user: auth_session.user().into(),
                         client_ip: conn.peer_addr().clone(),
                         external_metadata_rx: None,
-                        // TODO (oidc_auth): Add superuser status to internal_user_metadata from catalog.
-                        internal_user_metadata: None,
                         helm_chart_version,
                     });
                     let expired = async move { auth_session.expired().await }.boxed();
@@ -286,7 +277,7 @@ where
                     return conn.send(e).await;
                 }
             };
-            let auth_response = match adapter_client.authenticate(&user, &password).await {
+            match adapter_client.authenticate(&user, &password).await {
                 Ok(resp) => resp,
                 Err(err) => {
                     warn!(?err, "pgwire connection failed authentication");
@@ -304,9 +295,6 @@ where
                 user,
                 client_ip: conn.peer_addr().clone(),
                 external_metadata_rx: None,
-                internal_user_metadata: Some(InternalUserMetadata {
-                    superuser: auth_response.superuser,
-                }),
                 helm_chart_version,
             });
             // No frontegg check, so auth session lasts indefinitely.
@@ -411,7 +399,7 @@ where
                 }
             };
 
-            let auth_resp = match conn.recv().await? {
+            match conn.recv().await? {
                 Some(FrontendMessage::RawAuthentication(data)) => {
                     match decode_sasl_response(Cursor::new(&data)).ok() {
                         Some(FrontendMessage::SASLResponse(response)) => {
@@ -449,7 +437,6 @@ where
                                     ))
                                     .await?;
                                     conn.flush().await?;
-                                    resp.auth_resp
                                 }
                                 Err(_) => {
                                     return conn
@@ -487,9 +474,6 @@ where
                 user,
                 client_ip: conn.peer_addr().clone(),
                 external_metadata_rx: None,
-                internal_user_metadata: Some(InternalUserMetadata {
-                    superuser: auth_resp.superuser,
-                }),
                 helm_chart_version,
             });
             // No frontegg check, so auth session lasts indefinitely.
@@ -504,7 +488,6 @@ where
                 user,
                 client_ip: conn.peer_addr().clone(),
                 external_metadata_rx: None,
-                internal_user_metadata: None,
                 helm_chart_version,
             });
             // No frontegg check, so auth session lasts indefinitely.

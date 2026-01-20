@@ -63,8 +63,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::command::{
-    AuthResponse, CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse,
-    SASLVerifyProofResponse, StartupResponse,
+    CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse, SASLVerifyProofResponse,
+    StartupResponse,
 };
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::peek::PendingPeek;
@@ -504,14 +504,8 @@ impl Coordinator {
             Ok(verifier) => {
                 // Success only if role exists, allows login, and a real password hash was used.
                 if login && real_hash.is_some() {
-                    let role = role.expect("login implies role exists");
-                    let _ = tx.send(Ok(SASLVerifyProofResponse {
-                        verifier,
-                        auth_resp: AuthResponse {
-                            role_id: role.id,
-                            superuser: role.attributes.superuser.unwrap_or(false),
-                        },
-                    }));
+                    role.expect("login implies role exists");
+                    let _ = tx.send(Ok(SASLVerifyProofResponse { verifier }));
                 } else {
                     let _ = tx.send(Err(make_auth_err(role_present, login)));
                 }
@@ -604,7 +598,7 @@ impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     async fn handle_authenticate_password(
         &self,
-        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
         role_name: String,
         password: Option<Password>,
     ) {
@@ -627,13 +621,11 @@ impl Coordinator {
             if let Some(auth) = self.catalog().try_get_role_auth_by_id(&role.id) {
                 if let Some(hash) = &auth.password_hash {
                     let hash = hash.clone();
-                    let role_id = role.id;
-                    let superuser = role.attributes.superuser.unwrap_or(false);
                     task::spawn_blocking(
                         || "auth-check-hash",
                         move || {
                             let _ = match mz_auth::hash::scram256_verify(&password, &hash) {
-                                Ok(_) => tx.send(Ok(AuthResponse { role_id, superuser })),
+                                Ok(_) => tx.send(Ok(())),
                                 Err(_) => tx.send(Err(AdapterError::AuthenticationError(
                                     AuthenticationError::InvalidCredentials,
                                 ))),
@@ -669,7 +661,7 @@ impl Coordinator {
     ) {
         // Early return if successful, otherwise cleanup any possible state.
         match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
-            Ok((role_id, session_defaults)) => {
+            Ok((role_id, superuser_attribute, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
                     .active_sessions
@@ -744,6 +736,7 @@ impl Coordinator {
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
                     statement_logging_frontend,
+                    superuser_attribute,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -770,7 +763,7 @@ impl Coordinator {
         user: &User,
         _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
-    ) -> Result<(RoleId, BTreeMap<String, OwnedVarInput>), AdapterError> {
+    ) -> Result<(RoleId, Option<bool>, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -783,11 +776,13 @@ impl Coordinator {
             };
             self.sequence_create_role_for_startup(plan).await?;
         }
-        let role_id = self
+        let role = self
             .catalog()
             .try_get_role_by_name(&user.name)
-            .expect("created above")
-            .id;
+            .expect("created above");
+        let role_id = role.id;
+
+        let superuser_attribute = role.attributes.superuser;
 
         if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
             return Err(AdapterError::UserSessionsDisallowed);
@@ -874,7 +869,7 @@ impl Coordinator {
         // rather than eagerly on connection startup. This avoids expensive catalog_mut() calls
         // for the common case where connections never create temporary objects.
 
-        Ok((role_id, session_defaults))
+        Ok((role_id, superuser_attribute, session_defaults))
     }
 
     /// Handles an execute command.

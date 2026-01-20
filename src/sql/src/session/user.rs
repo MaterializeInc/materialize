@@ -67,6 +67,8 @@ pub struct User {
     pub name: String,
     /// Metadata about this user in an external system.
     pub external_metadata: Option<ExternalUserMetadata>,
+    /// Metadata about this user stored in the catalog,
+    /// such as its role's `SUPERUSER` attribute.
     pub internal_metadata: Option<InternalUserMetadata>,
 }
 
