@@ -122,7 +122,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -212,6 +212,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
+    let subscribe_snapshot_optimization =
+        SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
@@ -259,11 +261,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let mut snapshot_mode = if import.with_snapshot {
-                        SnapshotMode::Include
-                    } else {
-                        SnapshotMode::Exclude
-                    };
+                    let mut snapshot_mode =
+                        if import.with_snapshot || !subscribe_snapshot_optimization {
+                            SnapshotMode::Include
+                        } else {
+                            compute_state.metrics.inc_subscribe_snapshot_optimization();
+                            SnapshotMode::Exclude
+                        };
                     let mut suppress_early_progress_as_of = dataflow.as_of.clone();
                     let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
                     if let Some(x) = ct_source_transformer.as_ref() {

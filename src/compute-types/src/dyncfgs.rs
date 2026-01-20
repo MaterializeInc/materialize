@@ -327,6 +327,13 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
+/// If set, skip fetching or processing the snapshot data for subscribes when possible.
+pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
+    "compute_subscribe_snapshot_optimization",
+    false,
+    "If set, skip fetching or processing the snapshot data for subscribes when possible.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -369,4 +376,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
+        .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
 }

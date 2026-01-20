@@ -16,7 +16,7 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge, raw};
 use mz_repr::{GlobalId, SharedRow};
 use prometheus::core::{AtomicF64, GenericCounter};
 use prometheus::proto::LabelPair;
-use prometheus::{Histogram, HistogramVec};
+use prometheus::{Histogram, HistogramVec, IntCounter};
 
 /// Metrics exposed by compute replicas.
 //
@@ -68,6 +68,9 @@ pub struct ComputeMetrics {
 
     // collections
     collection_count: raw::UIntGaugeVec,
+
+    // subscribes
+    subscribe_snapshots_skipped_total: IntCounter,
 }
 
 impl ComputeMetrics {
@@ -175,6 +178,10 @@ impl ComputeMetrics {
                 name: "mz_compute_collection_count",
                 help: "The number and hydration status of maintained compute collections.",
                 var_labels: ["worker_id", "type", "hydrated"],
+            )),
+            subscribe_snapshots_skipped_total: registry.register(metric!(
+                name: "mz_subscribe_snapshots_skipped_total",
+                help: "The number of collection snapshots that were skipped by the subscribe snapshot optimization.",
             )),
         }
     }
@@ -353,6 +360,10 @@ impl WorkerMetrics {
             .collection_count
             .with_label_values(&[self.worker_label.as_ref(), collection_type, hydrated])
             .dec();
+    }
+
+    pub fn inc_subscribe_snapshot_optimization(&self) {
+        self.metrics.subscribe_snapshots_skipped_total.inc()
     }
 
     /// Sets the workload class for the compute metrics.

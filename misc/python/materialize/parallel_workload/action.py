@@ -1417,6 +1417,9 @@ class FlipFlagsAction(Action):
             "1048576",  # 1 MiB, an in-between value
             "314572800",  # 300 MiB, the production value
         ]
+        self.flags_with_values["compute_subscribe_snapshot_optimization"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
         self.flags_with_values["enable_frontend_peek_sequencing"] = [
             "true",
