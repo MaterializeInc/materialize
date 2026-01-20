@@ -59,6 +59,16 @@ pub struct ComputeMetrics {
     stashed_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
 
+    // Index peek timing phases
+    index_peek_total_seconds: HistogramVec,
+    index_peek_seek_fulfillment_seconds: HistogramVec,
+    index_peek_error_scan_seconds: HistogramVec,
+    index_peek_cursor_setup_seconds: HistogramVec,
+    index_peek_row_iteration_seconds: HistogramVec,
+    index_peek_result_sort_seconds: HistogramVec,
+    index_peek_frontier_check_seconds: HistogramVec,
+    index_peek_row_collection_seconds: HistogramVec,
+
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
 
@@ -164,6 +174,54 @@ impl ComputeMetrics {
                 var_labels: ["worker_id", "command_type"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            index_peek_total_seconds: registry.register(metric!(
+                name: "mz_index_peek_total_seconds",
+                help: "Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_seek_fulfillment_seconds: registry.register(metric!(
+                name: "mz_index_peek_seek_fulfillment_seconds",
+                help: "Time in seek_fulfillment method including frontier checks and data collection.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_error_scan_seconds: registry.register(metric!(
+                name: "mz_index_peek_error_scan_seconds",
+                help: "Time scanning the error trace for errors.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_cursor_setup_seconds: registry.register(metric!(
+                name: "mz_index_peek_cursor_setup_seconds",
+                help: "Time setting up cursor and literal constraints.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_row_iteration_seconds: registry.register(metric!(
+                name: "mz_index_peek_row_iteration_seconds",
+                help: "Time iterating rows and evaluating MFP.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_result_sort_seconds: registry.register(metric!(
+                name: "mz_index_peek_result_sort_seconds",
+                help: "Time sorting intermediate results during peek collection.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_frontier_check_seconds: registry.register(metric!(
+                name: "mz_index_peek_frontier_check_seconds",
+                help: "Time checking trace frontiers.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_row_collection_seconds: registry.register(metric!(
+                name: "mz_index_peek_row_collection_seconds",
+                help: "Time constructing RowCollection from peek results.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
             replica_expiration_timestamp_seconds: registry.register(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
                 help: "The replica expiration timestamp in seconds since epoch.",
@@ -209,6 +267,28 @@ impl ComputeMetrics {
             self.handle_command_duration_seconds
                 .with_label_values(&[worker.as_ref(), typ])
         });
+        let index_peek_total_seconds = self.index_peek_total_seconds.with_label_values(&[&worker]);
+        let index_peek_seek_fulfillment_seconds = self
+            .index_peek_seek_fulfillment_seconds
+            .with_label_values(&[&worker]);
+        let index_peek_error_scan_seconds = self
+            .index_peek_error_scan_seconds
+            .with_label_values(&[&worker]);
+        let index_peek_cursor_setup_seconds = self
+            .index_peek_cursor_setup_seconds
+            .with_label_values(&[&worker]);
+        let index_peek_row_iteration_seconds = self
+            .index_peek_row_iteration_seconds
+            .with_label_values(&[&worker]);
+        let index_peek_result_sort_seconds = self
+            .index_peek_result_sort_seconds
+            .with_label_values(&[&worker]);
+        let index_peek_frontier_check_seconds = self
+            .index_peek_frontier_check_seconds
+            .with_label_values(&[&worker]);
+        let index_peek_row_collection_seconds = self
+            .index_peek_row_collection_seconds
+            .with_label_values(&[&worker]);
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -228,6 +308,14 @@ impl ComputeMetrics {
             persist_peek_seconds,
             stashed_peek_seconds,
             handle_command_duration_seconds,
+            index_peek_total_seconds,
+            index_peek_seek_fulfillment_seconds,
+            index_peek_error_scan_seconds,
+            index_peek_cursor_setup_seconds,
+            index_peek_row_iteration_seconds,
+            index_peek_result_sort_seconds,
+            index_peek_frontier_check_seconds,
+            index_peek_row_collection_seconds,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -257,6 +345,22 @@ pub struct WorkerMetrics {
     pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
+    /// Histogram of total index peek durations.
+    pub(crate) index_peek_total_seconds: Histogram,
+    /// Histogram of index peek seek_fulfillment durations.
+    pub(crate) index_peek_seek_fulfillment_seconds: Histogram,
+    /// Histogram of index peek error scan durations.
+    pub(crate) index_peek_error_scan_seconds: Histogram,
+    /// Histogram of index peek cursor setup durations.
+    pub(crate) index_peek_cursor_setup_seconds: Histogram,
+    /// Histogram of index peek row iteration durations.
+    pub(crate) index_peek_row_iteration_seconds: Histogram,
+    /// Histogram of index peek result sort durations.
+    pub(crate) index_peek_result_sort_seconds: Histogram,
+    /// Histogram of index peek frontier check durations.
+    pub(crate) index_peek_frontier_check_seconds: Histogram,
+    /// Histogram of index peek row collection construction durations.
+    pub(crate) index_peek_row_collection_seconds: Histogram,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.
