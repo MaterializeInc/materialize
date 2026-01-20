@@ -418,7 +418,7 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMIT) => {
                     Ok(self.parse_commit().map_parser_err(StatementKind::Commit)?)
                 }
-                Token::Keyword(ROLLBACK) => Ok(self
+                Token::Keyword(ROLLBACK) | Token::Keyword(ABORT) => Ok(self
                     .parse_rollback()
                     .map_parser_err(StatementKind::Rollback)?),
                 Token::Keyword(TAIL) => {
