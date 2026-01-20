@@ -29,6 +29,7 @@ To serve results, you can:
 {{</ linkbox >}}
 {{< linkbox title="External BI tools" >}}
 - [Deepnote](/serve-results/bi-tools/deepnote/)
+- [Excel](/serve-results/bi-tools/excel/)
 - [Hex](/serve-results/bi-tools/hex/)
 - [Metabase](/serve-results/bi-tools/metabase/)
 - [Power BI](/serve-results/bi-tools/power-bi/)
