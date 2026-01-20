@@ -672,13 +672,18 @@ impl PgwireBalancer {
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
 
+        let conn_uuid = params
+            .get(CONN_UUID_KEY)
+            .expect("we always set a uuid")
+            .clone();
+        let conn_uuid = &conn_uuid;
         let mut mz_stream =
             match Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls)
                 .await
             {
                 Ok(mz_stream) => mz_stream,
                 Err(e) => {
-                    error!("Error in init_stream: {:?}", e);
+                    error!("Error in init_stream, conn_uuid={conn_uuid}: {:?}", e);
                     return Ok(());
                 }
             };
@@ -712,46 +717,53 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        info!("Before connect to envd");
+        let conn_uuid = params
+            .get(CONN_UUID_KEY)
+            .expect("we always set a uuid")
+            .clone();
+        let conn_uuid = &conn_uuid;
+        info!("Before connect to envd, conn_uuid={conn_uuid}");
         let mut mz_stream = Retry::default()
             .max_duration(Duration::from_secs(30))
             .retry_async(|_| async { TcpStream::connect(envd_addr).await })
             .await?;
-        info!("After connect to envd");
+        info!("After connect to envd, conn_uuid={conn_uuid}");
         let mut buf = BytesMut::new();
 
         let mut mz_stream = if internal_tls {
-            info!("Before FrontendStartupMessage::SslRequest.encode");
+            info!("Before FrontendStartupMessage::SslRequest.encode, conn_uuid={conn_uuid}");
             FrontendStartupMessage::SslRequest.encode(&mut buf)?;
-            info!("Before mz_stream.write_all");
+            info!("Before mz_stream.write_all, conn_uuid={conn_uuid}");
             mz_stream.write_all(&buf).await?;
             buf.clear();
             let mut maybe_ssl_request_response = [0u8; 1];
-            info!("Before netio::read_exact_or_eof maybe_ssl_request_response");
+            info!(
+                "Before netio::read_exact_or_eof maybe_ssl_request_response, conn_uuid={conn_uuid}"
+            );
             let nread =
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
-                info!("Got ssl response");
+                info!("Got ssl response, conn_uuid={conn_uuid}");
                 // do a TLS handshake
                 let mut builder =
                     SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
                 // environmentd doesn't yet have a cert we trust, so for now disable verification.
                 builder.set_verify(SslVerifyMode::NONE);
-                info!("Building SSL object");
+                info!("Building SSL object, conn_uuid={conn_uuid}");
                 let mut ssl = builder
                     .build()
                     .configure()?
                     .into_ssl(&envd_addr.to_string())?;
-                info!("ssl.set_connect_state");
+                info!("ssl.set_connect_state, conn_uuid={conn_uuid}");
                 ssl.set_connect_state();
-                info!("Conn::Ssl");
+                info!("Conn::Ssl, conn_uuid={conn_uuid}");
                 Conn::Ssl(SslStream::new(ssl, mz_stream)?)
             } else {
-                info!("Conn::Unencrypted");
+                info!("Conn::Unencrypted, conn_uuid={conn_uuid}");
                 Conn::Unencrypted(mz_stream)
             }
         } else {
-            info!("Conn::Unencrypted");
+            info!("Conn::Unencrypted, conn_uuid={conn_uuid}");
             Conn::Unencrypted(mz_stream)
         };
 
@@ -760,9 +772,9 @@ impl PgwireBalancer {
             version: VERSION_3,
             params,
         };
-        info!("startup.encode");
+        info!("startup.encode, conn_uuid={conn_uuid}");
         startup.encode(&mut buf)?;
-        info!("mz_stream.write_all");
+        info!("mz_stream.write_all, conn_uuid={conn_uuid}");
         mz_stream.write_all(&buf).await?;
         let client_stream = conn.inner_mut();
 
@@ -782,7 +794,7 @@ impl PgwireBalancer {
         // once before: https://github.com/pgbouncer/pgbouncer/pull/1058.
         // We will work to upstream a fix, but in the meantime, this early return avoids the issue entirely.
         if password.is_none() {
-            info!("password is None, returning stream early");
+            info!("password is None, returning stream early, conn_uuid={conn_uuid}");
             return Ok(mz_stream);
         }
 
@@ -790,7 +802,7 @@ impl PgwireBalancer {
         // Otherwise start shuffling bytes. message type (len 1, 'R') + message len (len 4, 8_i32) +
         // auth type (len 4, 3_i32).
         let mut maybe_auth_frame = [0; 1 + 4 + 4];
-        info!("netio::read_exact_or_eof maybe_auth_frame");
+        info!("netio::read_exact_or_eof maybe_auth_frame, conn_uuid={conn_uuid}");
         let nread = netio::read_exact_or_eof(&mut mz_stream, &mut maybe_auth_frame).await?;
         // 'R' for auth message, 0008 for message length, 0003 for password cleartext variant.
         // See: https://www.postgresql.org/docs/current/protocol-message-formats.html#PROTOCOL-MESSAGE-FORMATS-AUTHENTICATIONCLEARTEXTPASSWORD
@@ -799,23 +811,23 @@ impl PgwireBalancer {
             && maybe_auth_frame == AUTH_PASSWORD_CLEARTEXT
             && password.is_some()
         {
-            info!("auth password cleartext");
+            info!("auth password cleartext, conn_uuid={conn_uuid}");
             // If we got exactly a cleartext password request and have one, send it.
             let Some(password) = password else {
-                unreachable!("verified some above");
+                unreachable!("verified some above, conn_uuid={conn_uuid}");
             };
             let password = FrontendMessage::Password { password };
             buf.clear();
-            info!("password.encode");
+            info!("password.encode, conn_uuid={conn_uuid}");
             password.encode(&mut buf)?;
-            info!("mz_stream.write_all (password)");
+            info!("mz_stream.write_all (password), conn_uuid={conn_uuid}");
             mz_stream.write_all(&buf).await?;
-            info!("mz_stream.flush (password)");
+            info!("mz_stream.flush (password), conn_uuid={conn_uuid}");
             mz_stream.flush().await?;
         } else {
             // Otherwise pass on the bytes we just got. This *might* even be a password request, but
             // we don't have a password. In which case it can be forwarded up to the client.
-            info!("client_stream.write_all (no password?)");
+            info!("client_stream.write_all (no password?), conn_uuid={conn_uuid}");
             client_stream.write_all(&maybe_auth_frame[0..nread]).await?;
         }
 
