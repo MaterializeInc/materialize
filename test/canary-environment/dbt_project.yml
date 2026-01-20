@@ -29,16 +29,16 @@ models:
       post-hook: "{% if config.get('materialized') != 'sink' %}GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\"{% endif %}"
     tpch:
       schema: tpch
-      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\""
+      post-hook: "{% if config.get('materialized') != 'sink' %}GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\"{% endif %}"
     pg_cdc:
       schema: pg_cdc
-      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\""
+      post-hook: "{% if config.get('materialized') != 'sink' %}GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\"{% endif %}"
     mysql_cdc:
       schema: mysql_cdc
-      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\""
+      post-hook: "{% if config.get('materialized') != 'sink' %}GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\"{% endif %}"
     table:
       schema: table
-      post-hook: "GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\""
+      post-hook: "{% if config.get('materialized') != 'sink' %}GRANT ALL PRIVILEGES ON TABLE {{ this }} TO \"infra+bot@materialize.com\", \"infra+qacanaryload@materialize.io\"{% endif %}"
 
 tests:
     +cluster: qa_canary_environment_compute
