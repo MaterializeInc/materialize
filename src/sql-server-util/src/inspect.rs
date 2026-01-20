@@ -645,11 +645,12 @@ impl DDLEvent {
                                         match tok.to_ascii_lowercase().as_str() {
                                             "if" | "exists" => continue,
                                             col_name => {
-                                                println!("Checking column '{col_name}' against exclude list");
                                                 // If the column is in the exclude list, then it is okay to alter/drop it
-                                                if !exclude_columns
-                                                    .iter()
-                                                    .any(|excluded| excluded.eq_ignore_ascii_case(col_name.trim_end_matches(","))) {
+                                                if !exclude_columns.iter().any(|excluded| {
+                                                    excluded.eq_ignore_ascii_case(
+                                                        col_name.trim_end_matches(","),
+                                                    )
+                                                }) {
                                                     all_excluded = false;
                                                     break;
                                                 }
