@@ -47,6 +47,7 @@ use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{ComputedGauge, IntCounter, IntGauge, MetricsRegistry};
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
+use mz_ore::retry::Retry;
 use mz_ore::task::{JoinSetExt, spawn};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
@@ -705,7 +706,10 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        let mut mz_stream = Retry::default()
+            .max_duration(Duration::from_secs(10))
+            .retry_async(|_| async { TcpStream::connect(envd_addr).await })
+            .await?;
         let mut buf = BytesMut::new();
 
         let mut mz_stream = if internal_tls {
@@ -1226,7 +1230,10 @@ impl mz_server_core::Server for HttpsBalancer {
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
 
-                let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+                let mut mz_stream = Retry::default()
+                    .max_duration(Duration::from_secs(10))
+                    .retry_async(|_| async { TcpStream::connect(resolved.addr).await })
+                    .await?;
 
                 if inject_proxy_headers {
                     // Write the tcp proxy header
