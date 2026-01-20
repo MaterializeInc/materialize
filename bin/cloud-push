@@ -63,9 +63,9 @@ tag="$version--local.$build_meta"
 
 for image in "${images[@]}"; do
     # shellcheck disable=SC2086
-    passthrough_args/mzimage acquire --arch=aarch64 "$image" $passthrough_args
+    bin/mzimage acquire --arch=aarch64 "$image" $passthrough_args
     # shellcheck disable=SC2086
-    passthrough_argstag "$(bin/mzimage spec --arch=aarch64 "$image" $passthrough_args)" "$username/$image:$tag"
+    docker tag "$(bin/mzimage spec --arch=aarch64 "$image" $passthrough_args)" "$username/$image:$tag"
     docker push "$username/$image:$tag"
 done
 
