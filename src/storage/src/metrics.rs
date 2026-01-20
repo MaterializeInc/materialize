@@ -90,7 +90,7 @@ impl StorageMetrics {
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
             timely_step_duration_seconds: registry.register(metric!(
                 name: "mz_timely_step_duration_seconds",
-                help: "The time spent in each storage step_or_park call",
+                help: "The time spent in each step_or_park call",
                 const_labels: {"cluster" => "storage"},
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
