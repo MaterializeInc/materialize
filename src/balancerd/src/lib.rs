@@ -670,11 +670,21 @@ impl PgwireBalancer {
             .tenant
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
-        let Ok(mut mz_stream) =
-            Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls).await
-        else {
-            return Ok(());
-        };
+        let mut mz_stream =
+            match Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls)
+                .await
+            {
+                Ok(stream) => stream,
+                Err(e) => {
+                    error!("failed to connect to upstream server: {e}");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                            "upstream server not available",
+                        ))
+                        .await;
+                }
+            };
 
         let mut client_counter = CountingConn::new(conn.inner_mut());
 
@@ -1196,7 +1206,7 @@ impl mz_server_core::Server for HttpsBalancer {
             let active_guard = inner_metrics.active_connections();
             let result: Result<_, anyhow::Error> = Box::pin(async move {
                 let peer_addr = peer_addr.context("fetching peer addr")?;
-                let (client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
+                let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
                             let mut ssl_stream =
@@ -1225,8 +1235,31 @@ impl mz_server_core::Server for HttpsBalancer {
                     .tenant
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
-
-                let mut mz_stream = TcpStream::connect(resolved.addr).await?;
+                let mut mz_stream = match TcpStream::connect(resolved.addr).await {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        error!("failed to connect to upstream server: {e}");
+                        let body = "upstream server not available";
+                        // We know this is an HTTPs stream (see name
+                        // HttpsBalancer), but we actually don't care what type
+                        // of traffic it is and we only use raw tcp streams.In
+                        // order to respond with HTTP we have to write this as a
+                        // raw http message.
+                        let response = format!(
+                            "HTTP/1.1 502 Bad Gateway\r\n\
+                             Content-Type: text/plain\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\
+                             \r\n\
+                             {}",
+                            body.len(),
+                            body
+                        );
+                        let _ = client_stream.write_all(response.as_bytes()).await;
+                        let _ = client_stream.shutdown().await;
+                        return Ok(());
+                    }
+                };
 
                 if inject_proxy_headers {
                     // Write the tcp proxy header
