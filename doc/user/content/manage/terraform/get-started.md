@@ -28,35 +28,67 @@ terraform {
 }
 ```
 
-## Authentication
+## Authentication and Configuration
 
-To configure the provider to communicate with your Materialize region, you
-need to authenticate with a Materialize username, app password, and other
-specifics from your account.
+The provider auto-detects your deployment type based on the configuration you
+provide:
+- **Materialize Cloud**: Use `password` and `default_region`
+- **Self-managed**: Use `host`, `username`, `password`, and other connection parameters
 
-We recommend saving sensitive input variables as environment variables to avoid
-checking secrets into source control. In Terraform, you can export Materialize
-app passwords as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
-with the `TF_VAR_<name>` format.
+{{< warning >}}
+Switching between Materialize Cloud and self-managed configuration **breaks your
+Terraform state file**. Ensure that your initial configuration
+matches your intended deployment type, and do not switch to a
+different deployment type afterward.
+{{< /warning >}}
+
+{{< tabs >}}
+{{< tab "Materialize Cloud" >}}
+### Materialize Cloud
+
+Configure the provider with your [app password](/security/cloud/users-service-accounts/create-service-accounts/)
+and region. This provides access to all provider resources, including
+organization-level resources (users, SSO, SCIM) and database resources.
+
+To avoid checking secrets into source control, use environment variables for authentication. You have two options:
+
+**Option 1: Using provider environment variables (recommended)**
+
+The provider automatically reads the `MZ_PASSWORD` environment variable:
 
 ```shell
-export TF_VAR_MZ_PASSWORD=<app_password>
+export MZ_PASSWORD=<app_password>
 ```
 
-In the `main.tf` file, add the provider configuration and any variable
-references:
-
 ```hcl
-variable "MZ_PASSWORD" {}
-
 provider "materialize" {
-  password       = var.MZ_PASSWORD
   default_region = <region>
   database       = <database>
 }
 ```
 
-## Creating service accounts
+**Option 2: Using Terraform input variables**
+
+Use [Terraform environment variables](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name) with the `TF_VAR_` prefix:
+
+```shell
+export TF_VAR_materialize_password=<app_password>
+```
+
+```hcl
+variable "materialize_password" {
+  type      = string
+  sensitive = true
+}
+
+provider "materialize" {
+  password       = var.materialize_password
+  default_region = <region>
+  database       = <database>
+}
+```
+
+#### Creating service accounts
 
 **Minimum requirements:** `terraform-provider-materialize` v0.8.1+
 
@@ -98,3 +130,69 @@ output "production_dashboard_password" {
   value = materialize_app_password.production_dashboard.password
 }
 ```
+
+{{</ tab >}}
+
+{{< tab "Self-managed Materialize" >}}
+### Self-managed Materialize
+
+Configure the provider with connection parameters similar to a standard
+PostgreSQL connection. Only database resources are available (clusters, sources,
+sinks, etc.). Organization-level resources like `materialize_app_password`,
+`materialize_user`, and SSO/SCIM resources are not supported.
+
+To avoid checking secrets into source control, use environment variables for authentication. You have two options:
+
+**Option 1: Using provider environment variables (recommended)**
+
+The provider automatically reads configuration from `MZ_*` environment variables:
+
+```shell
+export MZ_PASSWORD=<password>
+export MZ_HOST=<host>
+```
+
+```hcl
+provider "materialize" {
+  # Configuration will be read from MZ_HOST, MZ_PORT, MZ_USER,
+  # MZ_DATABASE, MZ_PASSWORD, MZ_SSLMODE environment variables
+}
+```
+
+**Option 2: Using Terraform input variables**
+
+Use [Terraform environment variables](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name) with the `TF_VAR_` prefix:
+
+```shell
+export TF_VAR_mz_password=<password>
+```
+
+```hcl
+variable "mz_password" {
+  type      = string
+  sensitive = true
+}
+
+provider "materialize" {
+  host     = "materialized"
+  port     = 6875
+  username = "materialize"
+  database = "materialize"
+  password = var.mz_password
+  sslmode  = "disable"
+}
+```
+
+#### Provider configuration parameters
+
+| Parameter | Description | Environment Variable | Default |
+|-----------|-------------|---------------------|---------|
+| `host` | Materialize host address | `MZ_HOST` | - |
+| `port` | Materialize port | `MZ_PORT` | `6875` |
+| `username` | Database username | `MZ_USER` | `materialize` |
+| `database` | Database name | `MZ_DATABASE` | `materialize` |
+| `password` | Database password | `MZ_PASSWORD` | - |
+| `sslmode` | SSL mode (`disable`, `require`, `verify-ca`, `verify-full`) | `MZ_SSLMODE` | `require` |
+
+{{< /tab >}}
+{{< /tabs >}}
