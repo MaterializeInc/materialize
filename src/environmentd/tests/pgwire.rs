@@ -829,3 +829,49 @@ fn test_pgtest_mz_transactions() {
 fn test_pgtest_mz_vars() {
     pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
 }
+
+// Test that encoding a message with too many columns (> i16::MAX) doesn't
+// corrupt the connection. The codec truncates the buffer when encoding fails,
+// ensuring no partial message is left in the buffer. See
+// https://github.com/MaterializeInc/database-issues/issues/9496
+#[mz_ore::test]
+fn test_many_columns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    let cols = (1..=32769)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let query = format!("SELECT {cols}");
+
+    // The query must fail because the server can't encode a RowDescription
+    // with more than i16::MAX columns. When encoding fails, `machine.run()`
+    // returns an error, and the catch-all handler in `protocol.rs` sends a
+    // FATAL ErrorResponse with "does not fit in an i16" before closing the
+    // connection.
+    //
+    // However, the client non-deterministically sees either the FATAL
+    // ErrorResponse or just "connection closed". This is because the
+    // rust-postgres client's `poll_block_on` drains connection-level events
+    // before polling the query future: if the ErrorResponse and the TCP
+    // close (FIN) arrive in the same read, `poll_read` processes the
+    // ErrorResponse but then immediately hits EOF and returns
+    // `Err(Error::closed)`, which short-circuits `poll_block_on` before the
+    // query future can read the ErrorResponse from the channel.
+    //
+    // Both outcomes indicate the server handled the overflow gracefully (no
+    // partial/corrupt message in the buffer).
+    match client.simple_query(&query) {
+        Ok(_) => panic!("query with too many columns should have failed"),
+        Err(err) => {
+            let err_str = err.to_string_with_causes();
+            assert!(
+                err_str.contains("does not fit in an i16") || err_str.contains("connection closed"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+}
