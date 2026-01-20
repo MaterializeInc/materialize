@@ -15,9 +15,13 @@ A few types of Materialize collections are durably written to storage: [material
 
 Internally, each collection is stored as a set of **runs** of data, each of which is sorted and then partitioned up into individual **parts**, and those parts are written to object storage and fetched only when necessary to satisfy a query. Materialize will also periodically **compact** the data it stores, to consolidate small parts into larger ones or discard deleted rows.
 
-Using the `PARTITION BY` option, you can specify the internal ordering that
-Materialize will use to sort, partition, and store these runs of data.
-A well-chosen partitioning can unlock optimizations like [filter pushdown](#filter-pushdown), which in turn can make queries and other operations more efficient.
+For [materialized views](/sql/create-materialized-view/) and
+[tables](/sql/create-table) (including read-only tables created from sources),
+you can use the `PARTITION BY` option to specify the internal ordering that
+Materialize will use to sort, partition, and store these runs of data. A
+well-chosen partitioning can unlock optimizations like [filter
+pushdown](#filter-pushdown), which in turn can make queries and other operations
+more efficient.
 
 {{< note >}}
 The `PARTITION BY` option has no impact on the order in which records are returned by queries.
