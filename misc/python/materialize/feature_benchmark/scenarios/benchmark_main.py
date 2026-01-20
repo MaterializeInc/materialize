@@ -1434,6 +1434,7 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 class IcebergSink(Sink):
     """Measure time to emit 1M records to an Iceberg sink.
+    Measures only the data streaming time, excluding sink creation overhead.
     Verification via DuckDB querying the Iceberg table from S3.
     """
 
@@ -1445,28 +1446,23 @@ class IcebergSink(Sink):
         super().__init__(scale, mz_version, default_size, seed)
         self._run_counter = 0
         self._invocation_id = uuid.uuid4()
+        self._current_table_name: str | None = None
+        self._current_source_name: str | None = None
 
     @classmethod
     def can_run(cls, version: MzVersion) -> bool:
         return version > MzVersion.create(26, 7, 0)
 
     def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 0, 0)
+        return ScenarioVersion.create(1, 1, 0)
 
     def init(self) -> Action:
-        # Enable feature flag, create source table, and set up connections
+        # Enable feature flag and set up connections
         return TdAction(
             f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_iceberg_sink = true;
-
-> CREATE TABLE iceberg_source (pk BIGINT, data BIGINT);
-
-> INSERT INTO iceberg_source SELECT x, x * 2 FROM generate_series(1, {self.n()}) AS x;
-
-> SELECT COUNT(*) FROM iceberg_source;
-{self.n()}
 
 > CREATE SECRET iceberg_secret AS '${{arg.s3-access-key}}';
 
@@ -1491,22 +1487,30 @@ ALTER SYSTEM SET enable_iceberg_sink = true;
 """
         )
 
-    def benchmark(self) -> MeasurementSource:
-        # Increment run counter to generate unique table names per benchmark run.
-        # This ensures each run writes to a fresh Iceberg table, avoiding issues
-        # where the sink resumes from the previous run's committed frontier.
-        # Include version to avoid conflicts between THIS and OTHER benchmark runs.
+    def before(self) -> Action:
+        # Create a fresh source table and sink for each run.
+        # Using a unique source table per run avoids race conditions where the sink's
+        # as_of could be set before a DELETE, causing it to see old data.
         self._run_counter += 1
         version_str = f"v{self._mz_version.major}_{self._mz_version.minor}_{self._mz_version.patch}"
-        table_name = f"benchmark_${{testdrive.seed}}_{self._invocation_id}_{version_str}_{self._run_counter}"
-        return Td(
+        self._current_table_name = f"benchmark_${{testdrive.seed}}_{self._invocation_id}_{version_str}_{self._run_counter}"
+        invocation_id_safe = str(self._invocation_id).replace("-", "_")
+        self._current_source_name = (
+            f"iceberg_source_{invocation_id_safe}_{self._run_counter}"
+        )
+        table_name = self._current_table_name
+        source_name = self._current_source_name
+        return TdAction(
             f"""
 > DROP SINK IF EXISTS iceberg_sink;
-  /* A */
+
+> CREATE TABLE {source_name} (pk BIGINT, data BIGINT);
+
+> INSERT INTO {source_name} VALUES (0, 0);
 
 > CREATE SINK iceberg_sink
   IN CLUSTER sink_cluster
-  FROM iceberg_source
+  FROM {source_name}
   INTO ICEBERG CATALOG CONNECTION polaris_conn (
     NAMESPACE 'default_namespace',
     TABLE '{table_name}'
@@ -1516,13 +1520,36 @@ ALTER SYSTEM SET enable_iceberg_sink = true;
   ENVELOPE UPSERT
   WITH (COMMIT INTERVAL '1s');
 
-> SELECT messages_committed
-  FROM mz_internal.mz_sink_statistics
-  JOIN mz_internal.mz_sink_statuses
-    ON mz_sink_statistics.id = mz_sink_statuses.id
+> SELECT status
+  FROM mz_internal.mz_sink_statuses
   WHERE name = 'iceberg_sink';
+running
+
+> SELECT messages_committed >= 1
+  FROM mz_internal.mz_sink_statistics
+  JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
+  WHERE mz_sinks.name = 'iceberg_sink';
+true
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        # Measure only the time to stream data through the already-running sink.
+        # The Iceberg table was created in before() with a seed row (pk=0).
+        # Here we insert pk=1..n, so total rows = n+1.
+        table_name = self._current_table_name
+        source_name = self._current_source_name
+        return Td(
+            f"""
+> INSERT INTO {source_name} SELECT x, x * 2 FROM generate_series(1, {self.n()}) AS x;
+  /* A */
+
+> SELECT messages_committed >= {self.n() + 1}
+  FROM mz_internal.mz_sink_statistics
+  JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
+  WHERE mz_sinks.name = 'iceberg_sink';
   /* B */
-{self.n()}
+true
 
 $ duckdb-execute name=iceberg
 CREATE SECRET s3_secret (TYPE S3, KEY_ID 'tduser', SECRET '${{arg.s3-access-key}}', ENDPOINT '${{arg.aws-endpoint}}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
@@ -1530,7 +1557,7 @@ SET unsafe_enable_version_guessing = true;
 
 $ duckdb-query name=iceberg
 SELECT COUNT(*) FROM iceberg_scan('s3://test-bucket/default_namespace/{table_name}')
-{self.n()}
+{self.n() + 1}
 
 > DROP SINK iceberg_sink;
 """
