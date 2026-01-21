@@ -1,0 +1,256 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! OIDC mock server for testing.
+//!
+//! This module provides a mock OIDC server that serves JWKS endpoints
+//! for validating JWT tokens in tests.
+
+use std::borrow::Cow;
+use std::future::IntoFuture;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+
+use axum::extract::State;
+use axum::routing::get;
+use axum::{Json, Router};
+use base64::Engine;
+use jsonwebtoken::{EncodingKey, Header, encode};
+use mz_authenticator::OidcClaims;
+use mz_ore::now::NowFn;
+use mz_ore::task::JoinHandle;
+use openssl::pkey::{PKey, Private};
+use openssl::rsa::Rsa;
+use serde::{Deserialize, Serialize};
+use tokio::net::TcpListener;
+
+/// JWKS response structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JwkSet {
+    pub keys: Vec<Jwk>,
+}
+
+/// JSON Web Key structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Jwk {
+    pub kty: String,
+    pub kid: String,
+    #[serde(rename = "use")]
+    pub key_use: String,
+    pub alg: String,
+    pub n: String,
+    pub e: String,
+}
+
+/// Shared context for the OIDC mock server.
+struct OidcMockContext {
+    /// The issuer URL (base URL of this server).
+    issuer: String,
+    /// RSA public key in JWK format.
+    jwk: Jwk,
+}
+
+/// OIDC mock server for testing.
+pub struct OidcMockServer {
+    /// Base URL of the server (e.g., "http://127.0.0.1:12345").
+    pub base_url: String,
+    /// The issuer URL (same as base_url, used for JWT iss claim).
+    pub issuer: String,
+    /// Key ID used in JWT headers.
+    pub kid: String,
+    /// Encoding key for signing JWTs (for generating test tokens).
+    pub encoding_key: EncodingKey,
+    /// Function for getting current time.
+    pub now: NowFn,
+    /// How long tokens should be valid (in seconds).
+    pub expires_in_secs: i64,
+    /// Handle to the server task.
+    pub handle: JoinHandle<Result<(), std::io::Error>>,
+}
+
+impl OidcMockServer {
+    /// Starts an [`OidcMockServer`].
+    ///
+    /// Must be started from within a [`tokio::runtime::Runtime`].
+    ///
+    /// # Arguments
+    ///
+    /// * `addr` - Optional address to bind to. If None, binds to localhost on a random port.
+    /// * `encoding_key` - PEM-encoded RSA private key string for signing JWTs.
+    /// * `kid` - Key ID to use in JWT headers and JWKS.
+    /// * `now` - Function for getting current time.
+    /// * `expires_in_secs` - How long tokens should be valid.
+    pub async fn start(
+        addr: Option<&SocketAddr>,
+        encoding_key: String,
+        kid: String,
+        now: NowFn,
+        expires_in_secs: i64,
+    ) -> Result<OidcMockServer, anyhow::Error> {
+        // Convert PEM string to key.
+        let encoding_key_typed = EncodingKey::from_rsa_pem(encoding_key.as_bytes())?;
+
+        // Parse the private key PEM to extract RSA components for JWKS.
+        let pkey = PKey::private_key_from_pem(encoding_key.as_bytes())?;
+        let rsa = pkey.rsa().expect("pkey should be RSA");
+
+        let addr = match addr {
+            Some(addr) => Cow::Borrowed(addr),
+            None => Cow::Owned(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)),
+        };
+
+        let listener = TcpListener::bind(*addr).await.unwrap_or_else(|e| {
+            panic!("error binding to {}: {}", addr, e);
+        });
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let issuer = base_url.clone();
+
+        // Extract RSA public key components from the decoding key
+        // We need to serialize the public key to get n and e values
+        let jwk = create_jwk(&kid, &rsa);
+
+        let context = Arc::new(OidcMockContext {
+            issuer: issuer.clone(),
+            jwk,
+        });
+
+        let router = Router::new()
+            .route("/.well-known/jwks.json", get(handle_jwks))
+            .route(
+                "/.well-known/openid-configuration",
+                get(handle_openid_config),
+            )
+            .with_state(context);
+
+        let server = axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        );
+        println!("oidc-mock listening...");
+        println!(" HTTP address: {}", base_url);
+        let handle = mz_ore::task::spawn(|| "oidc-mock-server", server.into_future());
+
+        Ok(OidcMockServer {
+            base_url,
+            issuer,
+            kid,
+            encoding_key: encoding_key_typed,
+            now,
+            expires_in_secs,
+            handle,
+        })
+    }
+
+    /// Generates a JWT token for testing.
+    ///
+    /// # Arguments
+    ///
+    /// * `sub` - Subject (user identifier).
+    /// * `email` - Optional email claim.
+    pub fn generate_jwt(&self, sub: &str, email: Option<&str>) -> String {
+        let now_ms = (self.now)();
+        let now_secs = (now_ms / 1000) as i64;
+
+        let claims = OidcClaims {
+            sub: sub.to_string(),
+            iss: self.issuer.clone(),
+            exp: now_secs + self.expires_in_secs,
+            iat: Some(now_secs),
+            email: email.map(|s| s.to_string()),
+        };
+
+        let mut header = Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some(self.kid.clone());
+
+        encode(&header, &claims, &self.encoding_key).expect("failed to encode JWT")
+    }
+
+    /// Generates a JWT token with a specific expiration time.
+    pub fn generate_jwt_with_exp(&self, sub: &str, email: Option<&str>, exp: i64) -> String {
+        let now_ms = (self.now)();
+        let now_secs = (now_ms / 1000) as i64;
+
+        let claims = OidcClaims {
+            sub: sub.to_string(),
+            iss: self.issuer.clone(),
+            exp,
+            iat: Some(now_secs),
+            email: email.map(|s| s.to_string()),
+        };
+
+        let mut header = Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some(self.kid.clone());
+
+        encode(&header, &claims, &self.encoding_key).expect("failed to encode JWT")
+    }
+
+    /// Generates a JWT token with a custom issuer (for testing invalid tokens).
+    pub fn generate_jwt_with_issuer(&self, sub: &str, email: Option<&str>, issuer: &str) -> String {
+        let now_ms = (self.now)();
+        let now_secs = (now_ms / 1000) as i64;
+
+        let claims = OidcClaims {
+            sub: sub.to_string(),
+            iss: issuer.to_string(),
+            exp: now_secs + self.expires_in_secs,
+            iat: Some(now_secs),
+            email: email.map(|s| s.to_string()),
+        };
+
+        let mut header = Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some(self.kid.clone());
+
+        encode(&header, &claims, &self.encoding_key).expect("failed to encode JWT")
+    }
+
+    /// Returns the JWKS URL for this server.
+    pub fn jwks_url(&self) -> String {
+        format!("{}/.well-known/jwks.json", self.base_url)
+    }
+}
+
+/// Handler for JWKS endpoint.
+async fn handle_jwks(State(context): State<Arc<OidcMockContext>>) -> Json<JwkSet> {
+    Json(JwkSet {
+        keys: vec![context.jwk.clone()],
+    })
+}
+
+/// OpenID Configuration response.
+#[derive(Serialize)]
+struct OpenIdConfiguration {
+    issuer: String,
+    jwks_uri: String,
+}
+
+/// Handler for OpenID Configuration endpoint.
+async fn handle_openid_config(
+    State(context): State<Arc<OidcMockContext>>,
+) -> Json<OpenIdConfiguration> {
+    Json(OpenIdConfiguration {
+        issuer: context.issuer.clone(),
+        jwks_uri: format!("{}/.well-known/jwks.json", context.issuer),
+    })
+}
+
+/// Creates a JWK from RSA key components.
+fn create_jwk(kid: &str, rsa: &Rsa<Private>) -> Jwk {
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let n = rsa.n().to_vec();
+    let e = rsa.e().to_vec();
+
+    Jwk {
+        kty: "RSA".to_string(),
+        kid: kid.to_string(),
+        key_use: "sig".to_string(),
+        alg: "RS256".to_string(),
+        n: engine.encode(n),
+        e: engine.encode(e),
+    }
+}

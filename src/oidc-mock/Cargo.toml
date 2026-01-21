@@ -1,0 +1,36 @@
+
+[package]
+name = "mz-oidc-mock"
+description = "OIDC mock server for testing."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+axum = "0.7.5"
+base64 = "0.22.1"
+jsonwebtoken = "9.3.1"
+mz-authenticator = { path = "../authenticator" }
+mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.148"
+tokio = { version = "1.48.0", default-features = false }
+tracing = "0.1.44"
+uuid = "1.19.0"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+openssl = { version = "0.10.75", features = ["vendored"] }
+reqwest = { version = "0.12.28", features = ["json"] }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack"]

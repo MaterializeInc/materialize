@@ -90,6 +90,7 @@ use crate::{
     CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
     WebSocketAuth, WebSocketResponse,
 };
+use mz_authenticator::GenericOidcAuthenticator;
 
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -100,6 +101,7 @@ pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthenticator>,
+    oidc: Option<GenericOidcAuthenticator>,
     external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
     unsafe_mode: bool,
@@ -137,6 +139,7 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
+            oidc: None,
             external_login_password_mz_system: None,
             listeners_config: ListenersConfig {
                 sql: btreemap![
@@ -331,6 +334,60 @@ impl TestHarness {
                     base: BaseListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::Frontegg,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                    },
+                },
+            },
+        };
+        self
+    }
+
+    pub fn with_oidc_auth(mut self, oidc: &GenericOidcAuthenticator) -> Self {
+        self.oidc = Some(oidc.clone());
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Oidc,
                         allowed_roles: AllowedRoles::Normal,
                         enable_tls,
                     },
@@ -750,8 +807,7 @@ impl Listeners {
                     connection_context,
                     replica_http_locator: Default::default(),
                 },
-                // TODO (SangJunBak): Add a mock OIDC authenticator
-                oidc: None,
+                oidc: config.oidc,
                 secrets_controller,
                 cloud_resource_controller: None,
                 tls: config.tls,

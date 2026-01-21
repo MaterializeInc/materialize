@@ -156,6 +156,7 @@ impl GenericOidcAuthenticator {
                 issuer: config.oidc_issuer,
                 jwks_uri,
                 decoding_keys: Mutex::new(BTreeMap::new()),
+                // TODO: Use same client code as frontegg-auth.
                 http_client: HttpClient::new(),
             }),
         })

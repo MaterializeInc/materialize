@@ -38,6 +38,7 @@ use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_auth::password::Password;
+use mz_authenticator::{GenericOidcAuthenticator, OidcConfig};
 use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -47,6 +48,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
+use mz_oidc_mock::OidcMockServer;
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -1262,6 +1264,187 @@ async fn test_auth_base_require_tls_frontegg() {
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
                     assert_eq!(message, "unauthorized");
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC authentication with TLS required.
+///
+/// This test verifies that users can authenticate using JWT tokens
+/// over TLS connections
+#[allow(clippy::unit_arg)]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_base_require_tls_oidc() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    // Get PEM string from CA's key (same pattern as Frontegg TLS test).
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
+        oidc_issuer: oidc_server.issuer.clone(),
+    })
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let jwt_token = oidc_server.generate_jwt(oidc_user, Some(oidc_user));
+    let expired_token = oidc_server.generate_jwt_with_exp(oidc_user, Some(oidc_user), 0);
+    let wrong_user_token = oidc_server.generate_jwt("other@example.com", Some("other@example.com"));
+    let wrong_issuer_token = oidc_server.generate_jwt_with_issuer(
+        oidc_user,
+        Some(oidc_user),
+        "https://wrong-issuer.com",
+    );
+
+    // Create Bearer auth header for HTTP tests.
+    let oidc_bearer = Authorization::bearer(&jwt_token).unwrap();
+    let oidc_header_bearer = make_header(oidc_bearer);
+
+    let oidc_header_basic = make_header(Authorization::basic(oidc_user, &jwt_token));
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(&oidc_auth)
+        .start()
+        .await;
+
+    run_tests(
+        "TlsMode::Require, OIDC",
+        &server,
+        &[
+            // TLS with valid JWT should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // HTTP with Bearer auth should succeed.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_bearer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // HTTP with basic username/password should succeed.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with bearer token should succeed.
+            TestCase::Ws {
+                auth: &WebSocketAuth::Bearer {
+                    token: jwt_token.clone(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with basic username/password should succeed.
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: oidc_user.to_string(),
+                    password: Password(jwt_token.clone()),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // No TLS should fail when server requires it.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Disable,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(
+                        *err.code(),
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    );
+                    assert_eq!(err.message(), "TLS encryption is required");
+                })),
+            },
+            // HTTP without TLS should be rejected.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTP,
+                headers: &oidc_header_bearer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: assert_http_rejected(),
+            },
+            // Invalid JWT should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed("invalid-jwt-token")),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // Expired JWT should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&expired_token)),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // JWT for wrong user should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_user_token)),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // JWT with wrong issuer should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_issuer_token)),
+                ssl_mode: SslMode::Require,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
                 })),
             },
         ],
