@@ -8,6 +8,7 @@
     [WITH (
         TEXT COLUMNS (<column_name> [, ...])
       | EXCLUDE COLUMNS (<column_name> [, ...])
+      | PARTITION BY (<column_name> [, ...])
       [, ...]
     )]
     ;
@@ -57,6 +58,7 @@
         |--------|-------------|
         | `TEXT COLUMNS (<column_name> [, ...])` |*Optional.* If specified, decode data as `text` for the listed column(s),such as for unsupported data types. See also [supported types](#supported-data-types). |
         | `EXCLUDE COLUMNS (<column_name> [, ...])`| *Optional.* If specified,exclude the listed column(s) from the table, such as for unsupported data types. See also [supported types](#supported-data-types).|
+        | `PARTITION BY (<column_name> [, ...])` | {{< include-md file="shared-content/partition-by-option-description.md" >}} |
   results: |
     {{< include-md
     file="shared-content/create-table-from-source-snapshotting.md"
