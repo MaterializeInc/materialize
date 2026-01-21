@@ -644,21 +644,21 @@ impl DDLEvent {
                                     while let Some(tok) = peekable.peek() {
                                         // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
                                         match tok.to_ascii_lowercase().as_str() {
-                                            "if" | "exists" => continue,
-                                            col_name => {
+                                            "if" | "exists" | "," => continue,
+                                            col_str => {
                                                 // If the column is in the exclude list, then it is okay to alter/drop it
-                                                if !exclude_columns.iter().any(|excluded| {
+                                                if !col_str.trim_matches(',').split(',').all(|col_name| { exclude_columns.iter().any(|excluded| {
                                                     excluded.eq_ignore_ascii_case(
                                                         col_name.trim_matches(
-                                                            [',', '[', ']', '"'].as_ref(),
+                                                            ['[', ']', '"'].as_ref(),
                                                         ),
                                                     )
-                                                }) {
+                                                })}) {
                                                     all_excluded = false;
                                                     break;
                                                 }
                                                 // If this is the only/last column, then we can break out of the while loop
-                                                if !col_name.ends_with(",") {
+                                                if !col_str.ends_with(",") {
                                                     break;
                                                 }
                                             }
@@ -1086,6 +1086,26 @@ mod tests {
         );
         test_case(
             "ALTER TABLE my_table DROP CONSTRAINT constraint_name",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col3",
+            &exclude_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col2",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 ,col2",
+            &exclude_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col2",
             &exclude_columns,
             true,
         );
