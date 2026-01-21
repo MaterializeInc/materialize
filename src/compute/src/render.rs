@@ -114,7 +114,7 @@ use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::SemigroupVariable;
-use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
@@ -131,7 +131,7 @@ use mz_compute_types::plan::render_plan::{
 use mz_expr::{EvalError, Id, LocalId};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, Diff, GlobalId, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -142,10 +142,10 @@ use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::{BranchWhen, Capability, Operator, Probe, probe};
+use timely::dataflow::operators::{BranchWhen, Capability, Filter, Operator, Probe, probe};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream, StreamCore};
-use timely::order::Product;
+use timely::order::{Product, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
@@ -161,7 +161,7 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
 pub mod context;
@@ -382,12 +382,19 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
                     context.import_index(
                         compute_state,
                         &mut tokens,
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        snapshot_mode,
                         start_signal.clone(),
                     );
                 }
@@ -484,12 +491,19 @@ pub fn build_compute_dataflow<A: Allocate>(
                 // Import declared indexes into the rendering context.
                 for (idx_id, idx) in &dataflow.index_imports {
                     let input_probe = compute_state.input_probe_for(*idx_id, dataflow.export_ids());
+                    let snapshot_mode = if idx.with_snapshot || !subscribe_snapshot_optimization {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
                     context.import_index(
                         compute_state,
                         &mut tokens,
                         input_probe,
                         *idx_id,
                         &idx.desc,
+                        snapshot_mode,
                         start_signal.clone(),
                     );
                 }
@@ -555,6 +569,27 @@ where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     T: Refines<G::Timestamp> + RenderTimestamp,
 {
+    /// Import the collection from the arrangement, discarding batches from the snapshot.
+    /// (This does not guarantee that no records from the snapshot are included; the assumption is
+    /// that we'll filter those out later if necessary.)
+    fn import_filtered_index_collection<Tr: TraceReader<Time = G::Timestamp> + Clone, V: Data>(
+        &self,
+        arranged: Arranged<G, Tr>,
+        start_signal: StartSignal,
+        mut logic: impl FnMut(Tr::Key<'_>, Tr::Val<'_>) -> V + 'static,
+    ) -> VecCollection<Child<'g, G, T>, V, Tr::Diff>
+    where
+        // This is implied by the fact that G::Timestamp = mz_repr::Timestamp, but it's essential
+        // for our batch-level filtering to be safe, so we document it here regardless.
+        G::Timestamp: TotalOrder,
+    {
+        let oks = arranged.stream.with_start_signal(start_signal).filter({
+            let as_of = self.as_of_frontier.clone();
+            move |b| !<Antichain<G::Timestamp> as PartialOrder>::less_equal(b.upper(), &as_of)
+        });
+        Arranged::<G, Tr>::flat_map_batches(&oks, move |a, b| [logic(a, b)]).enter(&self.scope)
+    }
+
     pub(crate) fn import_index(
         &mut self,
         compute_state: &mut ComputeState,
@@ -562,6 +597,7 @@ where
         input_probe: probe::Handle<mz_repr::Timestamp>,
         idx_id: GlobalId,
         idx: &IndexDesc,
+        snapshot_mode: SnapshotMode,
         start_signal: StartSignal,
     ) {
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
@@ -588,20 +624,48 @@ where
                 self.until.clone(),
             );
 
-            let ok_arranged = oks
-                .enter(&self.scope)
-                .with_start_signal(start_signal.clone());
-            let err_arranged = err_arranged
-                .enter(&self.scope)
-                .with_start_signal(start_signal);
-
-            self.update_id(
-                Id::Global(idx.on_id),
-                CollectionBundle::from_expressions(
-                    idx.key.clone(),
-                    ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
-                ),
-            );
+            let bundle = match snapshot_mode {
+                SnapshotMode::Include => {
+                    let ok_arranged = oks
+                        .enter(&self.scope)
+                        .with_start_signal(start_signal.clone());
+                    let err_arranged = err_arranged
+                        .enter(&self.scope)
+                        .with_start_signal(start_signal);
+                    CollectionBundle::from_expressions(
+                        idx.key.clone(),
+                        ArrangementFlavor::Trace(idx_id, ok_arranged, err_arranged),
+                    )
+                }
+                SnapshotMode::Exclude => {
+                    // When we import an index without a snapshot, we have two balancing considerations:
+                    // - It's easy to filter out irrelevant batches from the stream, but hard to filter them out from an arrangement.
+                    //   (The `TraceFrontier` wrapper allows us to set an "until" frontier, but not a lower.)
+                    // - We do not actually need to reference the arrangement in this dataflow, since all operators that use the arrangement
+                    //   (joins, reduces, etc.) also require the snapshot data.
+                    // So: when the snapshot is excluded, we import only the (filtered) collection itself and ignore the arrangement.
+                    let oks = {
+                        let mut datums = DatumVec::new();
+                        self.import_filtered_index_collection(
+                            oks,
+                            start_signal.clone(),
+                            move |k: DatumSeq, v: DatumSeq| {
+                                let mut datums_borrow = datums.borrow();
+                                datums_borrow.extend(k);
+                                datums_borrow.extend(v);
+                                SharedRow::pack(&**datums_borrow)
+                            },
+                        )
+                    };
+                    let errs = self.import_filtered_index_collection(
+                        err_arranged,
+                        start_signal,
+                        |e, _| e.clone(),
+                    );
+                    CollectionBundle::from_collections(oks, errs)
+                }
+            };
+            self.update_id(Id::Global(idx.on_id), bundle);
             tokens.insert(
                 idx_id,
                 Rc::new((ok_button.press_on_drop(), err_button.press_on_drop(), token)),
