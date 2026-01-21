@@ -55,7 +55,7 @@ CREATE SINK [IF NOT EXISTS] <sink_name>
 | **NAMESPACE** `'<namespace>'` | The Iceberg namespace (database) containing the table. |
 | **TABLE** `'<table>'` | The name of the Iceberg table to write to. If the table doesn't exist, Materialize will create it. |
 | **USING AWS CONNECTION** `<aws_connection>` | The AWS connection for object storage access. |
-| **KEY** `(<key_col>, ...)` | The columns that uniquely identify rows. Required for generating equality deletes when rows are updated or deleted. |
+| **KEY** `(<key_col>, ...)` | **Required.** The columns that uniquely identify rows. Used to generate equality deletes when rows are updated or deleted. |
 | **NOT ENFORCED** | Optional. Disable validation of key uniqueness. Use only when you have outside knowledge that the key is unique. |
 | **COMMIT INTERVAL** `'<interval>'` | **Required.** How frequently to commit snapshots to Iceberg (e.g., `'10s'`, `'1m'`). |
 

@@ -157,6 +157,27 @@ CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
 Replace `<region>` with your AWS region (e.g., `us-east-1`) and `<table-bucket-name>`
 with the name of your S3 Tables bucket.
 
+#### Alternative: REST Catalog
+
+For REST-compatible catalogs (Polaris, Nessie, etc.), create a connection with
+OAuth2 credentials:
+
+```mzsql
+-- First, create a secret with your OAuth2 credentials
+CREATE SECRET oauth_creds AS '<CLIENT_ID>:<CLIENT_SECRET>';
+
+-- Then create the REST catalog connection
+CREATE CONNECTION rest_catalog TO ICEBERG CATALOG (
+    CATALOG TYPE = 'rest',
+    URL = 'https://your-catalog.example.com/v1',
+    WAREHOUSE = 'my_warehouse',
+    CREDENTIAL = SECRET oauth_creds
+);
+```
+
+You'll still need an AWS connection for object storage access (created in the
+previous step), even when using a REST catalog.
+
 ## Step 3. Create the sink
 
 Create a sink from a source, table, or materialized view:
@@ -203,9 +224,10 @@ snapshots to your Iceberg table. This involves tradeoffs:
 
 ### Key selection
 
-The `KEY` columns you specify must uniquely identify rows in your source
-relation. Materialize uses these columns to generate equality delete files when
-rows are updated or deleted.
+The `KEY` clause is **required** for Iceberg sinks. The columns you specify must
+uniquely identify rows in your source relation. Materialize uses these columns
+to generate equality delete files when rows are updated or deleted across commit
+intervals. Without a key, Materialize cannot correctly handle updates or deletes.
 
 If Materialize cannot validate that your key is unique, you'll receive an error.
 You can use `KEY (...) NOT ENFORCED` to bypass this validation if you have
