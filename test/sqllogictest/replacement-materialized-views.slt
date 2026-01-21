@@ -315,6 +315,12 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT 2
 
+# If we run too quickly the replacement can succeed, so make sure we can select
+query I
+SELECT * FROM mv
+----
+1
+
 simple
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 ----
