@@ -21,6 +21,7 @@ def create_mysql_server_args(server_id: str, is_master: bool) -> list[str]:
         "--binlog-format=row",
         "--binlog-row-image=full",
         f"--server-id={server_id}",
+        "--max-connections=500",
     ]
 
     if not is_master:

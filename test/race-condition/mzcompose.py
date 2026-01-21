@@ -17,15 +17,19 @@ import time
 from textwrap import dedent
 from uuid import uuid4
 
+import requests
+
 from materialize.mzcompose.composition import (
     Composition,
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
@@ -33,6 +37,7 @@ from materialize.mzcompose.services.sql_server import (
     setup_sql_server_testing,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread, all_subclasses
 
@@ -40,18 +45,21 @@ SERVICES = [
     Postgres(max_replication_slots=100000),
     MySql(),
     SqlServer(),
+    PolarisBootstrap(),
+    Polaris(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,
         ports=["30123:30123"],
         allow_host_ports=True,
         environment_extra=[
-            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_ADVERTISED_LISTENERS=HOST://127.0.0.1:30123,PLAINTEXT://kafka:9092",
             "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
         ],
     ),
     SchemaRegistry(),
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Toxiproxy(),
     Testdrive(no_reset=True, consistent_seed=True, default_timeout="600s"),
     Mc(),
     Materialized(
@@ -155,10 +163,10 @@ class UpsertSource(Object):
             {{"b": "bdata", "a": ${{kafka-ingest.iteration}}}} {{"before": {{"row": {{"a": ${{kafka-ingest.iteration}}, "data": "fish", "b": "bdata"}}}}, "after": {{"row": {{"a": ${{kafka-ingest.iteration}}, "data": "fish2", "b": "bdata"}}}}}}
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
-              URL '${{testdrive.schema-registry-url}}')
+              URL 'http://toxiproxy:8081')
 
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)"""
+              TO KAFKA (BROKER 'toxiproxy:9092', SECURITY PROTOCOL PLAINTEXT)"""
         )
 
     def create(self) -> str:
@@ -213,84 +221,82 @@ class Table(Object):
 # TODO: Add more manipulations: inserts, updates, deletes, ALTER RENAME (twice)
 
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9302 is fixed
-# class PostgresSource(Object):
-#     def prepare(self) -> str:
-#         return dedent(
-#             f"""
-#             $ postgres-execute connection=postgres://postgres:postgres@postgres
-#             DROP USER IF EXISTS {self.name}_role;
-#             CREATE USER {self.name}_role WITH SUPERUSER PASSWORD 'postgres';
-#             ALTER USER {self.name}_role WITH replication;
-#             DROP PUBLICATION IF EXISTS {self.name}_source;
-#             DROP TABLE IF EXISTS {self.name}_table;
-#             CREATE TABLE {self.name}_table (a TEXT, b TEXT);
-#             ALTER TABLE {self.name}_table REPLICA IDENTITY FULL;
-#             CREATE PUBLICATION {self.name}_source FOR TABLE {self.name}_table;
-#             INSERT INTO {self.name}_table VALUES ('foo', 'bar');
-#
-#             > DROP SECRET IF EXISTS {self.name}_pass CASCADE
-#             > CREATE SECRET {self.name}_pass AS 'postgres'
-#             > DROP CONNECTION IF EXISTS {self.name}_conn CASCADE
-#             > CREATE CONNECTION {self.name}_conn FOR POSTGRES
-#               HOST 'postgres',
-#               DATABASE postgres,
-#               USER {self.name}_role,
-#               PASSWORD SECRET {self.name}_pass"""
-#         )
-#
-#     def create(self) -> str:
-#         return dedent(
-#             f"""
-#             > BEGIN
-#             > CREATE SOURCE {self.name}_source
-#               IN CLUSTER quickstart
-#               FROM POSTGRES CONNECTION {self.name}_conn
-#               (PUBLICATION '{self.name}_source')
-#             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)
-#             > COMMIT"""
-#         )
-#
-#     def destroy(self) -> str:
-#         return dedent(
-#             f"""
-#             > DROP TABLE {self.name} CASCADE
-#             > DROP SOURCE IF EXISTS {self.name}_source"""
-#         )
-#
-#     def manipulate(self, kind: int) -> str:
-#         manipulations = [
-#             lambda: "",
-#             lambda: dedent(
-#                 f"""
-#                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-#                 INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""
-#             ),
-#             lambda: dedent(
-#                 f"""
-#                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-#                 UPDATE {self.name}_table SET b = b || 'bar' WHERE true;"""
-#             ),
-#             lambda: dedent(
-#                 f"""
-#                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-#                 DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""
-#             ),
-#             lambda: dedent(
-#                 f"""
-#                 > DROP TABLE IF EXISTS {self.name}_tmp_table
-#                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
-#                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-#                 """
-#             ),
-#         ]
-#         return manipulations[kind % len(manipulations)]()
-#
-#     def verify(self) -> str:
-#         raise NotImplementedError
+class PostgresSource(Object):
+    def prepare(self) -> str:
+        return dedent(
+            f"""
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            DROP USER IF EXISTS {self.name}_role;
+            CREATE USER {self.name}_role WITH SUPERUSER PASSWORD 'postgres';
+            ALTER USER {self.name}_role WITH replication;
+            DROP PUBLICATION IF EXISTS {self.name}_source;
+            DROP TABLE IF EXISTS {self.name}_table;
+            CREATE TABLE {self.name}_table (a TEXT, b TEXT);
+            ALTER TABLE {self.name}_table REPLICA IDENTITY FULL;
+            CREATE PUBLICATION {self.name}_source FOR TABLE {self.name}_table;
+            INSERT INTO {self.name}_table VALUES ('foo', 'bar');
+
+            > DROP SECRET IF EXISTS {self.name}_pass CASCADE
+            > CREATE SECRET {self.name}_pass AS 'postgres'
+            > DROP CONNECTION IF EXISTS {self.name}_conn CASCADE
+            > CREATE CONNECTION {self.name}_conn FOR POSTGRES
+              HOST 'postgres',
+              DATABASE postgres,
+              USER {self.name}_role,
+              PASSWORD SECRET {self.name}_pass"""
+        )
+
+    def create(self) -> str:
+        return dedent(
+            f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM POSTGRES CONNECTION {self.name}_conn
+              (PUBLICATION '{self.name}_source')
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)
+            > COMMIT"""
+        )
+
+    def destroy(self) -> str:
+        return dedent(
+            f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source"""
+        )
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: dedent(
+                f"""
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""
+            ),
+            lambda: dedent(
+                f"""
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                UPDATE {self.name}_table SET b = b || 'bar' WHERE true;"""
+            ),
+            lambda: dedent(
+                f"""
+                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""
+            ),
+            lambda: dedent(
+                f"""
+                > DROP TABLE IF EXISTS {self.name}_tmp_table
+                > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+                > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+                """
+            ),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
 
 
-# TODO: Can't set up with an empty table in mysql? ERROR: reference to public.o_0_table not found in source
 class MySqlSource(Object):
     def prepare(self) -> str:
         return dedent(
@@ -607,6 +613,73 @@ class KafkaSink(Object):
         raise NotImplementedError
 
 
+class IcebergSink(Object):
+    can_refer: bool = False
+
+    def __init__(self, name: str, references: Object | None, rng: random.Random):
+        super().__init__(name, references, rng)
+
+    def create(self) -> str:
+        self.references_str = (
+            self.references.name if self.references else f"{self.name}_view"
+        )
+        cmds = []
+        if not self.references:
+            cmds.append(
+                f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT 'foo' AS a, 'bar' AS b"
+            )
+        elif isinstance(self.references, View):
+            self.references_str = f"{self.name}_mv"
+            cmds.append(
+                f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT * FROM {self.references.name}"
+            )
+
+        # See database-issues#9048, topic has to be unique
+        table = f"{self.name}-{uuid4()}"
+
+        cmds.append(
+            dedent(
+                f"""
+            > CREATE SINK {self.name}
+              IN CLUSTER quickstart
+              FROM {self.references_str}
+              INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table}')
+              USING AWS CONNECTION aws_conn
+              ENVELOPE DEBEZIUM WITH (COMMIT INTERVAL '1s')"""
+            )
+        )
+        return "\n".join(cmds)
+
+    def destroy(self) -> str:
+        return f"> DROP SINK {self.name} CASCADE"
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            # TODO: https://github.com/MaterializeInc/database-issues/issues/10026
+            # lambda: dedent(
+            #     f"""
+            #     > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
+            #     > CREATE MATERIALIZED VIEW {self.name}_tmp_mv AS SELECT * FROM {self.references_str}
+            #     > ALTER SINK {self.name} SET FROM {self.name}_tmp_mv
+            #     > ALTER SINK {self.name} SET FROM {self.references_str}
+            #     > DROP MATERIALIZED VIEW {self.name}_tmp_mv
+            #     """
+            # ),
+            lambda: dedent(
+                f"""
+                > DROP SINK IF EXISTS {self.name}_tmp_sink
+                > ALTER SINK {self.name} RENAME TO {self.name}_tmp_sink
+                > ALTER SINK {self.name}_tmp_sink RENAME TO {self.name}
+                """
+            ),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
 class View(Object):
     def create(self) -> str:
         select = (
@@ -658,13 +731,14 @@ class MaterializedView(Object):
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
                 """
             ),
-            lambda: dedent(
-                f"""
-                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
-                > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
-                > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
-                """
-            ),
+            # TODO: Deal with 'The materialized view has already computed its output until the end of time, so replacing its definition would have no effect.'
+            # lambda: dedent(
+            #     f"""
+            #     > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
+            #     > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
+            #     > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
+            #     """
+            # ),
             lambda: dedent(
                 f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
@@ -866,6 +940,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=5,
         type=int,
     )
+    parser.add_argument(
+        "--jitter",
+        default=10,
+        type=int,
+    )
     args = parser.parse_args()
 
     print(f"--- Random seed is {args.seed}")
@@ -874,8 +953,42 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
     ).timestamp()
 
+    toxiproxy_start(c, args.jitter)
     c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
     setup_sql_server_testing(c)
+
+    iceberg_credentials = setup_polaris_for_iceberg(c)
+    c.sql(f"CREATE SECRET iceberg_secret AS '{iceberg_credentials[1]}'")
+    c.sql(
+        f"CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_credentials[0]}', SECRET ACCESS KEY = SECRET iceberg_secret, ENDPOINT = 'http://toxiproxy:9000/', REGION = 'us-east-1');"
+    )
+    c.sql(
+        "CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://toxiproxy:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');"
+    )
+    c.sql(
+        "ALTER SYSTEM SET max_schemas_per_database = 1000000",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("ALTER SYSTEM SET max_tables = 1000000", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET max_materialized_views = 1000000", user="mz_system", port=6877
+    )
+    c.sql("ALTER SYSTEM SET max_sources = 1000000", user="mz_system", port=6877)
+    c.sql("ALTER SYSTEM SET max_sinks = 1000000", user="mz_system", port=6877)
+    c.sql("ALTER SYSTEM SET max_roles = 1000000", user="mz_system", port=6877)
+    c.sql("ALTER SYSTEM SET max_clusters = 1000000", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET max_replicas_per_cluster = 1000000",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("ALTER SYSTEM SET max_secrets = 1000000", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET webhook_concurrent_request_limit = 1000000",
+        user="mz_system",
+        port=6877,
+    )
 
     seed = args.seed
 
@@ -897,3 +1010,89 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         print(f"--- Running scenario {args.repetitions} times")
         scenario.run(args.repetitions)
         seed = rng.randrange(1000000)
+
+
+def toxiproxy_start(c: Composition, jitter: int) -> None:
+    c.up("toxiproxy")
+
+    port = c.default_port("toxiproxy")
+    r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "schema-registry",
+            "listen": "0.0.0.0:8081",
+            "upstream": "schema-registry:8081",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "kafka",
+            "listen": "0.0.0.0:9092",
+            "upstream": "kafka:9092",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "polaris",
+            "listen": "0.0.0.0:8181",
+            "upstream": "polaris:8181",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies",
+        json={
+            "name": "minio",
+            "listen": "0.0.0.0:9000",
+            "upstream": "minio:9000",
+            "enabled": True,
+        },
+    )
+    assert r.status_code == 201, r
+
+    if not jitter:
+        return
+
+    r = requests.post(
+        f"http://localhost:{port}/proxies/schema-registry/toxics",
+        json={
+            "name": "schema-registry",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": jitter},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/kafka/toxics",
+        json={
+            "name": "kafka",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": jitter},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/polaris/toxics",
+        json={
+            "name": "polaris",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": jitter},
+        },
+    )
+    assert r.status_code == 200, r
+    r = requests.post(
+        f"http://localhost:{port}/proxies/minio/toxics",
+        json={
+            "name": "minio",
+            "type": "latency",
+            "attributes": {"latency": 0, "jitter": jitter},
+        },
+    )
+    assert r.status_code == 200, r
