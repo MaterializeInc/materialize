@@ -233,6 +233,28 @@ If Materialize cannot validate that your key is unique, you'll receive an error.
 You can use `KEY (...) NOT ENFORCED` to bypass this validation if you have
 outside knowledge that the key is unique.
 
+## Step 4. Monitor your sink
+
+Query the `mz_iceberg_sinks` system catalog table to monitor sink health:
+
+```mzsql
+SELECT
+    s.name,
+    ics.snapshot_id,
+    ics.snapshot_version_id,
+    ics.num_data_files,
+    ics.num_equality_delete_files,
+    ics.num_position_delete_files
+FROM mz_sinks s
+JOIN mz_iceberg_sinks ics ON s.id = ics.id
+WHERE s.name = 'my_iceberg_sink';
+```
+
+Key metrics to watch:
+- `num_equality_delete_files`: Growing large → consider compaction
+- `num_position_delete_files`: Usually stays small
+- `snapshot_id`: Should increment regularly (indicates commits happening)
+
 ## Querying Iceberg tables
 
 Once your sink is running, you can query the Iceberg table from any system that
@@ -250,8 +272,9 @@ supports Iceberg:
   must drop and recreate the sink.
 - **Partition evolution**: Partition spec changes are not supported.
 - **Table format**: Only Iceberg v2 format is supported.
-- **Record types**: Composite/record types are not currently supported. Use
-  scalar types or flatten your data structure.
+- **Nested types**: While `list` and `map` types are supported, deeply nested
+  structures may have limitations. Composite/record types are not currently
+  supported. Flatten your data into scalar columns for best compatibility.
 
 ## Troubleshooting
 
@@ -310,17 +333,31 @@ This hybrid approach means:
 
 ### Table creation
 
-When Materialize creates a new Iceberg table, it uses:
-- A schema derived from your source relation's columns
-- Iceberg format version 2
-- No partitioning (unpartitioned table)
+When Materialize creates a new Iceberg table (because it doesn't exist), it:
+
+- Derives the schema from your source relation's columns (see Type mapping below)
+- Uses Iceberg format version 2
+- Creates an unpartitioned table (partition support not yet available)
+- Assigns field IDs sequentially starting from 1
+- Sets the default write format to Parquet
+
+**Schema evolution limitation**: Once created, Materialize does not modify the
+table schema. If your source schema changes (columns added/removed/renamed), you
+must drop and recreate the sink, which will snapshot all data again.
 
 ### Progress tracking
 
 Materialize stores progress information in Iceberg snapshot metadata properties
-(`mz-frontier` and `mz-sink-version`). This enables exactly-once delivery by
-allowing Materialize to identify and resume from the last successfully committed
-snapshot after a restart.
+(`mz-frontier` and `mz-sink-version`). This enables exactly-once delivery:
+
+- On sink creation, Materialize commits initial snapshots with these properties
+- After a restart or failure, Materialize scans snapshot metadata to find the
+  last successfully committed snapshot
+- It resumes writing from the stored `mz-frontier` value
+- No data is duplicated or lost
+
+**Important**: If you manually delete or modify Iceberg table snapshots, you may
+break the resume mechanism. Always let Materialize manage the snapshot lifecycle.
 
 ### Type mapping
 
