@@ -83,13 +83,18 @@ API. Add the following to your IAM policy:
 ```json
 {
     "Effect": "Allow",
-    "Action": "s3tables:*",
-    "Resource": "*"
+    "Action": [
+        "s3tables:GetTable",
+        "s3tables:GetTableMetadata",
+        "s3tables:UpdateTableMetadata",
+        "s3tables:PutTableData"
+    ],
+    "Resource": "arn:aws:s3tables:*:*:bucket/<table-bucket-name>/table/*/*"
 }
 ```
 
-You can scope the resource ARN more narrowly to your specific S3 Tables bucket
-if desired.
+Replace `<table-bucket-name>` with your S3 Tables bucket name. This grants the
+minimum permissions needed for Materialize to write to Iceberg tables.
 
 ### Create an IAM role
 
@@ -221,6 +226,17 @@ snapshots to your Iceberg table. This involves tradeoffs:
 - For batch analytics, use longer intervals (`5m` to `15m`)
 - If you notice query performance degradation from small files, increase the
   interval and consider running Iceberg compaction jobs
+
+**Real-world considerations:**
+
+- **Query engine overhead**: Some query engines (Snowflake, Databricks) have
+  per-snapshot overhead. With 10-second intervals, you create 360 snapshots/hour.
+  Test with your specific query engine to find an acceptable latency/overhead balance.
+
+- **Compaction strategy**: If using short intervals, plan for regular Iceberg maintenance:
+  - Run data file compaction weekly to merge small files
+  - Run delete file compaction if you have high update/delete rates
+  - Monitor file count per table (thousands of small files can slow queries)
 
 ### Key selection
 
@@ -382,6 +398,12 @@ Materialize converts SQL types to Iceberg/Parquet types:
 | `jsonb` | `string` |
 | `list` | `list` |
 | `map` | `map` |
+
+**Notes**:
+- `numeric` types are mapped to `decimal(38, scale)` with maximum precision of 38
+- `time`, `timestamp`, and `timestamptz` are stored with microsecond precision (not nanosecond)
+- `jsonb` is serialized to string; query engines must parse the JSON content
+- `uuid` is stored as `fixed(16)` binary format
 
 ## Related pages
 
