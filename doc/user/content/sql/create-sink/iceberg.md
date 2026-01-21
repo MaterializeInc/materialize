@@ -61,57 +61,19 @@ CREATE SINK [IF NOT EXISTS] <sink_name>
 
 ## How Iceberg sinks work
 
-### Data format
+Iceberg sinks continuously stream changes from your source relation to an
+Iceberg table. If the table doesn't exist, Materialize automatically creates it
+with a schema matching your source.
 
-Iceberg sinks write data as Parquet files. The schema of the Iceberg table is
-derived from the source relation's schema. Materialize converts SQL types to
-Iceberg types as follows:
+At each `COMMIT INTERVAL`, a new snapshot is committed, making the data
+available to downstream query engines. Inserts, updates, and deletes are all
+reflected in the Iceberg table—the `KEY` columns identify rows for updates and
+deletes.
 
-SQL type                         | Iceberg type
----------------------------------|-------------
-[`boolean`]                      | `boolean`
-[`smallint`]                     | `int`
-[`integer`]                      | `int`
-[`bigint`]                       | `long`
-[`uint2`]                        | `int`
-[`uint4`]                        | `int`
-[`uint8`]                        | `long`
-[`real`]                         | `float`
-[`double precision`]             | `double`
-[`numeric`]                      | `decimal(38, scale)`
-[`date`]                         | `date`
-[`time`]                         | `time`
-[`timestamp`]                    | `timestamp`
-[`timestamptz`]                  | `timestamptz`
-[`text`] / [`varchar`]           | `string`
-[`bytea`]                        | `binary`
-[`uuid`]                         | `uuid` (fixed-size binary)
-[`jsonb`]                        | `string`
-[`list`]                         | `list`
-[`map`]                          | `map`
+Iceberg sinks provide **exactly-once delivery**: Materialize resumes from the
+last committed snapshot after restarts without duplicating data.
 
-### Change data capture
-
-Iceberg sinks capture changes from your source relation using equality deletes.
-When a row is:
-
-- **Inserted**: A new row is written to a data file.
-- **Updated**: An equality delete is written (based on the `KEY` columns) followed by an insert of the new row.
-- **Deleted**: An equality delete is written for the row.
-
-This approach allows downstream query engines to see the current state of your
-data by applying deletes during query execution.
-
-### Batching and commits
-
-Materialize batches writes according to the `COMMIT INTERVAL` you specify. At
-each interval:
-
-1. All pending writes are flushed to Parquet data files
-2. Any delete files are written
-3. A new Iceberg snapshot is committed atomically
-
-#### Commit interval tradeoffs
+### Commit interval tradeoffs
 
 The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 
@@ -126,20 +88,6 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 - For batch analytics: `5m` to `15m`
 - If query performance degrades due to small files, increase the interval and
   run Iceberg compaction
-
-### Automatic table creation
-
-If the specified Iceberg table doesn't exist, Materialize will create it with:
-
-- A schema matching your source relation
-- No partitioning (unpartitioned table)
-- Iceberg format version 2
-
-### Exactly-once processing
-
-Iceberg sinks provide exactly-once processing guarantees. Materialize stores
-progress information in Iceberg snapshot metadata properties. After a restart,
-Materialize resumes from the last committed snapshot without duplicating data.
 
 ## Required privileges
 
@@ -236,6 +184,12 @@ results when equality deletes are applied.
 - **Record types**: Composite/record types are not supported. Use scalar types
   or flatten your data structure.
 
+## Technical reference
+
+For details on the underlying implementation, including data file formats,
+equality deletes, progress tracking, and table creation behavior, see the
+[Iceberg sink reference](/serve-results/sink/iceberg/#reference).
+
 ## Related pages
 
 - [Iceberg sink guide](/serve-results/sink/iceberg/)
@@ -243,24 +197,3 @@ results when equality deletes are applied.
 - [`DROP SINK`](/sql/drop-sink)
 - [`CREATE CONNECTION`](/sql/create-connection)
 
-[`bigint`]: /sql/types/integer
-[`boolean`]: /sql/types/boolean
-[`bytea`]: /sql/types/bytea
-[`date`]: /sql/types/date
-[`double precision`]: /sql/types/float
-[`integer`]: /sql/types/integer
-[`jsonb`]: /sql/types/jsonb
-[`list`]: /sql/types/list
-[`map`]: /sql/types/map
-[`numeric`]: /sql/types/numeric
-[`real`]: /sql/types/float
-[`smallint`]: /sql/types/integer
-[`text`]: /sql/types/text
-[`time`]: /sql/types/time
-[`timestamp`]: /sql/types/timestamp
-[`timestamptz`]: /sql/types/timestamp
-[`uint2`]: /sql/types/uint
-[`uint4`]: /sql/types/uint
-[`uint8`]: /sql/types/uint
-[`uuid`]: /sql/types/uuid
-[`varchar`]: /sql/types/text

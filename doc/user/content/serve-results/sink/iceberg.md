@@ -23,32 +23,17 @@ can be queried by data warehouses like Snowflake, Databricks, or Spark.
 
 ## How it works
 
-When you create an Iceberg sink, Materialize:
+Iceberg sinks continuously stream changes from your source, table, or
+materialized view to an Iceberg table. If the table doesn't exist, Materialize
+automatically creates it with a schema matching your source relation.
 
-1. **Creates or loads the table**: If the specified Iceberg table doesn't exist,
-   Materialize creates it with a schema matching your source relation. If it
-   exists, Materialize validates schema compatibility.
+At each `COMMIT INTERVAL`, Materialize commits a new snapshot to the Iceberg
+table, making the data available to downstream query engines. Inserts, updates,
+and deletes from your source are all reflected in the Iceberg table—the `KEY`
+columns you specify identify rows for updates and deletes.
 
-2. **Writes data files**: Materialize writes Parquet data files to object
-   storage, batched at configurable intervals (the `COMMIT INTERVAL`).
-
-3. **Commits snapshots**: At each commit interval, Materialize creates an
-   Iceberg snapshot that atomically adds the new data files to the table.
-
-4. **Handles updates and deletes**: Iceberg sinks use equality deletes based on
-   the specified `KEY` columns to handle updates and deletes from your source
-   relation.
-
-### Exactly-once processing
-
-Iceberg sinks provide exactly-once processing guarantees by storing progress
-information in Iceberg snapshot metadata. After a restart, Materialize resumes
-from the last committed snapshot without duplicating data.
-
-### Memory considerations
-
-During creation, sinks need to load an entire snapshot of the data in memory
-before writing it to Iceberg.
+Iceberg sinks provide **exactly-once delivery**: after a restart, Materialize
+resumes from the last committed snapshot without duplicating data.
 
 ## Step 1. Set up AWS permissions
 
@@ -260,6 +245,84 @@ the entire source relation.
 If another process modifies the Iceberg table while Materialize is committing,
 you may see commit conflict errors. Materialize will automatically retry, but
 if conflicts persist, ensure no other writers are modifying the same table.
+
+## Reference
+
+This section provides technical details about how Iceberg sinks work under the
+hood.
+
+### Data files and snapshots
+
+Materialize writes data as Parquet files to the object storage backing your
+Iceberg catalog. At each commit interval:
+
+1. All pending writes are flushed to Parquet data files
+2. Delete files are written for any updates or deletes
+3. A new Iceberg snapshot is committed atomically
+
+The snapshot makes all changes from that interval visible to readers as a single
+atomic unit.
+
+### How deletes work
+
+Iceberg sinks use a hybrid delete strategy that optimizes for different
+scenarios:
+
+**Position deletes** are used when a row is inserted and then deleted (or
+updated) within the same commit interval. Since Materialize knows exactly where
+the row was written, it records the file path and row position. This is
+efficient because it targets a specific location.
+
+**Equality deletes** are used when deleting or updating a row that exists in a
+previous snapshot (i.e., was written in an earlier commit interval). Materialize
+writes a delete file containing the `KEY` column values, and query engines match
+these against rows in existing data files at read time.
+
+This hybrid approach means:
+- Short-lived rows (inserted and deleted quickly) use efficient position deletes
+- Long-lived rows use equality deletes, which may accumulate over time
+- The `KEY` columns must uniquely identify rows for equality deletes to work
+  correctly
+- Consider running [Iceberg compaction](https://iceberg.apache.org/docs/latest/maintenance/#compacting-data-files)
+  periodically to merge delete files and improve query performance
+
+### Table creation
+
+When Materialize creates a new Iceberg table, it uses:
+- A schema derived from your source relation's columns
+- Iceberg format version 2
+- No partitioning (unpartitioned table)
+
+### Progress tracking
+
+Materialize stores progress information in Iceberg snapshot metadata properties
+(`mz-frontier` and `mz-sink-version`). This enables exactly-once delivery by
+allowing Materialize to identify and resume from the last successfully committed
+snapshot after a restart.
+
+### Type mapping
+
+Materialize converts SQL types to Iceberg/Parquet types:
+
+| SQL type | Iceberg type |
+|----------|--------------|
+| `boolean` | `boolean` |
+| `smallint` | `int` |
+| `integer` | `int` |
+| `bigint` | `long` |
+| `real` | `float` |
+| `double precision` | `double` |
+| `numeric` | `decimal(38, scale)` |
+| `date` | `date` |
+| `time` | `time` (microsecond precision) |
+| `timestamp` | `timestamp` (microsecond precision) |
+| `timestamptz` | `timestamptz` (microsecond precision) |
+| `text` / `varchar` | `string` |
+| `bytea` | `binary` |
+| `uuid` | `fixed(16)` |
+| `jsonb` | `string` |
+| `list` | `list` |
+| `map` | `map` |
 
 ## Related pages
 
