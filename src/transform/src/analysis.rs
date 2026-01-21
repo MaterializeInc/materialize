@@ -20,6 +20,7 @@ pub use column_names::{ColumnName, ColumnNames};
 pub use common::{Derived, DerivedBuilder, DerivedView};
 pub use explain::annotate_plan;
 pub use non_negative::NonNegative;
+pub use repr_types::ReprRelationType;
 pub use subtree::SubtreeSize;
 pub use types::SqlRelationType;
 pub use unique_keys::UniqueKeys;
@@ -645,6 +646,133 @@ mod types {
             &self,
             a: &mut Option<Vec<SqlColumnType>>,
             b: Option<Vec<SqlColumnType>>,
+        ) -> bool {
+            match (a, b) {
+                (_, None) => false,
+                (Some(a), Some(b)) => {
+                    let mut changed = false;
+                    assert_eq!(a.len(), b.len());
+                    for (at, bt) in a.iter_mut().zip_eq(b.iter()) {
+                        assert_eq!(at.scalar_type, bt.scalar_type);
+                        if !at.nullable && bt.nullable {
+                            at.nullable = true;
+                            changed = true;
+                        }
+                    }
+                    changed
+                }
+                (a, b) => {
+                    *a = b;
+                    true
+                }
+            }
+        }
+    }
+}
+
+/// Expression types
+mod repr_types {
+
+    use super::{Analysis, Derived, Lattice};
+    use itertools::Itertools;
+    use mz_expr::MirRelationExpr;
+    use mz_repr::ReprColumnType;
+
+    /// Analysis that determines the type of relation expressions.
+    ///
+    /// The value is `Some` when it discovers column types, and `None` in the case that
+    /// it has discovered no constraining information on the column types. The `None`
+    /// variant should only occur in the course of iteration, and should not be revealed
+    /// as an output of the analysis. One can `unwrap()` the result, and if it errors then
+    /// either the expression is malformed or the analysis has a bug.
+    ///
+    /// The analysis will panic if an expression is not well typed (i.e. if `try_col_with_input_cols`
+    /// returns an error).
+    #[derive(Debug)]
+    pub struct ReprRelationType;
+
+    impl Analysis for ReprRelationType {
+        type Value = Option<Vec<ReprColumnType>>;
+
+        fn derive(
+            &self,
+            expr: &MirRelationExpr,
+            index: usize,
+            results: &[Self::Value],
+            depends: &Derived,
+        ) -> Self::Value {
+            let offsets = depends
+                .children_of_rev(index, expr.children().count())
+                .map(|child| &results[child])
+                .collect::<Vec<_>>();
+
+            // For most expressions we'll apply `try_col_with_input_cols`, but for `Get` expressions
+            // we'll want to combine what we know (iteratively) with the stated `Get::typ`.
+            match expr {
+                MirRelationExpr::Get {
+                    id: mz_expr::Id::Local(i),
+                    typ,
+                    ..
+                } => {
+                    let mut result = typ
+                        .column_types
+                        .iter()
+                        .map(ReprColumnType::from)
+                        .collect_vec();
+                    if let Some(o) = depends.bindings().get(i) {
+                        if let Some(t) = results.get(*o) {
+                            if let Some(rec_typ) = t {
+                                // Reconcile nullability statements.
+                                // Unclear if we should trust `typ`.
+                                assert_eq!(result.len(), rec_typ.len());
+                                result.clone_from(rec_typ);
+                                for (res, col) in result.iter_mut().zip_eq(typ.column_types.iter())
+                                {
+                                    if !col.nullable {
+                                        res.nullable = false;
+                                    }
+                                }
+                            } else {
+                                // Our `None` information indicates that we are optimistically
+                                // assuming the best, including that all columns are non-null.
+                                // This should only happen in the first visit to a `Get` expr.
+                                // Use `typ`, but flatten nullability.
+                                for col in result.iter_mut() {
+                                    col.nullable = false;
+                                }
+                            }
+                        }
+                    }
+                    Some(result)
+                }
+                _ => {
+                    // Every expression with inputs should have non-`None` inputs at this point.
+                    let input_cols = offsets.into_iter().rev().map(|o| {
+                        o.as_ref()
+                            .expect("ReprRelationType analysis discovered type-less expression")
+                    });
+
+                    let sql_typ = expr.try_repr_col_with_input_repr_cols(input_cols).unwrap();
+                    Some(sql_typ)
+                }
+            }
+        }
+
+        fn lattice() -> Option<Box<dyn Lattice<Self::Value>>> {
+            Some(Box::new(RTLattice))
+        }
+    }
+
+    struct RTLattice;
+
+    impl Lattice<Option<Vec<ReprColumnType>>> for RTLattice {
+        fn top(&self) -> Option<Vec<ReprColumnType>> {
+            None
+        }
+        fn meet_assign(
+            &self,
+            a: &mut Option<Vec<ReprColumnType>>,
+            b: Option<Vec<ReprColumnType>>,
         ) -> bool {
             match (a, b) {
                 (_, None) => false,

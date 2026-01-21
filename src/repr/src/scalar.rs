@@ -15,6 +15,7 @@ use std::iter;
 use std::ops::Add;
 use std::sync::LazyLock;
 
+use anyhow::bail;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
@@ -4212,6 +4213,89 @@ pub enum ReprScalarType {
     Range { element_type: Box<ReprScalarType> },
     MzAclItem,
     AclItem,
+}
+
+impl ReprScalarType {
+    pub(crate) fn union(&self, scalar_type: &ReprScalarType) -> Result<Self, anyhow::Error> {
+        match (self, scalar_type) {
+            (ReprScalarType::Bool, ReprScalarType::Bool) => Ok(ReprScalarType::Bool),
+            (ReprScalarType::Int16, ReprScalarType::Int16) => Ok(ReprScalarType::Int16),
+            (ReprScalarType::Int32, ReprScalarType::Int32) => Ok(ReprScalarType::Int32),
+            (ReprScalarType::Int64, ReprScalarType::Int64) => Ok(ReprScalarType::Int64),
+            (ReprScalarType::UInt8, ReprScalarType::UInt8) => Ok(ReprScalarType::UInt8),
+            (ReprScalarType::UInt16, ReprScalarType::UInt16) => Ok(ReprScalarType::UInt16),
+            (ReprScalarType::UInt32, ReprScalarType::UInt32) => Ok(ReprScalarType::UInt32),
+            (ReprScalarType::UInt64, ReprScalarType::UInt64) => Ok(ReprScalarType::UInt64),
+            (ReprScalarType::Float32, ReprScalarType::Float32) => Ok(ReprScalarType::Float32),
+            (ReprScalarType::Float64, ReprScalarType::Float64) => Ok(ReprScalarType::Float64),
+            (ReprScalarType::Numeric, ReprScalarType::Numeric) => Ok(ReprScalarType::Numeric),
+            (ReprScalarType::Date, ReprScalarType::Date) => Ok(ReprScalarType::Date),
+            (ReprScalarType::Time, ReprScalarType::Time) => Ok(ReprScalarType::Time),
+            (ReprScalarType::Timestamp, ReprScalarType::Timestamp) => Ok(ReprScalarType::Timestamp),
+            (ReprScalarType::TimestampTz, ReprScalarType::TimestampTz) => {
+                Ok(ReprScalarType::TimestampTz)
+            }
+            (ReprScalarType::MzTimestamp, ReprScalarType::MzTimestamp) => {
+                Ok(ReprScalarType::MzTimestamp)
+            }
+            (ReprScalarType::AclItem, ReprScalarType::AclItem) => Ok(ReprScalarType::AclItem),
+            (ReprScalarType::MzAclItem, ReprScalarType::MzAclItem) => Ok(ReprScalarType::MzAclItem),
+            (ReprScalarType::Interval, ReprScalarType::Interval) => Ok(ReprScalarType::Interval),
+            (ReprScalarType::Bytes, ReprScalarType::Bytes) => Ok(ReprScalarType::Bytes),
+            (ReprScalarType::Jsonb, ReprScalarType::Jsonb) => Ok(ReprScalarType::Jsonb),
+            (ReprScalarType::String, ReprScalarType::String) => Ok(ReprScalarType::String),
+            (ReprScalarType::Uuid, ReprScalarType::Uuid) => Ok(ReprScalarType::Uuid),
+            (ReprScalarType::Array(element_type), ReprScalarType::Array(other_element_type)) => Ok(
+                ReprScalarType::Array(Box::new(element_type.union(other_element_type)?)),
+            ),
+            (ReprScalarType::Int2Vector, ReprScalarType::Int2Vector) => {
+                Ok(ReprScalarType::Int2Vector)
+            }
+            (
+                ReprScalarType::List { element_type },
+                ReprScalarType::List {
+                    element_type: other_element_type,
+                },
+            ) => Ok(ReprScalarType::List {
+                element_type: Box::new(element_type.union(other_element_type)?),
+            }),
+            (
+                ReprScalarType::Record { fields },
+                ReprScalarType::Record {
+                    fields: other_fields,
+                },
+            ) => {
+                if fields.len() != other_fields.len() {
+                    bail!("Can't union record types: {:?} and {:?}", self, scalar_type);
+                }
+
+                let mut union_fields = Vec::with_capacity(fields.len());
+                for (field, other_field) in fields.iter().zip_eq(other_fields.iter()) {
+                    union_fields.push(field.union(other_field)?);
+                }
+                Ok(ReprScalarType::Record {
+                    fields: union_fields.into_boxed_slice(),
+                })
+            }
+            (
+                ReprScalarType::Map { value_type },
+                ReprScalarType::Map {
+                    value_type: other_value_type,
+                },
+            ) => Ok(ReprScalarType::Map {
+                value_type: Box::new(value_type.union(other_value_type)?),
+            }),
+            (
+                ReprScalarType::Range { element_type },
+                ReprScalarType::Range {
+                    element_type: other_element_type,
+                },
+            ) => Ok(ReprScalarType::Range {
+                element_type: Box::new(element_type.union(other_element_type)?),
+            }),
+            (_, _) => bail!("Can't union scalar types: {:?} and {:?}", self, scalar_type),
+        }
+    }
 }
 
 impl From<&SqlScalarType> for ReprScalarType {

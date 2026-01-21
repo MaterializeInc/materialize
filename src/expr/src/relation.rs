@@ -35,8 +35,8 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, Row, RowIterator, SqlColumnType,
-    SqlRelationType, SqlScalarType,
+    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, Row, RowIterator,
+    SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -514,6 +514,162 @@ impl MirRelationExpr {
                     .iter()
                     .map(|e| e.typ(input))
                     .chain(aggregates.iter().map(|agg| agg.typ(input)))
+                    .collect()
+            }
+            TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
+                input_types.next().unwrap().clone()
+            }
+            Let { .. } => {
+                // skip over the input types for `value`.
+                input_types.nth(1).unwrap().clone()
+            }
+            LetRec { values, .. } => {
+                // skip over the input types for `values`.
+                input_types.nth(values.len()).unwrap().clone()
+            }
+            Union { .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                for input_col_types in input_types {
+                    for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
+                        *base_col = base_col
+                            .union(col)
+                            .map_err(|e| format!("{}\nin plan:\n{}", e, self.pretty()))?;
+                    }
+                }
+                result
+            }
+        };
+
+        Ok(col_types)
+    }
+
+    /// Reports the column types of the relation given the column types of the
+    /// input relations.
+    ///
+    /// This method delegates to `try_repr_col_with_input_repr_cols`, panicking if an `Err`
+    /// variant is returned.
+    pub fn repr_col_with_input_repr_cols<'a, I>(&self, input_types: I) -> Vec<ReprColumnType>
+    where
+        I: Iterator<Item = &'a Vec<ReprColumnType>>,
+    {
+        match self.try_repr_col_with_input_repr_cols(input_types) {
+            Ok(col_types) => col_types,
+            Err(err) => panic!("{err}"),
+        }
+    }
+
+    /// Reports the column types of the relation given the column types of the input relations.
+    ///
+    /// `input_types` is required to contain the column types for the input relations of
+    /// the current relation in the same order as they are visited by `try_visit_children`
+    /// method, even though not all may be used for computing the schema of the
+    /// current relation. For example, `Let` expects two input types, one for the
+    /// value relation and one for the body, in that order, but only the one for the
+    /// body is used to determine the type of the `Let` relation.
+    ///
+    /// It is meant to be used during post-order traversals to compute column types
+    /// incrementally.
+    pub fn try_repr_col_with_input_repr_cols<'a, I>(
+        &self,
+        mut input_types: I,
+    ) -> Result<Vec<ReprColumnType>, String>
+    where
+        I: Iterator<Item = &'a Vec<ReprColumnType>>,
+    {
+        use MirRelationExpr::*;
+
+        let col_types = match self {
+            Constant { rows, typ } => {
+                let mut col_types = typ
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect_vec();
+                let mut seen_null = vec![false; typ.arity()];
+                if let Ok(rows) = rows {
+                    for (row, _diff) in rows {
+                        for (datum, i) in row.iter().zip_eq(0..typ.arity()) {
+                            if datum.is_null() {
+                                seen_null[i] = true;
+                            }
+                        }
+                    }
+                }
+                for (&seen_null, i) in seen_null.iter().zip_eq(0..typ.arity()) {
+                    if !seen_null {
+                        col_types[i].nullable = false;
+                    } else {
+                        assert!(col_types[i].nullable);
+                    }
+                }
+                col_types
+            }
+            Get { typ, .. } => typ
+                .column_types
+                .iter()
+                .map(ReprColumnType::from)
+                .collect_vec(),
+            Project { outputs, .. } => {
+                let input = input_types.next().unwrap();
+                outputs.iter().map(|&i| input[i].clone()).collect()
+            }
+            Map { scalars, .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                for scalar in scalars.iter() {
+                    result.push(scalar.repr_typ(&result))
+                }
+                result
+            }
+            FlatMap { func, .. } => {
+                let mut result = input_types.next().unwrap().clone();
+                result.extend(
+                    func.output_type()
+                        .column_types
+                        .iter()
+                        .map(ReprColumnType::from),
+                );
+                result
+            }
+            Filter { predicates, .. } => {
+                let mut result = input_types.next().unwrap().clone();
+
+                // Set as nonnull any columns where null values would cause
+                // any predicate to evaluate to null.
+                for column in non_nullable_columns(predicates) {
+                    result[column].nullable = false;
+                }
+                result
+            }
+            Join { equivalences, .. } => {
+                // Concatenate input column types
+                let mut types = input_types.flat_map(|cols| cols.to_owned()).collect_vec();
+                // In an equivalence class, if any column is non-null, then make all non-null
+                for equivalence in equivalences {
+                    let col_inds = equivalence
+                        .iter()
+                        .filter_map(|expr| match expr {
+                            MirScalarExpr::Column(col, _name) => Some(*col),
+                            _ => None,
+                        })
+                        .collect_vec();
+                    if col_inds.iter().any(|i| !types.get(*i).unwrap().nullable) {
+                        for i in col_inds {
+                            types.get_mut(i).unwrap().nullable = false;
+                        }
+                    }
+                }
+                types
+            }
+            Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                let input = input_types.next().unwrap();
+                group_key
+                    .iter()
+                    .map(|e| e.repr_typ(input))
+                    .chain(aggregates.iter().map(|agg| agg.repr_typ(input)))
                     .collect()
             }
             TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {
@@ -2434,6 +2590,15 @@ impl AggregateExpr {
     /// Computes the type of this `AggregateExpr`.
     pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
         self.func.output_type(self.expr.typ(column_types))
+    }
+
+    /// Computes the type of this `AggregateExpr`.
+    pub fn repr_typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
+        ReprColumnType::from(
+            &self
+                .func
+                .output_type(SqlColumnType::from_repr(&self.expr.repr_typ(column_types))),
+        )
     }
 
     /// Returns whether the expression has a constant result.
