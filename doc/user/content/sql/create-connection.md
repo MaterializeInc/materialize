@@ -780,23 +780,7 @@ catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/
 
 #### Syntax {#iceberg-catalog-syntax}
 
-```mzsql
-CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
-    CATALOG TYPE = 's3tablesrest',
-    URL = '<catalog_url>',
-    WAREHOUSE = '<warehouse_arn>',
-    AWS CONNECTION = <aws_connection>
-);
-```
-
-#### Options {#iceberg-catalog-options}
-
-| Option | Description | Required |
-|--------|-------------|:--------:|
-| `CATALOG TYPE` | The type of Iceberg catalog. Currently only `'s3tablesrest'` (AWS S3 Tables) is supported. | Yes |
-| `URL` | The URL of the Iceberg catalog endpoint. For S3 Tables: `https://s3tables.<region>.amazonaws.com/iceberg` | Yes |
-| `WAREHOUSE` | The ARN of the S3 Tables bucket: `arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>` | Yes |
-| `AWS CONNECTION` | The name of the [AWS connection](#aws) used for authentication. | Yes |
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog" %}}
 
 #### Example {#iceberg-catalog-example}
 

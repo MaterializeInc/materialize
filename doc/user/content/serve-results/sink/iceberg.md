@@ -143,7 +143,8 @@ WHERE c.name = 'aws_connection';
 
 ### Create an Iceberg catalog connection
 
-Create an Iceberg catalog connection for AWS S3 Tables:
+Create an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog)
+for AWS S3 Tables:
 
 ```mzsql
 CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
@@ -159,7 +160,8 @@ with the name of your S3 Tables bucket.
 
 ## Step 3. Create the sink
 
-Create a sink from a source, table, or materialized view:
+Create a sink from a source, table, or materialized view. For full syntax
+options, see [`CREATE SINK`](/sql/create-sink/iceberg).
 
 ```mzsql
 CREATE SINK my_iceberg_sink
@@ -180,8 +182,10 @@ CREATE SINK my_iceberg_sink
 |--------|-------------|
 | `NAMESPACE` | The Iceberg namespace (database) containing the table. |
 | `TABLE` | The name of the Iceberg table to write to. |
-| `KEY` | The columns that uniquely identify rows. Required for handling updates and deletes via equality deletes. |
-| `COMMIT INTERVAL` | How frequently to commit snapshots to Iceberg. See [Commit interval tradeoffs](#commit-interval-tradeoffs) below. |
+| `KEY` | **Required.** The columns that uniquely identify rows. Used to track updates and deletes. |
+| `COMMIT INTERVAL` | **Required.** How frequently to commit snapshots to Iceberg. See [Commit interval tradeoffs](#commit-interval-tradeoffs) below. |
+
+For the full list of syntax options, see the [`CREATE SINK` reference](/sql/create-sink/iceberg).
 
 ### Commit interval tradeoffs {#commit-interval-tradeoffs}
 
@@ -203,13 +207,14 @@ snapshots to your Iceberg table. This involves tradeoffs:
 
 ### Key selection
 
-The `KEY` columns you specify must uniquely identify rows in your source
-relation. Materialize uses these columns to generate equality delete files when
-rows are updated or deleted.
+The `KEY` clause is required for all Iceberg sinks. The columns you specify must
+uniquely identify rows in your source relation. Materialize uses these columns
+to track updates and deletes.
 
-If Materialize cannot validate that your key is unique, you'll receive an error.
-You can use `KEY (...) NOT ENFORCED` to bypass this validation if you have
-outside knowledge that the key is unique.
+Materialize validates that the key is unique. If it cannot prove uniqueness,
+you'll receive an error. You can use `KEY (...) NOT ENFORCED` to bypass this
+validation if you have outside knowledge that the key is unique. For more
+details, see [Unique keys](/sql/create-sink/iceberg/#unique-keys).
 
 ## Querying Iceberg tables
 
@@ -249,7 +254,8 @@ if conflicts persist, ensure no other writers are modifying the same table.
 ## Reference
 
 This section provides technical details about how Iceberg sinks work under the
-hood.
+hood. See also the [`CREATE SINK` reference](/sql/create-sink/iceberg/#details)
+for additional details.
 
 ### Data files and snapshots
 

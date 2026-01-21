@@ -60,18 +60,7 @@ For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
 
 {{< public-preview />}}
 
-```mzsql
-CREATE SINK [IF NOT EXISTS] <sink_name>
-  [IN CLUSTER <cluster_name>]
-  FROM <item_name>
-  INTO ICEBERG CATALOG CONNECTION <catalog_connection> (
-    NAMESPACE = '<namespace>',
-    TABLE = '<table>'
-  )
-  USING AWS CONNECTION <aws_connection>
-  KEY ( <key_col> [, ...] ) [NOT ENFORCED]
-  WITH (COMMIT INTERVAL = '<interval>')
-```
+{{% include-example file="examples/create_sink_iceberg" example="syntax" %}}
 
 For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
 {{< /tab >}}

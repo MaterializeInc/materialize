@@ -609,3 +609,38 @@
         *Value:* `text`. Required.
 
         The name of the user to connect as.
+
+- name: "syntax-iceberg-catalog"
+  code: |
+    CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
+        CATALOG TYPE = 's3tablesrest',
+        URL = '<catalog_url>',
+        WAREHOUSE = '<warehouse_arn>',
+        AWS CONNECTION = <aws_connection>
+    );
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`CATALOG TYPE`"
+      description: |
+        *Value:* `text`. Required.
+
+        The type of Iceberg catalog. Currently only `'s3tablesrest'` (AWS S3 Tables) is supported.
+    - name: "`URL`"
+      description: |
+        *Value:* `text`. Required.
+
+        The URL of the Iceberg catalog endpoint. For AWS S3 Tables, use
+        `https://s3tables.<region>.amazonaws.com/iceberg`.
+    - name: "`WAREHOUSE`"
+      description: |
+        *Value:* `text`. Required.
+
+        The ARN of the S3 Tables bucket:
+        `arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>`.
+    - name: "`AWS CONNECTION`"
+      description: |
+        *Value:* object name. Required.
+
+        The name of an [AWS connection](#aws) to use for authentication.
