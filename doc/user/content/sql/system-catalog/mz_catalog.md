@@ -309,19 +309,18 @@ This table was previously in the `mz_internal` schema. All queries previously re
 | `group_id_prefix`      | [`text`]       | The value of the `GROUP ID PREFIX` connection option.                                                     |
 | `topic          `      | [`text`]       | The name of the Kafka topic the source is reading from.                                                              |
 
-{{< hide >}}
 ### `mz_iceberg_sinks`
+
+{{< private-preview />}}
 
 The `mz_iceberg_sinks` table contains a row for each Iceberg sink in the system.
 
 <!-- RELATION_SPEC mz_catalog.mz_iceberg_sinks -->
 | Field          | Type     | Meaning                                                                                                   |
 |----------------|----------|-----------------------------------------------------------------------------------------------------------|
-| `id`           | [`text`] | The ID of the sink.                                                                                       |
-| `namespace`     | [`text`] | The namespace of the Iceberg table into which the sink is writing.                                       |
-| `table`     | [`text`] | The Iceberg table into which the sink is writing.                                             |
-
-{{< /hide >}}
+| `id`           | [`text`] | The ID of the sink. Corresponds to [`mz_catalog.mz_sinks.id`](../mz_catalog#mz_sinks).                  |
+| `namespace`    | [`text`] | The namespace of the Iceberg table into which the sink is writing.                                        |
+| `table`        | [`text`] | The Iceberg table into which the sink is writing.                                                         |
 
 
 
