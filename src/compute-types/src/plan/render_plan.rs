@@ -930,7 +930,7 @@ impl<'a, T> std::fmt::Display for RenderPlanExprHumanizer<'a, T> {
                     }
                     write!(f, ")")
                 }
-                ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate`"),
+                ReducePlan::Basic(..) => write!(f, "Non-incremental GroupAggregate"),
                 ReducePlan::Collation(..) => write!(f, "Collated Multi-GroupAggregate"),
             },
             TopK {
