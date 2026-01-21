@@ -176,6 +176,10 @@ pub struct Args {
     /// OIDC issuer URL (e.g., `https://accounts.google.com`).
     #[clap(long, env = "MZ_OIDC_ISSUER")]
     oidc_issuer: Option<String>,
+    /// OIDC audience (client ID). If set, validates that the JWT's `aud` claim
+    /// contains this value.
+    #[clap(long, env = "MZ_OIDC_AUDIENCE")]
+    oidc_audience: Option<String>,
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, value_enum, env = "ORCHESTRATOR")]
@@ -749,7 +753,10 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let tls = args.tls.into_config()?;
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
     let oidc = if let Some(oidc_issuer) = args.oidc_issuer {
-        Some(GenericOidcAuthenticator::new(OidcConfig { oidc_issuer })?)
+        Some(GenericOidcAuthenticator::new(OidcConfig {
+            oidc_issuer,
+            oidc_audience: args.oidc_audience,
+        })?)
     } else {
         None
     };

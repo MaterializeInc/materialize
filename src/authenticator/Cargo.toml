@@ -20,6 +20,10 @@ tracing = "0.1.43"
 url = "2.5.7"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[dev-dependencies]
+mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+serde_json = "1.0"
+
 [lints]
 workspace = true
 

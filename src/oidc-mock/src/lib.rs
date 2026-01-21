@@ -56,6 +56,19 @@ struct OidcMockContext {
     jwk: Jwk,
 }
 
+/// Options for generating JWT tokens.
+#[derive(Debug, Clone, Default)]
+pub struct GenerateJwtOptions<'a> {
+    /// Optional email claim.
+    pub email: Option<&'a str>,
+    /// Custom expiration time. If None, uses server's default expires_in_secs.
+    pub exp: Option<i64>,
+    /// Custom issuer. If None, uses server's issuer.
+    pub issuer: Option<&'a str>,
+    /// Audience claim. If None, uses empty vec.
+    pub aud: Option<Vec<String>>,
+}
+
 /// OIDC mock server for testing.
 pub struct OidcMockServer {
     /// The issuer URL. Used as the base URL of the server
@@ -149,55 +162,18 @@ impl OidcMockServer {
     /// # Arguments
     ///
     /// * `sub` - Subject (user identifier).
-    /// * `email` - Optional email claim.
-    pub fn generate_jwt(&self, sub: &str, email: Option<&str>) -> String {
+    /// * `opts` - Optional JWT generation options. Use `Default::default()` for defaults.
+    pub fn generate_jwt(&self, sub: &str, opts: GenerateJwtOptions<'_>) -> String {
         let now_ms = (self.now)();
         let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
 
         let claims = OidcClaims {
             sub: sub.to_string(),
-            iss: self.issuer.clone(),
-            exp: now_secs + self.expires_in_secs,
+            iss: opts.issuer.unwrap_or(&self.issuer).to_string(),
+            exp: opts.exp.unwrap_or(now_secs + self.expires_in_secs),
             iat: Some(now_secs),
-            email: email.map(|s| s.to_string()),
-        };
-
-        let mut header = Header::new(jsonwebtoken::Algorithm::RS256);
-        header.kid = Some(self.kid.clone());
-
-        encode(&header, &claims, &self.encoding_key).expect("failed to encode JWT")
-    }
-
-    /// Generates a JWT token with a specific expiration time.
-    pub fn generate_jwt_with_exp(&self, sub: &str, email: Option<&str>, exp: i64) -> String {
-        let now_ms = (self.now)();
-        let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
-
-        let claims = OidcClaims {
-            sub: sub.to_string(),
-            iss: self.issuer.clone(),
-            exp,
-            iat: Some(now_secs),
-            email: email.map(|s| s.to_string()),
-        };
-
-        let mut header = Header::new(jsonwebtoken::Algorithm::RS256);
-        header.kid = Some(self.kid.clone());
-
-        encode(&header, &claims, &self.encoding_key).expect("failed to encode JWT")
-    }
-
-    /// Generates a JWT token with a custom issuer (for testing invalid tokens).
-    pub fn generate_jwt_with_issuer(&self, sub: &str, email: Option<&str>, issuer: &str) -> String {
-        let now_ms = (self.now)();
-        let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
-
-        let claims = OidcClaims {
-            sub: sub.to_string(),
-            iss: issuer.to_string(),
-            exp: now_secs + self.expires_in_secs,
-            iat: Some(now_secs),
-            email: email.map(|s| s.to_string()),
+            email: opts.email.map(|s| s.to_string()),
+            aud: opts.aud.unwrap_or_default(),
         };
 
         let mut header = Header::new(jsonwebtoken::Algorithm::RS256);

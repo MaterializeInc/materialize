@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
 use reqwest::Client as HttpClient;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use tracing::warn;
 use url::Url;
@@ -31,6 +31,9 @@ pub struct OidcConfig {
     /// OIDC issuer URL (e.g., `https://accounts.google.com`).
     /// This is validated against the `iss` claim in the JWT.
     pub oidc_issuer: String,
+    /// Optional OIDC audience (client ID).
+    /// If set, validates that the JWT's `aud` claim contains this value.
+    pub oidc_audience: Option<String>,
 }
 
 /// Errors that can occur during OIDC authentication.
@@ -72,6 +75,22 @@ impl std::fmt::Display for OidcError {
 
 impl std::error::Error for OidcError {}
 
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<String>),
+    }
+
+    match StringOrVec::deserialize(deserializer)? {
+        StringOrVec::String(s) => Ok(vec![s]),
+        StringOrVec::Vec(v) => Ok(v),
+    }
+}
 /// Claims extracted from a validated JWT.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcClaims {
@@ -87,6 +106,9 @@ pub struct OidcClaims {
     /// Email claim (commonly used for username).
     #[serde(default)]
     pub email: Option<String>,
+    /// Audience claim (can be single string or array in JWT).
+    #[serde(default, deserialize_with = "deserialize_string_or_vec")]
+    pub aud: Vec<String>,
 }
 
 impl OidcClaims {
@@ -147,6 +169,7 @@ struct OpenIdConfiguration {
 #[derive(Debug)]
 pub struct GenericOidcAuthenticatorInner {
     issuer: String,
+    audience: Option<String>,
     decoding_keys: Mutex<BTreeMap<String, OidcDecodingKey>>,
     http_client: HttpClient,
 }
@@ -159,6 +182,7 @@ impl GenericOidcAuthenticator {
         Ok(Self {
             inner: Arc::new(GenericOidcAuthenticatorInner {
                 issuer: config.oidc_issuer,
+                audience: config.oidc_audience,
                 decoding_keys: Mutex::new(BTreeMap::new()),
                 http_client,
             }),
@@ -284,8 +308,11 @@ impl GenericOidcAuthenticatorInner {
         // TODO (SangJunBak): Make JWT expiration configurable.
         let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[&self.issuer]);
-        // TODO (SangJunBak): Validate audience based on configuration.
-        validation.validate_aud = false;
+        if let Some(ref audience) = self.audience {
+            validation.set_audience(&[audience]);
+        } else {
+            validation.validate_aud = false;
+        }
 
         // Decode and validate the token
         let token_data =
@@ -329,5 +356,24 @@ impl OidcAuthenticator for GenericOidcAuthenticator {
         expected_user: Option<&str>,
     ) -> Result<OidcClaims, OidcError> {
         self.inner.validate_access_token(token, expected_user).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_aud_single_string() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"my-app"}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.aud, vec!["my-app"]);
+    }
+
+    #[mz_ore::test]
+    fn test_aud_array() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":["app1","app2"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.aud, vec!["app1", "app2"]);
     }
 }
