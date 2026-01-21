@@ -78,7 +78,7 @@ operator                     total_elapsed
 "          Read l4" <XXX>
 "With l4 = Differential Join %1 » %0" <XXX>
 "  Arrange (#1, #0)" <XXX>
-"    Non-incremental GroupAggregate`" <XXX>
+"    Non-incremental GroupAggregate" <XXX>
 "      Arranged <XXX>" <XXX>
 "  Arrange (#0{replica_id}, #3{bucket_start})" <XXX>
 "    Stream l3" <null>
