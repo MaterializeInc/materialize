@@ -1010,11 +1010,9 @@ pub async fn validate_source_privileges<'a>(
 
 #[cfg(test)]
 mod tests {
-    use mz_ore::test;
-
     use super::DDLEvent;
 
-    #[test]
+    #[mz_ore::test]
     fn test_ddl_event_is_compatible() {
         fn test_case(ddl_command: &str, exclude_columns: &Vec<String>, expected: bool) {
             let ddl_event = DDLEvent {
