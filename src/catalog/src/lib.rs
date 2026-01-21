@@ -9,6 +9,8 @@
 
 // Disallow usage of `unwrap()`.
 #![warn(clippy::unwrap_used)]
+// Latest Rust beta complains: queries overflow the depth limit!
+#![recursion_limit = "256"]
 
 //! Persistent metadata storage for the coordinator.
 

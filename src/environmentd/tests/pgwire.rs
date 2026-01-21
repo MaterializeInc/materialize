@@ -9,6 +9,8 @@
 
 //! Integration tests for pgwire functionality.
 
+#![recursion_limit = "256"]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;

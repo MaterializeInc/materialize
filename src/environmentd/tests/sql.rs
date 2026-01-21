@@ -13,6 +13,8 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};

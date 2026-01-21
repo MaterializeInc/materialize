@@ -9,6 +9,8 @@
 
 //! Integration tests for Materialize server.
 
+#![recursion_limit = "256"]
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::Write as _;

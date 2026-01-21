@@ -9,6 +9,8 @@
 
 //! Integration tests for TLS encryption and authentication.
 
+#![recursion_limit = "256"]
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{self, File};
