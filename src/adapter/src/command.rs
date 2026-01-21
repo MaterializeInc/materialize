@@ -381,7 +381,7 @@ pub struct StartupResponse {
     /// The role's superuser attribute in the Catalog.
     /// This attribute is None for Cloud. Cloud is able
     /// to derive the role's superuser status from
-    /// [Session.external_metadata_rx](crate::session::Session::external_metadata_rx).
+    /// external_metadata_rx.
     pub superuser_attribute: Option<bool>,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]

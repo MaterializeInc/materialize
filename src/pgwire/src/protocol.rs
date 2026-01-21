@@ -164,8 +164,9 @@ where
 
     // If oidc_auth_enabled exists as an option, return its value and filter it from
     // the remaining options.
-    // TODO (SangJunBak): Use oidc_auth_enabled boolean to implement OIDC flow instead of
-    // OIDC authenticator kind.
+    // TODO (SangJunBak): Use oidc_auth_enabled boolean and Authenticator::OIDC
+    // to decide whether or not we want to use OIDC authentication or password
+    // authentication.
     let (_oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
 
     // TODO move this somewhere it can be shared with HTTP
@@ -201,13 +202,6 @@ where
             let auth_response = frontegg.authenticate(&user, &password).await;
             match auth_response {
                 Ok(mut auth_session) => {
-                    // Create a session based on the auth session.
-                    //
-                    // In particular, it's important that the username come from the
-                    // auth session, as Frontegg may return an email address with
-                    // different casing than the user supplied via the pgwire
-                    // username field. We want to use the Frontegg casing as
-                    // canonical.
                     let session = adapter_client.new_session(SessionConfig {
                         conn_id: conn.conn_id().clone(),
                         uuid: conn_uuid,
@@ -231,7 +225,6 @@ where
             }
         }
         Authenticator::Oidc(oidc) => {
-            tracing::info!("OIDC authentication");
             // OIDC authentication: JWT sent as password in cleartext flow
             let jwt = match request_cleartext_password(conn).await {
                 Ok(password) => password,
@@ -241,19 +234,10 @@ where
                 }
             };
 
-            tracing::info!("JWT: {}", jwt);
-
             let auth_response = oidc.authenticate(&user, &jwt).await;
 
             match auth_response {
                 Ok(mut auth_session) => {
-                    // Create a session based on the auth session.
-                    //
-                    // In particular, it's important that the username come from the
-                    // auth session, as Frontegg may return an email address with
-                    // different casing than the user supplied via the pgwire
-                    // username field. We want to use the Frontegg casing as
-                    // canonical.
                     let session = adapter_client.new_session(SessionConfig {
                         conn_id: conn.conn_id().clone(),
                         uuid: conn_uuid,

@@ -1273,7 +1273,7 @@ async fn test_auth_base_require_tls_frontegg() {
 
 /// Tests OIDC authentication with TLS required.
 ///
-/// This test verifies that users can authenticate using JWT tokens
+/// This test verifies that users can authenticate using OIDC tokens
 /// over TLS connections
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -1284,7 +1284,6 @@ async fn test_auth_base_require_tls_oidc() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    // Get PEM string from CA's key (same pattern as Frontegg TLS test).
     let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
 
     let kid = "test-key-1".to_string();
@@ -1313,10 +1312,8 @@ async fn test_auth_base_require_tls_oidc() {
         "https://wrong-issuer.com",
     );
 
-    // Create Bearer auth header for HTTP tests.
     let oidc_bearer = Authorization::bearer(&jwt_token).unwrap();
     let oidc_header_bearer = make_header(oidc_bearer);
-
     let oidc_header_basic = make_header(Authorization::basic(oidc_user, &jwt_token));
 
     let server = test_util::TestHarness::default()

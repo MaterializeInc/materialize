@@ -18,14 +18,16 @@ use async_trait::async_trait;
 /// An authentication session represents a duration of time during which a
 /// user's authentication is known to be valid.
 ///
-/// [`OidcAuthSessionHandle::external_metadata_rx`] can be used to receive events if
-/// the session's metadata is updated.
-///
 /// [`OidcAuthSessionHandle::expired`] can be used to learn if the session has
 /// failed to refresh the validity of the API key.
 #[async_trait]
 pub trait OidcAuthSessionHandle: Debug + Send {
     /// Returns the name of the user that created the session.
+    //  In particular, it's important that the username comes from the
+    // auth session, as the OIDC authenticator may return a user with
+    // different casing than the user supplied via the pgwire
+    // username field. We want to use the IdP's casing as
+    // canonical.
     fn user(&self) -> &str;
     /// Completes when the authentication session has expired.
     async fn expired(&mut self);

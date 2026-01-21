@@ -155,7 +155,7 @@ impl OidcMockServer {
     /// * `email` - Optional email claim.
     pub fn generate_jwt(&self, sub: &str, email: Option<&str>) -> String {
         let now_ms = (self.now)();
-        let now_secs = (now_ms / 1000) as i64;
+        let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
 
         let claims = OidcClaims {
             sub: sub.to_string(),
@@ -174,7 +174,7 @@ impl OidcMockServer {
     /// Generates a JWT token with a specific expiration time.
     pub fn generate_jwt_with_exp(&self, sub: &str, email: Option<&str>, exp: i64) -> String {
         let now_ms = (self.now)();
-        let now_secs = (now_ms / 1000) as i64;
+        let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
 
         let claims = OidcClaims {
             sub: sub.to_string(),
@@ -193,7 +193,7 @@ impl OidcMockServer {
     /// Generates a JWT token with a custom issuer (for testing invalid tokens).
     pub fn generate_jwt_with_issuer(&self, sub: &str, email: Option<&str>, issuer: &str) -> String {
         let now_ms = (self.now)();
-        let now_secs = (now_ms / 1000) as i64;
+        let now_secs = i64::try_from(now_ms / 1000).expect("timestamp must fit in i64");
 
         let claims = OidcClaims {
             sub: sub.to_string(),
