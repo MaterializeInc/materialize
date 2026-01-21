@@ -61,7 +61,8 @@ fn return_true() -> bool {
 
 impl SqlColumnType {
     pub fn backport_nullability(&mut self, backport_typ: &SqlColumnType) {
-        self.scalar_type.backport_nullability(&backport_typ.scalar_type);
+        self.scalar_type
+            .backport_nullability(&backport_typ.scalar_type);
         self.nullable = backport_typ.nullable;
     }
 
