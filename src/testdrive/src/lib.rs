@@ -9,6 +9,7 @@
 
 //! Integration test driver for Materialize.
 
+#![recursion_limit = "256"]
 #![warn(missing_docs)]
 
 use std::fs::File;

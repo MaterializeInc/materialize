@@ -9,6 +9,8 @@
 
 //! Integration tests for balancerd.
 
+#![recursion_limit = "256"]
+
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::pin::pin;
