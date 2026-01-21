@@ -29,7 +29,7 @@ RUN groupadd --system --gid=999 materialize \
         curl \
         gettext-base \
         nginx \
-        postgresql \
+        postgresql-18 \
         ssh \
         tini \
     && if [ "$CI_SANITIZER" != "none" ]; then \
