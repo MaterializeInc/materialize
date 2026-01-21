@@ -1,0 +1,46 @@
+- name: "syntax"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO ICEBERG CATALOG CONNECTION <catalog_connection> (
+      NAMESPACE = '<namespace>',
+      TABLE = '<table>'
+    )
+    USING AWS CONNECTION <aws_connection>
+    KEY ( <key_col> [, ...] ) [NOT ENFORCED]
+    WITH (COMMIT INTERVAL = '<interval>')
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Do not throw an error if a sink with the same name already exists.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        The [cluster](/sql/create-cluster) to maintain this sink.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view to sink.
+    - name: "**ICEBERG CATALOG CONNECTION** `<catalog_connection>`"
+      description: |
+        The name of the [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to use.
+    - name: "**NAMESPACE** `'<namespace>'`"
+      description: |
+        The Iceberg namespace (database) containing the table.
+    - name: "**TABLE** `'<table>'`"
+      description: |
+        The name of the Iceberg table to write to. If the table doesn't exist, Materialize creates it with a schema matching `<item_name>`.
+    - name: "**USING AWS CONNECTION** `<aws_connection>`"
+      description: |
+        The [AWS connection](/sql/create-connection/#aws) for object storage access.
+    - name: "**KEY** ( `<key_col>` [, ...] )"
+      description: |
+        **Required.** The columns that uniquely identify rows. Materialize validates that the key is unique unless `NOT ENFORCED` is specified.
+    - name: "**NOT ENFORCED**"
+      description: |
+        Disable validation of key uniqueness. Use only when you have outside knowledge that the key is unique.
+    - name: "**COMMIT INTERVAL** `'<interval>'`"
+      description: |
+        **Required.** How frequently to commit snapshots to Iceberg (e.g., `'10s'`, `'1m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
