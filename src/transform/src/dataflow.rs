@@ -499,6 +499,16 @@ pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), Tra
 
         import.with_snapshot = *with_snapshot;
     }
+    for (id, import) in &mut dataflow.index_imports {
+        let index_with_snapshot = *downstream_requires_snapshot
+            .entry(Id::Global(*id))
+            .or_default();
+        let object_with_snapshot = *downstream_requires_snapshot
+            .entry(Id::Global(import.desc.on_id))
+            .or_default();
+
+        import.with_snapshot = index_with_snapshot || object_with_snapshot;
+    }
 
     Ok(())
 }
@@ -730,6 +740,7 @@ id: {}, key: {:?}",
             desc: index_desc,
             typ: _,
             monotonic: _,
+            with_snapshot: _,
         },
     ) in dataflow.index_imports.iter_mut()
     {
