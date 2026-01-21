@@ -647,13 +647,18 @@ impl DDLEvent {
                                             "if" | "exists" | "," => continue,
                                             col_str => {
                                                 // If the column is in the exclude list, then it is okay to alter/drop it
-                                                if !col_str.trim_matches(',').split(',').all(|col_name| { exclude_columns.iter().any(|excluded| {
-                                                    excluded.eq_ignore_ascii_case(
-                                                        col_name.trim_matches(
-                                                            ['[', ']', '"'].as_ref(),
-                                                        ),
-                                                    )
-                                                })}) {
+                                                // The col_str token may be a comma-separated list of columns as whitespace is not required between column names in SQL Server DDL.
+                                                if !col_str.trim_matches(',').split(',').all(
+                                                    |col_name| {
+                                                        exclude_columns.iter().any(|excluded| {
+                                                            excluded.eq_ignore_ascii_case(
+                                                                col_name.trim_matches(
+                                                                    ['[', ']', '"'].as_ref(),
+                                                                ),
+                                                            )
+                                                        })
+                                                    },
+                                                ) {
                                                     all_excluded = false;
                                                     break;
                                                 }
