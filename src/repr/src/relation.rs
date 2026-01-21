@@ -60,6 +60,11 @@ fn return_true() -> bool {
 }
 
 impl SqlColumnType {
+    pub fn backport_nullability(&mut self, backport_typ: &SqlColumnType) {
+        self.scalar_type.backport_nullability(&backport_typ.scalar_type);
+        self.nullable = backport_typ.nullable;
+    }
+
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (&self.scalar_type, &other.scalar_type) {
             (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
@@ -244,14 +249,14 @@ impl SqlRelationType {
         assert_eq!(
             backport_typ.column_types.len(),
             self.column_types.len(),
-            "SQL and repr types should have the same number of columns"
+            "HIR and MIR types should have the same number of columns"
         );
         for (backport_col, sql_col) in backport_typ
             .column_types
             .iter()
             .zip_eq(self.column_types.iter_mut())
         {
-            sql_col.nullable = backport_col.nullable;
+            sql_col.backport_nullability(backport_col);
         }
 
         self.keys = backport_typ.keys.clone();

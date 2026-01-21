@@ -3334,6 +3334,33 @@ impl SqlScalarType {
         }
     }
 
+    /// Adopts the nullability from another [`SqlScalarType`].
+    /// Traverses deeply into structured types.
+    pub fn backport_nullability(&mut self, backport_typ: &SqlScalarType) {
+        use SqlScalarType::*;
+        match (self, backport_typ) {
+            (List { element_type, .. }, List { element_type: backport_element_type, .. }) => {
+                element_type.backport_nullability(backport_element_type);
+            }
+            (Map { value_type, .. }, Map { value_type: backport_value_type, .. }) => {
+                value_type.backport_nullability(backport_value_type);
+            }
+            (Record { fields, .. }, Record { fields: backport_fields, .. }) => {
+                assert_eq!(fields.len(), backport_fields.len(), "HIR and MIR types should have the same number of fields");
+                fields.iter_mut().zip_eq(backport_fields).for_each(|(field, backport_field)| {
+                    field.1.backport_nullability(&backport_field.1);
+                });
+            }
+            (Array(a), Array(b)) => {
+                a.backport_nullability(b);
+            }
+            (Range { element_type }, Range { element_type: backport_element_type }) => {
+                element_type.backport_nullability(backport_element_type);
+            }
+            _ => (),
+        }
+    }
+
     /// Returns various interesting datums for a SqlScalarType (max, min, 0 values, etc.).
     pub fn interesting_datums(&self) -> impl Iterator<Item = Datum<'static>> {
         // TODO: Add datums for the types that have an inner Box'd SqlScalarType. It'd be best to
