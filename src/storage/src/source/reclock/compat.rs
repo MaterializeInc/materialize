@@ -80,7 +80,7 @@ where
             .await
             .context("error creating persist client")?;
 
-        let (write_handle, mut read_handle) = persist_client
+        let (mut write_handle, mut read_handle) = persist_client
             .open(
                 remap_metadata.data_shard,
                 Arc::new(remap_relation_desc),
@@ -94,7 +94,7 @@ where
             .await
             .expect("invalid usage");
 
-        let upper = write_handle.upper();
+        let upper = write_handle.fetch_recent_upper().await;
         // We want a leased reader because elsewhere in the code the `as_of`
         // time may also be determined by another `ReadHandle`, and the pair of
         // them offer the invariant that we need (that the `as_of` if <= this
