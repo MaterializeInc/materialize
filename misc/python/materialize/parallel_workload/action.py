@@ -1056,7 +1056,7 @@ class ReplaceMaterializedViewAction(Action):
                 f"ALTER MATERIALIZED VIEW {identifier(view.name())} APPLY REPLACEMENT {tmp_mv}",
             )
         else:
-            exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+            exe.execute(f"DROP REPLACEMENT MATERIALIZED VIEW {tmp_mv}")
         return True
 
 
