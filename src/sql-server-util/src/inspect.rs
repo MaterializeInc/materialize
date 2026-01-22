@@ -1125,5 +1125,10 @@ mod tests {
             &included_columns,
             false,
         );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , COLUMN col3",
+            &included_columns,
+            false,
+        );
     }
 }
