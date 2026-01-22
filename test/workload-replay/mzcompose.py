@@ -690,12 +690,17 @@ def long_tail_text(chars: str, max_len: int, hot_pool: list[str]) -> str:
 
 
 class Column:
-    def __init__(self, name: str, typ: str, nullable: bool, default: Any):
+    def __init__(
+        self, name: str, typ: str, nullable: bool, default: Any, data_shape: str | None
+    ):
         self.name = name
         self.typ = typ
         self.nullable = nullable
         self.default = default
         self.chars = string.ascii_letters + string.digits
+        self.data_shape = data_shape
+        if data_shape:
+            assert typ in ("text", "bytea"), f"Can't create text shape for type {typ}"
 
         self._hot_strings = [
             f"{name}_a",
@@ -750,6 +755,15 @@ class Column:
             return long_tail_float(-1_000_000_000.0, 1_000_000_000.0)
 
         elif self.typ in ("text", "bytea"):
+            if self.data_shape == "datetime":
+                year = long_tail_choice(
+                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                )
+                return literal(
+                    f"{year}-{random.randrange(1, 13):02}-{random.randrange(1, 29):02}T{random.randrange(0, 23):02}:{random.randrange(0, 59):02}:{random.randrange(0, 59):02}Z"
+                )
+            elif self.data_shape:
+                raise ValueError(f"Unhandled text shape {self.data_shape}")
             return literal(long_tail_text(self.chars, 100, self._hot_strings))
 
         elif self.typ in ("character", "character varying"):
@@ -848,6 +862,15 @@ class Column:
             return str(long_tail_float(-1_000_000_000.0, 1_000_000_000.0))
 
         elif self.typ in ("text", "bytea"):
+            if self.data_shape == "datetime":
+                year = long_tail_choice(
+                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                )
+                return literal(
+                    f"{year}-{random.randrange(1, 13):02}-{random.randrange(1, 29):02}T{random.randrange(0, 23):02}:{random.randrange(0, 59):02}:{random.randrange(0, 59):02}Z"
+                )
+            elif self.data_shape:
+                raise ValueError(f"Unhandled text shape {self.data_shape}")
             return literal(long_tail_text(self.chars, 100, self._hot_strings))
 
         elif self.typ in ("character", "character varying"):
@@ -943,6 +966,7 @@ def ingest_webhook(
                 column["type"],
                 column["nullable"],
                 column["default"],
+                column.get("data_shape"),
             )
         elif column["name"] == "headers":
             headers_column = Column(
@@ -950,6 +974,7 @@ def ingest_webhook(
                 column["type"],
                 column["nullable"],
                 column["default"],
+                column.get("data_shape"),
             )
     assert body_column
 
@@ -1027,77 +1052,241 @@ def ingest(
                 + ", ".join(batch_values)
             )
     elif source["type"] == "kafka":
-        topic = get_kafka_topic(source)
-
-        schema = {
-            "type": "record",
-            "name": topic,
-            "namespace": "com.materialize",
-            "fields": [
-                {
-                    "name": field.name,
-                    "type": field.avro_type(),
-                    **({"default": field.default} if field.default is not None else {}),
-                }
-                for field in columns[1:]
-            ],
-        }
-
-        key_field = columns[0]
-        key_schema = {
-            "type": "record",
-            "name": "Key",
-            "namespace": topic,
-            "fields": [
-                {
-                    "name": key_field.name,
-                    "type": key_field.avro_type(),
-                    **(
-                        {"default": key_field.default}
-                        if key_field.default is not None
-                        else {}
-                    ),
-                }
-            ],
-        }
-
         schema_registry_conf = {
             "url": f"http://127.0.0.1:{c.default_port('schema-registry')}"
         }
         registry = SchemaRegistryClient(schema_registry_conf)
-
-        serializer = AvroSerializer(registry, json.dumps(schema), lambda d, ctx: d)
-
-        key_serializer = AvroSerializer(
-            registry, json.dumps(key_schema), lambda d, ctx: d
-        )
-
-        # registry.register_schema(
-        #     f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
-        # )
-        # registry.register_schema(
-        #     f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
-        # )
-
-        serialization_context = SerializationContext(topic, MessageField.VALUE)
-        key_serialization_context = SerializationContext(topic, MessageField.KEY)
-
         kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
         producer = confluent_kafka.Producer(kafka_conf)
-        for row in batch_values_kafka:
-            producer.produce(
-                topic=topic,
-                key=key_serializer(
-                    {columns[0].name: row[0]},
-                    key_serialization_context,
-                ),
-                value=serializer(
-                    {column.name: value for column, value in zip(columns[1:], row[1:])},
-                    serialization_context,
-                ),
-                on_delivery=delivery_report,
+        topic = get_kafka_topic(source)
+
+        if "ENVELOPE DEBEZIUM" in child["create_sql"]:
+            value_record_schema = {
+                "type": "record",
+                "name": "Value",
+                "fields": [
+                    {
+                        "name": field.name,
+                        "type": field.avro_type(),
+                        **(
+                            {"default": field.default}
+                            if field.default is not None
+                            else {}
+                        ),
+                    }
+                    for field in columns
+                ],
+                "connect.name": f"{topic}.Value",
+            }
+
+            envelope_schema = {
+                "type": "record",
+                "name": "Envelope",
+                "namespace": topic,
+                "fields": [
+                    {
+                        "name": "before",
+                        "type": ["null", value_record_schema],
+                        "default": None,
+                    },
+                    {
+                        "name": "after",
+                        "type": ["null", "Value"],
+                        "default": None,
+                    },
+                    {
+                        "name": "source",
+                        "type": {
+                            "type": "record",
+                            "name": "Source",
+                            "namespace": "io.debezium.connector.mysql",
+                            "fields": [
+                                {"name": "version", "type": "string"},
+                                {"name": "connector", "type": "string"},
+                                {"name": "name", "type": "string"},
+                                {"name": "ts_ms", "type": "long"},
+                                {
+                                    "name": "snapshot",
+                                    "type": ["null", "string"],
+                                    "default": None,
+                                },
+                                {"name": "db", "type": "string"},
+                                {
+                                    "name": "sequence",
+                                    "type": ["null", "string"],
+                                    "default": None,
+                                },
+                                {
+                                    "name": "table",
+                                    "type": ["null", "string"],
+                                    "default": None,
+                                },
+                                {"name": "server_id", "type": "long"},
+                                {
+                                    "name": "gtid",
+                                    "type": ["null", "string"],
+                                    "default": None,
+                                },
+                                {"name": "file", "type": "string"},
+                                {"name": "pos", "type": "long"},
+                                {"name": "row", "type": "int"},
+                                {
+                                    "name": "thread",
+                                    "type": ["null", "long"],
+                                    "default": None,
+                                },
+                                {
+                                    "name": "query",
+                                    "type": ["null", "string"],
+                                    "default": None,
+                                },
+                            ],
+                            "connect.name": "io.debezium.connector.mysql.Source",
+                        },
+                    },
+                    {"name": "op", "type": "string"},
+                    {"name": "ts_ms", "type": ["null", "long"], "default": None},
+                    {
+                        "name": "transaction",
+                        "type": ["null", "string"],
+                        "default": None,
+                    },
+                ],
+                "connect.name": f"{topic}.Envelope",
+            }
+
+            key_schema = {
+                "type": "record",
+                "name": "Key",
+                "namespace": topic,
+                "fields": [
+                    {
+                        "name": field.name,
+                        "type": field.avro_type(),
+                        **(
+                            {"default": field.default}
+                            if field.default is not None
+                            else {}
+                        ),
+                    }
+                    for field in columns
+                ],
+                "connect.name": f"{topic}.Key",
+            }
+
+            serializer = AvroSerializer(
+                registry, json.dumps(envelope_schema), lambda d, ctx: d
             )
-        producer.flush()
+            key_serializer = AvroSerializer(
+                registry, json.dumps(key_schema), lambda d, ctx: d
+            )
+            serialization_context = SerializationContext(topic, MessageField.VALUE)
+            key_serialization_context = SerializationContext(topic, MessageField.KEY)
+            now_ms = int(time.time() * 1000)
+            for row in batch_values_kafka:
+                after_value = {col.name: val for col, val in zip(columns, row)}
+                envelope_value = {
+                    "before": None,
+                    "after": after_value,
+                    "source": {
+                        "version": "0",
+                        "connector": "mysql",
+                        "name": "materialize-generator",
+                        "ts_ms": now_ms,
+                        "snapshot": None,
+                        "db": "db",
+                        "sequence": None,
+                        "table": topic.split(".")[-1],
+                        "server_id": 0,
+                        "gtid": None,
+                        "file": "binlog.000001",
+                        "pos": 0,
+                        "row": 0,
+                        "thread": None,
+                        "query": None,
+                    },
+                    "op": "c",  # create
+                    "ts_ms": now_ms,
+                    "transaction": None,
+                }
+                key_value = {col.name: after_value[col.name] for col in columns}
+                producer.produce(
+                    topic=topic,
+                    key=key_serializer(key_value, key_serialization_context),
+                    value=serializer(envelope_value, serialization_context),
+                    on_delivery=delivery_report,
+                )
+            producer.flush()
+        else:
+            schema = {
+                "type": "record",
+                "name": topic,
+                "namespace": "com.materialize",
+                "fields": [
+                    {
+                        "name": field.name,
+                        "type": field.avro_type(),
+                        **(
+                            {"default": field.default}
+                            if field.default is not None
+                            else {}
+                        ),
+                    }
+                    for field in columns[1:]
+                ],
+            }
+
+            key_field = columns[0]
+            key_schema = {
+                "type": "record",
+                "name": topic + "_key",
+                "namespace": "com.materialize",
+                "fields": [
+                    {
+                        "name": key_field.name,
+                        "type": key_field.avro_type(),
+                        **(
+                            {"default": key_field.default}
+                            if key_field.default is not None
+                            else {}
+                        ),
+                    }
+                ],
+            }
+
+            serializer = AvroSerializer(registry, json.dumps(schema), lambda d, ctx: d)
+
+            key_serializer = AvroSerializer(
+                registry, json.dumps(key_schema), lambda d, ctx: d
+            )
+
+            # registry.register_schema(
+            #     f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
+            # )
+            # registry.register_schema(
+            #     f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
+            # )
+
+            serialization_context = SerializationContext(topic, MessageField.VALUE)
+            key_serialization_context = SerializationContext(topic, MessageField.KEY)
+
+            for row in batch_values_kafka:
+                producer.produce(
+                    topic=topic,
+                    key=key_serializer(
+                        {columns[0].name: row[0]},
+                        key_serialization_context,
+                    ),
+                    value=serializer(
+                        {
+                            column.name: value
+                            for column, value in zip(columns[1:], row[1:])
+                        },
+                        serialization_context,
+                    ),
+                    on_delivery=delivery_report,
+                )
+            producer.flush()
     elif source["type"] == "sql-server":
         ref_database, ref_schema, ref_table = get_sql_server_reference_db_schema_table(
             child
@@ -1595,7 +1784,13 @@ def create_initial_data(
                 if not num_rows:
                     continue
                 data_columns = [
-                    Column(c["name"], c["type"], c["nullable"], c["default"])
+                    Column(
+                        c["name"],
+                        c["type"],
+                        c["nullable"],
+                        c["default"],
+                        c.get("data_shape"),
+                    )
                     for c in table["columns"]
                 ]
                 print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
@@ -1648,7 +1843,13 @@ def create_initial_data(
                     if not num_rows:
                         continue
                     data_columns = [
-                        Column(c["name"], c["type"], c["nullable"], c["default"])
+                        Column(
+                            c["name"],
+                            c["type"],
+                            c["nullable"],
+                            c["default"],
+                            c.get("data_shape"),
+                        )
                         for c in source["columns"]
                     ]
                     print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
@@ -1673,7 +1874,13 @@ def create_initial_data(
                         if not num_rows:
                             continue
                         data_columns = [
-                            Column(c["name"], c["type"], c["nullable"], c["default"])
+                            Column(
+                                c["name"],
+                                c["type"],
+                                c["nullable"],
+                                c["default"],
+                                c.get("data_shape"),
+                            )
                             for c in child["columns"]
                         ]
                         print(
@@ -1781,7 +1988,13 @@ def create_ingestions(
                         continue
 
                     data_columns = [
-                        Column(c["name"], c["type"], c["nullable"], c["default"])
+                        Column(
+                            c["name"],
+                            c["type"],
+                            c["nullable"],
+                            c["default"],
+                            c.get("data_shape"),
+                        )
                         for c in source["columns"]
                     ]
                     pretty_name = f"{db}.{schema}.{name}"
@@ -1844,7 +2057,13 @@ def create_ingestions(
                             continue
 
                         data_columns = [
-                            Column(c["name"], c["type"], c["nullable"], c["default"])
+                            Column(
+                                c["name"],
+                                c["type"],
+                                c["nullable"],
+                                c["default"],
+                                c.get("data_shape"),
+                            )
                             for c in child["columns"]
                         ]
                         pretty_name = f"{db}.{schema}.{name}->{child_name}"
