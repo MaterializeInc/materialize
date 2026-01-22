@@ -23,6 +23,7 @@ use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 
 use tracing::warn;
+use url::Url;
 
 /// Command line arguments for OIDC authentication.
 #[derive(Debug, Clone)]
@@ -36,7 +37,9 @@ pub struct OidcConfig {
 #[derive(Debug)]
 pub enum OidcError {
     /// Failed to parse OIDC configuration URL.
-    InvalidConfigUrl(url::ParseError),
+    InvalidIssuerUrl(url::ParseError),
+    /// Failed to fetch OpenID configuration from provider.
+    OpenIdConfigFetchFailed(String),
     /// Failed to fetch JWKS from provider.
     JwksFetchFailed(String),
     /// The key ID is missing in the token header.
@@ -52,8 +55,11 @@ pub enum OidcError {
 impl std::fmt::Display for OidcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            OidcError::InvalidConfigUrl(e) => {
-                write!(f, "failed to parse OIDC configuration URL: {}", e)
+            OidcError::InvalidIssuerUrl(e) => {
+                write!(f, "failed to parse OIDC issuer URL: {}", e)
+            }
+            OidcError::OpenIdConfigFetchFailed(e) => {
+                write!(f, "failed to fetch OpenID configuration: {}", e)
             }
             OidcError::JwksFetchFailed(e) => write!(f, "failed to fetch JWKS: {}", e),
             OidcError::MissingKid => write!(f, "missing key ID in token header"),
@@ -130,10 +136,17 @@ pub struct GenericOidcAuthenticator {
     inner: Arc<GenericOidcAuthenticatorInner>,
 }
 
+/// OpenID Connect Discovery document.
+/// See: <https://openid.net/specs/openid-connect-discovery-1_0.html>
+#[derive(Debug, Deserialize)]
+struct OpenIdConfiguration {
+    /// URL of the JWKS endpoint.
+    jwks_uri: String,
+}
+
 #[derive(Debug)]
 pub struct GenericOidcAuthenticatorInner {
     issuer: String,
-    jwks_uri: String,
     decoding_keys: Mutex<BTreeMap<String, OidcDecodingKey>>,
     http_client: HttpClient,
 }
@@ -141,34 +154,53 @@ pub struct GenericOidcAuthenticatorInner {
 impl GenericOidcAuthenticator {
     /// Create a new [`GenericOidcAuthenticator`] from [`OidcConfig`].
     pub fn new(config: OidcConfig) -> Result<Self, OidcError> {
-        let issuer_url =
-            url::Url::parse(&config.oidc_issuer).map_err(OidcError::InvalidConfigUrl)?;
-
-        // TODO (SangJunBak): Add a configuration variable for the JWKS set and
-        // a boolean jwksFetchFromIssuer.
-        let jwks_uri = issuer_url
-            .join(".well-known/jwks.json")
-            .map_err(OidcError::InvalidConfigUrl)?
-            .to_string();
+        let http_client = HttpClient::new();
 
         Ok(Self {
             inner: Arc::new(GenericOidcAuthenticatorInner {
                 issuer: config.oidc_issuer,
-                jwks_uri,
                 decoding_keys: Mutex::new(BTreeMap::new()),
-                // TODO: Use same client code as frontegg-auth.
-                http_client: HttpClient::new(),
+                http_client,
             }),
         })
     }
 }
 
 impl GenericOidcAuthenticatorInner {
-    /// Fetch JWKS from the provider and parse into a map of key IDs to decoding keys.
-    async fn fetch_jwks(self: &Self) -> Result<BTreeMap<String, OidcDecodingKey>, OidcError> {
+    async fn fetch_jwks_uri(&self) -> Result<String, OidcError> {
+        let openid_config_url = Url::parse(&self.issuer)
+            .and_then(|url| url.join(".well-known/openid-configuration"))
+            .map_err(OidcError::InvalidIssuerUrl)?;
+
+        // Fetch OpenID configuration to get the JWKS URI
         let response = self
             .http_client
-            .get(&self.jwks_uri)
+            .get(openid_config_url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| OidcError::OpenIdConfigFetchFailed(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(OidcError::OpenIdConfigFetchFailed(format!(
+                "HTTP {}",
+                response.status()
+            )));
+        }
+
+        let openid_config: OpenIdConfiguration = response
+            .json()
+            .await
+            .map_err(|e| OidcError::OpenIdConfigFetchFailed(e.to_string()))?;
+
+        Ok(openid_config.jwks_uri)
+    }
+    /// Fetch JWKS from the provider and parse into a map of key IDs to decoding keys.
+    async fn fetch_jwks(&self) -> Result<BTreeMap<String, OidcDecodingKey>, OidcError> {
+        let jwks_uri = self.fetch_jwks_uri().await?;
+        let response = self
+            .http_client
+            .get(&jwks_uri)
             .timeout(Duration::from_secs(10))
             .send()
             .await
