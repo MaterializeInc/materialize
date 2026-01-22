@@ -1582,6 +1582,12 @@ def run_create_objects(
                         ref_database, ref_schema, ref_table = (
                             get_postgres_reference_db_schema_table(child)
                         )
+                        match = re.search(
+                            r"\bPUBLICATION\s*=\s*([A-Za-z_][A-Za-z0-9_]*)",
+                            source["create_sql"],
+                        )
+                        assert match, f"Publication not found in {source}"
+                        publication = match.group(1)
                         columns = [
                             f"{column['name']} {column['type']} {'NULL' if column['nullable'] else 'NOT NULL'} DEFAULT {'NULL' if column['default'] is None else column['default']}"
                             for column in child["columns"]
@@ -1593,11 +1599,8 @@ def run_create_objects(
                                     $ postgres-execute connection=postgres://postgres:postgres@postgres/{ref_database}
                                     ALTER USER postgres WITH replication;
 
-                                    DROP PUBLICATION IF EXISTS mz_source;
-                                    CREATE PUBLICATION mz_source FOR ALL TABLES;
-                                    CREATE TABLE IF NOT EXISTS dummy (f1 INTEGER);
-                                    ALTER TABLE dummy REPLICA IDENTITY FULL;
-                                    INSERT INTO dummy VALUES (1);
+                                    DROP PUBLICATION IF EXISTS "{publication}";
+                                    CREATE PUBLICATION "{publication}" FOR ALL TABLES;
                                     """
                                 )
                             )
@@ -2310,7 +2313,7 @@ def test(
                 c, workload, stop_event, factor_ingestions, verbose, stats["ingestions"]
             )
         )
-    if run_queries:
+    if run_queries and workload["queries"]:
         print("Starting continuous queries")
         threads.append(
             PropagatingThread(
@@ -2340,7 +2343,8 @@ def test(
     else:
         print("No continuous ingestions or queries defined, skipping phase")
 
-    # TODO: Measure performance
+    # TODO: Measure performance: Query times, how much CPU, memory usage during continuous phase, compare with previous Mz version. This should help with telling how much effect changes have on specific customer workloads
+    # TODO: Compare error rate or types of errors with previous version to catch regressions
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
