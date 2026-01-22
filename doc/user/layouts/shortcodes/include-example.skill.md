@@ -8,7 +8,7 @@
 {{- $indent := .Get "indent" -}}
 {{- range $data }}
 {{- if eq .name $example -}}
-{{ .description }}
+{{- .description -}}
 {{- if .code -}}
 {{- $code := .code -}}
 {{- if $indent }}
@@ -21,7 +21,7 @@
 {{- end -}}
 {{- if .results }}
 
-{{ if $indent }}   {{ end }}{{ .results }}
+{{- if $indent }}   {{ end }}{{ .results -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

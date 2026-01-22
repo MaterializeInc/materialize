@@ -7,6 +7,6 @@
 {{- $name := .Get "name" -}}
 {{- range $data -}}
 {{- if eq .name $name -}}
-{{ .content | $.Page.RenderString }}
+{{- .content | $.Page.RenderString -}}
 {{- end -}}
 {{- end -}}
