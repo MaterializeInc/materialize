@@ -109,19 +109,22 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Export statistics for a given capture instance
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
-            // Maps the exclude columns for each output index so we can check whether schema updates are valid on a per-output basis
-            let mut exclude_columns: HashMap<u64, &Vec<String>> = HashMap::new();
+            // Maps the included columns for each output index so we can check whether schema updates are valid on a per-output basis
+            let mut included_columns: HashMap<u64, Vec<String>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
+                // Collect the included columns from decoder for schema change validation
+                // The decoder serves as an effective source of truth for which columns are "included", as we only care about the columns that are being decoded and replicated
+                let included_cols = output.decoder.included_column_names();
+                included_columns.insert(output.partition_index, included_cols);
+
                 capture_instances
                     .entry(Arc::clone(&output.capture_instance))
                     .or_default()
                     .push(output.partition_index);
-
-                exclude_columns.insert(output.partition_index, &output.excluded_columns);
 
                 if *output.resume_upper == [Lsn::minimum()] {
                     capture_instance_to_snapshot
@@ -486,7 +489,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             table.to_string()
                         );
                         for partition_idx in partition_indexes {
-                            if !errored_partitions.contains(partition_idx) && !ddl_event.is_compatible(exclude_columns.get(partition_idx).unwrap_or_else(|| panic!("Partition index didn't exist: '{partition_idx}'"))) {
+                            if !errored_partitions.contains(partition_idx) && !ddl_event.is_compatible(included_columns.get(partition_idx).unwrap_or_else(|| panic!("Partition index didn't exist: '{partition_idx}'"))) {
                                 data_output
                                     .give_fueled(
                                         &data_cap_set[0],
