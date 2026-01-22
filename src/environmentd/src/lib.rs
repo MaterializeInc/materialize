@@ -283,9 +283,10 @@ impl Listener<SqlListenerConfig> {
             ),
             AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
             AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client.clone()),
-            AuthenticatorKind::Oidc => Authenticator::Oidc(
-                oidc.expect("OIDC config is required with AuthenticatorKind::Oidc"),
-            ),
+            AuthenticatorKind::Oidc => Authenticator::Oidc {
+                oidc: oidc.expect("OIDC config is required with AuthenticatorKind::Oidc"),
+                password: adapter_client.clone(),
+            },
             AuthenticatorKind::None => Authenticator::None,
         };
 
@@ -391,16 +392,11 @@ impl Listeners {
         let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
         let authenticator_none_rx = authenticator_none_rx.shared();
 
-        // We can only send the Frontegg, OIDC, and None variants immediately.
-        // The Password variant requires an adapter client.
+        // We can only send the Frontegg and None variants immediately.
+        // The Password and Oidc variants require an adapter client.
         if let Some(frontegg) = &config.frontegg {
             authenticator_frontegg_tx
                 .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
-                .expect("rx known to be live");
-        }
-        if let Some(oidc) = &config.oidc {
-            authenticator_oidc_tx
-                .send(Arc::new(Authenticator::Oidc(oidc.clone())))
                 .expect("rx known to be live");
         }
         authenticator_none_tx
@@ -824,6 +820,14 @@ impl Listeners {
         authenticator_password_tx
             .send(Arc::new(Authenticator::Password(adapter_client.clone())))
             .expect("rx known to be live");
+        if let Some(oidc) = &config.oidc {
+            authenticator_oidc_tx
+                .send(Arc::new(Authenticator::Oidc {
+                    oidc: oidc.clone(),
+                    password: adapter_client.clone(),
+                }))
+                .expect("rx known to be live");
+        }
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");

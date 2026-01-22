@@ -1039,7 +1039,9 @@ async fn auth(
                 include_www_authenticate_header,
             });
         }
-        Authenticator::Oidc(oidc) => match creds {
+        // TODO (SangJunBak): Implement password auth flow
+        // for this authenticator variant.
+        Authenticator::Oidc { oidc, password: _ } => match creds {
             Some(Credentials::Token { token }) => {
                 // Validate JWT token
                 let (claims, authenticated) = oidc

@@ -227,7 +227,8 @@ where
                 }
             }
         }
-        Authenticator::Oidc(oidc) => {
+        // TODO: Implement password auth flow for this authenticator variant.
+        Authenticator::Oidc { oidc, password: _ } => {
             // OIDC authentication: JWT sent as password in cleartext flow
             let jwt = match request_cleartext_password(conn).await {
                 Ok(password) => password,

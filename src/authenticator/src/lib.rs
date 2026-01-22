@@ -19,6 +19,9 @@ pub enum Authenticator {
     Frontegg(FronteggAuthenticator),
     Password(AdapterClient),
     Sasl(AdapterClient),
-    Oidc(GenericOidcAuthenticator),
+    Oidc {
+        oidc: GenericOidcAuthenticator,
+        password: AdapterClient,
+    },
     None,
 }
