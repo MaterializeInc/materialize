@@ -408,5 +408,4 @@ available (also for PostgreSQL)."
 
 ## Considerations
 
-{{% include-from-yaml data="mysql_source_details"
-name="mysql-considerations" %}}
+{{% include-headless "/headless/mysql-considerations" %}}

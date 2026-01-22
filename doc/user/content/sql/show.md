@@ -25,7 +25,7 @@ configuration parameters.
 - `schema`: an alias for showing the first resolvable schema in `search_path`
 - `time zone`: an alias for `timezone`
 
-{{< include-md file="shared-content/configuration-parameters.md" >}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ## Examples
 

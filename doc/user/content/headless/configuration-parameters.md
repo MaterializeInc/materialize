@@ -1,3 +1,6 @@
+---
+headless: true
+---
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?

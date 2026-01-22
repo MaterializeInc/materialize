@@ -82,8 +82,7 @@ as it arrives, in real time.
 
 ### Modifying an existing source
 
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
 
 ## Running/steady-state
 
