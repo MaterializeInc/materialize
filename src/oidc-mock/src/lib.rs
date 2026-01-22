@@ -58,9 +58,8 @@ struct OidcMockContext {
 
 /// OIDC mock server for testing.
 pub struct OidcMockServer {
-    /// Base URL of the server (e.g., "http://127.0.0.1:12345").
-    pub base_url: String,
-    /// The issuer URL (same as base_url, used for JWT iss claim).
+    /// The issuer URL. Used as the base URL of the server
+    /// and as the issuer for JWT iss claim.
     pub issuer: String,
     /// Key ID used in JWT headers.
     pub kid: String,
@@ -108,8 +107,7 @@ impl OidcMockServer {
         let listener = TcpListener::bind(*addr).await.unwrap_or_else(|e| {
             panic!("error binding to {}: {}", addr, e);
         });
-        let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let issuer = base_url.clone();
+        let issuer = format!("http://{}", listener.local_addr().unwrap());
 
         // Extract RSA public key components from the decoding key
         // We need to serialize the public key to get n and e values
@@ -133,11 +131,10 @@ impl OidcMockServer {
             router.into_make_service_with_connect_info::<SocketAddr>(),
         );
         println!("oidc-mock listening...");
-        println!(" HTTP address: {}", base_url);
+        println!(" HTTP address: {}", issuer);
         let handle = mz_ore::task::spawn(|| "oidc-mock-server", server.into_future());
 
         Ok(OidcMockServer {
-            base_url,
             issuer,
             kid,
             encoding_key: encoding_key_typed,
@@ -211,7 +208,7 @@ impl OidcMockServer {
 
     /// Returns the JWKS URL for this server.
     pub fn jwks_url(&self) -> String {
-        format!("{}/.well-known/jwks.json", self.base_url)
+        format!("{}/.well-known/jwks.json", self.issuer)
     }
 }
 

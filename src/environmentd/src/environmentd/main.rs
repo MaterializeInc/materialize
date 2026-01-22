@@ -173,7 +173,7 @@ pub struct Args {
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
     // === OIDC options. ===
-    /// OIDC issuer URL (e.g., "<https://accounts.google.com>").
+    /// OIDC issuer URL (e.g., `https://accounts.google.com`).
     #[clap(long, env = "MZ_OIDC_ISSUER")]
     oidc_issuer: Option<String>,
     // === Orchestrator options. ===

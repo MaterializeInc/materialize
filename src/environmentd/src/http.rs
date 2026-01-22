@@ -1039,10 +1039,10 @@ async fn auth(
                 let name = claims.username().to_string();
                 (name, None)
             }
-            Some(Credentials::Password { password, .. }) => {
+            Some(Credentials::Password { username, password }) => {
                 // Allow JWT to be passed as password
                 let claims = oidc
-                    .validate_access_token(&password.0, None)
+                    .validate_access_token(&password.0, Some(&username))
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
                 let name = claims.username().to_string();

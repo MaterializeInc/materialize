@@ -28,7 +28,7 @@ use url::Url;
 /// Command line arguments for OIDC authentication.
 #[derive(Debug, Clone)]
 pub struct OidcConfig {
-    /// OIDC issuer URL (e.g., "<https://accounts.google.com>").
+    /// OIDC issuer URL (e.g., `https://accounts.google.com`).
     /// This is validated against the `iss` claim in the JWT.
     pub oidc_issuer: String,
 }

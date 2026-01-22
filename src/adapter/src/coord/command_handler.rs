@@ -504,7 +504,6 @@ impl Coordinator {
             Ok(verifier) => {
                 // Success only if role exists, allows login, and a real password hash was used.
                 if login && real_hash.is_some() {
-                    role.expect("login implies role exists");
                     let _ = tx.send(Ok(SASLVerifyProofResponse { verifier }));
                 } else {
                     let _ = tx.send(Err(make_auth_err(role_present, login)));
