@@ -85,6 +85,7 @@ def get_minimal_system_parameters(
         "enable_eager_delta_joins": "true",
         "enable_envelope_debezium_in_subscribe": "true",
         "enable_expressions_in_limit_syntax": "true",
+        "enable_iceberg_sink": "true",
         "enable_introspection_subscribes": "true",
         "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
