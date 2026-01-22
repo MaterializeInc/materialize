@@ -1,4 +1,0 @@
-{{ $dataFile := .Get "data" }}
-{{ $data := index $.Site.Data $dataFile }}
-
-{{ partial "index-usages-tables/table-index-usage-queries.html" $data }}

@@ -197,7 +197,7 @@ CREATE INDEX idx_orders_view_qty on orders_view (quantity);
 The following table shows various queries and whether Materialize performs a
 point lookup or an index scan.
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity" >}}
+{{< yaml-table data="examples/index_usage/index_usage_key_quantity" >}}
 
 Consider that the view has an index on the `quantity` and `price` fields
 instead of an index on the `quantity` field:
@@ -207,11 +207,11 @@ DROP INDEX idx_orders_view_qty;
 CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 ```
 
-{{< index_usage/index-usage-table data="index_usage_key_quantity_price" >}}
+{{< yaml-table data="examples/index_usage/index_usage_key_quantity_price" >}}
 
 #### Limitations
 
-{{% index_usage/index-ordering %}}
+{{% include-headless "/headless/index-ordering" %}}
 
 ### Indexes on views vs. materialized views
 

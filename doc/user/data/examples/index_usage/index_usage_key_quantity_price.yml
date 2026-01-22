@@ -1,11 +1,15 @@
 # CREATE INDEX idx_orders_view_qty on orders_view (quantity);
-queries:
+columns:
+  - column: query
+    header: Query
+  - column: index_usage
+    header: Index Usage
+rows:
   - query: |
       ```mzsql
       SELECT * FROM orders_view;
       ```
     index_usage: Index scan.
-
   - query: |
       ```mzsql
       SELECT * FROM orders_view WHERE quantity = 10;
@@ -13,20 +17,17 @@ queries:
     index_usage: |
       Index scan. Query does not include equality conditions on **all** indexed
       fields.
-
   - query: |
       ```mzsql
       SELECT * FROM orders_view WHERE quantity = 10 AND price = 2.50;
       ```
     index_usage: Point lookup.
-
   - query: |
       ```mzsql
       SELECT * FROM orders_view WHERE quantity = 10 OR price = 2.50;
       ```
     index_usage: |
       Index scan. Query uses `OR` to combine conditions on **different** fields.
-
   - query: |
       ```mzsql
       SELECT * FROM orders_view
@@ -34,7 +35,6 @@ queries:
       ```
     index_usage: |
       Point lookup. Query uses `OR` to combine conditions on **same** field and `AND` to combine conditions on **different** fields.
-
   - query: |
       ```mzsql
       SELECT * FROM orders_view
@@ -43,7 +43,6 @@ queries:
     index_usage: |
       Point lookup on the index keys `quantity` and `price`, then filter on
       `item`.
-
   - query: |
       ```mzsql
       SELECT * FROM orders_view
