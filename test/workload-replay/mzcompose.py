@@ -12,6 +12,8 @@ Simulates workloads recorded via `bin/mz-workload-record` in a local run using
 Docker Compose.
 """
 
+from __future__ import annotations
+
 import argparse
 import datetime
 import json
@@ -27,10 +29,14 @@ import threading
 import time
 import urllib.parse
 import uuid
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from typing import Literal as TypeLiteral
 
 import confluent_kafka  # type: ignore
+import matplotlib.pyplot as plt
+import numpy
 import psycopg
 import pymysql
 import pymysql.cursors
@@ -47,6 +53,7 @@ from pg8000.native import literal
 from psycopg.sql import SQL, Identifier, Literal
 
 from materialize import MZ_ROOT, buildkite, spawn, ui
+from materialize.docker import image_registry
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -67,6 +74,9 @@ from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import PropagatingThread
+from materialize.version_list import resolve_ancestor_image_tag
+
+WORKLOAD_REPLAY_VERSION = "1.0.0"  # Used for uploading test analytics results
 
 cluster_replica_sizes = {
     "bootstrap": {
@@ -498,6 +508,13 @@ SERVICES = [
 ]
 
 LOCATION = MZ_ROOT / "test" / "workload-replay" / "recorded-workloads"
+
+
+def resolve_tag(tag: str) -> str | None:
+    if tag == "common-ancestor":
+        # TODO: We probably will need overrides too
+        return resolve_ancestor_image_tag({})
+    return tag
 
 
 def update_recorded_workloads_repo() -> None:
@@ -1543,8 +1560,6 @@ def run_create_objects(
                     raise ValueError(f"Unhandled connection type {connection['type']}")
 
     print("Creating sources")
-    kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
-    admin_client = AdminClient(kafka_conf)
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for name, source in items["sources"].items():
@@ -1583,7 +1598,7 @@ def run_create_objects(
                             get_postgres_reference_db_schema_table(child)
                         )
                         match = re.search(
-                            r"\bPUBLICATION\s*=\s*([A-Za-z_][A-Za-z0-9_]*)",
+                            r"\bPUBLICATION\s*=\s*'?(?P<pub>[A-Za-z_][A-Za-z0-9_]*)'?",
                             source["create_sql"],
                         )
                         assert match, f"Publication not found in {source}"
@@ -1654,6 +1669,10 @@ def run_create_objects(
 
                 if source["type"] == "kafka":
                     topic = get_kafka_topic(source)
+                    kafka_conf = {
+                        "bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"
+                    }
+                    admin_client = AdminClient(kafka_conf)
                     admin_client.create_topics(
                         [
                             confluent_kafka.admin.NewTopic(  # type: ignore
@@ -1704,7 +1723,7 @@ def run_create_objects(
 
                 for child in source.get("children", {}).values():
                     if child["type"] == "table":
-                        # TODO: I guess we should just create a valid CREATE TABLE command ourselves, since the provided one is full of internals
+                        # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/10034 is fixed
                         create_sql = re.sub(
                             r",?\s*DETAILS\s*=\s*'[^']*'",
                             "",
@@ -1778,8 +1797,9 @@ def run_create_objects(
 
 def create_initial_data(
     c: Composition, workload: dict[str, Any], factor_initial_data: float
-) -> None:
+) -> bool:
     batch_size = 2000
+    created_data = False
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
             for name, table in items["tables"].items():
@@ -1840,6 +1860,7 @@ def create_initial_data(
                             source,
                             min(batch_size, num_rows - start),
                         )
+                        created_data = True
                     print()
                 elif not source.get("children", {}):
                     num_rows = int(source["messages_total"] * factor_initial_data)
@@ -1870,6 +1891,7 @@ def create_initial_data(
                             data_columns,
                             min(batch_size, num_rows - start),
                         )
+                        created_data = True
                     print()
                 else:
                     for child_name, child in source.get("children", {}).items():
@@ -1903,7 +1925,9 @@ def create_initial_data(
                                 data_columns,
                                 min(batch_size, num_rows - start),
                             )
+                            created_data = True
                         print()
+    return created_data
 
 
 def create_ingestions(
@@ -1983,7 +2007,7 @@ def create_ingestions(
                         )
                     )
 
-                if not source.get("children", {}):
+                elif not source.get("children", {}):
                     if "messages_second" not in source:
                         continue
                     rate = math.ceil(source["messages_second"] * factor_ingestions)
@@ -2128,7 +2152,7 @@ def create_ingestions(
 
 
 def run_query(
-    c: Composition, query: dict[str, Any], stats: dict[str, int], verbose: bool
+    c: Composition, query: dict[str, Any], stats: dict[str, Any], verbose: bool
 ) -> None:
     conn = c.sql_connection(user="mz_system", port=6877)
     with conn.cursor() as cur:
@@ -2143,7 +2167,10 @@ def run_query(
         stats["total"] += 1
         try:
             sql, params = pg_params_to_psycopg(query["sql"], query["params"])
+            start_time = time.time()
             cur.execute(sql.encode(), params)
+            end_time = time.time()
+            stats["timings"].append((sql, end_time - start_time))
             if verbose:
                 print(f"Success: {sql} (params: {params})")
         except psycopg.Error as e:
@@ -2217,6 +2244,90 @@ def continuous_queries(
         raise
 
 
+_SI_UNITS = {
+    "b": 1,
+    "kb": 10**3,
+    "mb": 10**6,
+    "gb": 10**9,
+    "tb": 10**12,
+    "pb": 10**15,
+}
+
+_IEC_UNITS = {
+    "kib": 2**10,
+    "mib": 2**20,
+    "gib": 2**30,
+    "tib": 2**40,
+    "pib": 2**50,
+}
+
+
+def parse_bytes(s: str) -> int:
+    """
+    Parses strings like:
+      "76.5MB" -> 76500000
+      "3.202GiB" -> 3438115842
+      "1e+03kB" -> 1000000
+      "0B" -> 0
+    """
+    s = s.strip()
+    # number: decimal or scientific notation, e.g. 1e+03, 3.2E-1, .5
+    m = re.fullmatch(
+        r"([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*([A-Za-z]+)", s
+    )
+    if not m:
+        raise ValueError(f"Cannot parse bytes: {s!r}")
+
+    val = float(m.group(1))
+    unit_raw = m.group(2)
+
+    unit = unit_raw.lower()
+
+    if unit in _SI_UNITS:
+        mult = _SI_UNITS[unit]
+    elif unit in _IEC_UNITS:
+        mult = _IEC_UNITS[unit]
+    else:
+        raise ValueError(f"Unknown unit {unit_raw!r} in {s!r}")
+
+    return int(val * mult)
+
+
+def parse_two_bytes(s: str) -> tuple[int, int]:
+    a, b = (x.strip() for x in s.split("/", 1))
+    return parse_bytes(a), parse_bytes(b)
+
+
+def parse_percent(s: str) -> float:
+    return float(s.strip().rstrip("%"))
+
+
+def docker_stats(
+    stats: list[tuple[int, dict[str, dict[str, Any]]]], stop_event: threading.Event
+) -> None:
+    while not stop_event.is_set():
+        result = {}
+        timestamp = int(time.time())
+        for line in subprocess.check_output(
+            ["docker", "stats", "--format", "json", "--no-trunc", "--no-stream"],
+            text=True,
+        ).splitlines():
+            obj = json.loads(line)
+            if not obj["Name"].startswith("workload-replay-"):
+                continue
+            # net_rx, net_tx = parse_two_bytes(obj["NetIO"])
+            # blk_read, blk_write = parse_two_bytes(obj["BlockIO"])
+            result[obj["Name"].removeprefix("workload-replay-").removesuffix("-1")] = {
+                "cpu_percent": parse_percent(obj["CPUPerc"]),
+                "mem_percent": parse_percent(obj["MemPerc"]),
+                # "net_rx_bytes": net_rx,
+                # "net_tx_bytes": net_tx,
+                # "block_read_bytes": blk_read,
+                # "block_write_bytes": blk_write,
+            }
+        stats.append((timestamp, result))
+
+
 def print_stats(stats: dict[str, Any]) -> None:
     print("Queries:")
     print(f"   Total: {stats['queries']['total']}")
@@ -2232,6 +2343,7 @@ def print_stats(stats: dict[str, Any]) -> None:
         else 0
     )
     print(f"    Slow: {stats['queries']['slow']} ({slow:.0f}%)")
+    # print(f" Timings: {stats['queries']['timings']}")
     print("Ingestions:")
     print(f"   Total: {stats['ingestions']['total']}")
     failed = (
@@ -2246,6 +2358,410 @@ def print_stats(stats: dict[str, Any]) -> None:
         else 0
     )
     print(f"    Slow: {stats['ingestions']['slow']} ({slow:.0f}%)")
+    # print(f"Docker stats: {stats['docker']}")
+
+
+def upload_plots(
+    plot_paths: list[str],
+    file: str,
+):
+    if buildkite.is_in_buildkite():
+        for plot_path in plot_paths:
+            buildkite.upload_artifact(plot_path, cwd=MZ_ROOT, quiet=True)
+        print(f"+++ Plots for {file}")
+        for plot_path in plot_paths:
+            print(
+                buildkite.inline_image(f"artifact://{plot_path}", f"Plots for {file}")
+            )
+    else:
+        print(f"Saving plots to {plot_paths}")
+
+
+class DockerSeries:
+    def __init__(
+        self,
+        *,
+        t: list[int],
+        cpu_percent: dict[str, list[float]],
+        mem_percent: dict[str, list[float]],
+    ) -> None:
+        self.t = t
+        self.cpu_percent = cpu_percent
+        self.mem_percent = mem_percent
+
+
+def extract_docker_series(
+    docker_stats: list[tuple[int, dict[str, dict[str, Any]]]]
+) -> DockerSeries:
+    t0 = docker_stats[0][0]
+    times: list[int] = [ts - t0 for (ts, _snapshot) in docker_stats]
+
+    containers: set[str] = set()
+    for _ts, snapshot in docker_stats:
+        containers |= set(snapshot.keys())
+
+    def init_float() -> dict[str, list[float]]:
+        return {c: [] for c in sorted(containers)}
+
+    def init_int() -> dict[str, list[int]]:
+        return {c: [] for c in sorted(containers)}
+
+    cpu_percent = init_float()
+    mem_percent = init_float()
+
+    for _ts, snapshot in docker_stats:
+        for c in sorted(containers):
+            m = snapshot.get(c)
+
+            def last_or(lst: list[Any], default: Any):
+                return default if not lst else lst[-1]
+
+            if m is None:
+                cpu_percent[c].append(last_or(cpu_percent[c], 0.0))
+                mem_percent[c].append(last_or(mem_percent[c], 0.0))
+                continue
+
+            cpu_percent[c].append(float(m["cpu_percent"]))
+            mem_percent[c].append(float(m["mem_percent"]))
+
+    return DockerSeries(
+        t=times,
+        cpu_percent=cpu_percent,
+        mem_percent=mem_percent,
+    )
+
+
+YScale = TypeLiteral["linear", "log", "symlog", "logit"]
+
+
+def plot_timeseries_compare(
+    *,
+    t_old: list[int],
+    ys_old: dict[str, list[float]],
+    t_new: list[int],
+    ys_new: dict[str, list[float]],
+    title: str,
+    ylabel: str,
+    out_path: Path,
+    yscale: YScale | None = None,
+):
+    plt.figure(figsize=(10, 6))
+
+    containers = sorted(set(ys_old.keys()) | set(ys_new.keys()))
+
+    for c in containers:
+        if c in ys_old:
+            plt.plot(t_old, ys_old[c], linestyle="--", label=f"{c} (old)")
+        if c in ys_new:
+            plt.plot(t_new, ys_new[c], linestyle="-", label=f"{c} (new)")
+
+    plt.xlabel("time [s]")
+    plt.ylabel(ylabel)
+    if yscale is not None:
+        plt.yscale(yscale)
+
+    plt.title(title)
+    plt.legend(loc="best")  # type: ignore
+    plt.grid(True)
+    plt.ylim(bottom=0)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+
+
+def plot_docker_stats_compare(
+    *,
+    stats_old: dict[str, Any],
+    stats_new: dict[str, Any],
+    file: str,
+):
+    if "docker" not in stats_old:
+        return
+    old = extract_docker_series(stats_old["docker"])
+    new = extract_docker_series(stats_new["docker"])
+
+    plot_paths = []
+    plot_path = Path("plots") / f"{file}_cpu.png"
+    plot_timeseries_compare(
+        t_old=old.t,
+        ys_old=old.cpu_percent,
+        t_new=new.t,
+        ys_new=new.cpu_percent,
+        title=f"{file}\nCPU% (old vs new)",
+        ylabel="cpu [%]",
+        out_path=plot_path,
+    )
+    plot_paths.append(plot_path)
+
+    plot_path = Path("plots") / f"{file}_mem.png"
+    plot_timeseries_compare(
+        t_old=old.t,
+        ys_old=old.mem_percent,
+        t_new=new.t,
+        ys_new=new.mem_percent,
+        title=f"{file}\nMemory% (old vs new)",
+        ylabel="memory [%]",
+        out_path=plot_path,
+    )
+    plot_paths.append(plot_path)
+
+    upload_plots(plot_paths, file)
+
+
+def average_cpu_mem_for_container(
+    docker_stats: list[tuple[int, dict[str, dict[str, Any]]]],
+    container: str,
+) -> tuple[float, float]:
+    cpu_sum = 0.0
+    mem_sum = 0.0
+    n = 0
+
+    for _ts, snapshot in docker_stats:
+        m = snapshot.get(container)
+        if m is None:
+            continue
+        cpu_sum += float(m["cpu_percent"])
+        mem_sum += float(m["mem_percent"])
+        n += 1
+
+    if n == 0:
+        raise ValueError(f"container {container!r} not found in docker_stats")
+
+    return (cpu_sum / n, mem_sum / n)
+
+
+def query_timing_stats(stats: dict[str, Any]) -> dict[str, float]:
+    durations = sorted(float(t) for (_sql, t) in stats["queries"]["timings"])
+    return {
+        "avg": float(numpy.mean(durations)),
+        "min": min(durations),
+        "max": max(durations),
+        "p50": float(numpy.median(durations)),
+        "p95": float(numpy.percentile(durations, 95)),
+        "p99": float(numpy.percentile(durations, 99)),
+        # "p99_9": float(numpy.percentile(durations, 99.9)),
+        # "p99_99": float(numpy.percentile(durations, 99.99)),
+        # "p99_999": float(numpy.percentile(durations, 99.999)),
+        # "p99_9999": float(numpy.percentile(durations, 99.9999)),
+        # "p99_99999": float(numpy.percentile(durations, 99.99999)),
+        # "p99_999999": float(numpy.percentile(durations, 99.999999)),
+        "std": float(numpy.std(durations, ddof=1)),
+    }
+
+
+def pct_change(old: float, new: float) -> float:
+    if old == 0:
+        return float("inf") if new != 0 else 0.0
+    return (new - old) / old * 100.0
+
+
+def fmt_pct(delta: float) -> str:
+    if delta == float("inf"):
+        return "inf"
+    return f"{delta:+.1f}%"
+
+
+def compare_table(
+    filename: str, stats_old: dict[str, Any], stats_new: dict[str, Any]
+) -> None:
+    rows = []
+    if "docker" in stats_old:
+        old_avg_cpu, old_avg_mem = average_cpu_mem_for_container(
+            stats_old["docker"], "materialized"
+        )
+        new_avg_cpu, new_avg_mem = average_cpu_mem_for_container(
+            stats_new["docker"], "materialized"
+        )
+        rows.extend(
+            [
+                ("CPU avg (%)", old_avg_cpu, new_avg_cpu, 1.2),
+                ("Mem avg (%)", old_avg_mem, new_avg_mem, 1.2),
+            ]
+        )
+
+    if "initial_data" in stats_old:
+        old_avg_cpu_initial_data, old_avg_mem_initial_data = (
+            average_cpu_mem_for_container(
+                stats_old["initial_data"]["docker"], "materialized"
+            )
+        )
+        new_avg_cpu_initial_data, new_avg_mem_initial_data = (
+            average_cpu_mem_for_container(
+                stats_new["initial_data"]["docker"], "materialized"
+            )
+        )
+        rows.extend(
+            [
+                (
+                    "Data ingestion CPU (sum)",
+                    old_avg_cpu_initial_data * stats_old["initial_data"]["time"],
+                    new_avg_cpu_initial_data * stats_new["initial_data"]["time"],
+                    1.2,
+                ),
+                (
+                    "Data ingestion Mem (sum)",
+                    old_avg_mem_initial_data * stats_old["initial_data"]["time"],
+                    new_avg_mem_initial_data * stats_new["initial_data"]["time"],
+                    1.2,
+                ),
+            ]
+        )
+
+    if "timings" in stats_old["queries"]:
+        old_q = query_timing_stats(stats_old)
+        new_q = query_timing_stats(stats_new)
+        rows.extend(
+            [
+                ("Query max (ms)", old_q["max"] * 1000, new_q["max"] * 1000, None),
+                ("Query min (ms)", old_q["min"] * 1000, new_q["min"] * 1000, None),
+                (
+                    "Query avg (ms)",
+                    old_q["avg"] * 1000,
+                    new_q["avg"] * 1000,
+                    None,
+                ),  # TODO: Why is this unstable?
+                (
+                    "Query p50 (ms)",
+                    old_q["p50"] * 1000,
+                    new_q["p50"] * 1000,
+                    None,
+                ),  # TODO: Why is this unstable?
+                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, 1.5),
+                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, 1.5),
+                ("Query std (ms)", old_q["std"] * 1000, new_q["std"] * 1000, None),
+            ]
+        )
+
+    if "object_creation" in stats_old:
+        rows.append(
+            (
+                "Object creation (s)",
+                stats_old["object_creation"],
+                stats_new["object_creation"],
+                1.2,
+            )
+        )
+
+    regressed = []
+
+    output_lines = [
+        f"{'METRIC':<25} | {'OLD':^12} | {'NEW':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
+        "-" * 106,
+    ]
+
+    for name, old, new, threshold in rows:
+        delta = pct_change(old, new)
+
+        if threshold is None:
+            flag = ""
+        elif new > old * threshold:
+            regressed.append(f"{name} increased from {old} to {new} ({fmt_pct(delta)})")
+            flag = "!!YES!!"
+        else:
+            flag = "no"
+        threshold_field = f"{threshold:>9.3f}" if threshold is not None else ""
+        output_lines.append(
+            f"{name:<25} | "
+            f"{old:>12.3f} | "
+            f"{new:>12.3f} | "
+            f"{fmt_pct(delta):>9} | "
+            f"{threshold_field:>9} | "
+            f"{flag:^12}"
+        )
+
+    print("\n".join(output_lines))
+
+    if regressed:
+        out = "\n".join(regressed)
+        raise ValueError(f"Regression caught in {filename}:\n{out}")
+
+
+def benchmark(
+    c: Composition,
+    file: pathlib.Path,
+    compare_against: str,
+    factor_initial_data: float,
+    factor_ingestions: float,
+    factor_queries: float,
+    runtime: int,
+    verbose: bool,
+    seed: str,
+) -> None:
+    services = [
+        "materialized",
+        "minio",
+        "fivetran-destination",
+        "postgres",
+        "mysql",
+        "sql-server",
+        "kafka",
+        "schema-registry",
+        "zookeeper",
+        "ssh-bastion-host",
+        "testdrive",
+    ]
+    tag = resolve_tag(compare_against)
+    print(f"-- Running against materialized:{tag} (reference)")
+    random.seed(seed)
+    with c.override(
+        Materialized(
+            image=f"{image_registry()}/materialized:{tag}",
+            cluster_replica_size=cluster_replica_sizes,
+        )
+    ):
+        stats_old = test(
+            c,
+            file,
+            factor_initial_data,
+            factor_ingestions,
+            factor_queries,
+            runtime,
+            verbose,
+            True,
+            True,
+            True,
+            True,
+        )
+    try:
+        c.kill(*services)
+    except:
+        pass
+    c.rm(*services, destroy_volumes=True)
+    c.rm_volumes("mzdata")
+    print("-- Running against current materialized")
+    random.seed(seed)
+    with c.override(
+        Materialized(image=None, cluster_replica_size=cluster_replica_sizes)
+    ):
+        stats_new = test(
+            c,
+            file,
+            factor_initial_data,
+            factor_ingestions,
+            factor_queries,
+            runtime,
+            verbose,
+            True,
+            True,
+            True,
+            True,
+        )
+    try:
+        c.kill(*services)
+    except:
+        pass
+    c.rm(*services, destroy_volumes=True)
+    c.rm_volumes("mzdata")
+    filename = posixpath.relpath(file, LOCATION)
+
+    plot_docker_stats_compare(
+        stats_old=stats_old,
+        stats_new=stats_new,
+        file=filename,
+    )
+    compare_table(filename, stats_old, stats_new)
+    # TODO: Compare error rate or types of errors with previous version to catch regressions
 
 
 def test(
@@ -2260,7 +2776,7 @@ def test(
     initial_data: bool,
     run_ingestions: bool,
     run_queries: bool,
-) -> None:
+) -> dict[str, Any]:
     print(f"--- {posixpath.relpath(file, LOCATION)}")
     with open(file) as f:
         workload = yaml.load(f, Loader=yaml.Loader)
@@ -2297,15 +2813,31 @@ def test(
 
     threads = []
     stop_event = threading.Event()
-    stats = {
+    stats: dict[str, Any] = {
         "queries": {"total": 0, "failed": 0, "slow": 0},
         "ingestions": {"total": 0, "failed": 0, "slow": 0},
     }
     if create_objects:
+        start_time = time.time()
         run_create_objects(c, services, workload)
+        stats["object_creation"] = time.time() - start_time
     if initial_data:
         print("Creating initial data")
-        create_initial_data(c, workload, factor_initial_data)
+        stats["initial_data"] = {"docker": [], "time": 0.0}
+        stats_thread = PropagatingThread(
+            target=docker_stats,
+            name="docker-stats",
+            args=(stats["initial_data"]["docker"], stop_event),
+        )
+        stats_thread.start()
+        start_time = time.time()
+        created_data = create_initial_data(c, workload, factor_initial_data)
+        stats["initial_data"]["time"] = time.time() - start_time
+        stop_event.set()
+        stats_thread.join()
+        stop_event.clear()
+        if not created_data:
+            del stats["initial_data"]
     if run_ingestions:
         print("Starting continuous ingestions")
         threads.extend(
@@ -2315,6 +2847,7 @@ def test(
         )
     if run_queries and workload["queries"]:
         print("Starting continuous queries")
+        stats["queries"]["timings"] = []
         threads.append(
             PropagatingThread(
                 target=continuous_queries,
@@ -2330,6 +2863,14 @@ def test(
             )
         )
     if threads:
+        stats["docker"] = []
+        threads.append(
+            PropagatingThread(
+                target=docker_stats,
+                name="docker-stats",
+                args=(stats["docker"], stop_event),
+            )
+        )
         for thread in threads:
             thread.start()
 
@@ -2343,8 +2884,7 @@ def test(
     else:
         print("No continuous ingestions or queries defined, skipping phase")
 
-    # TODO: Measure performance: Query times, how much CPU, memory usage during continuous phase, compare with previous Mz version. This should help with telling how much effect changes have on specific customer workloads
-    # TODO: Compare error rate or types of errors with previous version to catch regressions
+    return stats
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -2426,5 +2966,78 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.initial_data,
             args.run_ingestions,
             args.run_queries,
+        ),
+    )
+
+
+def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--factor-initial-data",
+        type=float,
+        default=1,
+        help="scale factor for initial data generation",
+    )
+    parser.add_argument(
+        "--factor-ingestions",
+        type=float,
+        default=1,
+        help="scale factor for runtime data ingestion rate",
+    )
+    parser.add_argument(
+        "--factor-queries",
+        type=float,
+        default=1,
+        help="scale factor for runtime queries",
+    )
+    parser.add_argument(
+        "--runtime",
+        type=int,
+        default=1200,
+        help="runtime for continuous ingestion/query period, in seconds",
+    )
+    parser.add_argument(
+        "--seed",
+        metavar="SEED",
+        type=str,
+        default=str(int(time.time())),
+        help="factor for initial data generation",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=["*.yml"],
+        help="run against the specified files",
+    )
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        "--compare-against",
+        type=str,
+        default=None,
+        help="compare performance and errors against another Materialize tag",
+    )
+    args = parser.parse_args()
+
+    print(f"-- Random seed is {args.seed}")
+    update_recorded_workloads_repo()
+
+    files_unsharded: list[pathlib.Path] = []
+    for file in args.files:
+        files_unsharded.extend(LOCATION.rglob(file))
+    files: list[pathlib.Path] = buildkite.shard_list(
+        sorted(files_unsharded),
+        lambda file: str(file),
+    )
+    c.test_parts(
+        files,
+        lambda file: benchmark(
+            c,
+            file,
+            args.compare_against,
+            args.factor_initial_data,
+            args.factor_ingestions,
+            args.factor_queries,
+            args.runtime,
+            args.verbose,
+            args.seed,
         ),
     )

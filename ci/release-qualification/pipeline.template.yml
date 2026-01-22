@@ -194,6 +194,23 @@ steps:
                 - --load-phase-duration
                 - 1200
 
+      - id: long-workload-replay
+        label: "Long Workload Replay (10% initial data)"
+        depends_on: build-x86_64
+        timeout_in_minutes: 1200
+        parallelism: 4
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: workload-replay
+              run: benchmark
+              args:
+                - --factor-initial-data=0.1
+                - --runtime=3600
+                - --compare-against
+                - common-ancestor
+        agents:
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - group: SQLsmith
     key: sqlsmith
     steps:

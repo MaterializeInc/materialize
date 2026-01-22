@@ -1793,8 +1793,9 @@ class Composition:
                 test_analytics_config = create_test_analytics_config(self)
                 test_analytics = TestAnalyticsDb(test_analytics_config)
                 test_analytics.database_connector.submit_update_statements()
-        if exceptions:
+        if len(exceptions) > 1:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
+        if exceptions:
             raise exceptions[0]
 
     def verify_build_profile(self, container: str = "materialized") -> None:
