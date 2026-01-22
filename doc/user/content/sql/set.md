@@ -26,7 +26,7 @@ Syntax element                | Description
 `<value>`                 | The value to assign to the parameter.
 **DEFAULT**               | Use the parameter's default value. Equivalent to [`RESET`](../reset).
 
-{{< include-md file="shared-content/configuration-parameters.md" >}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ### Aliased configuration parameters
 

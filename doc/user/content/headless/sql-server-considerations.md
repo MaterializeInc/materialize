@@ -1,6 +1,9 @@
+---
+headless: true
+---
 ### Schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+{{% include-headless "/headless/schema-changes-in-progress" %}}
 
 {{% schema-changes %}}
 
@@ -57,5 +60,4 @@ If two capture instances for a table share the same timestamp (unlikely given th
 
 ### Modifying an existing source
 
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}

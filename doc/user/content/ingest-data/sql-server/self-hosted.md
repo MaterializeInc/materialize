@@ -278,4 +278,4 @@ example="schema-changes" %}}
 
 ## Considerations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
+{{% include-headless "/headless/sql-server-considerations" %}}

@@ -22,7 +22,7 @@ Syntax element | Description
 ---------------|------------
 `<config>`     | The configuration parameter's name.
 
-{{< include-md file="shared-content/configuration-parameters.md" >}}
+{{% include-headless "/headless/configuration-parameters" %}}
 
 ## Privileges
 

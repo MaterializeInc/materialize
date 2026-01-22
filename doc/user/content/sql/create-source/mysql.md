@@ -178,8 +178,7 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-{{% include-from-yaml data="mysql_source_details"
-name="mysql-considerations" %}}
+{{% include-headless "/headless/mysql-considerations" %}}
 
 ## Examples
 
@@ -322,7 +321,7 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+{{% include-headless "/headless/schema-changes-in-progress" %}}
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected

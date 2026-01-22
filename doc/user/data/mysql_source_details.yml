@@ -106,39 +106,3 @@
     and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add the
     subsource back to the source. When you add the subsource, it will have the
     updated schema from the corresponding upstream table.
-
-- name: mysql-considerations
-  content: |
-    ### Schema changes
-
-    {{< include-md file="shared-content/schema-changes-in-progress.md" >}}
-
-    Materialize supports schema changes in the upstream database as follows:
-
-    #### Compatible schema changes
-
-    {{% include-from-yaml data="mysql_source_details"
-    name="mysql-compatible-schema-changes-legacy" %}}
-
-    #### Incompatible schema changes
-
-    {{% include-from-yaml data="mysql_source_details"
-    name="mysql-incompatible-schema-changes-legacy" %}}
-
-    ### Supported types
-
-    {{% include-from-yaml data="mysql_source_details"
-    name="mysql-supported-types" %}}
-
-    {{% include-from-yaml data="mysql_source_details"
-    name="mysql-unsupported-types" %}}
-
-    ### Truncation
-
-    {{% include-from-yaml data="mysql_source_details"
-    name="mysql-truncation-restriction" %}}
-
-    ### Modifying an existing source
-
-    {{< include-md
-    file="shared-content/alter-source-snapshot-blocking-behavior.md" >}}

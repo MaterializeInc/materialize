@@ -1,3 +1,6 @@
+---
+headless: true
+---
 {{% note %}}
 
 Using `WAIT UNTIL READY` requires that the session remain open: you need to

@@ -41,4 +41,4 @@ Data Capture (CDC) support.
 
 ## Considerations
 
-{{% include-md file="shared-content/sql-server-considerations.md" %}}
+{{% include-headless "/headless/sql-server-considerations" %}}

@@ -9,7 +9,7 @@
 {{- range $data }}
 {{- if eq .name $example -}}
 {{- if .description }}
-{{ .description }}
+{{- .description -}}
 {{ end -}}
 {{- if .code -}}
 {{- $code := .code -}}
@@ -33,7 +33,7 @@
 {{- end -}}
 {{- if .addenda }}
 
-{{ .addenda }}
+{{- .addenda -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

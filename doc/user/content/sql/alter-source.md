@@ -25,8 +25,7 @@ To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Ser
 {{% include-syntax file="examples/alter_source" example="syntax-add-subsource" %}}
 
 {{< note >}}
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
 {{< /note >}}
 
 {{< /tab >}}
@@ -73,8 +72,7 @@ Note that using a combination of dropping and adding subsources lets you change
 the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
 
 {{< important >}}
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
 {{< /important >}}
 
 ### Dropping subsources from a PostgreSQL/MySQL/SQL Server source
@@ -98,8 +96,7 @@ ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.co
 ```
 
 {{< important >}}
-{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
->}}
+{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
 {{< /important >}}
 
 ### Dropping subsources
