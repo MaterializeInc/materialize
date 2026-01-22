@@ -14,7 +14,8 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
     api::{DeleteParams, Patch, PatchParams, PostParams},
-    core::ErrorResponse,
+    core::Status,
+    core::response::StatusSummary,
     runtime::{reflector, watcher},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -56,12 +57,17 @@ where
     <K as Resource>::DynamicType: Default,
 {
     if resource.meta().resource_version.is_none() {
-        return Err(kube::Error::Api(ErrorResponse {
-            status: "Failure".to_string(),
-            message: "Must use apply_resource instead of replace_resource to apply fully created resources.".to_string(),
-            reason: "BadRequest".to_string(),
-            code: 400,
-        }).into());
+        return Err(kube::Error::Api(
+            Box::new(Status {
+                status: Some(StatusSummary::Failure),
+                message: "Must use apply_resource instead of replace_resource to apply fully created resources.".to_string(),
+                reason: "BadRequest".to_string(),
+                code: 400,
+                metadata: None,
+                details: None,
+            }),
+        )
+        .into());
     }
     Ok(api
         .replace(&resource.name_unchecked(), &PostParams::default(), resource)

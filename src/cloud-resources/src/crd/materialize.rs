@@ -15,6 +15,7 @@ use k8s_openapi::{
         api::resource::Quantity,
         apis::meta::v1::{Condition, Time},
     },
+    jiff::Timestamp,
 };
 use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
@@ -611,7 +612,7 @@ pub mod v1alpha1 {
 
     impl MaterializeStatus {
         pub fn needs_update(&self, other: &Self) -> bool {
-            let now = chrono::offset::Utc::now();
+            let now = Timestamp::now();
             let mut a = self.clone();
             for condition in &mut a.conditions {
                 condition.last_transition_time = Time(now);

@@ -13,13 +13,12 @@ workspace = true
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 axum = "0.7.5"
-chrono = { version = "0.4.39", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
 futures = "0.3.31"
 http = "1.4.0"
-k8s-controller = "0.9.0"
-k8s-openapi = { version = "0.26.0", features = ["v1_31"] }
-kube = { version = "2.0.1", default-features = false, features = ["client", "runtime", "ws"] }
+k8s-controller = "0.10.0"
+k8s-openapi = { version = "0.27.0", features = ["v1_32"] }
+kube = { version = "3.0.0", default-features = false, features = ["client", "runtime", "ws"] }
 maplit = "1.0.2"
 mz-alloc = { path = "../alloc", default-features = false }
 mz-alloc-default = { path = "../alloc-default", optional = true, default-features = false }
