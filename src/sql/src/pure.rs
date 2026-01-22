@@ -20,6 +20,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_cloud_provider::CloudProvider;
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
@@ -565,6 +566,35 @@ async fn purify_create_sink(
                     ),
                 }
             };
+
+            // For S3 Tables connections in the Materialize Cloud product, verify the
+            // AWS region matches the environment's region. This check only applies to
+            // the cloud product (indicated by aws_connection_role_arn being set) since
+            // self-managed deployments may have legitimate reasons to use cross-region
+            // configurations.
+            if let Some(s3tables) = connection.s3tables_catalog() {
+                let ctx = &storage_configuration.connection_context;
+                if ctx.aws_connection_role_arn.is_some() {
+                    let env_id = &catalog.config().environment_id;
+                    if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
+                        let env_region = env_id.cloud_provider_region();
+                        // Later on we default to "us-east-1" if the region is not set on the S3 Tables
+                        // connection, so we need to do the same check here.
+                        let s3_tables_region = s3tables
+                            .aws_connection
+                            .connection
+                            .region
+                            .clone()
+                            .unwrap_or_else(|| "us-east-1".to_string());
+                        if s3_tables_region != env_region {
+                            Err(IcebergSinkPurificationError::S3TablesRegionMismatch {
+                                s3_tables_region,
+                                environment_region: env_region.to_string(),
+                            })?;
+                        }
+                    }
+                }
+            }
 
             let _catalog = connection
                 .connect(storage_configuration, InTask::No)
