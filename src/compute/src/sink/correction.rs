@@ -10,10 +10,14 @@
 //! The `Correction` data structure used by `persist_sink::write_batches` to stash updates before
 //! they are written into batches.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::fmt;
 use std::ops::{AddAssign, Bound, RangeBounds, SubAssign};
+use std::rc::Rc;
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
+use differential_dataflow::logging::{BatchEvent, DropEvent};
 use itertools::Itertools;
 use mz_compute_types::dyncfgs::{CONSOLIDATING_VEC_GROWTH_DAMPENER, ENABLE_CORRECTION_V2};
 use mz_dyncfg::ConfigSet;
@@ -23,6 +27,11 @@ use mz_repr::{Diff, Timestamp};
 use timely::PartialOrder;
 use timely::progress::Antichain;
 
+use crate::logging::compute::{
+    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
+    ArrangementHeapSizeOperator, ArrangementHeapSizeOperatorDrop, ComputeEvent,
+    Logger as ComputeLogger,
+};
 use crate::sink::correction_v2::{CorrectionV2, Data};
 
 /// A data structure suitable for storing updates in a self-correcting persist sink.
@@ -41,10 +50,11 @@ impl<D: Data> Correction<D> {
     pub fn new(
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
+        logging: Option<Logging>,
         config: &ConfigSet,
     ) -> Self {
         if ENABLE_CORRECTION_V2.get(config) {
-            Self::V2(CorrectionV2::new(metrics, worker_metrics))
+            Self::V2(CorrectionV2::new(metrics, worker_metrics, logging))
         } else {
             let growth_dampener = CONSOLIDATING_VEC_GROWTH_DAMPENER.get(config);
             Self::V1(CorrectionV1::new(metrics, worker_metrics, growth_dampener))
@@ -508,5 +518,166 @@ impl<D: Ord> Extend<(D, Diff)> for ConsolidatingVec<D> {
         for item in iter {
             self.push(item);
         }
+    }
+}
+
+/// Helper type for convenient tracking of various size metrics together.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct SizeMetrics {
+    pub size: usize,
+    pub capacity: usize,
+    pub allocations: usize,
+}
+
+impl AddAssign<Self> for SizeMetrics {
+    fn add_assign(&mut self, other: Self) {
+        self.size += other.size;
+        self.capacity += other.capacity;
+        self.allocations += other.allocations;
+    }
+}
+
+/// Helper for correction buffer logging.
+///
+// TODO: Correction buffer logging currently reuses the arrangement batch and size logging. This
+// isn't strictly correct as a correction buffer is not an arrangement. Consider refactoring this
+// to be about "operator sizes" instead.
+#[derive(Clone, Debug)]
+pub(super) struct Logging(Rc<RefCell<LoggingInner>>);
+
+impl Logging {
+    pub fn new(
+        compute_logger: ComputeLogger,
+        differential_logger: differential_dataflow::logging::Logger,
+        operator_id: usize,
+        address: Vec<usize>,
+    ) -> Self {
+        let inner = LoggingInner::new(compute_logger, differential_logger, operator_id, address);
+        Self(Rc::new(RefCell::new(inner)))
+    }
+
+    /// A new chain was created.
+    pub fn chain_created(&self, updates: usize) {
+        self.0.borrow_mut().chain_created(updates);
+    }
+
+    /// A chain was dropped.
+    pub fn chain_dropped(&self, updates: usize) {
+        self.0.borrow_mut().chain_dropped(updates);
+    }
+
+    /// Report a heap size diff.
+    pub fn report_size_diff(&self, diff: isize) {
+        self.0.borrow_mut().report_size_diff(diff);
+    }
+
+    /// Report a heap capacity diff.
+    pub fn report_capacity_diff(&self, diff: isize) {
+        self.0.borrow_mut().report_capacity_diff(diff);
+    }
+
+    /// Report a heap allocations diff.
+    pub fn report_allocations_diff(&self, diff: isize) {
+        self.0.borrow_mut().report_allocations_diff(diff);
+    }
+}
+
+/// Inner state for correction buffer logging.
+///
+/// This is separate from `Logging` and shared via an `Rc`, to ensure we only emit
+/// `ArrangementHeapSizeOperator{Drop}` events once, even though we pass the logger to both the Ok
+/// and the Err correction buffer.
+struct LoggingInner {
+    compute_logger: ComputeLogger,
+    differential_logger: differential_dataflow::logging::Logger,
+    operator_id: usize,
+}
+
+impl fmt::Debug for LoggingInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoggingInner")
+            .field("operator_id", &self.operator_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl LoggingInner {
+    fn new(
+        compute_logger: ComputeLogger,
+        differential_logger: differential_dataflow::logging::Logger,
+        operator_id: usize,
+        address: Vec<usize>,
+    ) -> Self {
+        compute_logger.log(&ComputeEvent::ArrangementHeapSizeOperator(
+            ArrangementHeapSizeOperator {
+                operator_id,
+                address,
+            },
+        ));
+
+        Self {
+            compute_logger,
+            differential_logger,
+            operator_id,
+        }
+    }
+
+    fn chain_created(&self, updates: usize) {
+        self.differential_logger.log(BatchEvent {
+            operator: self.operator_id,
+            length: updates,
+        });
+    }
+
+    fn chain_dropped(&self, updates: usize) {
+        self.differential_logger.log(DropEvent {
+            operator: self.operator_id,
+            length: updates,
+        });
+    }
+
+    fn report_size_diff(&self, diff: isize) {
+        if diff != 0 {
+            self.compute_logger
+                .log(&ComputeEvent::ArrangementHeapSize(ArrangementHeapSize {
+                    operator_id: self.operator_id,
+                    delta_size: diff,
+                }));
+        }
+    }
+
+    fn report_capacity_diff(&self, diff: isize) {
+        if diff != 0 {
+            self.compute_logger
+                .log(&ComputeEvent::ArrangementHeapCapacity(
+                    ArrangementHeapCapacity {
+                        operator_id: self.operator_id,
+                        delta_capacity: diff,
+                    },
+                ));
+        }
+    }
+
+    fn report_allocations_diff(&self, diff: isize) {
+        if diff != 0 {
+            self.compute_logger
+                .log(&ComputeEvent::ArrangementHeapAllocations(
+                    ArrangementHeapAllocations {
+                        operator_id: self.operator_id,
+                        delta_allocations: diff,
+                    },
+                ));
+        }
+    }
+}
+
+impl Drop for LoggingInner {
+    fn drop(&mut self) {
+        self.compute_logger
+            .log(&ComputeEvent::ArrangementHeapSizeOperatorDrop(
+                ArrangementHeapSizeOperatorDrop {
+                    operator_id: self.operator_id,
+                },
+            ));
     }
 }

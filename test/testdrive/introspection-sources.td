@@ -417,6 +417,47 @@ true true true true true
 
 > DROP SOURCE counter CASCADE;
 
+# Test that MV sink correction buffers show up in mz_arrangement_sizes.
+# We use a replacement MV to keep the correction buffer filled with data while
+# we inspect it.
+
+> CREATE TABLE t_mv_sink (a INT, b TEXT)
+> INSERT INTO t_mv_sink VALUES (1, 'one'), (2, 'two'), (3, 'three')
+
+> CREATE MATERIALIZED VIEW mv_sink_test
+  AS SELECT a, b FROM t_mv_sink
+> CREATE REPLACEMENT MATERIALIZED VIEW rp_sink_test FOR mv_sink_test
+  AS SELECT a * 2 AS a, b FROM t_mv_sink
+
+> SELECT COUNT(*)
+  FROM mz_introspection.mz_arrangement_sizes s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows o ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%_sink_test' AND
+    o.name LIKE 'mv_sink%'
+2
+
+# Since the source table contains three records, and all of them get replaced,
+# there must be at least six records in the correction buffer: three -1s and
+# three +1s.
+> SELECT records >= 6, batches > 0, size > 0, capacity > 0, allocations > 0
+  FROM mz_introspection.mz_arrangement_sizes s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows o ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%rp_sink_test' AND
+    o.name LIKE 'mv_sink%'
+true true true true true
+
+> DROP TABLE t_mv_sink CASCADE
+
+> SELECT COUNT(*)
+  FROM mz_introspection.mz_arrangement_sizes s
+  JOIN mz_introspection.mz_dataflow_operator_dataflows o ON s.operator_id = o.id
+  WHERE
+    o.dataflow_name LIKE '%_sink_test' AND
+    o.name LIKE 'mv_sink%'
+0
+
 # Test dataflow error introspection.
 
 > CREATE TABLE zeros (a int)
