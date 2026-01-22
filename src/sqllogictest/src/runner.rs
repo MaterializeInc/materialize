@@ -2636,6 +2636,7 @@ fn generate_view_sql(
         if_exists: false,
         names: vec![UnresolvedObjectName::Item(name)],
         cascade: false,
+        replacement: false,
     })
     .to_ast_string_stable();
 

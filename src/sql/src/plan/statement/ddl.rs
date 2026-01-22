@@ -2628,6 +2628,7 @@ pub fn plan_create_view(
             if_exists,
             definition.name.clone(),
             cascade,
+            false,
         )?;
 
         // Check if the new View depends on the item that we would be replacing.
@@ -2952,6 +2953,7 @@ pub fn plan_create_materialized_view(
                 if_exists,
                 partial_name.clone().into(),
                 cascade,
+                false,
             )?;
 
             // Check if the new Materialized View depends on the item that we would be replacing.
@@ -5478,6 +5480,7 @@ pub fn plan_drop_objects(
         if_exists,
         names,
         cascade,
+        replacement,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
     assert_ne!(
@@ -5485,6 +5488,11 @@ pub fn plan_drop_objects(
         mz_sql_parser::ast::ObjectType::Func,
         "rejected in parser"
     );
+    assert!(
+        !replacement || object_type == mz_sql_parser::ast::ObjectType::MaterializedView,
+        "rejected in parser",
+    );
+
     let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
@@ -5505,10 +5513,15 @@ pub fn plan_drop_objects(
             UnresolvedObjectName::Role(name) => {
                 plan_drop_role(scx, if_exists, name)?.map(ObjectId::Role)
             }
-            UnresolvedObjectName::Item(name) => {
-                plan_drop_item(scx, object_type, if_exists, name.clone(), cascade)?
-                    .map(ObjectId::Item)
-            }
+            UnresolvedObjectName::Item(name) => plan_drop_item(
+                scx,
+                object_type,
+                if_exists,
+                name.clone(),
+                cascade,
+                replacement,
+            )?
+            .map(ObjectId::Item),
             UnresolvedObjectName::NetworkPolicy(name) => {
                 plan_drop_network_policy(scx, if_exists, name)?.map(ObjectId::NetworkPolicy)
             }
@@ -5674,6 +5687,7 @@ fn plan_drop_item(
     if_exists: bool,
     name: UnresolvedItemName,
     cascade: bool,
+    replacement: bool,
 ) -> Result<Option<CatalogItemId>, PlanError> {
     let resolved = match resolve_item_or_type(scx, object_type, name, if_exists) {
         Ok(r) => r,
@@ -5718,6 +5732,18 @@ fn plan_drop_item(
                 // TODO(jkosh44) It would be nice to also check if any active subscribe or pending peek
                 //  relies on entry. Unfortunately, we don't have that information readily available.
             }
+
+            if replacement && catalog_item.replacement_target().is_none() {
+                // MVs are the only item type that supports `DROP REPLACEMENT` syntax currently,
+                // which means we don't have to bother with a generic error.
+                assert_eq!(catalog_item.item_type(), CatalogItemType::MaterializedView);
+                let name = scx
+                    .catalog
+                    .minimal_qualification(catalog_item.name())
+                    .to_string();
+                return Err(PlanError::DropReplacementOnNonReplacementMv(name));
+            }
+
             Some(catalog_item.id())
         }
         None => None,

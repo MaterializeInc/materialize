@@ -95,7 +95,7 @@ DROP CONTINUAL TASK foo;
 ----
 DROP CONTINUAL TASK foo
 =>
-DropObjects(DropObjectsStatement { object_type: ContinualTask, if_exists: false, names: [Item(UnresolvedItemName([Ident("foo")]))], cascade: false })
+DropObjects(DropObjectsStatement { object_type: ContinualTask, if_exists: false, names: [Item(UnresolvedItemName([Ident("foo")]))], cascade: false, replacement: false })
 
 parse-statement
 COMMENT ON CONTINUAL TASK foo IS 'bar';

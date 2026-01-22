@@ -159,6 +159,7 @@ pub enum PlanError {
     ParserStatement(ParserStatementError),
     Parser(ParserError),
     DropViewOnMaterializedView(String),
+    DropReplacementOnNonReplacementMv(String),
     DependentObjectsStillExist {
         object_type: String,
         object_name: String,
@@ -412,6 +413,9 @@ impl PlanError {
         match self {
             Self::DropViewOnMaterializedView(_) => {
                 Some("Use DROP MATERIALIZED VIEW to remove a materialized view.".into())
+            }
+            Self::DropReplacementOnNonReplacementMv(_) => {
+                Some("Use DROP MATERIALIZED VIEW to remove a regular materialized view.".into())
             }
             Self::DependentObjectsStillExist {..} => Some("Use DROP ... CASCADE to drop the dependent objects too.".into()),
             Self::AlterViewOnMaterializedView(_) => {
@@ -669,6 +673,9 @@ impl fmt::Display for PlanError {
             | Self::AlterViewOnMaterializedView(name)
             | Self::ShowCreateViewOnMaterializedView(name)
             | Self::ExplainViewOnMaterializedView(name) => write!(f, "{name} is not a view"),
+            Self::DropReplacementOnNonReplacementMv(name) => {
+                write!(f, "{name} is not a replacement materialized view")
+            }
             Self::FetchingCsrSchemaFailed { schema_lookup, .. } => {
                 write!(f, "failed to fetch schema {schema_lookup} from schema registry")
             }

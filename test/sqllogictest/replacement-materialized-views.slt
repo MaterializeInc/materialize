@@ -376,3 +376,21 @@ FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 ----
 u21  u20
+
+statement ok
+DROP MATERIALIZED VIEW mv CASCADE
+
+
+# Test: DROP REPLACEMENT MATERIALIZED VIEW
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b FROM t
+
+statement ok
+DROP REPLACEMENT MATERIALIZED VIEW rp
+
+statement error db error: ERROR: mv is not a replacement materialized view
+DROP REPLACEMENT MATERIALIZED VIEW mv

@@ -4835,7 +4835,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop_objects(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = self.expect_object_type()?;
+        let replacement = self.parse_keyword(REPLACEMENT);
+        let object_type = if replacement {
+            self.expect_keywords(&[MATERIALIZED, VIEW])?;
+            ObjectType::MaterializedView
+        } else {
+            self.expect_object_type()?
+        };
         let if_exists = self.parse_if_exists()?;
         match object_type {
             ObjectType::Database => {
@@ -4849,6 +4855,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names: vec![name],
                     cascade: !restrict,
+                    replacement,
                 }))
             }
             ObjectType::Schema => {
@@ -4865,6 +4872,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade,
+                    replacement,
                 }))
             }
             ObjectType::Role => {
@@ -4876,6 +4884,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade: false,
+                    replacement,
                 }))
             }
             ObjectType::NetworkPolicy => {
@@ -4889,6 +4898,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade: false,
+                    replacement,
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
@@ -4915,6 +4925,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade,
+                    replacement,
                 }))
             }
             ObjectType::Func | ObjectType::Subsource => parser_err!(
@@ -4938,6 +4949,7 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade,
+            replacement: false,
         }))
     }
 
@@ -4955,6 +4967,7 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade: false,
+            replacement: false,
         }))
     }
 

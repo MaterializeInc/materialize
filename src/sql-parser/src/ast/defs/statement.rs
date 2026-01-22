@@ -3284,11 +3284,16 @@ pub struct DropObjectsStatement {
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` was specified.
     pub cascade: bool,
+    /// Whether this is dropping a REPLACEMENT object.
+    pub replacement: bool,
 }
 
 impl AstDisplay for DropObjectsStatement {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("DROP ");
+        if self.replacement {
+            f.write_str("REPLACEMENT ");
+        }
         f.write_node(&self.object_type);
         f.write_str(" ");
         if self.if_exists {
