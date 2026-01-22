@@ -218,6 +218,11 @@ pub enum IcebergSinkPurificationError {
     CatalogError(Arc<anyhow::Error>),
     #[error("error loading aws sdk context")]
     AwsSdkContextError(Arc<anyhow::Error>),
+    #[error("S3 Tables connection region mismatch")]
+    S3TablesRegionMismatch {
+        s3_tables_region: String,
+        environment_region: String,
+    },
 }
 
 impl IcebergSinkPurificationError {
@@ -225,11 +230,26 @@ impl IcebergSinkPurificationError {
         match self {
             Self::CatalogError(e) => Some(e.to_string_with_causes()),
             Self::AwsSdkContextError(e) => Some(e.to_string_with_causes()),
+            Self::S3TablesRegionMismatch {
+                s3_tables_region,
+                environment_region,
+            } => Some(format!(
+                "S3 Tables connection is configured for region '{}' but this Materialize environment is running in region '{}'",
+                s3_tables_region, environment_region
+            )),
         }
     }
 
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            Self::S3TablesRegionMismatch {
+                environment_region, ..
+            } => Some(format!(
+                "Create a new AWS connection with REGION = '{}' to use with S3 Tables in this environment.",
+                environment_region
+            )),
+            _ => None,
+        }
     }
 }
 
