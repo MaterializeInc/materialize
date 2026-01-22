@@ -1,0 +1,185 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the CREATEDATAFLOW privilege, which controls whether a user
+# can execute queries that require dataflow rendering (slow path) on a cluster.
+#
+# By default, PUBLIC has CREATEDATAFLOW on all clusters. This test demonstrates
+# how an admin can REVOKE it to restrict certain users from running slow-path queries.
+
+mode cockroach
+
+reset-server
+
+# Enable rbac checks.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+# Create a test role
+simple conn=mz_system,user=mz_system
+CREATE ROLE restricted_user;
+----
+COMPLETE 0
+
+# Create a cluster for testing with valid size
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER test_cluster SIZE 'scale=1,workers=1';
+----
+COMPLETE 0
+
+# Grant USAGE on cluster to restricted_user
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER test_cluster TO restricted_user;
+----
+COMPLETE 0
+
+# Grant necessary database/schema access
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO restricted_user;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO restricted_user;
+----
+COMPLETE 0
+
+# Create a test table and index
+simple conn=mz_system,user=mz_system
+CREATE TABLE test_table (x INT, y INT);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX test_idx ON test_table (x);
+----
+COMPLETE 0
+
+# Grant SELECT on the table
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE test_table TO restricted_user;
+----
+COMPLETE 0
+
+# Verify the cluster has default privileges including CREATEDATAFLOW for PUBLIC
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
+----
+test_cluster  =D/mz_system
+test_cluster  mz_support=U/mz_system
+test_cluster  mz_system=UCD/mz_system
+test_cluster  restricted_user=U/mz_system
+
+# Set up for testing as restricted_user
+simple conn=restricted_user,user=restricted_user
+SET CLUSTER = test_cluster;
+----
+COMPLETE 0
+
+# Test constant query (fast path) - should always succeed
+simple conn=restricted_user,user=restricted_user
+SELECT 1 + 1;
+----
+2
+COMPLETE 1
+
+# Test slow-path query - should succeed because PUBLIC has CREATEDATAFLOW by default
+simple conn=restricted_user,user=restricted_user
+SELECT * FROM test_table WHERE y = 1;
+----
+COMPLETE 0
+
+# Now REVOKE CREATEDATAFLOW from PUBLIC to restrict all users
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDATAFLOW ON CLUSTER test_cluster FROM PUBLIC;
+----
+COMPLETE 0
+
+# Verify the privilege was revoked from PUBLIC
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
+----
+test_cluster  mz_support=U/mz_system
+test_cluster  mz_system=UCD/mz_system
+test_cluster  restricted_user=U/mz_system
+
+# Test slow-path query without CREATEDATAFLOW - should now fail
+simple conn=restricted_user,user=restricted_user
+SELECT * FROM test_table WHERE y = 1;
+----
+db error: ERROR: permission denied for CLUSTER "test_cluster"
+DETAIL: The 'restricted_user' role needs CREATEDATAFLOW privileges on CLUSTER "test_cluster"
+
+# Fast-path queries should still work
+simple conn=restricted_user,user=restricted_user
+SELECT 1 + 1;
+----
+2
+COMPLETE 1
+
+# Grant CREATEDATAFLOW specifically to the restricted_user
+simple conn=mz_system,user=mz_system
+GRANT CREATEDATAFLOW ON CLUSTER test_cluster TO restricted_user;
+----
+COMPLETE 0
+
+# Now the slow-path query should succeed again
+simple conn=restricted_user,user=restricted_user
+SELECT * FROM test_table WHERE y = 1;
+----
+COMPLETE 0
+
+# Verify restricted_user now has CREATEDATAFLOW
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
+----
+test_cluster  mz_support=U/mz_system
+test_cluster  mz_system=UCD/mz_system
+test_cluster  restricted_user=UD/mz_system
+
+# Test REVOKE ALL removes CREATEDATAFLOW from restricted_user
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON CLUSTER test_cluster FROM restricted_user;
+----
+COMPLETE 0
+
+# Verify all privileges are revoked from restricted_user
+query TT rowsort
+SELECT name, unnest(privileges)::text FROM mz_clusters WHERE name = 'test_cluster';
+----
+test_cluster  mz_support=U/mz_system
+test_cluster  mz_system=UCD/mz_system
+
+# Cleanup - revoke privileges from role before dropping
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON DATABASE materialize FROM restricted_user;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM restricted_user;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER test_cluster CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP TABLE test_table CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE restricted_user;
+----
+COMPLETE 0

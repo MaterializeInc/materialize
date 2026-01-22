@@ -84,6 +84,23 @@
     {{</ important >}}
   test_replacements:
     admin@example.com: materialize
+  test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC mydb <null> public schema USAGE
+    materialize view_manager <null> <null> compute_cluster cluster CREATE
+    materialize view_manager <null> <null> compute_cluster cluster USAGE
+    materialize view_manager mydb <null> sales schema CREATE
+    materialize view_manager mydb <null> sales schema USAGE
+    materialize view_manager mydb sales items table SELECT
+    materialize view_manager mydb sales orders table SELECT
+    materialize view_manager mydb sales orders_daily_totals materialized-view SELECT
+    materialize view_manager mydb sales orders_view view SELECT
+    materialize view_manager mydb sales sales_items table SELECT
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "to-serving-index-manager"
   description: |
@@ -156,6 +173,17 @@
     {{</ note >}}
   test_replacements:
     admin@example.com: materialize
+  test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC mydb <null> public schema USAGE
+    materialize serving_index_manager <null> <null> serving_cluster cluster CREATE
+    materialize serving_index_manager <null> <null> serving_cluster cluster USAGE
+    materialize serving_index_manager mydb <null> sales schema CREATE
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "to-data-reader"
   description: |
@@ -226,3 +254,18 @@
     {{</ important >}}
   test_replacements:
     admin@example.com: materialize
+  test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC mydb <null> public schema USAGE
+    materialize data_reader <null> <null> serving_cluster cluster USAGE
+    materialize data_reader mydb <null> sales schema USAGE
+    materialize data_reader mydb sales items table SELECT
+    materialize data_reader mydb sales orders table SELECT
+    materialize data_reader mydb sales orders_daily_totals materialized-view SELECT
+    materialize data_reader mydb sales orders_view view SELECT
+    materialize data_reader mydb sales sales_items table SELECT
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE

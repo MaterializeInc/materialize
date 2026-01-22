@@ -10,3 +10,9 @@ rows:
       - All `*.public` schemas (e.g., `materialize.public`);
       - `materialize` database; and
       - `quickstart` cluster.
+
+  - Privilege: "`CREATEDATAFLOW`"
+    Description: |
+      Permission to execute queries that require dataflow rendering.
+    "On database object(s)": |
+      - All clusters.

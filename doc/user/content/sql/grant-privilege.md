@@ -28,7 +28,7 @@ object type.
 For specific cluster(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | CREATE | CREATEDATAFLOW | ALL [PRIVILEGES]> [, ... ]
 ON CLUSTER <name> [, ...]
 TO <role_name> [, ... ];
 ```
@@ -36,7 +36,7 @@ TO <role_name> [, ... ];
 For all clusters:
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | CREATE | CREATEDATAFLOW | ALL [PRIVILEGES]> [, ... ]
 ON ALL CLUSTERS
 TO <role_name> [, ... ];
 ```

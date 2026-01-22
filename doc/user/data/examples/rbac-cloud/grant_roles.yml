@@ -47,8 +47,11 @@
     mz_system         | PUBLIC       |             |        | quickstart        | cluster     | USAGE
     ```
   test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
     materialize PUBLIC mydb <null> public schema USAGE
     mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
     mz_system PUBLIC <null> <null> quickstart cluster USAGE
     mz_system PUBLIC materialize <null> public schema USAGE
 
@@ -161,8 +164,11 @@
     mz_system         | PUBLIC                |             |        | quickstart        | cluster     | USAGE
     ```
   test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
     materialize PUBLIC mydb <null> public schema USAGE
     mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
     mz_system PUBLIC <null> <null> quickstart cluster USAGE
     mz_system PUBLIC materialize <null> public schema USAGE
 - name: "serving_index_manager-results-show-privileges-view_manager-member"
@@ -203,8 +209,11 @@
     mz_system              | PUBLIC                 |             |        | quickstart          | cluster           | USAGE
     ```
   test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
     materialize PUBLIC mydb <null> public schema USAGE
     mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
     mz_system PUBLIC <null> <null> quickstart cluster USAGE
     mz_system PUBLIC materialize <null> public schema USAGE
 
@@ -273,8 +282,11 @@
     mz_system         | PUBLIC      |             |        | quickstart          | cluster     | USAGE
     ```
   test_results: |
+    materialize PUBLIC <null> <null> compute_cluster cluster CREATEDATAFLOW
+    materialize PUBLIC <null> <null> serving_cluster cluster CREATEDATAFLOW
     materialize PUBLIC mydb <null> public schema USAGE
     mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster CREATEDATAFLOW
     mz_system PUBLIC <null> <null> quickstart cluster USAGE
     mz_system PUBLIC materialize <null> public schema USAGE
 

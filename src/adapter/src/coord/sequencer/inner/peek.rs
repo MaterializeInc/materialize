@@ -24,6 +24,7 @@ use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::QueryWhen;
 use mz_sql::plan::{self};
+use mz_sql::rbac::check_create_dataflow_privilege;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
@@ -807,6 +808,16 @@ impl Coordinator {
 
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
+
+        // Check CREATE_DATAFLOW privilege for slow path queries (those that render dataflows).
+        // Fast path queries (constant, existing index, or persist read) don't require this privilege.
+        if matches!(&peek_plan, PeekPlan::SlowPath(_)) {
+            check_create_dataflow_privilege(
+                &self.catalog().for_session(session),
+                session,
+                cluster_id,
+            )?;
+        }
 
         emit_optimizer_notices(&*self.catalog, &*session, &df_meta.optimizer_notices);
 

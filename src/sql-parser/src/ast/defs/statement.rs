@@ -5254,6 +5254,7 @@ pub enum Privilege {
     CREATEDB,
     CREATECLUSTER,
     CREATENETWORKPOLICY,
+    CREATEDATAFLOW,
 }
 
 impl AstDisplay for Privilege {
@@ -5269,6 +5270,7 @@ impl AstDisplay for Privilege {
             Privilege::CREATEDB => "CREATEDB",
             Privilege::CREATECLUSTER => "CREATECLUSTER",
             Privilege::CREATENETWORKPOLICY => "CREATENETWORKPOLICY",
+            Privilege::CREATEDATAFLOW => "CREATEDATAFLOW",
         });
     }
 }

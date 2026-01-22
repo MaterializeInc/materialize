@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -554,7 +553,7 @@ Snapshot {
                         1,
                     ),
                     acl_mode: AclMode {
-                        bitflags: 256,
+                        bitflags: 268435712,
                     },
                 },
                 MzAclItem {
@@ -576,7 +575,7 @@ Snapshot {
                         1,
                     ),
                     acl_mode: AclMode {
-                        bitflags: 768,
+                        bitflags: 268436224,
                     },
                 },
             ],
@@ -677,7 +676,7 @@ Snapshot {
         IdAllocKey {
             name: "auditlog",
         }: IdAllocValue {
-            next_id: 13,
+            next_id: 14,
         },
         IdAllocKey {
             name: "database",
@@ -780,6 +779,17 @@ Snapshot {
         }: DefaultPrivilegesValue {
             privileges: AclMode {
                 bitflags: 256,
+            },
+        },
+        DefaultPrivilegesKey {
+            role_id: Public,
+            database_id: None,
+            schema_id: None,
+            object_type: Cluster,
+            grantee: Public,
+        }: DefaultPrivilegesValue {
+            privileges: AclMode {
+                bitflags: 268435456,
             },
         },
         DefaultPrivilegesKey {

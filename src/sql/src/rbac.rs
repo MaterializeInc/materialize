@@ -333,6 +333,62 @@ pub fn check_usage(
     Ok(())
 }
 
+/// Checks if a session has CREATE_DATAFLOW privilege on the specified cluster.
+/// This is used to restrict dataflow rendering to authorized users while still
+/// allowing fast-path queries (which don't render dataflows) for everyone with SELECT access.
+pub fn check_create_dataflow_privilege(
+    catalog: &impl SessionCatalog,
+    session: &dyn SessionMetadata,
+    cluster_id: ClusterId,
+) -> Result<(), UnauthorizedError> {
+    // Skip check for system clusters (mz_catalog_server, mz_introspection, etc.)
+    // These clusters are managed by the system and should allow all users to execute queries.
+    if cluster_id.is_system() {
+        return Ok(());
+    }
+
+    // Skip check if RBAC is not enabled
+    if !is_rbac_enabled_for_session(catalog.system_vars(), session) {
+        return Ok(());
+    }
+
+    // Skip check for superusers
+    if session.is_superuser() {
+        return Ok(());
+    }
+
+    rbac_check_preamble(catalog, session)?;
+
+    let role_id = session.role_metadata().current_role;
+    let role_membership = catalog.collect_role_membership(&role_id);
+
+    let object_id = SystemObjectId::Object(ObjectId::Cluster(cluster_id));
+    let object_privileges = catalog
+        .get_privileges(&object_id)
+        .expect("clusters have privileges");
+
+    let role_privileges = role_membership
+        .iter()
+        .flat_map(|role_id| object_privileges.get_acl_items_for_grantee(role_id))
+        .map(|mz_acl_item| mz_acl_item.acl_mode)
+        .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
+
+    if !role_privileges.contains(AclMode::CREATE_DATAFLOW) {
+        let role_name = catalog.get_role(&role_id).name().to_string();
+        let cluster_name = catalog.get_cluster(cluster_id).name().to_string();
+        return Err(UnauthorizedError::Privilege {
+            object_description: ErrorMessageObjectDescription::Object {
+                object_type: ObjectType::Cluster,
+                object_name: Some(cluster_name),
+            },
+            role_name,
+            privileges: "CREATEDATAFLOW".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 /// Checks if a session is authorized to execute a plan. If not, an error is returned.
 pub fn check_plan(
     catalog: &impl SessionCatalog,
@@ -1790,6 +1846,9 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         .union(AclMode::UPDATE)
         .union(AclMode::DELETE);
     const USAGE_CREATE_ACL_MODE: AclMode = AclMode::USAGE.union(AclMode::CREATE);
+    const CLUSTER_ACL_MODE: AclMode = AclMode::USAGE
+        .union(AclMode::CREATE)
+        .union(AclMode::CREATE_DATAFLOW);
     const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
         .union(AclMode::CREATE_DB)
         .union(AclMode::CREATE_CLUSTER)
@@ -1805,7 +1864,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::Cluster) => USAGE_CREATE_ACL_MODE,
+        SystemObjectType::Object(ObjectType::Cluster) => CLUSTER_ACL_MODE,
         SystemObjectType::Object(ObjectType::ClusterReplica) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Secret) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::NetworkPolicy) => AclMode::USAGE,

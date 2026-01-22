@@ -30,7 +30,7 @@ object type.
 For specific cluster(s):
 
 ```mzsql
-REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+REVOKE <USAGE | CREATE | CREATEDATAFLOW | ALL [PRIVILEGES]> [, ... ]
 ON CLUSTER <name> [, ...]
 FROM <role_name> [, ... ]
 ;
@@ -39,7 +39,7 @@ FROM <role_name> [, ... ]
 For all clusters:
 
 ```mzsql
-REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+REVOKE <USAGE | CREATE | CREATEDATAFLOW | ALL [PRIVILEGES]> [, ... ]
 ON ALL CLUSTERS
 FROM <role_name> [, ... ]
 ;
