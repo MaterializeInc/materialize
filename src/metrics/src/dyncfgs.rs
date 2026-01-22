@@ -16,7 +16,7 @@ use mz_dyncfg::{Config, ConfigSet};
 /// How frequently to refresh lgalloc map stats.
 pub(crate) const MZ_METRICS_LGALLOC_MAP_REFRESH_INTERVAL: Config<Duration> = Config::new(
     "mz_metrics_lgalloc_map_refresh_interval",
-    Duration::from_secs(600),
+    Duration::from_secs(0),
     "How frequently to refresh lgalloc stats. A zero duration disables refreshing.",
 );
 
