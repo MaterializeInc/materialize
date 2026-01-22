@@ -11,9 +11,7 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1.89"
-mz-repr = { path = "../repr" }
-tokio = { version = "1.48.0", features = ["macros"] }
-uuid = { version = "1.19.0", features = ["serde"] }
+mz-repr = { path = "../repr", default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

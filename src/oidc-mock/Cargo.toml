@@ -15,7 +15,7 @@ anyhow = "1.0.100"
 axum = "0.7.5"
 base64 = "0.22.1"
 jsonwebtoken = "9.3.1"
-mz-authenticator = { path = "../authenticator" }
+mz-authenticator = { path = "../authenticator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 openssl = { version = "0.10.75", features = ["vendored"] }
 serde = { version = "1.0.219", features = ["derive"] }

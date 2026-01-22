@@ -5611,8 +5611,6 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "mz-repr",
- "tokio",
- "uuid",
  "workspace-hack",
 ]
 
