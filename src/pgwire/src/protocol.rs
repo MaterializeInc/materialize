@@ -21,7 +21,7 @@ use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,
+    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -164,10 +164,7 @@ where
 
     // If oidc_auth_enabled exists as an option, return its value and filter it from
     // the remaining options.
-    // TODO (SangJunBak): Use oidc_auth_enabled boolean and Authenticator::OIDC
-    // to decide whether or not we want to use OIDC authentication or password
-    // authentication.
-    let (_oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
+    let (oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
 
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
@@ -227,80 +224,85 @@ where
                 }
             }
         }
-        // TODO: Implement password auth flow for this authenticator variant.
-        Authenticator::Oidc { oidc, password: _ } => {
-            // OIDC authentication: JWT sent as password in cleartext flow
-            let jwt = match request_cleartext_password(conn).await {
-                Ok(password) => password,
-                Err(PasswordRequestError::IoError(e)) => return Err(e),
-                Err(PasswordRequestError::InvalidPasswordError(e)) => {
-                    return conn.send(e).await;
+        Authenticator::Oidc {
+            oidc,
+            password: password_client,
+        } => {
+            if oidc_auth_enabled {
+                // OIDC authentication: JWT sent as password in cleartext flow
+                let jwt = match request_cleartext_password(conn).await {
+                    Ok(password) => password,
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
+                };
+                let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
+                match auth_response {
+                    Ok((claims, authenticated)) => {
+                        let session = adapter_client.new_session(
+                            SessionConfig {
+                                conn_id: conn.conn_id().clone(),
+                                uuid: conn_uuid,
+                                user: claims.username().into(),
+                                client_ip: conn.peer_addr().clone(),
+                                external_metadata_rx: None,
+                                helm_chart_version,
+                            },
+                            authenticated,
+                        );
+                        // No invalidation of the auth session once authenticated,
+                        // so auth session lasts indefinitely.
+                        (session, pending().right_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn
+                            .send(ErrorResponse::fatal(
+                                SqlState::INVALID_PASSWORD,
+                                "invalid password",
+                            ))
+                            .await;
+                    }
                 }
-            };
-
-            let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
-            match auth_response {
-                Ok((claims, authenticated)) => {
-                    let session = adapter_client.new_session(
-                        SessionConfig {
-                            conn_id: conn.conn_id().clone(),
-                            uuid: conn_uuid,
-                            user: claims.username().into(),
-                            client_ip: conn.peer_addr().clone(),
-                            external_metadata_rx: None,
-                            helm_chart_version,
-                        },
-                        authenticated,
-                    );
-                    // No invalidation of the auth session once authenticated,
-                    // so auth session lasts indefinitely.
-                    (session, pending().right_future())
-                }
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_PASSWORD,
-                            "invalid password",
-                        ))
-                        .await;
+            } else {
+                // Fallback to password authentication if oidc auth is not enabled
+                // through options.
+                match authenticate_with_password(
+                    conn,
+                    &password_client,
+                    user,
+                    conn_uuid,
+                    helm_chart_version,
+                )
+                .await
+                {
+                    Ok(session) => (session, pending().right_future()),
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
                 }
             }
         }
         Authenticator::Password(adapter_client) => {
-            let password = match request_cleartext_password(conn).await {
-                Ok(password) => Password(password),
+            let session = match authenticate_with_password(
+                conn,
+                &adapter_client,
+                user,
+                conn_uuid,
+                helm_chart_version,
+            )
+            .await
+            {
+                Ok(session) => session,
                 Err(PasswordRequestError::IoError(e)) => return Err(e),
                 Err(PasswordRequestError::InvalidPasswordError(e)) => {
                     return conn.send(e).await;
                 }
             };
-            let authenticated = match adapter_client.authenticate(&user, &password).await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_PASSWORD,
-                            "invalid password",
-                        ))
-                        .await;
-                }
-            };
-            let session = adapter_client.new_session(
-                SessionConfig {
-                    conn_id: conn.conn_id().clone(),
-                    uuid: conn_uuid,
-                    user,
-                    client_ip: conn.peer_addr().clone(),
-                    external_metadata_rx: None,
-                    helm_chart_version,
-                },
-                authenticated,
-            );
             // No frontegg check, so auth session lasts indefinitely.
-            let auth_session = pending().right_future();
-            (session, auth_session)
+            (session, pending().right_future())
         }
         Authenticator::Sasl(adapter_client) => {
             // Start the handshake
@@ -732,7 +734,7 @@ async fn request_cleartext_password<A>(
     conn: &mut FramedConn<A>,
 ) -> Result<String, PasswordRequestError>
 where
-    A: AsyncRead + AsyncWrite + Unpin,
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
 {
     conn.send(BackendMessage::AuthenticationCleartextPassword)
         .await?;
@@ -754,6 +756,48 @@ where
             "expected Password message",
         ),
     ))
+}
+
+/// Helper for password-based authentication using AdapterClient
+/// and returns an authenticated session.
+async fn authenticate_with_password<A>(
+    conn: &mut FramedConn<A>,
+    adapter_client: &mz_adapter::Client,
+    user: String,
+    conn_uuid: Uuid,
+    helm_chart_version: Option<String>,
+) -> Result<Session, PasswordRequestError>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    let password = match request_cleartext_password(conn).await {
+        Ok(password) => Password(password),
+        Err(e) => return Err(e),
+    };
+
+    let authenticated = match adapter_client.authenticate(&user, &password).await {
+        Ok(authenticated) => authenticated,
+        Err(err) => {
+            warn!(?err, "pgwire connection failed authentication");
+            return Err(PasswordRequestError::InvalidPasswordError(
+                ErrorResponse::fatal(SqlState::INVALID_PASSWORD, "invalid password"),
+            ));
+        }
+    };
+
+    let session = adapter_client.new_session(
+        SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx: None,
+            helm_chart_version,
+        },
+        authenticated,
+    );
+
+    Ok(session)
 }
 
 #[derive(Debug)]
