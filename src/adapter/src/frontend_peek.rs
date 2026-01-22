@@ -966,9 +966,7 @@ impl PeekClient {
                                             .desc
                                             .source_imports
                                             .into_iter()
-                                            .filter_map(|(id, (desc, _, _upper))| {
-                                                desc.arguments.operators.map(|mfp| (id, mfp))
-                                            })
+                                            .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp)))
                                             .collect(),
                                         PeekPlan::FastPath(_) => std::collections::BTreeMap::default(),
                                     };

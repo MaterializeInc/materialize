@@ -1103,7 +1103,15 @@ mod tests {
                     storage_metadata: Default::default(),
                     typ: SqlRelationType::empty(),
                 };
-                (id, (desc, Default::default(), Default::default()))
+                (
+                    id,
+                    mz_compute_types::dataflows::SourceImport {
+                        desc,
+                        monotonic: Default::default(),
+                        with_snapshot: true,
+                        upper: Default::default(),
+                    },
+                )
             })
             .collect();
         let index_imports = input_ids

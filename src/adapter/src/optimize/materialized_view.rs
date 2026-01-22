@@ -293,8 +293,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
         );
         // Apply source monotonicity overrides.
         for id in self.force_source_non_monotonic.iter() {
-            if let Some((_desc, monotonic, _upper)) = df_desc.source_imports.get_mut(id) {
-                *monotonic = false;
+            if let Some(import) = df_desc.source_imports.get_mut(id) {
+                import.monotonic = false;
             }
         }
         // Run global optimization.

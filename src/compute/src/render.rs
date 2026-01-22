@@ -122,7 +122,7 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::LirId;
 use mz_compute_types::plan::render_plan::{
@@ -212,6 +212,8 @@ pub fn build_compute_dataflow<A: Allocate>(
 
     let worker_logging = timely_worker.logger_for("timely").map(Into::into);
     let apply_demands = COMPUTE_APPLY_COLUMN_DEMANDS.get(&compute_state.worker_config);
+    let subscribe_snapshot_optimization =
+        SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(&compute_state.worker_config);
 
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let input_name = format!("InputRegion: {}", &dataflow.debug_name);
@@ -232,16 +234,19 @@ pub fn build_compute_dataflow<A: Allocate>(
 
         scope.clone().region_named(&input_name, |region| {
             // Import declared sources into the rendering context.
-            for (source_id, (source, _monotonic, upper)) in dataflow.source_imports.iter() {
+            for (source_id, import) in dataflow.source_imports.iter() {
                 region.region_named(&format!("Source({:?})", source_id), |inner| {
                     let mut read_schema = None;
-                    let mut mfp = source.arguments.operators.clone().map(|mut ops| {
+                    let mut mfp = import.desc.arguments.operators.clone().map(|mut ops| {
                         // If enabled, we read from Persist with a `RelationDesc` that
                         // omits uneeded columns.
                         if apply_demands {
                             let demands = ops.demand();
-                            let new_desc =
-                                source.storage_metadata.relation_desc.apply_demand(&demands);
+                            let new_desc = import
+                                .desc
+                                .storage_metadata
+                                .relation_desc
+                                .apply_demand(&demands);
                             let new_arity = demands.len();
                             let remap: BTreeMap<_, _> = demands
                                 .into_iter()
@@ -256,7 +261,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let mut snapshot_mode = SnapshotMode::Include;
+                    let mut snapshot_mode =
+                        if import.with_snapshot || !subscribe_snapshot_optimization {
+                            SnapshotMode::Include
+                        } else {
+                            compute_state.metrics.inc_subscribe_snapshot_optimization();
+                            SnapshotMode::Exclude
+                        };
                     let mut suppress_early_progress_as_of = dataflow.as_of.clone();
                     let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
                     if let Some(x) = ct_source_transformer.as_ref() {
@@ -272,7 +283,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         *source_id,
                         Arc::clone(&compute_state.persist_clients),
                         &compute_state.txns_ctx,
-                        source.storage_metadata.clone(),
+                        import.desc.storage_metadata.clone(),
                         read_schema,
                         dataflow.as_of.clone(),
                         snapshot_mode,
@@ -308,7 +319,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             output_probe.clone(),
                             slack,
                             limit,
-                            upper.clone(),
+                            import.upper.clone(),
                             name.clone(),
                         );
                         ok_stream = stream;

@@ -180,6 +180,11 @@ def get_variable_system_parameters(
             ["0", "1048576", "314572800", "67108864"],
         ),
         VariableSystemParameter(
+            "compute_subscribe_snapshot_optimization",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_cast_elimination",
             "false",
             ["true", "false"],

@@ -960,9 +960,7 @@ impl Coordinator {
             read_holds,
             plan.source_imports
                 .into_iter()
-                .filter_map(|(id, (source, _, _upper))| {
-                    source.arguments.operators.map(|mfp| (id, mfp))
-                }),
+                .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp))),
         )
         .await
     }

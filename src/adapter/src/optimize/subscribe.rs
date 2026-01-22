@@ -23,7 +23,7 @@ use mz_repr::{GlobalId, RelationDesc, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::TransformCtx;
-use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::reprtypecheck::{
     SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
@@ -344,6 +344,9 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         for build in df_desc.objects_to_build.iter_mut() {
             normalize_lets(&mut build.plan.0, &self.config.features)?
         }
+
+        // Determine whether we can elide any snapshots for this subscribe.
+        optimize_dataflow_snapshot(&mut df_desc)?;
 
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
