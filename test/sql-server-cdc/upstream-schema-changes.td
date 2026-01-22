@@ -51,8 +51,13 @@ $ sql-server-execute name=sql-server
 ALTER TABLE foo ALTER COLUMN meta_col VARCHAR(64);
 INSERT INTO foo VALUES ('d', 'date', 'ajwa');
 
-! SELECT * FROM foo1;
-contains:Incompatible schema change
+# Altering the newly added `meta_col` column does not brick `foo1` subsource because `foo1` is
+# not following/replicating `meta_col`, so schema updates involving it are inconsequential.
+> SELECT * FROM foo1;
+1 a apple
+2 b banana
+3 c cherry
+4 d date
 
 > DROP TABLE foo1;
 
