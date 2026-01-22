@@ -2090,6 +2090,72 @@ impl CatalogItem {
         }
     }
 
+    /// Returns a clone of `self` with all instances of `old_id` replaced with `new_id`.
+    pub fn replace_item_refs(&self, old_id: CatalogItemId, new_id: CatalogItemId) -> CatalogItem {
+        let do_rewrite = |create_sql: String| -> String {
+            let mut create_stmt = mz_sql::parse::parse(&create_sql)
+                .expect("invalid create sql persisted to catalog")
+                .into_element()
+                .ast;
+            mz_sql::ast::transform::create_stmt_replace_ids(
+                &mut create_stmt,
+                &[(old_id, new_id)].into(),
+            );
+            create_stmt.to_ast_string_stable()
+        };
+
+        match self {
+            CatalogItem::Table(i) => {
+                let mut i = i.clone();
+                i.create_sql = i.create_sql.map(do_rewrite);
+                CatalogItem::Table(i)
+            }
+            CatalogItem::Log(i) => CatalogItem::Log(i.clone()),
+            CatalogItem::Source(i) => {
+                let mut i = i.clone();
+                i.create_sql = i.create_sql.map(do_rewrite);
+                CatalogItem::Source(i)
+            }
+            CatalogItem::Sink(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Sink(i)
+            }
+            CatalogItem::View(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::View(i)
+            }
+            CatalogItem::MaterializedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::MaterializedView(i)
+            }
+            CatalogItem::Index(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Index(i)
+            }
+            CatalogItem::Secret(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Secret(i)
+            }
+            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+                unreachable!("references of {}s cannot be replaced", self.typ())
+            }
+            CatalogItem::Connection(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::Connection(i)
+            }
+            CatalogItem::ContinualTask(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql);
+                CatalogItem::ContinualTask(i)
+            }
+        }
+    }
     /// Updates the retain history for an item. Returns the previous retain history value. Returns
     /// an error if this item does not support retain history.
     pub fn update_retain_history(
@@ -2803,6 +2869,24 @@ impl CatalogEntry {
     /// Returns the privileges of the entry.
     pub fn privileges(&self) -> &PrivilegeMap {
         &self.privileges
+    }
+
+    /// Returns the comment object ID for this entry.
+    pub fn comment_object_id(&self) -> CommentObjectId {
+        use CatalogItemType::*;
+        match self.item_type() {
+            Table => CommentObjectId::Table(self.id),
+            Source => CommentObjectId::Source(self.id),
+            Sink => CommentObjectId::Sink(self.id),
+            View => CommentObjectId::View(self.id),
+            MaterializedView => CommentObjectId::MaterializedView(self.id),
+            Index => CommentObjectId::Index(self.id),
+            Func => CommentObjectId::Func(self.id),
+            Connection => CommentObjectId::Connection(self.id),
+            Type => CommentObjectId::Type(self.id),
+            Secret => CommentObjectId::Secret(self.id),
+            ContinualTask => CommentObjectId::ContinualTask(self.id),
+        }
     }
 }
 

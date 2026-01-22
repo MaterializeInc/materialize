@@ -9,6 +9,9 @@
 
 mode cockroach
 
+# Reset so we get predictable catalog IDs.
+reset-server
+
 # Setup
 
 statement ok
@@ -326,3 +329,50 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 ----
 db error: ERROR: materialized view mv is sealed and thus cannot be replaced
 DETAIL: The materialized view has already computed its output until the end of time, so replacing its definition would have no effect.
+
+statement ok
+DROP MATERIALIZED VIEW mv CASCADE
+
+
+# Test: MV catalog ID evolves to replacement ID after application
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + 1 as a, b FROM t
+
+# Add a dependent MV, so we also test that dependencies are correctly updated.
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv;
+
+query TT
+SELECT id, name FROM mz_materialized_views
+----
+u19  mv
+u20  rp
+u21  mv2
+
+query TT
+SELECT d.object_id, d.referenced_object_id
+FROM mz_internal.mz_object_dependencies d
+JOIN mz_materialized_views m ON m.id = d.referenced_object_id
+----
+u20  u19
+u21  u19
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query TT
+SELECT id, name FROM mz_materialized_views
+----
+u20  mv
+u21  mv2
+
+query TT
+SELECT d.object_id, d.referenced_object_id
+FROM mz_internal.mz_object_dependencies d
+JOIN mz_materialized_views m ON m.id = d.referenced_object_id
+----
+u21  u20

@@ -328,8 +328,8 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 2
 ----
-83  drop  materialized-view  {"database":"materialize","id":"u18","item":"rp","schema":"public"}  materialize
-82  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u18","item":"rp","schema":"public"},"schema":"public"}  materialize
+83  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u18","item":"rp","schema":"public"},"schema":"public"}  materialize
+82  drop  materialized-view  {"database":"materialize","id":"u18","item":"rp","schema":"public"}  materialize
 
 statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv IN CLUSTER test2 AS SELECT id FROM mz_tables
@@ -340,6 +340,6 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp2
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 3
 ----
-87  drop  materialized-view  {"database":"materialize","id":"u19","item":"rp2","schema":"public"}  materialize
-86  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","new_cluster_id":"u4","old_cluster_id":"u3","schema":"public"}  materialize
-85  alter  materialized-view  {"database":"materialize","id":"u17","item":"mv","replacement":{"database":"materialize","id":"u19","item":"rp2","schema":"public"},"schema":"public"}  materialize
+87  alter  materialized-view  {"database":"materialize","id":"u19","item":"mv","new_cluster_id":"u4","old_cluster_id":"u3","schema":"public"}  materialize
+86  alter  materialized-view  {"database":"materialize","id":"u18","item":"mv","replacement":{"database":"materialize","id":"u19","item":"rp2","schema":"public"},"schema":"public"}  materialize
+85  drop  materialized-view  {"database":"materialize","id":"u19","item":"rp2","schema":"public"}  materialize

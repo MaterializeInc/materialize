@@ -165,13 +165,14 @@ impl Coordinator {
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut storage_sink_gids_to_drop = vec![];
-        let mut compute_gids_to_drop = vec![];
+        let mut indexes_to_drop = vec![];
+        let mut compute_sinks_to_drop = vec![];
         let mut view_gids_to_drop = vec![];
         let mut secrets_to_drop = vec![];
         let mut vpc_endpoints_to_drop = vec![];
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
-        let mut compute_sinks_to_drop = BTreeMap::new();
+        let mut active_compute_sinks_to_drop = BTreeMap::new();
         let mut peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
 
@@ -187,10 +188,9 @@ impl Coordinator {
         let mut execution_timestamps_to_set = BTreeSet::new();
         let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
 
-        // Replacing a materialized view causes the replacement's catalog entry
-        // to be dropped. Its compute and storage collections are transferred to
-        // the target MV though, so we must make sure not to drop those.
-        let mut replacement_gids = vec![];
+        // Sources that shouldn't be dropped, even if we saw a `Dropped` event.
+        // Used for correct handling of ALTER MV.
+        let mut source_gids_to_keep = BTreeSet::new();
 
         // Collections for batching connection-related alterations.
         let mut source_connections_to_alter: BTreeMap<
@@ -325,7 +325,7 @@ impl Coordinator {
                     );
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Dropped(index, full_name)) => {
-                    compute_gids_to_drop.push((index.cluster_id, index.global_id()));
+                    indexes_to_drop.push((index.cluster_id, index.global_id()));
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Added(mv)) => {
@@ -335,19 +335,41 @@ impl Coordinator {
                     prev: prev_mv,
                     new: new_mv,
                 }) => {
-                    let old_gid = prev_mv.global_id_writes();
-                    let new_gid = new_mv.global_id_writes();
-                    if new_gid != old_gid {
-                        replacement_gids.push((new_mv.cluster_id, new_gid));
-                    }
+                    // We get here for two reasons:
+                    //  * Name changes, like those caused by ALTER SCHEMA.
+                    //  * Replacement application.
+                    //
+                    // In the first case, we don't have to do anything here. The second case is
+                    // tricky: Replacement application changes the `CatalogItemId` of the target to
+                    // that of the replacement and simultaneously drops the replacement. Which
+                    // means when we get here `prev_mv` is the replacement that should be dropped,
+                    // and `new_mv` is the target that already exists but under a different ID
+                    // (which will receive a `Dropped` event separately). We can sniff out this
+                    // case by checking for version differences.
+                    if prev_mv.collections != new_mv.collections {
+                        // Sanity check: The replacement's last (and only) version must be the same
+                        // as the new target's last version.
+                        assert_eq!(
+                            prev_mv.global_id_writes(),
+                            new_mv.global_id_writes(),
+                            "unexpected MV Altered implication: prev={prev_mv:?}, new={new_mv:?}",
+                        );
 
-                    self.handle_alter_materialized_view(prev_mv, new_mv)?;
+                        let gid = new_mv.global_id_writes();
+                        self.allow_writes(new_mv.cluster_id, gid);
+
+                        // There will be a separate `Dropped` implication for the old definition of
+                        // the target MV. That will drop the old compute collection, as we desire,
+                        // but we need to prevent it from dropping the old storage collection as
+                        // well, since that might still be depended on.
+                        source_gids_to_keep.extend(new_mv.global_ids());
+                    }
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Dropped(
                     mv,
                     full_name,
                 )) => {
-                    compute_gids_to_drop.push((mv.cluster_id, mv.global_id_writes()));
+                    compute_sinks_to_drop.push((mv.cluster_id, mv.global_id_writes()));
                     sources_to_drop.extend(mv.global_ids().map(|gid| (catalog_id, gid)));
                     dropped_item_names.insert(mv.global_id_writes(), full_name);
                 }
@@ -381,7 +403,7 @@ impl Coordinator {
                     ct,
                     _full_name,
                 )) => {
-                    compute_gids_to_drop.push((ct.cluster_id, ct.global_id()));
+                    compute_sinks_to_drop.push((ct.cluster_id, ct.global_id()));
                     sources_to_drop.push((catalog_id, ct.global_id()));
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
@@ -540,12 +562,6 @@ impl Coordinator {
             }
         }
 
-        // Cancel out drops against replacements.
-        for (cluster_id, gid) in replacement_gids {
-            sources_to_drop.retain(|(_, id)| *id != gid);
-            compute_gids_to_drop.retain(|id| *id != (cluster_id, gid));
-        }
-
         if !source_collections_to_create.is_empty() {
             self.create_source_collections(source_collections_to_create)
                 .await?;
@@ -608,12 +624,14 @@ impl Coordinator {
                 .unwrap_or_terminate("altering source export data configs after txn must succeed");
         }
 
-        let collections_to_drop: BTreeSet<_> = sources_to_drop
+        // Apply source drop overwrites.
+        sources_to_drop.retain(|(_, gid)| !source_gids_to_keep.contains(gid));
+
+        let readable_collections_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
             .map(|(_, gid)| *gid)
             .chain(tables_to_drop.iter().map(|(_, gid)| *gid))
-            .chain(storage_sink_gids_to_drop.iter().copied())
-            .chain(compute_gids_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
             .chain(view_gids_to_drop.iter().copied())
             .collect();
 
@@ -624,13 +642,13 @@ impl Coordinator {
             if let Some(id) = sink
                 .depends_on()
                 .iter()
-                .find(|id| collections_to_drop.contains(id))
+                .find(|id| readable_collections_to_drop.contains(id))
             {
                 let name = dropped_item_names
                     .get(id)
                     .map(|n| format!("relation {}", n.quoted()))
                     .expect("missing relation name");
-                compute_sinks_to_drop.insert(
+                active_compute_sinks_to_drop.insert(
                     *sink_id,
                     ActiveComputeSinkRetireReason::DependencyDropped(name),
                 );
@@ -639,7 +657,7 @@ impl Coordinator {
                     .get(&cluster_id)
                     .map(|n| format!("cluster {}", n.quoted()))
                     .expect("missing cluster name");
-                compute_sinks_to_drop.insert(
+                active_compute_sinks_to_drop.insert(
                     *sink_id,
                     ActiveComputeSinkRetireReason::DependencyDropped(name),
                 );
@@ -651,7 +669,7 @@ impl Coordinator {
             if let Some(id) = pending_peek
                 .depends_on
                 .iter()
-                .find(|id| collections_to_drop.contains(id))
+                .find(|id| readable_collections_to_drop.contains(id))
             {
                 let name = dropped_item_names
                     .get(id)
@@ -684,6 +702,11 @@ impl Coordinator {
             .map(|(_id, gid)| gid)
             .chain(storage_sink_gids_to_drop.iter())
             .chain(tables_to_drop.iter().map(|(_id, gid)| gid))
+            .copied()
+            .collect();
+        let compute_gids_to_drop: Vec<_> = indexes_to_drop
+            .iter()
+            .chain(compute_sinks_to_drop.iter())
             .copied()
             .collect();
 
@@ -759,8 +782,9 @@ impl Coordinator {
                 self.drop_storage_sinks(storage_sink_gids_to_drop);
             }
 
-            if !compute_sinks_to_drop.is_empty() {
-                self.retire_compute_sinks(compute_sinks_to_drop).await;
+            if !active_compute_sinks_to_drop.is_empty() {
+                self.retire_compute_sinks(active_compute_sinks_to_drop)
+                    .await;
             }
 
             if !peeks_to_drop.is_empty() {
@@ -1176,36 +1200,6 @@ impl Coordinator {
 
         // Alter is complete! We can drop our read hold.
         drop(existing_table_read_hold);
-
-        Ok(())
-    }
-
-    #[instrument(level = "debug")]
-    fn handle_alter_materialized_view(
-        &mut self,
-        prev_mv: MaterializedView,
-        new_mv: MaterializedView,
-    ) -> Result<(), AdapterError> {
-        let old_gid = prev_mv.global_id_writes();
-        let new_gid = new_mv.global_id_writes();
-
-        if old_gid == new_gid {
-            // It's not an ALTER MATERIALIZED VIEW as far as the controller is
-            // concerned, because we still have the same GlobalId. This is
-            // likely a change from an ALTER SWAP.
-            return Ok(());
-        }
-
-        // Cut over the MV computation, by shutting down the old dataflow and allowing the
-        // new dataflow to start writing.
-        //
-        // Both commands are applied to their respective clusters asynchronously and they
-        // race, so it is possible that we allow writes by the replacement before having
-        // dropped the old dataflow. Thus there might be a period where the two dataflows
-        // are competing in trying to commit conflicting outputs. Eventually the old
-        // dataflow will be dropped and the replacement takes over.
-        self.drop_compute_collections(vec![(prev_mv.cluster_id, old_gid)]);
-        self.allow_writes(new_mv.cluster_id, new_gid);
 
         Ok(())
     }

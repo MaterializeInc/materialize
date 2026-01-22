@@ -901,7 +901,9 @@ impl Catalog {
                 mv.apply_replacement(replacement_mv.clone());
 
                 tx.remove_item(replacement_id)?;
-                tx.update_item(id, new_entry.into())?;
+
+                new_entry.id = replacement_id;
+                tx_replace_item(tx, state, id, new_entry)?;
 
                 let comment_id = CommentObjectId::MaterializedView(replacement_id);
                 tx.drop_comments(&[comment_id].into())?;
@@ -2628,6 +2630,72 @@ impl Catalog {
     }
 }
 
+/// Prepare the given transaction for replacing a catalog item with a new version.
+///
+/// The new version gets a new `CatalogItemId`, which requires rewriting the `create_sql` of all
+/// dependent objects to refer to that new ID (at a previous version).
+///
+/// Note that here is where we break the assumption that the `CatalogItemId` is a stable identifier
+/// for catalog items. We currently think that there are no use cases that require this assumption,
+/// but no way to know for sure.
+fn tx_replace_item(
+    tx: &mut Transaction<'_>,
+    state: &CatalogState,
+    id: CatalogItemId,
+    new_entry: CatalogEntry,
+) -> Result<(), AdapterError> {
+    let new_id = new_entry.id;
+
+    // Rewrite dependent objects to point to the new ID.
+    for use_id in new_entry.referenced_by() {
+        // The dependent might be dropped in the same tx, so check.
+        if tx.get_item(use_id).is_none() {
+            continue;
+        }
+
+        let mut dependent = state.get_entry(use_id).clone();
+        dependent.item = dependent.item.replace_item_refs(id, new_id);
+        tx.update_item(*use_id, dependent.into())?;
+    }
+
+    // Move comments to the new ID.
+    let old_comment_id = state.get_comment_id(ObjectId::Item(id));
+    let new_comment_id = new_entry.comment_object_id();
+    if let Some(comments) = state.comments.get_object_comments(old_comment_id) {
+        tx.drop_comments(&[old_comment_id].into())?;
+        for (sub, comment) in comments {
+            tx.update_comment(new_comment_id, *sub, Some(comment.clone()))?;
+        }
+    }
+
+    let mz_catalog::durable::Item {
+        id: _,
+        oid,
+        global_id,
+        schema_id,
+        name,
+        create_sql,
+        owner_id,
+        privileges,
+        extra_versions,
+    } = new_entry.into();
+
+    tx.remove_item(id)?;
+    tx.insert_item(
+        new_id,
+        oid,
+        global_id,
+        schema_id,
+        &name,
+        create_sql,
+        owner_id,
+        privileges,
+        extra_versions,
+    )?;
+
+    Ok(())
+}
+
 /// Generate audit events for a replacement apply operation.
 fn apply_replacement_audit_events(
     state: &CatalogState,
@@ -2647,12 +2715,19 @@ fn apply_replacement_audit_events(
         name: Catalog::full_name_detail(&replacement_name),
     };
 
+    if Catalog::should_audit_log_item(&replacement.item) {
+        events.push((
+            EventType::Drop,
+            EventDetails::IdFullNameV1(replacement_id_name.clone()),
+        ));
+    }
+
     if Catalog::should_audit_log_item(&target.item) {
         events.push((
             EventType::Alter,
             EventDetails::AlterApplyReplacementV1(mz_audit_log::AlterApplyReplacementV1 {
                 target: target_id_name.clone(),
-                replacement: replacement_id_name.clone(),
+                replacement: replacement_id_name,
             }),
         ));
 
@@ -2660,23 +2735,18 @@ fn apply_replacement_audit_events(
             && let Some(new_cluster_id) = replacement.cluster_id()
             && old_cluster_id != new_cluster_id
         {
+            // When the replacement is applied, the target takes on the ID of the replacement, so
+            // we should use that ID for subsequent events.
             events.push((
                 EventType::Alter,
                 EventDetails::AlterSetClusterV1(mz_audit_log::AlterSetClusterV1 {
-                    id: target.id().to_string(),
+                    id: replacement.id().to_string(),
                     name: target_id_name.name,
                     old_cluster_id: old_cluster_id.to_string(),
                     new_cluster_id: new_cluster_id.to_string(),
                 }),
             ));
         }
-    }
-
-    if Catalog::should_audit_log_item(&replacement.item) {
-        events.push((
-            EventType::Drop,
-            EventDetails::IdFullNameV1(replacement_id_name),
-        ));
     }
 
     events
