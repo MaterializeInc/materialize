@@ -20,12 +20,14 @@ import json
 import random
 
 import boto3
-from psycopg.errors import SystemError
+from psycopg.errors import InternalError_, SystemError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 
 AWS_EXTERNAL_ID_PREFIX = "eb5cb59b-e2fe-41f3-87ca-d2176a495345"
+# Use an AWS environment ID so that region checks apply (CloudProvider::Aws)
+AWS_ENVIRONMENT_ID = "aws-us-east-1-00000000-0000-0000-0000-000000000000-0"
 
 SERVICES = [
     Materialized(),
@@ -88,6 +90,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--aws-connection-role-arn={connection_role_arn}",
                 f"--aws-external-id-prefix={AWS_EXTERNAL_ID_PREFIX}",
             ],
+            environment_id=AWS_ENVIRONMENT_ID,
+            system_parameter_defaults={"enable_iceberg_sink": "true"},
         )
         with c.override(materialized):
             # (Re)start Materialize and enable AWS connections.
@@ -105,6 +109,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 test_credentials,
                 test_assume_role,
                 test_s3tablesrest_connection,
+                test_s3tablesrest_region_mismatch,
             ]:
                 with c.test_case(fn.__name__):
                     fn(c, ctx)
@@ -299,6 +304,109 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
                 RoleName=customer_role,
                 PolicyName=f"{customer_role}-s3tables-all",
             )
+            _delete_role(ctx, customer_role)
+
+
+def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
+    """Test that S3 Tables sinks fail when region doesn't match environment.
+
+    The environment is configured as aws-us-east-1, so attempting to create
+    an Iceberg sink using an S3 Tables connection pointing to us-west-2 should
+    fail with a region mismatch error during sink purification.
+    """
+    bucket = None
+    customer_role = None
+    try:
+        bucket = ctx.s3tables.create_table_bucket(
+            name=f"test-bucket-region-{ctx.seed}",
+        )
+        customer_role = f"testdrive-{ctx.seed}-CustomerRegion"
+        customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
+
+        c.sql(
+            f"CREATE CONNECTION aws_wrong_region TO AWS (ASSUME ROLE ARN '{customer_role_arn}', REGION = 'us-west-2')"
+        )
+        connection_id = c.sql_query(
+            "SELECT id FROM mz_connections WHERE name = 'aws_wrong_region'"
+        )[0][0]
+
+        principal = c.sql_query(
+            f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        _create_role(ctx, customer_role, principal)
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        ctx.iam.put_role_policy(
+            RoleName=customer_role,
+            PolicyName=f"{customer_role}-s3tables-all",
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3tables:*"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        # Create the ICEBERG CATALOG connection with VALIDATE = false to skip
+        # connection-time validation (which would fail at AWS level). We want
+        # to test that sink purification catches the region mismatch.
+        c.sql(
+            f"CREATE CONNECTION s3tables_wrong_region TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-west-2.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_wrong_region) WITH (VALIDATE = false)"
+        )
+
+        c.sql("CREATE TABLE sink_test_table (id INT, value TEXT)")
+        c.sql("INSERT INTO sink_test_table VALUES (1, 'test')")
+
+        # This should fail because the AWS connection is configured for us-west-2
+        # but the environment is running in us-east-1. The region check happens
+        # during sink purification.
+        try:
+            c.sql(
+                """CREATE SINK s3tables_sink
+                    FROM sink_test_table
+                    INTO ICEBERG CATALOG CONNECTION s3tables_wrong_region (
+                        NAMESPACE 'test_namespace',
+                        TABLE 'test_table'
+                    )
+                    USING AWS CONNECTION aws_wrong_region"""
+            )
+            raise AssertionError(
+                "Expected S3 Tables sink to fail due to region mismatch"
+            )
+        except InternalError_ as e:
+            assert e.diag.message_primary is not None
+            assert (
+                "region mismatch" in e.diag.message_primary.lower()
+            ), f"Expected 'region mismatch' error but got: {e.diag.message_primary}"
+    finally:
+        if bucket is not None:
+            ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
+        if customer_role is not None:
+            try:
+                ctx.iam.delete_role_policy(
+                    RoleName=customer_role,
+                    PolicyName=f"{customer_role}-s3tables-all",
+                )
+            except Exception:
+                pass
             _delete_role(ctx, customer_role)
 
 
