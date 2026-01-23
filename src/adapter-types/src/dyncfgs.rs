@@ -21,10 +21,10 @@ pub const ALLOW_USER_SESSIONS: Config<bool> = Config::new(
     "Whether to allow user roles to create new sessions. When false, only system roles will be permitted to create new sessions.",
 );
 
-// Slightly awkward with the WITH prefix, but we can't start with a 0.
+// Slightly awkward with the WITH prefix, but we can't start with a 0..
 pub const WITH_0DT_DEPLOYMENT_MAX_WAIT: Config<Duration> = Config::new(
     "with_0dt_deployment_max_wait",
-    Duration::from_secs(60 * 60),
+    Duration::from_secs(60 * 60 * 72),
     "How long to wait at most for clusters to be hydrated, when doing a zero-downtime deployment.",
 );
 
