@@ -140,7 +140,7 @@ pub(crate) async fn migrate(
         catalog_version
     );
 
-    rewrite_ast_items(tx, |_tx, _id, stmt| {
+    rewrite_ast_items(tx, |tx, _id, stmt| {
         // Add per-item AST migrations below.
         //
         // Each migration should be a function that takes `stmt` (the AST
@@ -151,6 +151,7 @@ pub(crate) async fn migrate(
         // arbitrary changes to the catalog.
         ast_rewrite_create_sink_partition_strategy(stmt)?;
         ast_rewrite_sql_server_constraints(stmt)?;
+        ast_rewrite_add_missing_index_ids(tx, stmt)?;
         Ok(())
     })?;
 
@@ -941,6 +942,53 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
         initial_lsn,
     };
     *deets = hex::encode(new_value.into_proto().encode_to_vec());
+
+    Ok(())
+}
+
+/// Add missing item IDs to the ON clauses of CREATE INDEX statements.
+fn ast_rewrite_add_missing_index_ids(
+    tx: &Transaction<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    let Statement::CreateIndex(stmt) = stmt else {
+        return Ok(());
+    };
+
+    let unresolved_name = match stmt.on_name.clone() {
+        mz_sql::ast::RawItemName::Name(name) => name,
+        // ID already present; nothing to do.
+        mz_sql::ast::RawItemName::Id(..) => return Ok(()),
+    };
+
+    let parts = &unresolved_name.0;
+    let (db_name, schema_name, item_name) = match parts.len() {
+        3 => (Some(&parts[0]), &parts[1], &parts[2]),
+        2 => (None, &parts[0], &parts[1]),
+        _ => panic!("invalid unresolved name: {unresolved_name:?}"),
+    };
+
+    let db_id = db_name.map(|x| {
+        let db = tx.get_databases().find(|db| db.name == x.as_str());
+        let db = db.unwrap_or_else(|| panic!("missing database: {x}"));
+        db.id
+    });
+    let schema_id = {
+        let schema = tx
+            .get_schemas()
+            .find(|s| s.name == schema_name.as_str() && s.database_id == db_id);
+        let schema = schema.unwrap_or_else(|| panic!("missing schema: {schema_name}, {db_id:?}"));
+        schema.id
+    };
+    let item_id = {
+        let item = tx
+            .get_items()
+            .find(|i| i.name == item_name.as_str() && i.schema_id == schema_id);
+        let item = item.unwrap_or_else(|| panic!("missing item: {item_name}, {schema_id:?}"));
+        item.id
+    };
+
+    stmt.on_name = mz_sql::ast::RawItemName::Id(item_id.to_string(), unresolved_name, None);
 
     Ok(())
 }
