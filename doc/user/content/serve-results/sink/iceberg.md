@@ -11,15 +11,29 @@ menu:
 {{< public-preview />}}
 
 This guide walks you through the steps required to export results from
-Materialize to [Apache Iceberg](https://iceberg.apache.org/) tables. Iceberg
-sinks are useful for maintaining a continuously updated analytical table that
-can be queried by data warehouses like Snowflake, Databricks, or Spark.
+Materialize to [Apache Iceberg](https://iceberg.apache.org/) tables hosted on
+[AWS S3 Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html).
+
+Apache Iceberg is an open table format for large-scale analytics datasets that
+brings reliable, performant ACID transactions, schema evolution, and time travel
+to data lakes. It gives you data warehouse-like reliability with the cost
+advantages of object storage.
+
+Amazon S3 Tables is an AWS feature that provides fully managed Apache Iceberg
+tables as a native S3 storage type, eliminating the need to manage separate
+metadata catalogs or table maintenance operations. It automatically handles
+compaction and snapshot management.
+
+Iceberg sinks allow you to deliver analytical data from Materialize into an
+Iceberg table hosted on AWS S3 Tables. As data changes in Materialize, your
+Iceberg tables are automatically kept up to date.
 
 ## Before you begin
 
 - Ensure you have access to an AWS account with permissions to create and manage
   IAM policies and roles.
 - Ensure you have an AWS S3 Tables bucket configured in your AWS account.
+- Ensure you have created a namespace in your S3 Tables bucket.
 
 ## How it works
 
@@ -44,7 +58,8 @@ authentication](/sql/create-connection/#aws-permissions) to manage access.
 ### Create an IAM policy
 
 Create an [IAM policy](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html)
-that allows Materialize to write to your Iceberg table's storage location:
+that allows Materialize to write to your Iceberg table's storage location and
+interact with the S3 Tables API:
 
 ```json
 {
@@ -72,29 +87,24 @@ that allows Materialize to write to your Iceberg table's storage location:
                     ]
                 }
             }
+        },
+        {
+            "Effect": "Allow",
+            "Action": "s3tables:*",
+            "Resource": "*"
         }
     ]
 }
 ```
 
-For AWS S3 Tables, you'll also need permissions to interact with the S3 Tables
-API. Add the following to your IAM policy:
-
-```json
-{
-    "Effect": "Allow",
-    "Action": "s3tables:*",
-    "Resource": "*"
-}
-```
-
-You can scope the resource ARN more narrowly to your specific S3 Tables bucket
-if desired.
+You can scope the `s3tables` resource ARN more narrowly to your specific S3
+Tables bucket if desired.
 
 ### Create an IAM role
 
 Create an [IAM role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html)
-with a trust policy that allows Materialize to assume the role:
+and attach the IAM policy you created above. Then configure a trust policy that
+allows Materialize to assume the role:
 
 ```json
 {
@@ -116,23 +126,38 @@ with a trust policy that allows Materialize to assume the role:
 }
 ```
 
-You'll update the external ID after creating the AWS connection in Materialize.
+{{< note >}}
+The AWS account ID `664411391173` is the Materialize AWS account. This may
+differ for self-managed deployments.
+{{< /note >}}
+
+Once you have created the IAM role, copy the role ARN from the AWS console.
+You'll use the ARN in the next step. You'll also update the external ID after
+creating the AWS connection in Materialize.
 
 ## Step 2. Create connections
 
-Iceberg sinks require two connections:
+_Connections_ allow Materialize to authenticate to external systems. Iceberg
+sinks require two connections:
 
 1. An **AWS connection** for authentication with object storage
 2. An **Iceberg catalog connection** to interact with the Iceberg catalog
 
 ### Create an AWS connection
 
+Fill in the ARN from step 1:
+
 ```mzsql
-CREATE CONNECTION aws_connection
-   TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::<account-id>:role/<role>');
+CREATE CONNECTION aws_connection TO AWS (
+    ASSUME ROLE ARN = 'arn:aws:iam::<account-id>:role/<role>',
+    REGION = '<region>'
+);
 ```
 
-Retrieve the external ID and update your IAM role's trust policy:
+Replace `<region>` with your AWS region (e.g., `us-east-1`). For more details on
+AWS connection options, see [`CREATE CONNECTION`](/sql/create-connection/#aws).
+
+Run the query below to fetch the `external_id`:
 
 ```mzsql
 SELECT external_id
@@ -141,10 +166,35 @@ JOIN mz_connections c ON awsc.id = c.id
 WHERE c.name = 'aws_connection';
 ```
 
+Once you have the `external_id`, go back to the trust policy for the IAM role
+created in step 1. Replace `"PENDING"` with the external ID value. Your IAM
+trust policy should now look like this:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "AWS": "arn:aws:iam::664411391173:role/MaterializeConnection"
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "sts:ExternalId": "mz_1234abcd-5678-efgh-9012-ijklmnopqrst_u123"
+                }
+            }
+        }
+    ]
+}
+```
+
 ### Create an Iceberg catalog connection
 
 Create an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog)
-for AWS S3 Tables:
+for AWS S3 Tables. You can find the ARN for your S3 Tables bucket in the AWS
+console:
 
 ```mzsql
 CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
@@ -155,8 +205,8 @@ CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
 );
 ```
 
-Replace `<region>` with your AWS region (e.g., `us-east-1`) and `<table-bucket-name>`
-with the name of your S3 Tables bucket.
+Replace `<region>` with your AWS region (e.g., `us-east-1`) and
+`<table-bucket-name>` with the name of your S3 Tables bucket.
 
 ## Step 3. Create the sink
 
@@ -173,6 +223,7 @@ CREATE SINK my_iceberg_sink
   )
   USING AWS CONNECTION aws_connection
   KEY (id)
+  ENVELOPE UPSERT
   WITH (COMMIT INTERVAL = '10s');
 ```
 
@@ -180,6 +231,7 @@ CREATE SINK my_iceberg_sink
 
 | Option | Description |
 |--------|-------------|
+| `ENVELOPE UPSERT` | Required. Specifies that the sink uses upsert semantics based on the `KEY`. |
 | `NAMESPACE` | The Iceberg namespace (database) containing the table. |
 | `TABLE` | The name of the Iceberg table to write to. |
 | `KEY` | **Required.** The columns that uniquely identify rows. Used to track updates and deletes. |
@@ -198,6 +250,8 @@ snapshots to your Iceberg table. This involves tradeoffs:
 | More small files - can degrade query performance over time | Fewer, larger files - better query performance |
 | More frequent snapshot commits - higher catalog overhead | Less catalog overhead |
 | Lower throughput efficiency | Higher throughput efficiency |
+
+The minimum commit interval is `1s`.
 
 **Recommendations:**
 - For real-time dashboards or alerting, use shorter intervals (`10s` to `1m`)
@@ -228,6 +282,8 @@ supports Iceberg:
 
 ## Limitations
 
+- **Same region required**: Your S3 Tables bucket must be in the same AWS region
+  as your Materialize deployment.
 - **Schema evolution**: Materialize does not currently support evolving the
   schema of an existing Iceberg table. If you need to change the schema, you
   must drop and recreate the sink.

@@ -57,6 +57,7 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 | Lower latency - data visible sooner | Higher latency - data takes longer to appear |
 | More small files - can degrade query performance | Fewer, larger files - better query performance |
 | Higher catalog overhead | Lower catalog overhead |
+| Higher S3 write costs (more PUT requests) | Lower S3 write costs |
 
 **Recommendations:**
 - For real-time use cases: `10s` to `1m`
@@ -141,6 +142,7 @@ CREATE SINK user_events_iceberg
   )
   USING AWS CONNECTION aws_connection
   KEY (user_id, event_timestamp)
+  ENVELOPE UPSERT
   WITH (COMMIT INTERVAL = '1m');
 ```
 
@@ -163,6 +165,7 @@ CREATE SINK deduped_sink
   )
   USING AWS CONNECTION aws_connection
   KEY (event_id) NOT ENFORCED
+  ENVELOPE UPSERT
   WITH (COMMIT INTERVAL = '10s');
 ```
 
@@ -173,6 +176,8 @@ results.
 
 ## Limitations
 
+- **Same region required**: Your S3 Tables bucket must be in the same AWS region
+  as your Materialize deployment.
 - **Schema evolution**: Materialize does not support changing the schema of an
   existing Iceberg table. If the source schema changes, you must drop and
   recreate the sink.
