@@ -24,6 +24,7 @@ from psycopg.errors import InternalError_, SystemError
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.testdrive import Testdrive
 
 AWS_EXTERNAL_ID_PREFIX = "eb5cb59b-e2fe-41f3-87ca-d2176a495345"
 # Use an AWS environment ID so that region checks apply (CloudProvider::Aws)
@@ -31,6 +32,7 @@ AWS_ENVIRONMENT_ID = "aws-us-east-1-00000000-0000-0000-0000-000000000000-0"
 
 SERVICES = [
     Materialized(),
+    Testdrive(),
 ]
 
 
@@ -102,6 +104,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 user="mz_system",
                 sql="""
                 ALTER SYSTEM SET enable_connection_validation_syntax = true;
+                ALTER SYSTEM SET enable_iceberg_sink = true;
                 """,
             )
 
@@ -110,6 +113,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 test_assume_role,
                 test_s3tablesrest_connection,
                 test_s3tablesrest_region_mismatch,
+                test_iceberg_e2e,
             ]:
                 with c.test_case(fn.__name__):
                     fn(c, ctx)
@@ -252,7 +256,7 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
         customer_role = f"testdrive-{ctx.seed}-Customer"
         customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
         c.sql(
-            f"CREATE CONNECTION aws_assume_role_s3tablesrest TO AWS (ASSUME ROLE ARN '{customer_role_arn}')"
+            f"CREATE CONNECTION aws_assume_role_s3tablesrest TO AWS (ASSUME ROLE ARN '{customer_role_arn}', REGION 'us-east-1')"
         )
         connection_id = c.sql_query(
             "SELECT id FROM mz_connections WHERE name = 'aws_assume_role_s3tablesrest'"
@@ -407,6 +411,112 @@ def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
                 )
             except Exception:
                 pass
+            _delete_role(ctx, customer_role)
+
+
+def test_iceberg_e2e(c: Composition, ctx: TestContext):
+    bucket = None
+    customer_role = None
+    try:
+        bucket = ctx.s3tables.create_table_bucket(
+            name=f"test-bucket-{ctx.seed}-e2e",
+        )
+        ctx.s3tables.create_namespace(
+            tableBucketARN=bucket["arn"], namespace=["default_namespace"]
+        )
+        customer_role = f"testdrive-{ctx.seed}-Customer"
+        customer_role_arn = f"arn:aws:iam::{ctx.account_id}:role/{customer_role}"
+        c.sql(
+            f"CREATE CONNECTION aws_assume_role_s3tablesrest_e2e TO AWS (ASSUME ROLE ARN '{customer_role_arn}', REGION 'us-east-1')"
+        )
+        connection_id = c.sql_query(
+            "SELECT id FROM mz_connections WHERE name = 'aws_assume_role_s3tablesrest_e2e'"
+        )[0][0]
+
+        principal = c.sql_query(
+            f"SELECT principal FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        _create_role(ctx, customer_role, principal)
+
+        c.sleep(ctx.iam_propagation_seconds)
+
+        ctx.iam.put_role_policy(
+            RoleName=customer_role,
+            PolicyName=f"{customer_role}-s3tables-all",
+            PolicyDocument=json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": ["s3tables:*", "s3:*"],
+                            "Resource": "*",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        trust_policy = c.sql_query(
+            f"SELECT example_trust_policy FROM mz_internal.mz_aws_connections WHERE id = '{connection_id}'"
+        )[0][0]
+
+        # Add the test runner's principal to the trust policy so we can assume
+        # the role to get credentials for duckdb.
+        trust_policy["Statement"].append(
+            {
+                "Effect": "Allow",
+                "Principal": {"AWS": ctx.materialized_principal},
+                "Action": "sts:AssumeRole",
+            }
+        )
+
+        ctx.iam.update_assume_role_policy(
+            RoleName=customer_role,
+            PolicyDocument=json.dumps(trust_policy),
+        )
+        c.sleep(ctx.iam_propagation_seconds)
+
+        # Assume the customer role to get temporary credentials for duckdb to
+        # query the iceberg table directly.
+        assumed_role = ctx.sts.assume_role(
+            RoleArn=customer_role_arn,
+            RoleSessionName="testdrive-duckdb",
+        )
+        aws_access_key_id = assumed_role["Credentials"]["AccessKeyId"]
+        aws_secret_access_key = assumed_role["Credentials"]["SecretAccessKey"]
+        aws_session_token = assumed_role["Credentials"]["SessionToken"]
+
+        c.run_testdrive_files(
+            "--no-reset",
+            f"--var=warehouse-arn={bucket['arn']}",
+            f"--var=role-arn={customer_role_arn}",
+            f"--var=aws-access-key-id={aws_access_key_id}",
+            f"--var=aws-secret-access-key={aws_secret_access_key}",
+            f"--var=aws-session-token={aws_session_token}",
+            "aws-iceberg-e2e.td",
+        )
+    finally:
+        if bucket is not None:
+            try:
+                ctx.s3tables.delete_table(
+                    tableBucketARN=bucket["arn"],
+                    namespace="default_namespace",
+                    name="demo_table",
+                )
+            except Exception:
+                # We might not have created the table.
+                pass
+            ctx.s3tables.delete_namespace(
+                tableBucketARN=bucket["arn"], namespace="default_namespace"
+            )
+            ctx.s3tables.delete_table_bucket(tableBucketARN=bucket["arn"])
+        if customer_role is not None:
+            ctx.iam.delete_role_policy(
+                RoleName=customer_role,
+                PolicyName=f"{customer_role}-s3tables-all",
+            )
             _delete_role(ctx, customer_role)
 
 

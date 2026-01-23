@@ -15,10 +15,14 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
-use aws_sdk_sts::config::ProvideCredentials;
+use async_trait::async_trait;
+use aws_credential_types::provider::ProvideCredentials;
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
-use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
+use iceberg::io::{
+    AwsCredential, AwsCredentialLoad, CustomAwsCredentialLoader, S3_ACCESS_KEY_ID,
+    S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
+};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
 };
@@ -56,7 +60,7 @@ use url::Url;
 use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
-    AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
 };
 use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
@@ -73,6 +77,46 @@ pub mod string_or_secret;
 
 const REST_CATALOG_PROP_SCOPE: &str = "scope";
 const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
+
+/// A credential loader that wraps an aws-sdk-rust credentials provider for use with
+/// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
+/// credential chain (including the full assume role chain) to OpenDAL's S3 implementation.
+///
+/// We use this instead of OpenDAL's built-in assume role support because Materialize
+/// has a runtime-defined credential chain (ambient → jump role → user role with external ID)
+/// that can't be expressed via OpenDAL's static configuration properties.
+struct AwsSdkCredentialLoader {
+    /// The underlying AWS SDK credentials provider. For assume role auth, this provider
+    /// already handles the full chain: ambient creds -> jump role -> user role.
+    provider: aws_credential_types::provider::SharedCredentialsProvider,
+}
+
+impl AwsSdkCredentialLoader {
+    fn new(provider: aws_credential_types::provider::SharedCredentialsProvider) -> Self {
+        Self { provider }
+    }
+}
+
+#[async_trait]
+impl AwsCredentialLoad for AwsSdkCredentialLoader {
+    async fn load_credential(
+        &self,
+        _client: reqwest::Client,
+    ) -> anyhow::Result<Option<AwsCredential>> {
+        let creds = self
+            .provider
+            .provide_credentials()
+            .await
+            .context("failed to load AWS credentials from SDK provider")?;
+
+        Ok(Some(AwsCredential {
+            access_key_id: creds.access_key_id().to_string(),
+            secret_access_key: creds.secret_access_key().to_string(),
+            session_token: creds.session_token().map(|s| s.to_string()),
+            expires_in: creds.expiry().map(|t| t.into()),
+        }))
+    }
+}
 
 /// An extension trait for [`SecretsReader`]
 #[async_trait::async_trait]
@@ -522,6 +566,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
+        let secret_reader = &storage_configuration.connection_context.secrets_reader;
         let aws_ref = &s3tables.aws_connection;
         let aws_config = aws_ref
             .connection
@@ -532,45 +577,57 @@ impl IcebergCatalogConnection<InlinedConnection> {
             )
             .await?;
 
-        let provider = aws_config
-            .credentials_provider()
-            .context("No credentials provider in AWS config")?;
+        let aws_region = aws_ref
+            .connection
+            .region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".to_string());
 
-        let creds = provider
-            .provide_credentials()
-            .await
-            .context("Failed to get AWS credentials")?;
-
-        let access_key_id = creds.access_key_id();
-        let secret_access_key = creds.secret_access_key();
-
-        let aws_region = aws_config
-            .region()
-            .map(|r| r.as_ref())
-            .unwrap_or("us-east-1");
-
-        let props = vec![
-            (S3_REGION.to_string(), aws_region.to_string()),
+        let mut props = vec![
+            (S3_REGION.to_string(), aws_region),
             (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
-            (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
-            (
-                S3_SECRET_ACCESS_KEY.to_string(),
-                secret_access_key.to_string(),
-            ),
             (
                 REST_CATALOG_PROP_WAREHOUSE.to_string(),
                 s3tables.warehouse.clone(),
             ),
-            (
-                REST_CATALOG_PROP_URI.to_string(),
-                self.uri.to_string().clone(),
-            ),
+            (REST_CATALOG_PROP_URI.to_string(), self.uri.to_string()),
         ];
 
+        let aws_auth = aws_ref.connection.auth.clone();
+
+        if let AwsAuth::Credentials(creds) = &aws_auth {
+            props.push((
+                S3_ACCESS_KEY_ID.to_string(),
+                creds
+                    .access_key_id
+                    .get_string(in_task, secret_reader)
+                    .await?,
+            ));
+            props.push((
+                S3_SECRET_ACCESS_KEY.to_string(),
+                secret_reader.read_string(creds.secret_access_key).await?,
+            ));
+        }
+
+        // Build the catalog with aws_config for REST API signing.
+        // For AssumeRole auth, we also add a FileIO extension so OpenDAL can
+        // use our credential chain for S3 object access.
         let catalog = RestCatalogBuilder::default()
-            .with_aws_config(aws_config)
+            .with_aws_config(aws_config.clone())
             .load("IcebergCatalog", props.into_iter().collect())
             .await?;
+
+        let catalog = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
+            let credentials_provider = aws_config
+                .credentials_provider()
+                .ok_or_else(|| anyhow!("aws_config missing credentials provider"))?;
+            let file_io_loader = CustomAwsCredentialLoader::new(Arc::new(
+                AwsSdkCredentialLoader::new(credentials_provider),
+            ));
+            catalog.with_file_io_extension(file_io_loader)
+        } else {
+            catalog
+        };
 
         Ok(Arc::new(catalog))
     }
