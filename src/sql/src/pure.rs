@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use itertools::Itertools;
+use mz_adapter_types::dyncfgs::ENABLE_S3_TABLES_REGION_CHECK;
 use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
 use mz_cloud_provider::CloudProvider;
 use mz_controller_types::ClusterId;
@@ -568,13 +569,12 @@ async fn purify_create_sink(
             };
 
             // For S3 Tables connections in the Materialize Cloud product, verify the
-            // AWS region matches the environment's region. This check only applies to
-            // the cloud product (indicated by aws_connection_role_arn being set) since
-            // self-managed deployments may have legitimate reasons to use cross-region
-            // configurations.
+            // AWS region matches the environment's region. This check only applies when
+            // the enable_s3_tables_region_check dyncfg is set.
             if let Some(s3tables) = connection.s3tables_catalog() {
-                let ctx = &storage_configuration.connection_context;
-                if ctx.aws_connection_role_arn.is_some() {
+                let enable_region_check =
+                    ENABLE_S3_TABLES_REGION_CHECK.get(scx.catalog.system_vars().dyncfgs());
+                if enable_region_check {
                     let env_id = &catalog.config().environment_id;
                     if matches!(env_id.cloud_provider(), CloudProvider::Aws) {
                         let env_region = env_id.cloud_provider_region();

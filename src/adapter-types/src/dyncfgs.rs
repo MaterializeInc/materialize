@@ -131,6 +131,14 @@ pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "If set, send queries with a compatible literal constraint or ordering clause down the Persist fast path.",
 );
 
+/// Whether to enforce that S3 Tables connections are in the same region as the Materialize
+/// environment.
+pub const ENABLE_S3_TABLES_REGION_CHECK: Config<bool> = Config::new(
+    "enable_s3_tables_region_check",
+    false,
+    "Whether to enforce that S3 Tables connections are in the same region as the environment.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -151,4 +159,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_PASSWORD_AUTH)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
+        .add(&ENABLE_S3_TABLES_REGION_CHECK)
 }
