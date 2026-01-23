@@ -17,8 +17,11 @@ use http::HeaderValue;
 use k8s_openapi::{
     api::{
         apps::v1::Deployment,
-        core::v1::{Affinity, ConfigMap, ResourceRequirements, Service, Toleration},
+        core::v1::{
+            Affinity, ConfigMap, ResourceRequirements, Service, ServiceAccount, Toleration,
+        },
         networking::v1::NetworkPolicy,
+        rbac::v1::{Role, RoleBinding},
     },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition,
 };
@@ -382,6 +385,39 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .await,
             watcher::Config::default().timeout(29),
         )
+        .with_controller(|controller| {
+            controller
+                .owns(
+                    Api::<NetworkPolicy>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<ServiceAccount>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<Role>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<RoleBinding>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<Certificate>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+        })
         .run(),
     );
 
