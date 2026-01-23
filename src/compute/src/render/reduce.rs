@@ -344,7 +344,7 @@ where
     fn build_basic_aggregates<S>(
         &self,
         input: VecCollection<S, (Row, Row), Diff>,
-        aggrs: Vec<(usize, AggregateExpr)>,
+        aggrs: Vec<AggregateExpr>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
@@ -361,7 +361,7 @@ where
         }
         let mut err_output = None;
         let mut to_collect = Vec::new();
-        for (index, aggr) in aggrs {
+        for (index, aggr) in aggrs.into_iter().enumerate() {
             let (result, errs) = self.build_basic_aggregate(
                 input.clone(),
                 index,
@@ -771,7 +771,6 @@ where
         input: VecCollection<S, (Row, Row), Diff>,
         BucketedPlan {
             aggr_funcs,
-            skips,
             buckets,
         }: BucketedPlan,
         key_arity: usize,
@@ -786,15 +785,13 @@ where
 
             // The first mod to apply to the hash.
             let first_mod = buckets.get(0).copied().unwrap_or(1);
+            let aggregations = aggr_funcs.len();
 
             // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
             let mut stage = input.map(move |(key, row)| {
                 let mut row_builder = SharedRow::get();
                 let mut row_packer = row_builder.packer();
-                let mut row_iter = row.iter();
-                for skip in skips.iter() {
-                    row_packer.push(row_iter.nth(*skip).unwrap());
-                }
+                row_packer.extend(row.iter().take(aggregations));
                 let values = row_builder.clone();
 
                 // Apply the initial mod here.
@@ -1105,7 +1102,6 @@ where
         collection: VecCollection<S, (Row, Row), Diff>,
         MonotonicPlan {
             aggr_funcs,
-            skips,
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
@@ -1113,17 +1109,17 @@ where
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
+        let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let collection = collection
             .map(move |(key, row)| {
                 let mut row_builder = SharedRow::get();
-                let mut values = Vec::with_capacity(skips.len());
-                let mut row_iter = row.iter();
-                for skip in skips.iter() {
-                    values.push(
-                        row_builder.pack_using(std::iter::once(row_iter.nth(*skip).unwrap())),
-                    );
-                }
+                let mut values = Vec::with_capacity(aggregations);
+                values.extend(
+                    row.iter()
+                        .take(aggregations)
+                        .map(|v| row_builder.pack_using(std::iter::once(v))),
+                );
 
                 (key, values)
             })
@@ -1284,13 +1280,13 @@ where
                     // everything that we don't care about, and it might be worth it to extend the
                     // Row API to do that.
                     let mut row_iter = row.iter().enumerate();
-                    for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
+                    for (datum_index, aggr) in simple_aggrs.iter() {
                         let mut datum = row_iter.next().unwrap();
                         while datum_index != &datum.0 {
                             datum = row_iter.next().unwrap();
                         }
                         let datum = datum.1;
-                        diffs.0[*accumulable_index] = datum_to_accumulator(&aggr.func, datum);
+                        diffs.0[*datum_index] = datum_to_accumulator(&aggr.func, datum);
                         diffs.1 = Diff::ONE;
                     }
                     ((key, ()), diffs)
@@ -1300,7 +1296,7 @@ where
         }
 
         // Next, collect all aggregations that require distinctness.
-        for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
+        for (datum_index, aggr) in distinct_aggrs.into_iter() {
             let pairer = Pairer::new(key_arity);
             let collection = collection
                 .map(move |(key, row)| {
@@ -1320,7 +1316,7 @@ where
                     move |(key, row)| {
                         let datum = row.iter().next().unwrap();
                         let mut diffs = zero_diffs.clone();
-                        diffs.0[accumulable_index] = datum_to_accumulator(&aggr.func, datum);
+                        diffs.0[datum_index] = datum_to_accumulator(&aggr.func, datum);
                         diffs.1 = Diff::ONE;
                         ((key, ()), diffs)
                     }

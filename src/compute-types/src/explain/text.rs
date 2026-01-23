@@ -1417,7 +1417,7 @@ impl AccumulablePlan {
             let simple_aggrs = self
                 .simple_aggrs
                 .iter()
-                .map(|(_i_aggs, _i_datum, agg)| mode.expr(agg, None));
+                .map(|(_i_datum, agg)| mode.expr(agg, None));
             let simple_aggrs = separated(", ", simple_aggrs);
             writeln!(f, "{}Simple aggregates: {simple_aggrs}", ctx.indent)?;
         }
@@ -1426,7 +1426,7 @@ impl AccumulablePlan {
             let distinct_aggrs = self
                 .distinct_aggrs
                 .iter()
-                .map(|(_i_aggs, _i_datum, agg)| mode.expr(agg, None));
+                .map(|(_i_datum, agg)| mode.expr(agg, None));
             let distinct_aggrs = separated(", ", distinct_aggrs);
             writeln!(f, "{}Distinct aggregates: {distinct_aggrs}", ctx.indent)?;
         }
@@ -1447,16 +1447,16 @@ impl AccumulablePlan {
         //     writeln!(f)?;
         // }
         // simple_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
+        for (i, (i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
             let agg = mode.expr(agg, None);
             write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
-            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {})", i_datum, agg)?;
         }
         // distinct_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
+        for (i, (i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
             let agg = mode.expr(agg, None);
             write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
-            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {})", i_datum, agg)?;
         }
         Ok(())
     }
@@ -1500,8 +1500,6 @@ impl HierarchicalPlan {
                 let aggr_funcs = mode.seq(&plan.aggr_funcs, None);
                 let aggr_funcs = separated(", ", aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
-                let skips = separated(", ", &plan.skips);
-                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
                 writeln!(f, "{}monotonic", ctx.indent)?;
                 if plan.must_consolidate {
                     writeln!(f, "{}must_consolidate", ctx.indent)?;
@@ -1511,8 +1509,6 @@ impl HierarchicalPlan {
                 let aggr_funcs = mode.seq(&plan.aggr_funcs, None);
                 let aggr_funcs = separated(", ", aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
-                let skips = separated(", ", &plan.skips);
-                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
                 let buckets = separated(", ", &plan.buckets);
                 writeln!(f, "{}buckets=[{}]", ctx.indent, buckets)?;
             }
@@ -1555,7 +1551,7 @@ impl BasicPlan {
                 let mode = HumanizedExplain::new(ctx.config.redacted);
                 write!(f, "{}Aggregations:", ctx.indent)?;
 
-                for (_, agg) in aggs.iter() {
+                for agg in aggs.iter() {
                     let agg = mode.expr(agg, None);
                     write!(f, " {agg}")?;
                 }
@@ -1591,9 +1587,9 @@ impl BasicPlan {
                 )?;
             }
             BasicPlan::Multiple(aggs) => {
-                for (i, (i_datum, agg)) in aggs.iter().enumerate() {
+                for (i, agg) in aggs.iter().enumerate() {
                     let agg = mode.expr(agg, None);
-                    writeln!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
+                    writeln!(f, "{}aggrs[{}]={}", ctx.indent, i, agg)?;
                 }
             }
         }
