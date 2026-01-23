@@ -45,7 +45,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -107,7 +106,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -167,7 +165,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -240,7 +237,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -319,7 +315,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         input_key=#0, #1
         key_plan
@@ -416,7 +411,6 @@ Explained Query:
     cte l1 =
       Reduce::Hierarchical
         aggr_funcs=[max]
-        skips=[0]
         monotonic
         must_consolidate
         key_plan
@@ -514,7 +508,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[max]
-        skips=[0]
         monotonic
         must_consolidate
         key_plan
@@ -592,14 +585,13 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         input_key=#0
         key_plan
           project=()
         val_plan=id
         Reduce::Accumulable
-          simple_aggrs[0]=(0, 0, sum(#0{a}))
+          simple_aggrs[0]=(0, sum(#0{a}))
           key_plan
             project=(#1)
           val_plan
@@ -655,7 +647,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         input_key=#0, #1
         key_plan
@@ -756,7 +747,7 @@ Explained Query:
   With
     cte l0 =
       Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, count(*))
+        simple_aggrs[0]=(0, count(*))
         key_plan
           project=(#1, #0)
         val_plan
@@ -769,7 +760,6 @@ Explained Query:
     cte l1 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         key_plan
           project=()
@@ -845,7 +835,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         key_plan
           project=()
@@ -909,7 +898,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         key_plan
           project=()
@@ -980,7 +968,6 @@ Explained Query:
         input_key=#0
         Reduce::Hierarchical
           aggr_funcs=[max]
-          skips=[0]
           monotonic
           must_consolidate
           key_plan
@@ -1033,7 +1020,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[max]
-        skips=[0]
         monotonic
         key_plan
           project=()
@@ -1046,7 +1032,6 @@ Explained Query:
               raw=true
               Reduce::Hierarchical
                 aggr_funcs=[max]
-                skips=[0]
                 monotonic
                 must_consolidate
                 key_plan
@@ -1103,7 +1088,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[max]
-        skips=[0]
         monotonic
         key_plan
           project=()
@@ -1188,7 +1172,6 @@ Explained Query:
       cte l1 =
         Reduce::Hierarchical
           aggr_funcs=[max]
-          skips=[0]
           monotonic
           must_consolidate
           key_plan

@@ -381,7 +381,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan

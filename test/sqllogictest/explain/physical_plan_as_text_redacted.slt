@@ -427,8 +427,8 @@ GROUP BY a
 ----
 Explained Query:
   Reduce::Accumulable
-    simple_aggrs[0]=(0, 0, sum(#1{b}))
-    distinct_aggrs[0]=(1, 1, count(distinct #1{b}))
+    simple_aggrs[0]=(0, sum(#1{b}))
+    distinct_aggrs[0]=(1, count(distinct #1{b}))
     input_key=#0{a}
     key_plan
       project=(#0)
@@ -457,8 +457,8 @@ Explained Query:
   With
     cte l0 =
       Reduce::Accumulable
-        simple_aggrs[0]=(0, 0, sum(#0{b}))
-        distinct_aggrs[0]=(1, 1, count(distinct #0{b}))
+        simple_aggrs[0]=(0, sum(#0{b}))
+        distinct_aggrs[0]=(1, count(distinct #0{b}))
         key_plan
           project=()
         val_plan
@@ -504,7 +504,6 @@ MATERIALIZED VIEW hierarchical_group_by_mv
 materialize.public.hierarchical_group_by_mv:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
-    skips=[0, 0]
     buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
     input_key=#0{a}
     key_plan
@@ -530,7 +529,6 @@ SELECT * FROM hierarchical_group_by
 Explained Query:
   Reduce::Hierarchical
     aggr_funcs=[min, max]
-    skips=[0, 0]
     monotonic
     must_consolidate
     input_key=#0{a}
@@ -559,7 +557,6 @@ materialize.public.hierarchical_global_mv:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
         key_plan
           project=()
@@ -608,7 +605,6 @@ Explained Query:
     cte l0 =
       Reduce::Hierarchical
         aggr_funcs=[min, max]
-        skips=[0, 0]
         monotonic
         must_consolidate
         key_plan
@@ -829,7 +825,6 @@ materialize.public.collated_group_by_mv:
       source={ relation=3, key=[#0] }
     Reduce::Hierarchical
       aggr_funcs=[min, max]
-      skips=[0, 0]
       buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
       input_key=#0{a}
       key_plan
@@ -840,8 +835,8 @@ materialize.public.collated_group_by_mv:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Accumulable
-      simple_aggrs[0]=(1, 1, sum(#1{b}))
-      distinct_aggrs[0]=(0, 0, count(distinct #1{b}))
+      simple_aggrs[0]=(1, sum(#1{b}))
+      distinct_aggrs[0]=(0, count(distinct #1{b}))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -953,7 +948,6 @@ Explained Query:
       source={ relation=3, key=[#0] }
     Reduce::Hierarchical
       aggr_funcs=[min, max]
-      skips=[0, 0]
       monotonic
       must_consolidate
       input_key=#0{a}
@@ -965,8 +959,8 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Accumulable
-      simple_aggrs[0]=(1, 1, sum(#1{b}))
-      distinct_aggrs[0]=(0, 0, count(distinct #1{b}))
+      simple_aggrs[0]=(1, sum(#1{b}))
+      distinct_aggrs[0]=(0, count(distinct #1{b}))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -1078,7 +1072,6 @@ materialize.public.collated_global_mv:
           source={ relation=3, key=[] }
         Reduce::Hierarchical
           aggr_funcs=[min, max]
-          skips=[0, 0]
           buckets=[268435456, 16777216, 1048576, 65536, 4096, 256, 16]
           key_plan
             project=()
@@ -1087,8 +1080,8 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Accumulable
-          simple_aggrs[0]=(1, 1, sum(#0{b}))
-          distinct_aggrs[0]=(0, 0, count(distinct #0{b}))
+          simple_aggrs[0]=(1, sum(#0{b}))
+          distinct_aggrs[0]=(0, count(distinct #0{b}))
           key_plan
             project=()
           val_plan
@@ -1209,7 +1202,6 @@ Explained Query:
           source={ relation=3, key=[] }
         Reduce::Hierarchical
           aggr_funcs=[min, max]
-          skips=[0, 0]
           monotonic
           must_consolidate
           key_plan
@@ -1219,8 +1211,8 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Accumulable
-          simple_aggrs[0]=(1, 1, sum(#0{b}))
-          distinct_aggrs[0]=(0, 0, count(distinct #0{b}))
+          simple_aggrs[0]=(1, sum(#0{b}))
+          distinct_aggrs[0]=(0, count(distinct #0{b}))
           key_plan
             project=()
           val_plan
