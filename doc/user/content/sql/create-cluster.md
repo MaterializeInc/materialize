@@ -153,6 +153,8 @@ When legacy sizes are enabled for a region, the following sizes are available:
 
 See also:
 
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
+
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
 
