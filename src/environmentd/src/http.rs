@@ -202,9 +202,7 @@ impl HttpServer {
             base_router = base_router
                 .route(
                     "/",
-                    routing::get(move || async move {
-                        root::handle_home(routes_enabled.profiling, routes_enabled.internal).await
-                    }),
+                    routing::get(move || async move { root::handle_home(routes_enabled).await }),
                 )
                 .route("/api/sql", routing::post(sql::handle_sql))
                 .route("/memory", routing::get(memory::handle_memory))

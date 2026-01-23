@@ -38,7 +38,7 @@ pub enum AllowedRoles {
     NormalAndInternal,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 pub struct HttpRoutesEnabled {
     /// Include the primary customer-facing endpoints, including the SQL APIs and static files.
     pub base: bool,

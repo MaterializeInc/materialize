@@ -5,12 +5,12 @@
 {% block content %}
 <p>environmentd {{ version }} (built from <code>{{ build_sha }}</code>)</p>
 <ul>
-    {% if profiling %}
+    {% if routes_enabled.profiling %}
         <li><a href="/prof/">profiling functions</a></li>
     {% endif %}
     <li><a href="/memory">memory visualization</a></li>
     <li><a href="/hierarchical-memory">hierarchical memory visualization</a></li>
-    {% if internal %}
+    {% if routes_enabled.internal %}
         <li><a href="/clusters">cluster replicas</a></li>
     {% endif %}
 </ul>

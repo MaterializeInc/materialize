@@ -24,14 +24,12 @@ use axum::extract::Path;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
 use http::HeaderValue;
-use http::header::HOST;
 use hyper::Uri;
 use hyper_util::rt::TokioIo;
 use mz_controller::ReplicaHttpLocator;
 use mz_controller_types::{ClusterId, ReplicaId};
 use tokio::net::TcpStream;
 
-use crate::BUILD_INFO;
 use crate::http::AuthedClient;
 
 /// Connection timeout for proxied requests.
@@ -137,7 +135,7 @@ async fn handle_cluster_proxy_inner(
     // Set Host header to target
     if let Some(host) = uri.host() {
         req.headers_mut().insert(
-            HOST,
+            http::header::HOST,
             HeaderValue::from_str(host).map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -175,7 +173,7 @@ async fn handle_cluster_proxy_inner(
         })?;
 
     // Spawn task to drive the connection
-    mz_ore::task::spawn(|| format!("Proxy to {http_addr}"), async move {
+    mz_ore::task::spawn(|| format!("Proxy to {uri}"), async move {
         if let Err(e) = conn.await {
             tracing::debug!("Connection to clusterd {http_addr} closed: {e}");
         }
@@ -255,7 +253,7 @@ pub(crate) async fn handle_clusters(client: AuthedClient) -> impl IntoResponse {
     });
 
     mz_http_util::template_response(ClustersTemplate {
-        version: BUILD_INFO.version,
+        version: crate::BUILD_INFO.version,
         replicas,
     })
 }
