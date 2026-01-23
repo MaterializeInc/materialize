@@ -28,12 +28,12 @@ COPY mysql.asc .
 
 RUN gpg --import mysql.asc \
     && echo "trusted-key B7B3B788A8D3785C" >> ~/.gnupg/gpg.conf \
-    && curl -fsSL https://dev.mysql.com/get/Downloads/Connector-ODBC/9.3/mysql-connector-odbc-9.3.0-src.tar.gz > mysql-odbc.tar.gz \
-    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-9.3.0-src.tar.gz&p=10" > mysql-odbc.asc \
+    && curl -fsSL https://dev.mysql.com/get/Downloads/Connector-ODBC/9.6/mysql-connector-odbc-9.6.0-src.tar.gz > mysql-odbc.tar.gz \
+    && curl -fsSL "https://dev.mysql.com/downloads/gpg/?file=mysql-connector-odbc-9.6.0-src.tar.gz&p=10" > mysql-odbc.asc \
     && gpg --verify mysql-odbc.asc mysql-odbc.tar.gz \
     && tar -xzf mysql-odbc.tar.gz
 
-RUN cd mysql-connector-odbc-9.3.0-src \
+RUN cd mysql-connector-odbc-9.6.0-src \
     && cmake -DWITH_UNIXODBC=1 -DDISABLE_GUI=1 . \
     && make -j8 \
     && make install
