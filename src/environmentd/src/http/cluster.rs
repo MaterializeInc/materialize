@@ -15,6 +15,7 @@
 //! requiring direct network access to the clusterd pods.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use askama::Template;
 use axum::Extension;
@@ -25,19 +26,21 @@ use axum::response::{IntoResponse, Response};
 use http::HeaderValue;
 use http::header::HOST;
 use hyper::Uri;
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::TokioIo;
 use mz_controller::ReplicaHttpLocator;
 use mz_controller_types::{ClusterId, ReplicaId};
+use tokio::net::TcpStream;
 
 use crate::BUILD_INFO;
 use crate::http::AuthedClient;
 
+/// Connection timeout for proxied requests.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Overall request timeout for proxied requests.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Configuration for the cluster HTTP proxy.
 pub struct ClusterProxyConfig {
-    /// HTTP client for proxying requests (no TLS needed for internal traffic).
-    client: Client<HttpConnector, Body>,
     /// Handle to look up replica HTTP addresses.
     locator: Arc<ReplicaHttpLocator>,
 }
@@ -45,8 +48,7 @@ pub struct ClusterProxyConfig {
 impl ClusterProxyConfig {
     /// Creates a new `ClusterProxyConfig`.
     pub fn new(locator: Arc<ReplicaHttpLocator>) -> Self {
-        let client = Client::builder(TokioExecutor::new()).build_http();
-        Self { client, locator }
+        Self { locator }
     }
 }
 
@@ -59,7 +61,7 @@ pub(crate) async fn handle_cluster_proxy_root(
     Path((cluster_id, replica_id, process)): Path<(String, String, usize)>,
     config: Extension<Arc<ClusterProxyConfig>>,
     req: Request<Body>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, (StatusCode, String)> {
     handle_cluster_proxy_inner(cluster_id, replica_id, process, "", config, req).await
 }
 
@@ -74,7 +76,7 @@ pub(crate) async fn handle_cluster_proxy(
     Path((cluster_id, replica_id, process, path)): Path<(String, String, usize, String)>,
     config: Extension<Arc<ClusterProxyConfig>>,
     req: Request<Body>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, (StatusCode, String)> {
     handle_cluster_proxy_inner(cluster_id, replica_id, process, &path, config, req).await
 }
 
@@ -85,24 +87,35 @@ async fn handle_cluster_proxy_inner(
     path: &str,
     config: Extension<Arc<ClusterProxyConfig>>,
     mut req: Request<Body>,
-) -> Result<Response, StatusCode> {
+) -> Result<Response, (StatusCode, String)> {
     // Parse cluster ID
-    let cluster_id: ClusterId = cluster_id.parse().map_err(|_| {
-        tracing::debug!("Invalid cluster_id: {cluster_id}");
-        StatusCode::BAD_REQUEST
+    let cluster_id: ClusterId = cluster_id.parse().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid cluster_id '{cluster_id}': {e}"),
+        )
     })?;
 
     // Parse replica ID
-    let replica_id: ReplicaId = replica_id.parse().map_err(|_| {
-        tracing::debug!("Invalid replica_id: {replica_id}");
-        StatusCode::BAD_REQUEST
+    let replica_id: ReplicaId = replica_id.parse().map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid replica_id '{replica_id}': {e}"),
+        )
     })?;
 
     // Look up HTTP address for this replica and process
     let http_addr = config
         .locator
         .get_http_addr(cluster_id, replica_id, process)
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                format!(
+                    "No HTTP address found for cluster {cluster_id}, replica {replica_id}, process {process}"
+                ),
+            )
+        })?;
 
     // Build target URI, preserving query string if present
     let path_query = if let Some(query) = req.uri().query() {
@@ -112,8 +125,10 @@ async fn handle_cluster_proxy_inner(
     };
 
     let uri = Uri::try_from(format!("http://{http_addr}{path_query}")).map_err(|e| {
-        tracing::debug!("Invalid URI: {e}");
-        StatusCode::BAD_REQUEST
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Invalid URI 'http://{http_addr}{path_query}': {e}"),
+        )
     })?;
 
     // Update request with new URI
@@ -123,21 +138,68 @@ async fn handle_cluster_proxy_inner(
     if let Some(host) = uri.host() {
         req.headers_mut().insert(
             HOST,
-            HeaderValue::from_str(host).map_err(|_| StatusCode::BAD_REQUEST)?,
+            HeaderValue::from_str(host).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Invalid host header '{host}': {e}"),
+                )
+            })?,
         );
     }
 
-    // Proxy the request
-    config
-        .client
-        .request(req)
+    // Connect to the target with timeout
+    let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&*http_addr))
         .await
+        .map_err(|_| {
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                format!("Connection timeout to {http_addr} after {CONNECT_TIMEOUT:?}"),
+            )
+        })?
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to connect to {http_addr}: {e}"),
+            )
+        })?;
+
+    // Perform HTTP/1.1 handshake
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("HTTP handshake with {http_addr} failed: {e}"),
+            )
+        })?;
+
+    // Spawn task to drive the connection
+    mz_ore::task::spawn(|| format!("Proxy to {http_addr}"), async move {
+        if let Err(e) = conn.await {
+            tracing::debug!("Connection to clusterd {http_addr} closed: {e}");
+        }
+    });
+
+    // Send the request with timeout
+    tokio::time::timeout(REQUEST_TIMEOUT, sender.send_request(req))
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                format!(
+                    "Request timeout to clusterd {cluster_id}/{replica_id}/process/{process} after {REQUEST_TIMEOUT:?}"
+                ),
+            )
+        })?
         .map(|r| r.into_response())
-        .map_err(|err| {
-            tracing::warn!(
-                "Error proxying to clusterd {cluster_id}/{replica_id}/process/{process}: {err}"
-            );
-            StatusCode::BAD_GATEWAY
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!(
+                    "Error proxying to clusterd {cluster_id}/{replica_id}/process/{process}: {e}"
+                ),
+            )
         })
 }
 
@@ -182,10 +244,13 @@ pub(crate) async fn handle_clusters(client: AuthedClient) -> impl IntoResponse {
 
     let _ = catalog;
 
-    // Sort by cluster name, then replica name
+    // Sort by system clusters first (cluster_id starts with 's'), then cluster name, then replica name
     replicas.sort_by(|a, b| {
-        a.cluster_name
-            .cmp(&b.cluster_name)
+        let a_is_system = a.cluster_id.starts_with('s');
+        let b_is_system = b.cluster_id.starts_with('s');
+        b_is_system
+            .cmp(&a_is_system)
+            .then_with(|| a.cluster_name.cmp(&b.cluster_name))
             .then_with(|| a.replica_name.cmp(&b.replica_name))
     });
 

@@ -3443,6 +3443,8 @@ def workflow_test_cluster_http_proxy(c: Composition) -> None:
     assert len(proxy_parsed) > 10, f"Too few proxy metrics: {len(proxy_parsed)}"
 
     # Verify that key metrics are present in both.
+    # We don't check for overall equality as we're not guaranteed to capture
+    # the exact same snapshot of metrics through both methods.
     key_metrics = [
         "mz_compute_replica_history_command_count",
         "mz_arrangement_maintenance_seconds_total",
@@ -3450,16 +3452,6 @@ def workflow_test_cluster_http_proxy(c: Composition) -> None:
     for metric in key_metrics:
         assert metric in direct_parsed, f"Missing metric {metric} in direct fetch"
         assert metric in proxy_parsed, f"Missing metric {metric} in proxy fetch"
-
-    # Verify that both have the same set of metric names.
-    direct_names = set(direct_parsed.keys())
-    proxy_names = set(proxy_parsed.keys())
-    missing_in_proxy = direct_names - proxy_names
-    extra_in_proxy = proxy_names - direct_names
-    assert not missing_in_proxy, f"Metrics missing in proxy: {missing_in_proxy}"
-    assert not extra_in_proxy, f"Extra metrics in proxy: {extra_in_proxy}"
-
-    print(f"HTTP proxy test passed: {len(direct_parsed)} metrics matched")
 
 
 def workflow_test_clusters_page(c: Composition) -> None:
@@ -3526,8 +3518,6 @@ def workflow_test_clusters_page(c: Composition) -> None:
     assert process_root_page.endswith(
         "200"
     ), f"Process root URL returned non-200: {process_root_page[-20:]}"
-
-    print("Clusters page test passed")
 
 
 def workflow_test_concurrent_connections(c: Composition) -> None:

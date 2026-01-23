@@ -11,8 +11,12 @@
 //!
 //! This module provides the [`ReplicaHttpLocator`] which maintains an in-memory
 //! mapping of cluster replica HTTP addresses. This is used by environmentd to
-//! proxy HTTP requests to clusterd internal endpoints (profiling, metrics,
-//! tracing) without requiring direct network access to the clusterd pods.
+//! proxy HTTP requests to clusterd internal endpoints without requiring
+//! direct network access to the clusterd pods.
+//!
+//! The reason for this to exist is that the process orchestrator with
+//! HTTP-to-domain socket proxies only lazily starts its proxies, meaning
+//! we don't know the ports to forward to until after the replica is started.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
