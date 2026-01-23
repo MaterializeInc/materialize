@@ -1928,7 +1928,6 @@ GROUP BY a
                 "simple_aggrs": [
                   [
                     0,
-                    0,
                     {
                       "func": "SumInt32",
                       "expr": {
@@ -1943,7 +1942,6 @@ GROUP BY a
                 ],
                 "distinct_aggrs": [
                   [
-                    1,
                     1,
                     {
                       "func": "Count",
@@ -2103,7 +2101,6 @@ FROM t
                       "simple_aggrs": [
                         [
                           0,
-                          0,
                           {
                             "func": "SumInt32",
                             "expr": {
@@ -2118,7 +2115,6 @@ FROM t
                       ],
                       "distinct_aggrs": [
                         [
-                          1,
                           1,
                           {
                             "func": "Count",
@@ -2420,10 +2416,6 @@ SELECT * FROM hierarchical_group_by
                     "MinInt32",
                     "MaxInt32"
                   ],
-                  "skips": [
-                    0,
-                    0
-                  ],
                   "must_consolidate": true
                 }
               }
@@ -2548,10 +2540,6 @@ MATERIALIZED VIEW hierarchical_global_mv
                         "aggr_funcs": [
                           "MinInt32",
                           "MaxInt32"
-                        ],
-                        "skips": [
-                          0,
-                          0
                         ],
                         "buckets": [
                           268435456,
@@ -2866,10 +2854,6 @@ SELECT * FROM hierarchical_global
                         "aggr_funcs": [
                           "MinInt32",
                           "MaxInt32"
-                        ],
-                        "skips": [
-                          0,
-                          0
                         ],
                         "must_consolidate": true
                       }
@@ -4489,10 +4473,6 @@ MATERIALIZED VIEW collated_group_by_mv
                             "MinInt32",
                             "MaxInt32"
                           ],
-                          "skips": [
-                            0,
-                            0
-                          ],
                           "buckets": [
                             268435456,
                             16777216,
@@ -4615,7 +4595,6 @@ MATERIALIZED VIEW collated_group_by_mv
                         "simple_aggrs": [
                           [
                             1,
-                            1,
                             {
                               "func": "SumInt32",
                               "expr": {
@@ -4630,7 +4609,6 @@ MATERIALIZED VIEW collated_group_by_mv
                         ],
                         "distinct_aggrs": [
                           [
-                            0,
                             0,
                             {
                               "func": "Count",
@@ -5918,10 +5896,6 @@ SELECT * FROM collated_group_by
                             "MinInt32",
                             "MaxInt32"
                           ],
-                          "skips": [
-                            0,
-                            0
-                          ],
                           "must_consolidate": true
                         }
                       }
@@ -6036,7 +6010,6 @@ SELECT * FROM collated_group_by
                         "simple_aggrs": [
                           [
                             1,
-                            1,
                             {
                               "func": "SumInt32",
                               "expr": {
@@ -6051,7 +6024,6 @@ SELECT * FROM collated_group_by
                         ],
                         "distinct_aggrs": [
                           [
-                            0,
                             0,
                             {
                               "func": "Count",
@@ -7375,10 +7347,6 @@ MATERIALIZED VIEW collated_global_mv
                                         "MinInt32",
                                         "MaxInt32"
                                       ],
-                                      "skips": [
-                                        0,
-                                        0
-                                      ],
                                       "buckets": [
                                         268435456,
                                         16777216,
@@ -7471,7 +7439,6 @@ MATERIALIZED VIEW collated_global_mv
                                     "simple_aggrs": [
                                       [
                                         1,
-                                        1,
                                         {
                                           "func": "SumInt32",
                                           "expr": {
@@ -7486,7 +7453,6 @@ MATERIALIZED VIEW collated_global_mv
                                     ],
                                     "distinct_aggrs": [
                                       [
-                                        0,
                                         0,
                                         {
                                           "func": "Count",
@@ -8739,10 +8705,6 @@ SELECT * FROM collated_global
                                         "MinInt32",
                                         "MaxInt32"
                                       ],
-                                      "skips": [
-                                        0,
-                                        0
-                                      ],
                                       "must_consolidate": true
                                     }
                                   }
@@ -8827,7 +8789,6 @@ SELECT * FROM collated_global
                                     "simple_aggrs": [
                                       [
                                         1,
-                                        1,
                                         {
                                           "func": "SumInt32",
                                           "expr": {
@@ -8842,7 +8803,6 @@ SELECT * FROM collated_global
                                     ],
                                     "distinct_aggrs": [
                                       [
-                                        0,
                                         0,
                                         {
                                           "func": "Count",
