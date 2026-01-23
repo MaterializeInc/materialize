@@ -42,8 +42,8 @@ and replacement views, then propagates the changes to all dependent objects.
 
 This strategy is ideal when:
 
-- You're modifying a single materialized view's query
+- You're modifying a single materialized view
 - You want a simple, SQL-native approach without additional tooling
-- You can tolerate a brief period where the replacement is hydrating
+- You can tolerate a brief reduction in freshness on the materialized view, and all downstream objects
 
 For detailed instructions, see the [Replace materialized view guide](replace-materialized-view/).
