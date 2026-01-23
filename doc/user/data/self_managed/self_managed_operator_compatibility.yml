@@ -9,27 +9,27 @@ rows:
     orchestratord version: v26.8.0
     environmentd version: v26.8.0
     Release date: "2026-01-23"
-    Notes: ""
+    Notes: "See [v26.8.0 release notes](/releases/#v2680)"
   - Materialize Operator: v26.7.0
     orchestratord version: v26.7.0
     environmentd version: v26.7.0
     Release date: "2026-01-16"
-    Notes: ""
+    Notes: "See [v26.7.0 release notes](/releases/#v2670)"
   - Materialize Operator: v26.6.0
     orchestratord version: v26.6.0
     environmentd version: v26.6.0
     Release date: "2026-01-12"
-    Notes: ""
+    Notes: "See [v26.6.0 release notes](/releases/#v2660)"
   - Materialize Operator: v26.5.1
     orchestratord version: v26.5.1
     environmentd version: v26.5.1
     Release date: "2025-12-23"
-    Notes: ""
+    Notes: "See [v26.5.1 release notes](/releases/#v2651)"
   - Materialize Operator: v26.5.0
     orchestratord version: v26.5.0
     environmentd version: v26.5.0
     Release date: "2025-12-23"
-    Notes: ""
+    Notes: "Do not use."
   - Materialize Operator: v26.4.0
     orchestratord version: v26.4.0
     environmentd version: v26.4.0

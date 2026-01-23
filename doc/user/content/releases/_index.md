@@ -15,14 +15,18 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
-# v26.8
+## v26.8.0
 *Released to Materialize Cloud: 2026-01-22* <br>
 *Released to Materialize Self-Managed: 2026-01-23* <br>
 
-v26.8 includes a new notice to help catch common SQL mistakes, Protobuf compatibility improvements, and performance optimizations for view creation.
+v26.8 includes a new notice in the Console to help catch common SQL mistakes,
+Protobuf compatibility improvements, and performance optimizations for view
+creation.
 
-# Improvements
-- Added a notice when users write `= null` or `!= null` in SQL expressions
+### Improvements
+- Added a Console notice when users write `= NULL`, `!= NULL`, or `<>
+  NULL` in SQL expressions instead of `IS NULL` or `IS NOT NULL`. Comparisons
+  using `=`, `!=`, or `<>` with `NULL` always evaluate to `NULL`.
 - Protobuf schemas that import well-known types (such as `google.protobuf.Timestamp` or `google.protobuf.Duration`) now work automatically when using a Confluent Schema Registry connection.
 - Improved performance of view creation by caching optimized expressions, resulting in approximately 2x faster view creation in some scenarios.
 

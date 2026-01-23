@@ -59,18 +59,18 @@ Operator | Computes
 ---------|---------
 `AND` | Boolean "and"
 `OR` | Boolean "or"
-`=` | Equality
-`<>` | Inequality
-`!=` | Inequality
+`=` | Equality. Do not use with `NULL` as `= NULL` always evaluates to `NULL`; instead, use `IS NULL` for null checks.
+`<>` | Inequality. Do not use with `NULL` as `<> NULL` always evaluates to `NULL`; instead, use `IS NOT NULL` for null checks.
+`!=` | Inequality. Do not use with `NULL` as `!= NULL` always evaluates to `NULL`; instead, use `IS NOT NULL` for null checks.
 `<` | Less than
 `>` | Greater than
 `<=` | Less than or equal to
 `>=` | Greater than or equal to
 `a BETWEEN x AND y` | `a >= x AND a <= y`
 `a NOT BETWEEN x AND y` | `a < x OR a > y`
-`a IS NULL` | `a = NULL`
-`a ISNULL` | `a = NULL`
-`a IS NOT NULL` | `a != NULL`
+`a IS NULL` | Evaluates to true if the value of a is `NULL`.
+`a ISNULL` | Evaluates to true if the value of a is `NULL`.
+`a IS NOT NULL` | Evaluates to true if the value of a is **NOT** `NULL`.
 `a IS TRUE` | `a` is true, requiring `a` to be a boolean
 `a IS NOT TRUE` | `a` is not true, requiring `a` to be a boolean
 `a IS FALSE` | `a` is false, requiring `a` to be a boolean
