@@ -22,22 +22,9 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 v26.8 includes a new notice to help catch common SQL mistakes, Protobuf compatibility improvements, and performance optimizations for view creation.
 
 # Improvements
-
-- Added a notice when users write `= null` or `!= null` in SQL expressions, which almost always indicates a mistake since these expressions return `null` instead of a boolean result; `IS NULL` / `IS NOT NULL` should be used instead.
-
+- Added a notice when users write `= null` or `!= null` in SQL expressions
 - Protobuf schemas that import well-known types (such as `google.protobuf.Timestamp` or `google.protobuf.Duration`) now work automatically when using a Confluent Schema Registry connection.
-
 - Improved performance of view creation by caching optimized expressions, resulting in approximately 2x faster view creation in some scenarios.
-
-- Added a troubleshooting guide for PostgreSQL "Slot Overcompacted" errors.
-
-- Fixed a typo in the Terraform installation instructions for Self-Managed deployments.
-
-- Updated the cloud upgrade schedule documentation to allow flexibility in upgrade windows.
-
-# Bug Fixes
-
-- Improved the error message for SUBSCRIBE commands with invalid bounds (where AS OF is greater than UP TO) to be clearer and consistent with the preceding error text.
 
 ## v26.7.0
 *Released to Materialize Self-Managed: 2026-01-16* <br>
