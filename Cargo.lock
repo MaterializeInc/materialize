@@ -5587,7 +5587,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5728,7 +5728,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -5889,7 +5889,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -6191,7 +6191,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "askama",
@@ -6702,7 +6702,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "mz-clusterd",
  "mz-environmentd",
@@ -6899,7 +6899,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7086,7 +7086,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8198,7 +8198,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.9.0-rc.1"
+version = "26.9.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
