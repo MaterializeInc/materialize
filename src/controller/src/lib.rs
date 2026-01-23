@@ -65,10 +65,12 @@ use tokio::sync::mpsc;
 use uuid::Uuid;
 
 pub mod clusters;
+pub mod replica_http_locator;
 
 // Export this on behalf of the storage controller to provide a unified
 // interface, allowing other crates to depend on this crate alone.
 pub use mz_storage_controller::prepare_initialization;
+pub use replica_http_locator::ReplicaHttpLocator;
 
 /// Configures a controller.
 #[derive(Debug, Clone)]
@@ -102,6 +104,9 @@ pub struct ControllerConfig {
     pub secrets_args: SecretsReaderCliArgs,
     /// The connection context, to thread through to clusterd, with cli flags.
     pub connection_context: ConnectionContext,
+    /// Locator for HTTP addresses of cluster replicas, used to proxy HTTP
+    /// requests from environmentd to clusterd.
+    pub replica_http_locator: Arc<ReplicaHttpLocator>,
 }
 
 /// Responses that [`Controller`] can produce.
@@ -198,6 +203,9 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
 
     /// Dynamic system configuration.
     dyncfg: ConfigSet,
+
+    /// Locator for HTTP addresses of cluster replicas.
+    replica_http_locator: Arc<ReplicaHttpLocator>,
 }
 
 impl<T: ComputeControllerTimestamp> Controller<T> {
@@ -259,6 +267,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             watch_set_id_gen: _,
             immediate_watch_sets,
             dyncfg: _,
+            replica_http_locator: _,
         } = self;
 
         let storage_collections = storage_collections.dump()?;
@@ -724,6 +733,7 @@ where
             watch_set_id_gen: Gen::default(),
             immediate_watch_sets: Vec::new(),
             dyncfg: mz_dyncfgs::all_dyncfgs(),
+            replica_http_locator: config.replica_http_locator,
         };
 
         if !this.read_only {

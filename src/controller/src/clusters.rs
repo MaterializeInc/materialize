@@ -438,6 +438,16 @@ where
                     ctl_addrs: service.addresses("computectl"),
                 };
                 metrics_task = Some(metrics_task_join_handle);
+
+                // Register the service for HTTP proxying. TCP addresses are
+                // queried lazily via tcp_addresses() since they may not be
+                // available immediately (the process orchestrator allocates
+                // TCP proxy ports asynchronously).
+                self.replica_http_locator.register_replica(
+                    cluster_id,
+                    replica_id,
+                    Arc::from(service),
+                );
             }
         }
 
@@ -469,6 +479,10 @@ where
         // provisioned.
         self.deprovision_replica(cluster_id, replica_id, self.deploy_generation)?;
         self.metrics_tasks.remove(&replica_id);
+
+        // Remove HTTP addresses from the locator.
+        self.replica_http_locator
+            .remove_replica(cluster_id, replica_id);
 
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);

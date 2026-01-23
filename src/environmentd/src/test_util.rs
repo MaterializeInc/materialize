@@ -748,6 +748,7 @@ impl Listeners {
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    replica_http_locator: Default::default(),
                 },
                 secrets_controller,
                 cloud_resource_controller: None,

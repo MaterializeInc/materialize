@@ -3374,6 +3374,152 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
     check_workload_class(None)
 
 
+def workflow_test_cluster_http_proxy(c: Composition) -> None:
+    """
+    Test that the HTTP proxy in environmentd correctly forwards requests to clusterd.
+
+    This test verifies that metrics fetched through the environmentd HTTP proxy
+    match metrics fetched directly from clusterd's internal HTTP endpoint.
+    """
+
+    c.up("materialized")
+
+    # Create a managed cluster and wait for it to come up.
+    c.sql(
+        """
+        CREATE CLUSTER test SIZE 'scale=1,workers=1';
+        SET cluster = test;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """
+    )
+
+    # Get cluster_id and replica_id from SQL.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test'")[0][0]
+    replica_id = c.sql_query(
+        f"SELECT id FROM mz_cluster_replicas WHERE cluster_id = '{cluster_id}'"
+    )[0][0]
+
+    # Find the internal-http port of the test cluster from logs.
+    logs = c.invoke("logs", "materialized", capture=True).stdout
+    clusterd_port = find_proxy_port(logs, cluster_id, "internal-http")
+    assert (
+        clusterd_port is not None
+    ), f"Could not find internal-http port for {cluster_id}"
+
+    # Wait a bit to let the replica fully start.
+    time.sleep(2)
+
+    # Fetch metrics directly from clusterd.
+    direct_metrics = c.exec(
+        "materialized", "curl", f"localhost:{clusterd_port}/metrics", capture=True
+    ).stdout
+
+    # Fetch metrics through the environmentd HTTP proxy.
+    # The proxy is accessible on port 6878 (internal HTTP) at:
+    # /api/cluster/{cluster_id}/replica/{replica_id}/process/{process}/*path
+    proxy_url = f"localhost:6878/api/cluster/{cluster_id}/replica/{replica_id}/process/0/metrics"
+    proxy_metrics = c.exec("materialized", "curl", proxy_url, capture=True).stdout
+
+    # Verify that both return metrics data (non-empty).
+    assert len(direct_metrics) > 0, "Direct metrics fetch returned empty response"
+    assert len(proxy_metrics) > 0, "Proxy metrics fetch returned empty response"
+
+    # Parse metrics into dictionaries for comparison.
+    def parse_metrics(text: str) -> dict[str, str]:
+        """Parse Prometheus metrics text into a dict of metric_name -> full_line."""
+        result = {}
+        for line in text.splitlines():
+            if line and not line.startswith("#"):
+                # Extract metric name (everything before the first space or {)
+                name = line.split("{")[0].split(" ")[0]
+                result[name] = line
+        return result
+
+    direct_parsed = parse_metrics(direct_metrics)
+    proxy_parsed = parse_metrics(proxy_metrics)
+
+    # Verify that we got a reasonable number of metrics.
+    assert len(direct_parsed) > 10, f"Too few direct metrics: {len(direct_parsed)}"
+    assert len(proxy_parsed) > 10, f"Too few proxy metrics: {len(proxy_parsed)}"
+
+    # Verify that key metrics are present in both.
+    # We don't check for overall equality as we're not guaranteed to capture
+    # the exact same snapshot of metrics through both methods.
+    key_metrics = [
+        "mz_compute_replica_history_command_count",
+        "mz_arrangement_maintenance_seconds_total",
+    ]
+    for metric in key_metrics:
+        assert metric in direct_parsed, f"Missing metric {metric} in direct fetch"
+        assert metric in proxy_parsed, f"Missing metric {metric} in proxy fetch"
+
+
+def workflow_test_clusters_page(c: Composition) -> None:
+    """
+    Test that the /clusters page displays expected replica information.
+
+    This test verifies that the clusters overview page correctly shows
+    cluster and replica names, IDs, and process links.
+    """
+
+    c.up("materialized")
+
+    # Create a managed cluster with a custom replica name.
+    c.sql(
+        """
+        CREATE CLUSTER test_cluster REPLICAS (test_replica (SIZE 'scale=1,workers=1'));
+        SET cluster = test_cluster;
+        SELECT * FROM mz_introspection.mz_dataflow_operators;
+        """
+    )
+
+    # Get cluster_id and replica_id from SQL.
+    cluster_id = c.sql_query("SELECT id FROM mz_clusters WHERE name = 'test_cluster'")[
+        0
+    ][0]
+    replica_id = c.sql_query(
+        f"SELECT id FROM mz_cluster_replicas WHERE cluster_id = '{cluster_id}'"
+    )[0][0]
+
+    # Wait a bit to let the replica fully start and register with the locator.
+    time.sleep(2)
+
+    # Fetch the clusters page.
+    clusters_page = c.exec(
+        "materialized", "curl", "localhost:6878/clusters", capture=True
+    ).stdout
+
+    # Verify that the page contains expected content.
+    assert "Cluster Replicas" in clusters_page, "Page title not found"
+    assert "test_cluster" in clusters_page, "Cluster name not found in page"
+    assert "test_replica" in clusters_page, "Replica name not found in page"
+    assert cluster_id in clusters_page, f"Cluster ID {cluster_id} not found in page"
+    assert replica_id in clusters_page, f"Replica ID {replica_id} not found in page"
+
+    # Verify process links are present (the replica has scale=1, so process 0).
+    expected_link = f"/api/cluster/{cluster_id}/replica/{replica_id}/process/0/"
+    assert expected_link in clusters_page, f"Process link {expected_link} not found"
+
+    # Verify the process link is clickable (check for href attribute).
+    assert f'href="{expected_link}"' in clusters_page, "Process link not clickable"
+
+    # Verify that following the process link returns content (not 404).
+    process_root_url = f"localhost:6878{expected_link}"
+    process_root_page = c.exec(
+        "materialized",
+        "curl",
+        "-s",
+        "-w",
+        "%{http_code}",
+        process_root_url,
+        capture=True,
+    ).stdout
+    # The response should end with 200 status code.
+    assert process_root_page.endswith(
+        "200"
+    ), f"Process root URL returned non-200: {process_root_page[-20:]}"
+
+
 def workflow_test_concurrent_connections(c: Composition) -> None:
     """
     Run many concurrent connections, measure their p50 and p99 latency, make

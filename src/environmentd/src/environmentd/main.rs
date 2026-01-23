@@ -40,7 +40,7 @@ use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_frontegg_auth::{Authenticator as FronteggAuthenticator, FronteggCliArgs};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::Orchestrator;
@@ -1023,6 +1023,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         cloud_resource_reader,
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
+    let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
     let controller = ControllerConfig {
         build_info: &BUILD_INFO,
         orchestrator,
@@ -1047,6 +1048,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
             secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
+        replica_http_locator: Arc::clone(&replica_http_locator),
     };
 
     let cluster_replica_sizes = ClusterReplicaSizeMap::parse_from_str(

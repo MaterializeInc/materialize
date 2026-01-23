@@ -50,7 +50,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     SUPPORT_CLUSTER_DEFAULT_REPLICATION_FACTOR, SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 use mz_catalog::config::ClusterReplicaSizeMap;
-use mz_controller::ControllerConfig;
+use mz_controller::{ControllerConfig, ReplicaHttpLocator};
 use mz_environmentd::CatalogConfig;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
@@ -1165,6 +1165,7 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_name_prefix: None,
                 },
                 connection_context,
+                replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
             },
             secrets_controller,
             cloud_resource_controller: None,

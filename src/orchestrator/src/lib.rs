@@ -140,6 +140,23 @@ pub trait Service: fmt::Debug + Send + Sync {
     ///
     /// Panics if `port` does not name a valid port.
     fn addresses(&self, port: &str) -> Vec<String>;
+
+    /// Given the name of a port, returns TCP-accessible addresses for each of
+    /// the service's processes, in order.
+    ///
+    /// This method is used when HTTP/TCP connectivity is needed (e.g., for
+    /// proxying HTTP requests). For orchestrators that use Unix sockets
+    /// internally (like the process orchestrator), this returns the TCP proxy
+    /// addresses instead of the socket paths.
+    ///
+    /// The default implementation returns the same as `addresses()`, which is
+    /// appropriate for orchestrators that already use TCP addresses (like
+    /// Kubernetes).
+    ///
+    /// Panics if `port` does not name a valid port.
+    fn tcp_addresses(&self, port: &str) -> Vec<String> {
+        self.addresses(port)
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
