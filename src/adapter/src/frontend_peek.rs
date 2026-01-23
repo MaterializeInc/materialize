@@ -35,7 +35,7 @@ use mz_sql_parser::ast::{CopyDirection, CopyRelation, ExplainStage, ShowStatemen
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
-use tracing::{Span, debug};
+use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::{Catalog, CatalogState};
@@ -847,7 +847,7 @@ impl PeekClient {
         }
 
         let source_ids_for_closure = source_ids.clone();
-        let optimization_result = mz_ore::task::spawn_blocking(
+        let optimization_future = mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
                 span.in_scope(|| {
@@ -1011,9 +1011,26 @@ impl PeekClient {
                     }
                 })
             },
-        )
-        .await
-        .map_err(|optimizer_error| AdapterError::Internal(format!("internal error in optimizer: {}", optimizer_error)))?;
+        );
+        let optimization_timeout = *session.vars().statement_timeout();
+        let optimization_result =
+            // Note: spawn_blocking tasks cannot be cancelled, so on timeout we stop waiting but the
+            // optimization task continues running in the background until completion. See
+            // https://github.com/MaterializeInc/database-issues/issues/8644 for properly cancelling
+            // optimizer runs.
+            match tokio::time::timeout(optimization_timeout, optimization_future).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(optimizer_error)) => {
+                    return Err(AdapterError::Internal(format!(
+                        "internal error in optimizer: {}",
+                        optimizer_error
+                    )));
+                }
+                Err(_elapsed) => {
+                    warn!("optimize peek timed out after {:?}", optimization_timeout);
+                    return Err(AdapterError::StatementTimeout);
+                }
+            };
 
         // Log optimization finished
         if let Some(logging_id) = &statement_logging_id {
