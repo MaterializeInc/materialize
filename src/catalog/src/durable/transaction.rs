@@ -2149,6 +2149,13 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
+    pub fn get_databases(&self) -> impl Iterator<Item = Database> + use<'_> {
+        self.databases
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
     pub fn get_roles(&self) -> impl Iterator<Item = Role> + use<'_> {
         self.roles
             .items()
