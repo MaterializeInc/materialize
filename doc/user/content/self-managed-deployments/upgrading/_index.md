@@ -234,7 +234,7 @@ The behavior of the new version rollout follows your `rolloutStrategy` setting.
 #### *WaitUntilReady* - ***Default***
 
 `WaitUntilReady` creates a new generation of pods and automatically cuts over to them as soon as they catch up to the old generation and become `ReadyToPromote`. This strategy temporarily doubles the required resources to run Materialize.
-{{< warning >}} Rollouts will automatically promote after 72 hour (configurable with the `with_0dt_deployment_max_wait` flag). {{< /warning >}}
+{{< warning >}} `WaitUntilReady` waits up to 72 hours (configurable by the `with_0dt_deployment_max_wait` flag) for the new pods to become ready. If the promotion has not occurred by then, the new pods are automatically promoted. {{< /warning >}}
 
 #### *ImmediatelyPromoteCausingDowntime*
 {{< warning >}} Using the `ImmediatelyPromoteCausingDowntime` rollout flag will cause downtime. {{< /warning >}}
