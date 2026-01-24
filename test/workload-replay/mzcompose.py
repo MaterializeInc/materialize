@@ -61,7 +61,6 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.azurite import Azurite
-from materialize.mzcompose.services.fivetran_destination import FivetranDestination
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -498,7 +497,6 @@ SERVICES = [
     Mz(app_password=""),
     Minio(setup_materialize=False, additional_directories=["copytos3"]),
     Materialized(cluster_replica_size=cluster_replica_sizes),
-    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(
         seed=1,
         no_reset=True,
@@ -2211,16 +2209,19 @@ def continuous_queries(
                 if stop_event.is_set():
                     return
 
-                # TODO: Support more statement types: prepare, fetch, commit, start_transaction
-                # Will require recreating transactions in which these have to be run
-                # TODO: Subscribes
-                if query["statement_type"] not in (
-                    "select",
-                    "delete",
-                    "insert",
-                    "update",
-                    "show",
-                    "set_variable",
+                if query["statement_type"] in (
+                    # Requires recreating transactions in which these have to be run
+                    "start_transaction",
+                    "set_transaction",
+                    "commit",
+                    "rollback",
+                    # They will already exist statically, don't create
+                    "create_connection",
+                    "create_webhook",
+                    "create_source",
+                    "create_subsource",
+                    "create_sink",
+                    "create_table_from_source",
                 ):
                     continue
 
@@ -2486,36 +2487,66 @@ def plot_docker_stats_compare(
     stats_old: dict[str, Any],
     stats_new: dict[str, Any],
     file: str,
+    old_version: str,
+    new_version: str,
 ):
-    if "docker" not in stats_old:
-        return
-    old = extract_docker_series(stats_old["docker"])
-    new = extract_docker_series(stats_new["docker"])
-
     plot_paths = []
-    plot_path = Path("plots") / f"{file}_cpu.png"
-    plot_timeseries_compare(
-        t_old=old.t,
-        ys_old=old.cpu_percent,
-        t_new=new.t,
-        ys_new=new.cpu_percent,
-        title=f"{file}\nCPU% (old vs new)",
-        ylabel="cpu [%]",
-        out_path=plot_path,
-    )
-    plot_paths.append(plot_path)
 
-    plot_path = Path("plots") / f"{file}_mem.png"
-    plot_timeseries_compare(
-        t_old=old.t,
-        ys_old=old.mem_percent,
-        t_new=new.t,
-        ys_new=new.mem_percent,
-        title=f"{file}\nMemory% (old vs new)",
-        ylabel="memory [%]",
-        out_path=plot_path,
-    )
-    plot_paths.append(plot_path)
+    if "initial_data" in stats_old:
+        old = extract_docker_series(stats_old["initial_data"]["docker"])
+        new = extract_docker_series(stats_new["initial_data"]["docker"])
+
+        plot_path = Path("plots") / f"{file}_initial_cpu.png"
+        plot_timeseries_compare(
+            t_old=old.t,
+            ys_old=old.cpu_percent,
+            t_new=new.t,
+            ys_new=new.cpu_percent,
+            title=f"{file} - Initial Data CPU\n{old_version} [old] vs {new_version} [new]",
+            ylabel="CPU [%]",
+            out_path=plot_path,
+        )
+        plot_paths.append(plot_path)
+
+        plot_path = Path("plots") / f"{file}_initial_mem.png"
+        plot_timeseries_compare(
+            t_old=old.t,
+            ys_old=old.mem_percent,
+            t_new=new.t,
+            ys_new=new.mem_percent,
+            title=f"{file} - Initial Data Memory\n{old_version} [old] vs {new_version} [new]",
+            ylabel="Memory [%]",
+            out_path=plot_path,
+        )
+        plot_paths.append(plot_path)
+
+    if "docker" in stats_old:
+        old = extract_docker_series(stats_old["docker"])
+        new = extract_docker_series(stats_new["docker"])
+
+        plot_path = Path("plots") / f"{file}_continuous_cpu.png"
+        plot_timeseries_compare(
+            t_old=old.t,
+            ys_old=old.cpu_percent,
+            t_new=new.t,
+            ys_new=new.cpu_percent,
+            title=f"{file} - Continuous Phase CPU\n{old_version} [old] vs {new_version} [new]",
+            ylabel="CPU [%]",
+            out_path=plot_path,
+        )
+        plot_paths.append(plot_path)
+
+        plot_path = Path("plots") / f"{file}_continuous_mem.png"
+        plot_timeseries_compare(
+            t_old=old.t,
+            ys_old=old.mem_percent,
+            t_new=new.t,
+            ys_new=new.mem_percent,
+            title=f"{file} - Continuous Phase Memory\n{old_version} [old] vs {new_version} [new]",
+            ylabel="Memory [%]",
+            out_path=plot_path,
+        )
+        plot_paths.append(plot_path)
 
     upload_plots(plot_paths, file)
 
@@ -2708,7 +2739,6 @@ def benchmark(
     services = [
         "materialized",
         "minio",
-        "fivetran-destination",
         "postgres",
         "mysql",
         "sql-server",
@@ -2740,6 +2770,7 @@ def benchmark(
             True,
             True,
         )
+        old_version = c.query_mz_version()
     try:
         c.kill(*services)
     except:
@@ -2764,6 +2795,7 @@ def benchmark(
             True,
             True,
         )
+        new_version = c.query_mz_version()
     try:
         c.kill(*services)
     except:
@@ -2772,17 +2804,20 @@ def benchmark(
     c.rm_volumes("mzdata")
     filename = posixpath.relpath(file, LOCATION)
 
+    print(f"-- Comparing {old_version} against {new_version}")
     plot_docker_stats_compare(
         stats_old=stats_old,
         stats_new=stats_new,
         file=filename,
+        old_version=old_version,
+        new_version=new_version,
     )
     failures: list[TestFailureDetails] = []
     failures.extend(compare_table(filename, stats_old, stats_new))
 
     if "errors" in stats_old["queries"]:
         new_errors = []
-        for error, occurrences in stats_new["queries"]["errors"]:
+        for error, occurrences in stats_new["queries"]["errors"].items():
             if error in stats_old["queries"]["errors"]:
                 continue
             new_errors.append(f"{error} in queries: {occurrences}")
@@ -2841,7 +2876,6 @@ def test(
     c.up(
         "materialized",
         "minio",
-        "fivetran-destination",
         *services,
         Service("testdrive", idle=True),
     )
