@@ -1,0 +1,10 @@
+---
+headless: true
+---
+- Ownership of the schema.
+- In addition,
+  - To swap with another schema:
+    - Ownership of the other schema
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing database.

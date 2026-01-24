@@ -84,7 +84,7 @@ ALTER SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-secret.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-secret" %}}
 
 ## Related pages
 

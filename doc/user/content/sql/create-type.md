@@ -125,7 +125,7 @@ custom_nested_row_type
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-type.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-type" %}}
 
 ## Related pages
 

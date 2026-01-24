@@ -35,8 +35,7 @@ my_db
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-database.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/create-database" %}}
 
 ## Related pages
 

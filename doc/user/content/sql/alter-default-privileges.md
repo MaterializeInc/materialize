@@ -101,7 +101,7 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-default-privileges.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-default-privileges" %}}
 
 ## Useful views
 

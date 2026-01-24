@@ -96,7 +96,7 @@ FROM <role_name> [, ... ];
 {{< tab "Materialized view/view/source">}}
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
+{{% include-headless "/headless/rbac-cloud/privilege-for-views-mat-views" %}}
 {{</ note >}}
 
 For specific materialized view(s)/view(s)/source(s):
@@ -204,7 +204,7 @@ For all tables or all tables in a specific schema(s) or in a specific database(s
 
 {{< note >}}
 
-{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
+{{% include-headless "/headless/rbac-cloud/grant-privilege-all-tables" %}}
 
 {{</ note >}}
 
@@ -237,8 +237,7 @@ FROM <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/revoke-privilege" %}}
 
 
 ## Examples

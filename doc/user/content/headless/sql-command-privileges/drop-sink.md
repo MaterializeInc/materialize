@@ -1,0 +1,5 @@
+---
+headless: true
+---
+- Ownership of the dropped sink.
+- `USAGE` privileges on the containing schema.

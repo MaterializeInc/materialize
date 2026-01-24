@@ -52,4 +52,4 @@ To reset the retention history to the default for a user-populated table:
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-table.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-table" %}}

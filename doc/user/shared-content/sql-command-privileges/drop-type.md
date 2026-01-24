@@ -1,2 +1,0 @@
-- Ownership of the dropped type.
-- `USAGE` privileges on the containing schema.

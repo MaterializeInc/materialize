@@ -32,7 +32,7 @@ RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
 
 To execute the `DROP INDEX` statement, you need:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-index.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-index" %}}
 
 ## Examples
 

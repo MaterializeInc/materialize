@@ -63,7 +63,7 @@ DROP SECRET kafka_sasl_password CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-secret.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-secret" %}}
 
 ## Related pages
 

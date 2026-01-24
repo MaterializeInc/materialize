@@ -1,3 +1,6 @@
+---
+headless: true
+---
 **In your PostgreSQL instance**:
 
 1. If not installed, create a `postgres_fdw` extension in your database:

@@ -140,7 +140,7 @@ name="postgres-inherited-tables-action" %}}
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-table.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-table" %}}
 
 ## Examples
 

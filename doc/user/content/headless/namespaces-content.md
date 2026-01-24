@@ -1,3 +1,6 @@
+---
+headless: true
+---
 Namespaces are a way to organize Materialize objects logically. In organizations
 with multiple objects, namespaces help avoid naming conflicts and make it easier
 to manage objects.

@@ -99,7 +99,7 @@ DROP TABLE IF EXISTS t;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-table.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-table" %}}
 
 ## Related pages
 

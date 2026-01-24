@@ -444,7 +444,7 @@ partioning](#custom-partitioning).
 
 To execute the `CREATE SINK` command, you need:
 
-{{< include-md file="shared-content/sql-command-privileges/create-sink.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-sink" %}}
 
 See also [Required Kafka ACLs](#required-kafka-acls).
 

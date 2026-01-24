@@ -103,7 +103,7 @@ For details, see [CREATE SOURCE: Webhook](/sql/create-source/webhook/).
 
 The privileges required to execute `CREATE SOURCE` are:
 
-{{< include-md file="shared-content/sql-command-privileges/create-source.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-source" %}}
 
 ## Available guides
 

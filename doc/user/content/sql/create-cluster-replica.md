@@ -116,8 +116,7 @@ CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/create-cluster-replica.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-cluster-replica" %}}
 
 ## See also
 

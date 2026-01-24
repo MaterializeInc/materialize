@@ -40,7 +40,7 @@ DROP OWNED BY joe, george CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-owned.md" >}}
+{{% include-headless "/headless/sql-command-privileges/drop-owned" %}}
 
 ## Related pages
 

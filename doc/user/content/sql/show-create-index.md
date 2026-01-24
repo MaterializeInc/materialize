@@ -44,8 +44,7 @@ SHOW CREATE INDEX my_view_idx;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/show-create-index.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/show-create-index" %}}
 
 ## Related pages
 

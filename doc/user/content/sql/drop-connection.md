@@ -63,8 +63,7 @@ DROP CONNECTION kafka_connection CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/drop-connection.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/drop-connection" %}}
 
 
 ## Related pages

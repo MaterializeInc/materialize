@@ -1,2 +1,0 @@
-- Ownership of the dropped connection.
-- `USAGE` privileges on the containing schema.

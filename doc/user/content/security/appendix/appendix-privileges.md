@@ -11,7 +11,7 @@ aliases:
 ---
 
 {{< note >}}
-{{< include-md file="shared-content/rbac-cloud/privileges-related-objects.md" >}}
+{{% include-headless "/headless/rbac-cloud/privileges-related-objects" %}}
 {{</ note >}}
 
 The following privileges are available in Materialize:
