@@ -63,7 +63,6 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
@@ -81,6 +80,7 @@ from materialize.util import PropagatingThread
 from materialize.version_list import resolve_ancestor_image_tag
 
 WORKLOAD_REPLAY_VERSION = "1.0.0"  # Used for uploading test analytics results
+SEED_RANGE = 1_000_000
 
 cluster_replica_sizes = {
     "bootstrap": {
@@ -495,7 +495,6 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=False, additional_directories=["copytos3"]),
     Materialized(cluster_replica_size=cluster_replica_sizes),
     Testdrive(
         seed=1,
@@ -654,38 +653,38 @@ def to_sql_server_data_type(typ: str) -> str:
     return typ
 
 
-def long_tail_rank(n: int = 10_000, a: float = 1.2) -> int:
-    x = int((random.paretovariate(a) - 1.0) * 3) + 1
+def long_tail_rank(n: int, a: float, rng: random.Random) -> int:
+    x = int((rng.paretovariate(a) - 1.0) * 3) + 1
     return max(1, min(n, x))
 
 
-def long_tail_int(lo: int, hi: int) -> int:
+def long_tail_int(lo: int, hi: int, rng: random.Random) -> int:
     if lo > hi:
         lo, hi = hi, lo
 
-    r = long_tail_rank(n=100_000, a=1.25)
+    r = long_tail_rank(n=100_000, a=1.25, rng=rng)
     mag = int(math.log2(r + 1) ** 4)
 
-    if random.random() < 0.80:
+    if rng.random() < 0.80:
         hot = [0, 1, -1, 2, -2, 10, -10, 100, -100]
-        val = random.choice(hot)
+        val = rng.choice(hot)
     else:
         val = mag
         if lo < 0 and hi > 0:
-            val *= random.choice([-1, 1])
+            val *= rng.choice([-1, 1])
 
     return max(lo, min(hi, val))
 
 
-def long_tail_float(lo: float, hi: float) -> float:
+def long_tail_float(lo: float, hi: float, rng: random.Random) -> float:
     if lo > hi:
         lo, hi = hi, lo
 
-    if random.random() < 0.85:
-        base = random.gauss(0.0, 1.0)
+    if rng.random() < 0.85:
+        base = rng.gauss(0.0, 1.0)
     else:
-        r = long_tail_rank(n=1_000_000, a=1.15)
-        base = (math.log(r + 1) ** 3) * random.choice([-1.0, 1.0])
+        r = long_tail_rank(n=1_000_000, a=1.15, rng=rng)
+        base = (math.log(r + 1) ** 3) * rng.choice([-1.0, 1.0])
 
     span = hi - lo
     x = base / (abs(base) + 10.0)
@@ -693,20 +692,22 @@ def long_tail_float(lo: float, hi: float) -> float:
     return max(lo, min(hi, val))
 
 
-def long_tail_choice(values: list[Any], hot_prob: float = 0.85) -> Any:
+def long_tail_choice(values: list[Any], hot_prob: float, rng: random.Random) -> Any:
     if not values:
         raise ValueError("empty values")
-    if random.random() < hot_prob:
-        return random.choice(values[: min(8, len(values))])
-    return random.choice(values)
+    if rng.random() < hot_prob:
+        return rng.choice(values[: min(8, len(values))])
+    return rng.choice(values)
 
 
-def long_tail_text(chars: str, max_len: int, hot_pool: list[str]) -> str:
-    if random.random() < 0.90 and hot_pool:
-        return random.choice(hot_pool)
+def long_tail_text(
+    chars: str, max_len: int, hot_pool: list[str], rng: random.Random
+) -> str:
+    if rng.random() < 0.90 and hot_pool:
+        return rng.choice(hot_pool)
 
-    length = min(max_len, max(1, long_tail_rank(n=max_len, a=1.3)))
-    return "".join(random.choice(chars) for _ in range(length))
+    length = min(max_len, max(1, long_tail_rank(n=max_len, a=1.3, rng=rng)))
+    return "".join(rng.choice(chars) for _ in range(length))
 
 
 class Column:
@@ -748,106 +749,106 @@ class Column:
             result = "long"
         return ["null", result] if self.nullable else result
 
-    def kafka_value(self) -> Any:
-        if self.default and random.randrange(10) == 0 and self.default != "NULL":
+    def kafka_value(self, rng: random.Random) -> Any:
+        if self.default and rng.randrange(10) == 0 and self.default != "NULL":
             return str(self.default)
-        if self.nullable and random.randrange(10) == 0:
+        if self.nullable and rng.randrange(10) == 0:
             return None
 
         if self.typ == "boolean":
-            return random.random() < 0.2
+            return rng.random() < 0.2
 
         elif self.typ == "smallint":
-            return long_tail_int(-32768, 32767)
+            return long_tail_int(-32768, 32767, rng=rng)
         elif self.typ == "integer":
-            return long_tail_int(-2147483648, 2147483647)
+            return long_tail_int(-2147483648, 2147483647, rng=rng)
         elif self.typ == "bigint":
-            return long_tail_int(-9223372036854775808, 9223372036854775807)
+            return long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
 
         elif self.typ == "uint2":
-            return long_tail_int(0, 65535)
+            return long_tail_int(0, 65535, rng=rng)
         elif self.typ == "uint4":
-            return long_tail_int(0, 4294967295)
+            return long_tail_int(0, 4294967295, rng=rng)
         elif self.typ == "uint8":
-            return long_tail_int(0, 18446744073709551615)
+            return long_tail_int(0, 18446744073709551615, rng=rng)
 
         elif self.typ in ("float", "double precision", "numeric"):
-            return long_tail_float(-1_000_000_000.0, 1_000_000_000.0)
+            return long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng)
 
         elif self.typ in ("text", "bytea"):
             if self.data_shape == "datetime":
                 year = long_tail_choice(
-                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
                 )
                 return literal(
-                    f"{year}-{random.randrange(1, 13):02}-{random.randrange(1, 29):02}T{random.randrange(0, 23):02}:{random.randrange(0, 59):02}:{random.randrange(0, 59):02}Z"
+                    f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}T{rng.randrange(0, 23):02}:{rng.randrange(0, 59):02}:{rng.randrange(0, 59):02}Z"
                 )
             elif self.data_shape:
                 raise ValueError(f"Unhandled text shape {self.data_shape}")
-            return literal(long_tail_text(self.chars, 100, self._hot_strings))
+            return literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
 
         elif self.typ in ("character", "character varying"):
-            return literal(long_tail_text(self.chars, 10, self._hot_strings))
+            return literal(long_tail_text(self.chars, 10, self._hot_strings, rng=rng))
 
         elif self.typ == "uuid":
-            return str(uuid.UUID(int=random.getrandbits(128), version=4))
+            return str(uuid.UUID(int=rng.getrandbits(128), version=4))
 
         elif self.typ == "jsonb":
-            result = {f"key{key}": str(long_tail_int(-100, 100)) for key in range(20)}
+            result = {
+                f"key{key}": str(long_tail_int(-100, 100, rng=rng)) for key in range(20)
+            }
             return json.dumps(result)
 
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
             now = 1700000000000  # doesn't need to be exact
-            if random.random() < 0.9:
-                return now + long_tail_int(-86_400_000, 86_400_000)
+            if rng.random() < 0.9:
+                return now + long_tail_int(-86_400_000, 86_400_000, rng=rng)
             else:
-                return random.randrange(0, 9223372036854775807)
+                return rng.randrange(0, 9223372036854775807)
 
         elif self.typ == "mz_timestamp":
             year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(
-                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
-            )
+            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
 
         elif self.typ == "date":
             year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(
-                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
-            )
+            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
 
         elif self.typ == "time":
-            if random.random() < 0.8:
+            if rng.random() < 0.8:
                 common = ["00:00:00.000000", "12:00:00.000000", "23:59:59.000000"]
-                return literal(random.choice(common))
+                return literal(rng.choice(common))
             return literal(
-                f"{random.randrange(0, 24)}:{random.randrange(0, 60)}:{random.randrange(0, 60)}.{random.randrange(0, 1000000)}"
+                f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}"
             )
 
         elif self.typ == "int2range":
-            a = str(long_tail_int(-32768, 32767))
-            b = str(long_tail_int(-32768, 32767))
+            a = str(long_tail_int(-32768, 32767, rng=rng))
+            b = str(long_tail_int(-32768, 32767, rng=rng))
             return literal(f"[{a},{b})")
 
         elif self.typ == "int4range":
-            a = str(long_tail_int(-2147483648, 2147483647))
-            b = str(long_tail_int(-2147483648, 2147483647))
+            a = str(long_tail_int(-2147483648, 2147483647, rng=rng))
+            b = str(long_tail_int(-2147483648, 2147483647, rng=rng))
             return literal(f"[{a},{b})")
 
         elif self.typ == "int8range":
-            a = str(long_tail_int(-9223372036854775808, 9223372036854775807))
-            b = str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            a = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
+            b = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
             return literal(f"[{a},{b})")
 
         elif self.typ == "map":
-            return {str(i): str(long_tail_int(-100, 100)) for i in range(0, 20)}
+            return {
+                str(i): str(long_tail_int(-100, 100, rng=rng)) for i in range(0, 20)
+            }
 
         elif self.typ == "text[]":
             values = [
-                literal(long_tail_text(self.chars, 100, self._hot_strings))
+                literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
                 for _ in range(5)
             ]
             return literal(f"{{{', '.join(values)}}}")
@@ -855,111 +856,112 @@ class Column:
         else:
             raise ValueError(f"Unhandled data type {self.typ}")
 
-    def value(self) -> str:
-        if self.default and random.randrange(10) == 0 and self.default != "NULL":
+    def value(self, rng: random.Random) -> str:
+        if self.default and rng.randrange(10) == 0 and self.default != "NULL":
             return str(self.default)
-        if self.nullable and random.randrange(10) == 0:
+        if self.nullable and rng.randrange(10) == 0:
             return "NULL"
 
         if self.typ == "boolean":
-            return "true" if (random.random() < 0.2) else "false"
+            return "true" if (rng.random() < 0.2) else "false"
 
         elif self.typ == "smallint":
-            return str(long_tail_int(-32768, 32767))
+            return str(long_tail_int(-32768, 32767, rng=rng))
         elif self.typ == "integer":
-            return str(long_tail_int(-2147483648, 2147483647))
+            return str(long_tail_int(-2147483648, 2147483647, rng=rng))
         elif self.typ == "bigint":
-            return str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            return str(
+                long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            )
 
         elif self.typ == "uint2":
-            return str(long_tail_int(0, 65535))
+            return str(long_tail_int(0, 65535, rng=rng))
         elif self.typ == "uint4":
-            return str(long_tail_int(0, 4294967295))
+            return str(long_tail_int(0, 4294967295, rng=rng))
         elif self.typ == "uint8":
-            return str(long_tail_int(0, 18446744073709551615))
+            return str(long_tail_int(0, 18446744073709551615, rng=rng))
 
         elif self.typ in ("float", "double precision", "numeric"):
-            return str(long_tail_float(-1_000_000_000.0, 1_000_000_000.0))
+            return str(long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng))
 
         elif self.typ in ("text", "bytea"):
             if self.data_shape == "datetime":
                 year = long_tail_choice(
-                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                    [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
                 )
                 return literal(
-                    f"{year}-{random.randrange(1, 13):02}-{random.randrange(1, 29):02}T{random.randrange(0, 23):02}:{random.randrange(0, 59):02}:{random.randrange(0, 59):02}Z"
+                    f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}T{rng.randrange(0, 23):02}:{rng.randrange(0, 59):02}:{rng.randrange(0, 59):02}Z"
                 )
             elif self.data_shape:
                 raise ValueError(f"Unhandled text shape {self.data_shape}")
-            return literal(long_tail_text(self.chars, 100, self._hot_strings))
+            return literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
 
         elif self.typ in ("character", "character varying"):
-            return literal(long_tail_text(self.chars, 10, self._hot_strings))
+            return literal(long_tail_text(self.chars, 10, self._hot_strings, rng=rng))
 
         elif self.typ == "uuid":
-            return str(uuid.UUID(int=random.getrandbits(128), version=4))
+            return str(uuid.UUID(int=rng.getrandbits(128), version=4))
 
         elif self.typ == "jsonb":
-            result = {f"key{key}": str(long_tail_int(-100, 100)) for key in range(20)}
+            result = {
+                f"key{key}": str(long_tail_int(-100, 100, rng=rng)) for key in range(20)
+            }
             return f"'{json.dumps(result)}'::jsonb"
 
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
             year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(
-                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
-            )
+            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
 
         elif self.typ == "mz_timestamp":
             year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(
-                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
-            )
+            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
 
         elif self.typ == "date":
             year = long_tail_choice(
-                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9
+                [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(
-                f"{year}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
-            )
+            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
 
         elif self.typ == "time":
-            if random.random() < 0.8:
+            if rng.random() < 0.8:
                 return literal(
-                    random.choice(
+                    rng.choice(
                         ["00:00:00.000000", "12:00:00.000000", "23:59:59.000000"]
                     )
                 )
             return literal(
-                f"{random.randrange(0, 24)}:{random.randrange(0, 60)}:{random.randrange(0, 60)}.{random.randrange(0, 1000000)}"
+                f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}"
             )
 
         elif self.typ == "int2range":
-            a = str(long_tail_int(-32768, 32767))
-            b = str(long_tail_int(-32768, 32767))
+            a = str(long_tail_int(-32768, 32767, rng=rng))
+            b = str(long_tail_int(-32768, 32767, rng=rng))
             return literal(f"[{a},{b})")
 
         elif self.typ == "int4range":
-            a = str(long_tail_int(-2147483648, 2147483647))
-            b = str(long_tail_int(-2147483648, 2147483647))
+            a = str(long_tail_int(-2147483648, 2147483647, rng=rng))
+            b = str(long_tail_int(-2147483648, 2147483647, rng=rng))
             return literal(f"[{a},{b})")
 
         elif self.typ == "int8range":
-            a = str(long_tail_int(-9223372036854775808, 9223372036854775807))
-            b = str(long_tail_int(-9223372036854775808, 9223372036854775807))
+            a = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
+            b = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
             return literal(f"[{a},{b})")
 
         elif self.typ == "map":
-            values = [f"'{i}' => {str(long_tail_int(-100, 100))}" for i in range(0, 20)]
+            values = [
+                f"'{i}' => {str(long_tail_int(-100, 100, rng=rng))}"
+                for i in range(0, 20)
+            ]
             return literal(f"{{{', '.join(values)}}}")
 
         elif self.typ == "text[]":
             values = [
-                literal(long_tail_text(self.chars, 100, self._hot_strings))
+                literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
                 for _ in range(5)
             ]
             return literal(f"{{{', '.join(values)}}}")
@@ -998,23 +1000,30 @@ def ingest_webhook(
             )
     assert body_column
 
-    def run(sleep: int = 1) -> None:
+    def run(sleep: int, rng: random.Random) -> None:
         result = requests.post(
             url,
-            data=body_column.kafka_value(),
-            headers=(headers_column.kafka_value() if headers_column else None),
+            data=body_column.kafka_value(rng),
+            headers=(headers_column.kafka_value(rng) if headers_column else None),
         )
         if result.status_code == 429:
             # hard-coded limit of 500 webhook requests/s
             time.sleep(sleep)
-            run(sleep * 2)
+            run(sleep * 2, rng)
         else:
             assert (
                 result.status_code == 200
             ), f"Webhook ingestion failed: {result.status_code}: {result.text}"
 
     threads = [
-        PropagatingThread(target=run, name=f"{db}.{schema}.{name}-{i}", args=())
+        PropagatingThread(
+            target=run,
+            name=f"{db}.{schema}.{name}-{i}",
+            args=(
+                1,
+                random.Random(random.randrange(SEED_RANGE)),
+            ),
+        )
         for i in range(num_rows)
     ]
     for thread in threads:
@@ -1029,15 +1038,16 @@ def ingest(
     source: dict[str, Any],
     columns: list[Column],
     num_rows: int,
+    rng: random.Random,
 ) -> None:
     batch_values = []
     batch_values_kafka = []
     for _ in range(num_rows):
         if source["type"] == "kafka":
-            row = [c.kafka_value() for c in columns]
+            row = [c.kafka_value(rng) for c in columns]
             batch_values_kafka.append(row)
         else:
-            row = [c.value() for c in columns]
+            row = [c.value(rng) for c in columns]
             batch_values.append(f"({', '.join(row)})")
     if source["type"] == "postgres":
         ref_database, ref_schema, ref_table = get_postgres_reference_db_schema_table(
@@ -1799,7 +1809,10 @@ def run_create_objects(
 
 
 def create_initial_data(
-    c: Composition, workload: dict[str, Any], factor_initial_data: float
+    c: Composition,
+    workload: dict[str, Any],
+    factor_initial_data: float,
+    rng: random.Random,
 ) -> bool:
     batch_size = 2000
     created_data = False
@@ -1829,7 +1842,7 @@ def create_initial_data(
                     )
                     batch_values = []
                     for _ in range(min(batch_size, num_rows - start)):
-                        row = [c.value() for c in data_columns]
+                        row = [c.value(rng) for c in data_columns]
                         batch_values.append(f"({', '.join(row)})")
                     c.sql(
                         SQL(
@@ -1893,6 +1906,7 @@ def create_initial_data(
                             source,
                             data_columns,
                             min(batch_size, num_rows - start),
+                            rng,
                         )
                         created_data = True
                     print()
@@ -1927,6 +1941,7 @@ def create_initial_data(
                                 source,
                                 data_columns,
                                 min(batch_size, num_rows - start),
+                                rng,
                             )
                             created_data = True
                         print()
@@ -1963,6 +1978,7 @@ def create_ingestions(
                         source: dict[str, Any],
                         pretty_name: str,
                         rate: int,
+                        rng: random.Random,
                     ) -> None:
                         nonlocal stop_event
                         try:
@@ -2006,6 +2022,7 @@ def create_ingestions(
                                 source,
                                 pretty_name,
                                 rate,
+                                random.Random(random.randrange(SEED_RANGE)),
                             ),
                         )
                     )
@@ -2035,6 +2052,7 @@ def create_ingestions(
                         pretty_name: str,
                         data_columns: list[Column],
                         rate: int,
+                        rng: random.Random,
                     ) -> None:
                         nonlocal stop_event
                         try:
@@ -2049,6 +2067,7 @@ def create_ingestions(
                                     source,
                                     data_columns,
                                     min(batch_size, rate),
+                                    rng,
                                 )
                                 time_to_sleep = (start_time + 1) - time.time()
                                 if time_to_sleep > 0:
@@ -2075,6 +2094,7 @@ def create_ingestions(
                                 pretty_name,
                                 data_columns,
                                 rate,
+                                random.Random(random.randrange(SEED_RANGE)),
                             ),
                         )
                     )
@@ -2105,6 +2125,7 @@ def create_ingestions(
                             pretty_name: str,
                             data_columns: list[Column],
                             rate: int,
+                            rng: random.Random,
                         ) -> None:
                             nonlocal stop_event
                             try:
@@ -2121,6 +2142,7 @@ def create_ingestions(
                                         source,
                                         data_columns,
                                         min(batch_size, rate),
+                                        rng,
                                     )
                                     time_to_sleep = (start_time + 1) - time.time()
                                     if time_to_sleep > 0:
@@ -2148,6 +2170,7 @@ def create_ingestions(
                                     pretty_name,
                                     data_columns,
                                     rate,
+                                    random.Random(random.randrange(SEED_RANGE)),
                                 ),
                             )
                         )
@@ -2196,6 +2219,7 @@ def continuous_queries(
     factor_queries: float,
     verbose: bool,
     stats: dict[str, int],
+    rng: random.Random,
 ) -> None:
     if not workload["queries"]:
         return
@@ -2738,7 +2762,6 @@ def benchmark(
 ) -> None:
     services = [
         "materialized",
-        "minio",
         "postgres",
         "mysql",
         "sql-server",
@@ -2750,6 +2773,7 @@ def benchmark(
     ]
     tag = resolve_tag(compare_against)
     print(f"-- Running against materialized:{tag} (reference)")
+    # TODO: Threads all need an rng with an initialized seed so we get the same data in each run!
     random.seed(seed)
     with c.override(
         Materialized(
@@ -2875,7 +2899,6 @@ def test(
 
     c.up(
         "materialized",
-        "minio",
         *services,
         Service("testdrive", idle=True),
     )
@@ -2900,7 +2923,12 @@ def test(
         )
         stats_thread.start()
         start_time = time.time()
-        created_data = create_initial_data(c, workload, factor_initial_data)
+        created_data = create_initial_data(
+            c,
+            workload,
+            factor_initial_data,
+            random.Random(random.randrange(SEED_RANGE)),
+        )
         stats["initial_data"]["time"] = time.time() - start_time
         stop_event.set()
         stats_thread.join()
@@ -2929,6 +2957,7 @@ def test(
                     factor_queries,
                     verbose,
                     stats["queries"],
+                    random.Random(random.randrange(SEED_RANGE)),
                 ),
             )
         )
