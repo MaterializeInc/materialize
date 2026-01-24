@@ -5855,7 +5855,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "crossbeam-channel",
  "differential-dataflow",
  "futures",
  "lgalloc",
@@ -7612,7 +7611,6 @@ dependencies = [
  "async-trait",
  "bincode",
  "clap",
- "crossbeam-channel",
  "futures",
  "itertools 0.14.0",
  "mz-aws-secrets-controller",

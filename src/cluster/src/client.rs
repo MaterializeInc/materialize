@@ -52,9 +52,9 @@ where
 pub struct TimelyContainer<C: ClusterSpec> {
     /// Channels over which to send endpoints for wiring up a new Client
     client_txs: Vec<
-        crossbeam_channel::Sender<(
+        mpsc::UnboundedSender<(
             Uuid,
-            crossbeam_channel::Receiver<C::Command>,
+            mpsc::UnboundedReceiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
         )>,
     >,
@@ -92,7 +92,7 @@ where
         let mut command_txs = Vec::new();
         let mut response_rxs = Vec::new();
         for client_tx in &timely.client_txs {
-            let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
             client_tx
@@ -170,9 +170,9 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<Self::Command>,
+            mpsc::UnboundedReceiver<Self::Command>,
             mpsc::UnboundedSender<Self::Response>,
         )>,
     );
@@ -185,7 +185,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     ) -> Result<TimelyContainer<Self>, Error> {
         info!("Building timely container with config {config:?}");
         let (client_txs, client_rxs): (Vec<_>, Vec<_>) = (0..config.workers)
-            .map(|_| crossbeam_channel::unbounded())
+            .map(|_| mpsc::unbounded_channel())
             .unzip();
         let client_rxs: Mutex<Vec<_>> = Mutex::new(client_rxs.into_iter().map(Some).collect());
 

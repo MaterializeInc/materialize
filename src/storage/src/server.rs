@@ -96,9 +96,9 @@ impl ClusterSpec for Config {
     fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<StorageCommand>,
+            mpsc::UnboundedReceiver<StorageCommand>,
             mpsc::UnboundedSender<StorageResponse>,
         )>,
     ) {
