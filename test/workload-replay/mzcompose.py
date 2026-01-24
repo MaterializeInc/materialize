@@ -29,6 +29,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+from collections import defaultdict
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
@@ -73,6 +74,10 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.mzcompose.test_result import (
+    FailedTestExecutionError,
+    TestFailureDetails,
+)
 from materialize.util import PropagatingThread
 from materialize.version_list import resolve_ancestor_image_tag
 
@@ -2175,6 +2180,7 @@ def run_query(
                 print(f"Success: {sql} (params: {params})")
         except psycopg.Error as e:
             stats["failed"] += 1
+            stats["errors"][f"{e.sqlstate}: {e}"].append(sql)
             if query["finished_status"] == "success":
                 if "unknown catalog item" not in str(e):
                     print(f"Failed: {sql} (params: {params})")
@@ -2205,11 +2211,16 @@ def continuous_queries(
                 if stop_event.is_set():
                     return
 
-                # TODO: Support more statement types
+                # TODO: Support more statement types: prepare, fetch, commit, start_transaction
+                # Will require recreating transactions in which these have to be run
+                # TODO: Subscribes
                 if query["statement_type"] not in (
                     "select",
                     "delete",
+                    "insert",
+                    "update",
                     "show",
+                    "set_variable",
                 ):
                     continue
 
@@ -2564,7 +2575,7 @@ def fmt_pct(delta: float) -> str:
 
 def compare_table(
     filename: str, stats_old: dict[str, Any], stats_new: dict[str, Any]
-) -> None:
+) -> list[TestFailureDetails]:
     rows = []
     if "docker" in stats_old:
         old_avg_cpu, old_avg_mem = average_cpu_mem_for_container(
@@ -2643,20 +2654,21 @@ def compare_table(
             )
         )
 
-    regressed = []
+    failures: list[TestFailureDetails] = []
 
     output_lines = [
         f"{'METRIC':<25} | {'OLD':^12} | {'NEW':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
         "-" * 106,
     ]
 
+    regressed = False
     for name, old, new, threshold in rows:
         delta = pct_change(old, new)
 
         if threshold is None:
             flag = ""
         elif new > old * threshold:
-            regressed.append(f"{name} increased from {old} to {new} ({fmt_pct(delta)})")
+            regressed = True
             flag = "!!YES!!"
         else:
             flag = "no"
@@ -2669,12 +2681,17 @@ def compare_table(
             f"{threshold_field:>9} | "
             f"{flag:^12}"
         )
+    if regressed:
+        failures.append(
+            TestFailureDetails(
+                message=f"Workload recording {filename} regressed",
+                details="\n".join(output_lines),
+                test_class_name_override=filename,
+            )
+        )
 
     print("\n".join(output_lines))
-
-    if regressed:
-        out = "\n".join(regressed)
-        raise ValueError(f"Regression caught in {filename}:\n{out}")
+    return failures
 
 
 def benchmark(
@@ -2760,8 +2777,26 @@ def benchmark(
         stats_new=stats_new,
         file=filename,
     )
-    compare_table(filename, stats_old, stats_new)
-    # TODO: Compare error rate or types of errors with previous version to catch regressions
+    failures: list[TestFailureDetails] = []
+    failures.extend(compare_table(filename, stats_old, stats_new))
+
+    if "errors" in stats_old["queries"]:
+        new_errors = []
+        for error, occurrences in stats_new["queries"]["errors"]:
+            if error in stats_old["queries"]["errors"]:
+                continue
+            new_errors.append(f"{error} in queries: {occurrences}")
+        if new_errors:
+            failures.append(
+                TestFailureDetails(
+                    message=f"Workload recording {filename} has new errors",
+                    details="\n".join(new_errors),
+                    test_class_name_override=filename,
+                )
+            )
+
+    if failures:
+        raise FailedTestExecutionError(errors=failures)
 
 
 def test(
@@ -2848,6 +2883,7 @@ def test(
     if run_queries and workload["queries"]:
         print("Starting continuous queries")
         stats["queries"]["timings"] = []
+        stats["queries"]["errors"] = defaultdict(list)
         threads.append(
             PropagatingThread(
                 target=continuous_queries,
