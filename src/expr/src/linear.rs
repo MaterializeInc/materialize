@@ -9,11 +9,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, DatumVec, DatumVecBorrow, Row, RowRef};
 use serde::{Deserialize, Serialize};
 
+use crate::scalar::Columns;
 use crate::visit::Visit;
-use crate::{MirRelationExpr, MirScalarExpr};
+use crate::{EvalError, MirRelationExpr, MirScalarExpr};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -1575,12 +1576,127 @@ pub mod util {
     }
 }
 
+/// A re-useable vector of `Datum` with no particular lifetime.
+#[derive(Debug, Default, Clone)]
+pub struct ResultVec {
+    datums: DatumVec,
+    errors: Vec<Option<EvalError>>,
+}
+
+impl ResultVec {
+    /// Allocate a new instance.
+    pub fn new() -> Self {
+        Self {
+            datums: DatumVec::new(),
+            errors: vec![],
+        }
+    }
+    /// Borrow an instance with a specific lifetime.
+    ///
+    /// When the result is dropped, its allocation will be returned to `self`.
+    pub fn borrow<'b>(&'b mut self) -> ResultVecBorrow<'b> {
+        ResultVecBorrow {
+            datums: self.datums.borrow(),
+            errors: &mut self.errors,
+        }
+    }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
+    pub fn borrow_with<'a>(&'a mut self, row: &'a RowRef) -> ResultVecBorrow<'a> {
+        let mut borrow = self.borrow();
+        borrow.datums.extend(row.iter());
+        borrow
+    }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row` with up to
+    /// `limit` elements. If `limit` is greater than the number of elements in `row`, the borrow
+    /// will contain all elements of `row`.
+    pub fn borrow_with_limit<'a>(
+        &'a mut self,
+        row: &'a RowRef,
+        limit: usize,
+    ) -> ResultVecBorrow<'a> {
+        let mut borrow = self.borrow();
+        borrow.datums.extend(row.iter().take(limit));
+        borrow
+    }
+}
+
+/// A borrowed allocation of `Result<Datum, EvalError>` with a specific lifetime.
+#[derive(Debug)]
+pub struct ResultVecBorrow<'a> {
+    datums: DatumVecBorrow<'a>,
+    errors: &'a mut Vec<Option<EvalError>>,
+}
+
+impl<'borrow> ResultVecBorrow<'borrow> {
+    pub fn extend(&mut self, iter: impl IntoIterator<Item = Datum<'borrow>>) {
+        self.datums.extend(iter);
+    }
+
+    pub fn push(&mut self, datum: Datum<'borrow>) {
+        self.datums.push(datum);
+    }
+
+    pub fn push_result(&mut self, result: Result<Datum<'borrow>, EvalError>) {
+        match result {
+            Ok(datum) => self.datums.push(datum),
+            Err(e) => {
+                // To avoid unnecessary allocations, we only push to the error collection
+                // when we have an error... but that means that we need to resize it explicitly
+                // here to keep things in sync.
+                self.errors.resize(self.datums.len(), None);
+                self.datums.push(Datum::Dummy);
+                self.errors.push(Some(e))
+            }
+        }
+    }
+
+    pub fn datums(&self) -> Result<&[Datum<'borrow>], &EvalError> {
+        if self.errors.is_empty() {
+            return Ok(&self.datums);
+        }
+        if let Some(err) = self.errors.iter().find_map(|e| e.as_ref()) {
+            Err(err)
+        } else {
+            Ok(&self.datums)
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.datums.len()
+    }
+
+    pub fn truncate(&mut self, len: usize) {
+        self.datums.truncate(len);
+        self.errors.truncate(len); // TODO: strip nones?
+    }
+}
+
+impl<'a> Columns<'a> for &ResultVecBorrow<'a> {
+    fn get(self, i: usize) -> Result<Datum<'a>, EvalError> {
+        if let Some(Some(err)) = self.errors.get(i) {
+            Err(err.clone())
+        } else {
+            Ok(self.datums[i].clone())
+        }
+    }
+}
+
+impl<'a> Drop for ResultVecBorrow<'a> {
+    fn drop(&mut self) {
+        self.errors.clear();
+    }
+}
+
 pub mod plan {
     use std::iter;
 
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
+    use crate::linear::ResultVecBorrow;
+    use crate::scalar::Columns;
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, UnaryFunc, func};
 
     /// A wrapper type which indicates it is safe to simply evaluate all expressions.
@@ -1617,7 +1733,7 @@ pub mod plan {
         #[inline(always)]
         pub fn evaluate_into<'a, 'row>(
             &'a self,
-            datums: &mut Vec<Datum<'a>>,
+            datums: &mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
             row_buf: &'row mut Row,
         ) -> Result<Option<&'row Row>, EvalError> {
@@ -1625,9 +1741,10 @@ pub mod plan {
             if !passed_predicates {
                 Ok(None)
             } else {
-                row_buf
-                    .packer()
-                    .extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                let mut packer = row_buf.packer();
+                for i in &self.mfp.projection {
+                    packer.push(datums.get(*i)?);
+                }
                 Ok(Some(row_buf))
             }
         }
@@ -1640,40 +1757,65 @@ pub mod plan {
         #[inline(always)]
         pub fn evaluate_iter<'b, 'a: 'b>(
             &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
+            datums: &'b mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
         ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
             let passed_predicates = self.evaluate_inner(datums, arena)?;
             if !passed_predicates {
                 Ok(None)
             } else {
-                Ok(Some(self.mfp.projection.iter().map(move |i| datums[*i])))
+                // If any of the projection indices are errored, return the first error.
+                let first_err = self
+                    .mfp
+                    .projection
+                    .iter()
+                    .find_map(|i| datums.get(*i).err());
+                if let Some(err) = first_err {
+                    Err(err)
+                } else {
+                    Ok(Some(
+                        self.mfp
+                            .projection
+                            .iter()
+                            .map(move |i| datums.get(*i).expect("error free")),
+                    ))
+                }
             }
         }
 
         /// Populates `datums` with `self.expressions` and tests `self.predicates`.
         ///
         /// This does not apply `self.projection`, which is up to the calling method.
-        pub fn evaluate_inner<'b, 'a: 'b>(
+        pub fn evaluate_inner<'a>(
             &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
+            datums: &mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
         ) -> Result<bool, EvalError> {
             let mut expression = 0;
+            let mut null = false;
+            let mut err = None;
             for (support, predicate) in self.mfp.predicates.iter() {
                 while self.mfp.input_arity + expression < *support {
-                    datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                    datums.push_result(self.mfp.expressions[expression].eval(&*datums, arena));
                     expression += 1;
                 }
-                if predicate.eval(&datums[..], arena)? != Datum::True {
-                    return Ok(false);
+                match predicate.eval(&*datums, arena) {
+                    Ok(Datum::False) => return Ok(false),
+                    Ok(Datum::True) => {}
+                    Ok(Datum::Null) => null = true,
+                    Err(e) => err = std::cmp::max(err.take(), Some(e)),
+                    Ok(_) => unreachable!(),
                 }
             }
             while expression < self.mfp.expressions.len() {
-                datums.push(self.mfp.expressions[expression].eval(&datums[..], arena)?);
+                datums.push_result(self.mfp.expressions[expression].eval(&*datums, arena));
                 expression += 1;
             }
-            Ok(true)
+            match (err, null) {
+                (Some(err), _) => Err(err),
+                (None, true) => Ok(false),
+                (None, false) => Ok(true),
+            }
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -1841,7 +1983,7 @@ pub mod plan {
         /// returns an iterator with any `Ok(_)` element.
         pub fn evaluate<'b, 'a: 'b, E: From<EvalError>, V: Fn(&mz_repr::Timestamp) -> bool>(
             &'a self,
-            datums: &'b mut Vec<Datum<'a>>,
+            datums: &'b mut ResultVecBorrow<'a>,
             arena: &'a RowArena,
             time: mz_repr::Timestamp,
             diff: Diff,
@@ -1850,15 +1992,7 @@ pub mod plan {
         ) -> impl Iterator<
             Item = Result<(Row, mz_repr::Timestamp, Diff), (E, mz_repr::Timestamp, Diff)>,
         > + use<E, V> {
-            match self.mfp.evaluate_inner(datums, arena) {
-                Err(e) => {
-                    return Some(Err((e.into(), time, diff))).into_iter().chain(None);
-                }
-                Ok(true) => {}
-                Ok(false) => {
-                    return None.into_iter().chain(None);
-                }
-            }
+            let mut err = None;
 
             // Lower and upper bounds.
             let mut lower_bound = time;
@@ -1868,15 +2002,19 @@ pub mod plan {
             // prevent the record from being produced at any time.
             let mut null_eval = false;
 
+            match self.mfp.evaluate_inner(datums, arena) {
+                Err(e) => err = std::cmp::max(err.take(), Some(e)),
+                Ok(true) => {}
+                Ok(false) => {
+                    return None.into_iter().chain(None);
+                }
+            }
+
             // Advance our lower bound to be at least the result of any lower bound
             // expressions.
             for l in self.lower_bounds.iter() {
-                match l.eval(datums, arena) {
-                    Err(e) => {
-                        return Some(Err((e.into(), time, diff)))
-                            .into_iter()
-                            .chain(None.into_iter());
-                    }
+                match l.eval(&*datums, arena) {
+                    Err(e) => err = std::cmp::max(err.take(), Some(e)),
                     Ok(Datum::MzTimestamp(d)) => {
                         lower_bound = lower_bound.max(d);
                     }
@@ -1899,12 +2037,8 @@ pub mod plan {
                 // We can cease as soon as the lower and upper bounds match,
                 // as the update will certainly not be produced in that case.
                 if upper_bound != Some(lower_bound) {
-                    match u.eval(datums, arena) {
-                        Err(e) => {
-                            return Some(Err((e.into(), time, diff)))
-                                .into_iter()
-                                .chain(None.into_iter());
-                        }
+                    match u.eval(&*datums, arena) {
+                        Err(e) => err = std::cmp::max(err.take(), Some(e)),
                         Ok(Datum::MzTimestamp(d)) => {
                             if let Some(upper) = upper_bound {
                                 upper_bound = Some(upper.min(d));
@@ -1938,16 +2072,28 @@ pub mod plan {
 
             // Produce an output only if the upper bound exceeds the lower bound,
             // and if we did not encounter a `null` in our evaluation.
-            if Some(lower_bound) != upper_bound && !null_eval {
-                row_builder
-                    .packer()
-                    .extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+            if Some(lower_bound) == upper_bound || null_eval {
+                return None.into_iter().chain(None);
+            }
+            let result = {
+                let mut packer = row_builder.packer();
+                for i in &self.mfp.mfp.projection {
+                    match datums.get(*i) {
+                        Ok(d) => {
+                            packer.push(d);
+                        }
+                        Err(e) => err = std::cmp::max(err.take(), Some(e)),
+                    }
+                }
                 let upper_opt =
                     upper_bound.map(|upper_bound| Ok((row_builder.clone(), upper_bound, -diff)));
                 let lower = Some(Ok((row_builder.clone(), lower_bound, diff)));
                 lower.into_iter().chain(upper_opt)
+            };
+            if let Some(e) = err {
+                Some(Err((e.into(), time, diff))).into_iter().chain(None)
             } else {
-                None.into_iter().chain(None)
+                result
             }
         }
 

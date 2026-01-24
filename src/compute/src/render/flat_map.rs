@@ -9,8 +9,8 @@
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
-use mz_expr::MfpPlan;
 use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
+use mz_expr::{MfpPlan, ResultVec};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
@@ -54,7 +54,7 @@ where
             let activator = scope.activator_for(info.address);
             Box::new(move |input, ok_output, err_output| {
                 let mut datums = DatumVec::new();
-                let mut datums_mfp = DatumVec::new();
+                let mut datums_mfp = ResultVec::new();
 
                 // Buffer for extensions to `input_row`.
                 let mut table_func_output = Vec::new();
@@ -132,7 +132,7 @@ fn drain_through_mfp<T>(
     input_row: &Row,
     input_time: &T,
     input_diff: &Diff,
-    datum_vec: &mut DatumVec,
+    datum_vec: &mut ResultVec,
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan,
     until: &Antichain<Timestamp>,

@@ -41,10 +41,11 @@ use crate::func::{
     regexp_match_static, regexp_replace_parse_flags, regexp_replace_static,
     regexp_split_to_array_re, stringify_datum, timezone_time,
 };
+use crate::scalar::Columns;
 use crate::{EvalError, MirScalarExpr};
 
 pub fn and<'a>(
-    datums: &[Datum<'a>],
+    datums: impl Columns<'a>,
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
@@ -312,7 +313,7 @@ fn array_to_string<'a>(
 }
 
 fn coalesce<'a>(
-    datums: &[Datum<'a>],
+    datums: impl Columns<'a>,
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
@@ -415,7 +416,7 @@ fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a
 }
 
 fn error_if_null<'a>(
-    datums: &[Datum<'a>],
+    datums: impl Columns<'a>,
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
@@ -437,7 +438,7 @@ fn error_if_null<'a>(
 }
 
 fn greatest<'a>(
-    datums: &[Datum<'a>],
+    datums: impl Columns<'a>,
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
@@ -546,7 +547,7 @@ fn jsonb_build_object<'a>(
 }
 
 fn least<'a>(
-    datums: &[Datum<'a>],
+    datums: impl Columns<'a>,
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
@@ -686,7 +687,7 @@ fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
 }
 
 pub fn or<'a>(
-    datums: &[Datum<'a>],
+    datums: impl Columns<'a>,
     temp_storage: &'a RowArena,
     exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
@@ -1179,7 +1180,7 @@ pub enum VariadicFunc {
 impl VariadicFunc {
     pub fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {

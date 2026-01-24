@@ -68,6 +68,7 @@ mod unary;
 mod unmaterializable;
 mod variadic;
 
+use crate::scalar::Columns;
 pub use impls::*;
 pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
@@ -2564,7 +2565,7 @@ pub enum BinaryFunc {
 impl BinaryFunc {
     pub fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl Columns<'a>,
         temp_storage: &'a RowArena,
         a_expr: &'a MirScalarExpr,
         b_expr: &'a MirScalarExpr,

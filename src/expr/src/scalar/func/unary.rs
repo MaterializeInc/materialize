@@ -17,6 +17,7 @@ use std::{fmt, str};
 
 use mz_repr::{Datum, DatumType, RowArena, SqlColumnType};
 
+use crate::scalar::Columns;
 use crate::scalar::func::impls::*;
 use crate::{EvalError, MirScalarExpr};
 
@@ -25,7 +26,7 @@ use crate::{EvalError, MirScalarExpr};
 pub trait LazyUnaryFunc {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError>;
@@ -141,7 +142,7 @@ pub trait EagerUnaryFunc<'a> {
 impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {

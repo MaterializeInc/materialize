@@ -25,7 +25,7 @@ pub struct CastRecordToString {
 impl LazyUnaryFunc for CastRecordToString {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -81,7 +81,7 @@ pub struct CastRecord1ToRecord2 {
 impl LazyUnaryFunc for CastRecord1ToRecord2 {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -139,7 +139,7 @@ pub struct RecordGet(pub usize);
 impl LazyUnaryFunc for RecordGet {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {

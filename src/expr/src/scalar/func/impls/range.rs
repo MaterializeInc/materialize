@@ -26,7 +26,7 @@ pub struct CastRangeToString {
 impl LazyUnaryFunc for CastRangeToString {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -77,7 +77,7 @@ pub struct RangeLower;
 impl LazyUnaryFunc for RangeLower {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
@@ -132,7 +132,7 @@ pub struct RangeUpper;
 impl LazyUnaryFunc for RangeUpper {
     fn eval<'a>(
         &'a self,
-        datums: &[Datum<'a>],
+        datums: impl crate::scalar::Columns<'a>,
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {

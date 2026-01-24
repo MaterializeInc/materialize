@@ -288,13 +288,7 @@ impl<'a> ResultSpec<'a> {
             // Since we only care about whether / not an error is possible, and not the specific
             // error, create an arbitrary error here.
             // NOTE! This assumes that functions do not discriminate on the type of the error.
-            let map_err = result_map(Err(EvalError::Internal("".into())));
-            let raise_err = ResultSpec::fails();
-            // SQL has a very loose notion of evaluation order: https://www.postgresql.org/docs/current/sql-expressions.html#SYNTAX-EXPRESS-EVAL
-            // Here, we account for the possibility that the expression is evaluated strictly,
-            // raising the error, or that it's evaluated lazily by the result_map function
-            // (which may return a non-error result even when given an error as input).
-            raise_err.union(map_err)
+            result_map(Err(EvalError::Internal("".into())))
         } else {
             ResultSpec::nothing()
         };
@@ -455,7 +449,7 @@ pub trait Interpreter {
             let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
             results.push(result);
         }
-        self.variadic(&VariadicFunc::And, results)
+        mfp_eval.variadic(&VariadicFunc::And, results)
     }
 }
 
@@ -1098,6 +1092,7 @@ impl Interpreter for Trace {
 
 #[cfg(test)]
 mod tests {
+    use crate::ResultVec;
     use itertools::Itertools;
     use mz_repr::adt::datetime::DateTimeUnits;
     use mz_repr::{Datum, PropDatum, RowArena, SqlScalarType};
@@ -1426,6 +1421,53 @@ mod tests {
                 }
             }
 
+            // Munge our expr into a list of filters, so we can test MFP evaluation.
+            let predicates = if let MirScalarExpr::CallVariadic {
+                func: VariadicFunc::And,
+                exprs,
+            } = expr
+            {
+                exprs
+            } else if expr.typ(relation_type.columns()).scalar_type == SqlScalarType::Bool {
+                vec![expr]
+            } else {
+                vec![MirScalarExpr::CallUnary {
+                    func: UnaryFunc::IsNull(IsNull),
+                    expr: Box::new(expr),
+                }]
+            };
+
+            let mfp = MapFilterProject::new(relation_type.arity()).filter(predicates);
+            let spec = interpreter.mfp_filter(&mfp);
+            let safe_plan = mfp.into_plan().unwrap().into_nontemporal().unwrap();
+            let mut buffer = Row::default();
+            let mut result_vec = ResultVec::new();
+            for row in &rows {
+                let mut datums = result_vec.borrow_with(row);
+                let eval_result = safe_plan.evaluate_into(&mut datums, &arena, &mut buffer);
+                match eval_result {
+                    Ok(None) => {
+                        assert!(
+                            spec.range.may_contain(Datum::False)
+                                || spec.range.may_contain(Datum::Null),
+                            "{spec:?} should allow for false/null when record is discarded"
+                        )
+                    }
+                    Ok(Some(_)) => {
+                        assert!(
+                            spec.range.may_contain(Datum::True),
+                            "{spec:?} should allow true when record is kept"
+                        )
+                    }
+                    Err(_) => {
+                        assert!(
+                            spec.range.may_fail(),
+                            "{spec:?} should allow for errors when MFP fails"
+                        );
+                    }
+                }
+            }
+
             Ok(())
         }
 
@@ -1476,7 +1518,9 @@ mod tests {
         let mut interpreter = ColumnSpecs::new(&relation, &arena);
         interpreter.push_column(0, ResultSpec::value(Datum::Int32(-1294725158)));
         let spec = interpreter.mfp_filter(&mfp);
-        assert!(spec.range.may_fail());
+        assert!(!spec.range.may_fail());
+        assert!(spec.range.may_contain(Datum::False));
+        assert!(!spec.range.may_contain(Datum::True));
     }
 
     #[mz_ore::test]

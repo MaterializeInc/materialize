@@ -21,7 +21,7 @@ use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
-use mz_expr::MirScalarExpr;
+use mz_expr::{MirScalarExpr, ResultVec};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
@@ -267,7 +267,7 @@ where
                         let (updates, errors) = update_stream
                             .flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>(name, {
                                 // Reuseable allocation for unpacking.
-                                let mut datums = DatumVec::new();
+                                let mut datums = ResultVec::new();
                                 move |row| {
                                     let mut row_builder = SharedRow::get();
                                     let temp_storage = RowArena::new();
@@ -356,7 +356,7 @@ where
             Ok((key, row_value, time))
         }
     });
-    let mut datums = DatumVec::new();
+    let mut datums = ResultVec::new();
 
     if closure.could_error() {
         let (oks, errs2) = differential_dogs3::operators::half_join::half_join_internal_unsafe(
@@ -485,7 +485,7 @@ where
         trace
             .stream
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
-                let mut datums = DatumVec::new();
+                let mut datums = ResultVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
                         let mut row_builder = SharedRow::get();
@@ -506,11 +506,10 @@ where
                                             let time = Tr::owned_time(time);
                                             let temp_storage = RowArena::new();
 
-                                            let mut datums_local = datums.borrow();
-                                            datums_local.extend(key.to_datum_iter());
-                                            datums_local.extend(val.to_datum_iter());
-
                                             if !initial_closure.is_identity() {
+                                                let mut datums_local = datums.borrow();
+                                                datums_local.extend(key.to_datum_iter());
+                                                datums_local.extend(val.to_datum_iter());
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,
@@ -534,7 +533,9 @@ where
                                                 }
                                             } else {
                                                 let row = {
-                                                    row_builder.packer().extend(&*datums_local);
+                                                    let mut packer = row_builder.packer();
+                                                    packer.extend(key.to_datum_iter());
+                                                    packer.extend(val.to_datum_iter());
                                                     row_builder.clone()
                                                 };
                                                 ok_session.give((row, time, Tr::owned_diff(diff)));

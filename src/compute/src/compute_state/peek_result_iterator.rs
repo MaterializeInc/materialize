@@ -11,9 +11,10 @@ use std::ops::Range;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
+use mz_expr::ResultVec;
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_repr::{Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
 pub struct PeekResultIterator<Tr>
@@ -27,7 +28,7 @@ where
     map_filter_project: mz_expr::SafeMfpPlan,
     peek_timestamp: mz_repr::Timestamp,
     row_builder: Row,
-    datum_vec: DatumVec,
+    datum_vec: ResultVec,
     literals: Option<Literals<Tr>>,
 }
 
@@ -121,7 +122,7 @@ where
             map_filter_project,
             peek_timestamp,
             row_builder: Row::default(),
-            datum_vec: DatumVec::new(),
+            datum_vec: ResultVec::new(),
             literals,
         }
     }
@@ -242,7 +243,7 @@ where
                 }
             });
             let copies: i64 = if copies.is_negative() {
-                let row = &*borrow;
+                let row = borrow.datums().expect("no errors on the ok path");
                 tracing::error!(
                     target = %self.target_id, diff = %copies, ?row,
                     "index peek encountered negative multiplicities in ok trace",

@@ -69,13 +69,13 @@ use bytes::Bytes;
 use differential_dataflow::Hashable;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use mz_expr::SafeMfpPlan;
+use mz_expr::{ResultVec, SafeMfpPlan};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::CollectionMetadata;
@@ -450,7 +450,7 @@ where
     let shutdown = builder.build(move |caps| async move {
         let [_row_cap] = caps.try_into().unwrap();
 
-        let mut datum_vec = DatumVec::default();
+        let mut datum_vec = ResultVec::default();
         let row_arena = RowArena::default();
         let mut row_buf = Row::default();
 
@@ -478,7 +478,7 @@ where
                     for row in rows {
                         let mut datums = datum_vec.borrow_with(&row);
                         let result = mfp
-                            .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
+                            .evaluate_into(&mut datums, &row_arena, &mut row_buf)
                             .map(|row| row.cloned());
 
                         match result {

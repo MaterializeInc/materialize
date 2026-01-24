@@ -31,11 +31,12 @@ use mz_compute_types::plan::reduce::{
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
 use mz_expr::{
-    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
+    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, ResultVec,
+    ResultVecBorrow, SafeMfpPlan,
 };
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{Datum, DatumList, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{Datum, DatumList, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
@@ -89,7 +90,7 @@ where
                 mut val_plan,
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
-            let mut datums = DatumVec::new();
+            let mut datums = ResultVec::new();
 
             // Determine the columns we'll need from the row.
             let mut demand = Vec::new();
@@ -346,8 +347,8 @@ where
         let n_distinct_aggregate_types = distinct_aggregate_types.len();
 
         // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
+        let mut datums1 = ResultVec::new();
+        let mut datums2 = ResultVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -515,8 +516,8 @@ where
         let error_logger = self.error_logger();
 
         // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
+        let mut datums1 = ResultVec::new();
+        let mut datums2 = ResultVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -615,8 +616,8 @@ where
         }
 
         // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
+        let mut datums1 = ResultVec::new();
+        let mut datums2 = ResultVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -742,10 +743,10 @@ where
         }
 
         // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
-        let mut datums_key_1 = DatumVec::new();
-        let mut datums_key_2 = DatumVec::new();
+        let mut datums1 = ResultVec::new();
+        let mut datums2 = ResultVec::new();
+        let mut datums_key_1 = ResultVec::new();
+        let mut datums_key_2 = ResultVec::new();
         let mfp_after1 = mfp_after.clone();
         let func2 = func.clone();
 
@@ -1077,8 +1078,8 @@ where
             });
 
             // Allocations for the two closures.
-            let mut datums1 = DatumVec::new();
-            let mut datums2 = DatumVec::new();
+            let mut datums1 = ResultVec::new();
+            let mut datums2 = ResultVec::new();
             let mfp_after1 = mfp_after.clone();
             let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
             let aggr_funcs2 = aggr_funcs.clone();
@@ -1392,8 +1393,8 @@ where
         });
 
         // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
+        let mut datums1 = ResultVec::new();
+        let mut datums2 = ResultVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -1572,8 +1573,8 @@ where
         };
 
         // Allocations for the two closures.
-        let mut datums1 = DatumVec::new();
-        let mut datums2 = DatumVec::new();
+        let mut datums1 = ResultVec::new();
+        let mut datums2 = ResultVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let full_aggrs2 = full_aggrs.clone();
@@ -1673,7 +1674,7 @@ where
 /// if the MFP filters the result out.
 fn evaluate_mfp_after<'a, 'b>(
     mfp_after: &'a Option<SafeMfpPlan>,
-    datums_local: &'b mut mz_repr::DatumVecBorrow<'a>,
+    datums_local: &'b mut ResultVecBorrow<'a>,
     temp_storage: &'a RowArena,
     key_len: usize,
 ) -> Option<Row> {
@@ -1691,7 +1692,15 @@ fn evaluate_mfp_after<'a, 'b>(
             None
         }
     } else {
-        Some(row_builder.pack_using(&datums_local[key_len..]))
+        Some(
+            row_builder.pack_using(
+                datums_local
+                    .datums()
+                    .expect("no evaluation")
+                    .iter()
+                    .skip(key_len),
+            ),
+        )
     }
 }
 

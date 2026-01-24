@@ -153,7 +153,7 @@ macro_rules! derive_unary {
         impl UnaryFunc {
             pub fn eval<'a>(
                 &'a self,
-                datums: &[Datum<'a>],
+                datums: impl crate::scalar::Columns<'a>,
                 temp_storage: &'a RowArena,
                 a: &'a MirScalarExpr,
             ) -> Result<Datum<'a>, EvalError> {

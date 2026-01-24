@@ -99,7 +99,7 @@ interpret
 ----
 may contain: [null]
 
-# Regression test: `or` may short circuit even when the first argument throws an error
+# Regression test: `or` will short circuit even when the first argument throws an error
 # Expression: ((((1 / 0) > 0) OR true))
 interpret
 []
@@ -107,7 +107,7 @@ interpret
 (call_variadic or [(call_binary gt (call_binary div_numeric (1 numeric) (0 numeric)) (0 numeric)) true])
 ["string" 300 true false null]
 ----
-may contain: [true <err>]
+may contain: [true]
 
 # Functions with many arguments can be expensive to interpret. 5 arguments is below the limit; note that
 # the output spec contains the exact value.
