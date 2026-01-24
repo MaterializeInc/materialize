@@ -196,7 +196,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_frontend_peek_sequencing",
-            "true",
+            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
