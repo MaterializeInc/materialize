@@ -258,15 +258,6 @@ def main() -> int:
                 Identifier(db), Identifier(schema), Identifier(subsource)
             ),
         )[0][0]
-        if args.expensive:
-            rows = query(
-                conn,
-                SQL("SELECT count(*) FROM {}.{}.{}").format(
-                    Identifier(db), Identifier(schema), Identifier(subsource)
-                ),
-            )[0][0]
-        else:
-            rows = 0
         columns = []
         obj = {
             "create_sql": create_sql,
@@ -274,7 +265,6 @@ def main() -> int:
             "schema": schema,
             "database": db,
             "id": subsource_id,
-            "rows": rows,
             "type": "subsource",
         }
 
@@ -293,35 +283,34 @@ def main() -> int:
                 }
             )
 
-            if rows > 0:
-                if args.expensive:
-                    avg_size = query(
-                        conn,
-                        SQL("SELECT avg(pg_column_size({})) FROM {}.{}.{}").format(
-                            Identifier(column),
-                            Identifier(db),
-                            Identifier(schema),
-                            Identifier(subsource),
-                        ),
-                    )[0][0]
-                    columns[-1]["avg_size"] = (
-                        int(avg_size) if avg_size is not None else None
-                    )
-                else:
-                    # TODO: This goes OoM, can we sample better?
-                    # avg_size = query(
-                    #     conn,
-                    #     SQL(
-                    #         "SELECT avg(pg_column_size({})) FROM (SELECT {} FROM {}.{}.{} LIMIT 100)"
-                    #     ).format(
-                    #         Identifier(column),
-                    #         Identifier(column),
-                    #         Identifier(db),
-                    #         Identifier(schema),
-                    #         Identifier(subsource),
-                    #     ),
-                    # )[0][0]
-                    pass
+            if args.expensive:
+                avg_size = query(
+                    conn,
+                    SQL("SELECT avg(pg_column_size({})) FROM {}.{}.{}").format(
+                        Identifier(column),
+                        Identifier(db),
+                        Identifier(schema),
+                        Identifier(subsource),
+                    ),
+                )[0][0]
+                columns[-1]["avg_size"] = (
+                    int(avg_size) if avg_size is not None else None
+                )
+            else:
+                # TODO: This goes OoM, can we sample better?
+                # avg_size = query(
+                #     conn,
+                #     SQL(
+                #         "SELECT avg(pg_column_size({})) FROM (SELECT {} FROM {}.{}.{} LIMIT 100)"
+                #     ).format(
+                #         Identifier(column),
+                #         Identifier(column),
+                #         Identifier(db),
+                #         Identifier(schema),
+                #         Identifier(subsource),
+                #     ),
+                # )[0][0]
+                pass
 
         if columns:
             obj["columns"] = columns
@@ -341,15 +330,6 @@ def main() -> int:
                 Identifier(db), Identifier(schema), Identifier(table)
             ),
         )[0][0]
-        if args.expensive:
-            rows = query(
-                conn,
-                SQL("SELECT count(*) FROM {}.{}.{}").format(
-                    Identifier(db), Identifier(schema), Identifier(table)
-                ),
-            )[0][0]
-        else:
-            rows = 0
         columns = []
         for column, typ, nullable, default in query(
             conn,
@@ -360,39 +340,37 @@ def main() -> int:
             columns.append(
                 {"name": column, "type": typ, "nullable": nullable, "default": default}
             )
-            if rows > 0:
-                if args.expensive:
-                    avg_size = query(
-                        conn,
-                        SQL("SELECT avg(pg_column_size({})) FROM {}.{}.{}").format(
-                            Identifier(column),
-                            Identifier(db),
-                            Identifier(schema),
-                            Identifier(table),
-                        ),
-                    )[0][0]
-                    columns[-1]["avg_size"] = (
-                        int(avg_size) if avg_size is not None else None
-                    )
-                else:
-                    # TODO: This goes OoM, can we sample better?
-                    # avg_size = query(
-                    #     conn,
-                    #     SQL(
-                    #         "SELECT avg(pg_column_size({})) FROM (SELECT {} FROM {}.{}.{} LIMIT 100)"
-                    #     ).format(
-                    #         Identifier(column),
-                    #         Identifier(column),
-                    #         Identifier(db),
-                    #         Identifier(schema),
-                    #         Identifier(table),
-                    #     ),
-                    # )[0][0]
-                    pass
+            if args.expensive:
+                avg_size = query(
+                    conn,
+                    SQL("SELECT avg(pg_column_size({})) FROM {}.{}.{}").format(
+                        Identifier(column),
+                        Identifier(db),
+                        Identifier(schema),
+                        Identifier(table),
+                    ),
+                )[0][0]
+                columns[-1]["avg_size"] = (
+                    int(avg_size) if avg_size is not None else None
+                )
+            else:
+                # TODO: This goes OoM, can we sample better?
+                # avg_size = query(
+                #     conn,
+                #     SQL(
+                #         "SELECT avg(pg_column_size({})) FROM (SELECT {} FROM {}.{}.{} LIMIT 100)"
+                #     ).format(
+                #         Identifier(column),
+                #         Identifier(column),
+                #         Identifier(db),
+                #         Identifier(schema),
+                #         Identifier(table),
+                #     ),
+                # )[0][0]
+                pass
 
         obj = {
             "create_sql": create_sql,
-            "rows": rows,
             "columns": columns,
             "id": id,
         }
@@ -412,6 +390,12 @@ def main() -> int:
                 source
             ].setdefault("children", {})[f"{db}.{schema}.{table}"] = obj
         else:
+            obj["rows"] = query(
+                conn,
+                SQL("SELECT count(*) FROM {}.{}.{}").format(
+                    Identifier(db), Identifier(schema), Identifier(table)
+                ),
+            )[0][0]
             workload["databases"][db][schema]["tables"][table] = obj
 
     print("Fetching sinks", file=sys.stderr)

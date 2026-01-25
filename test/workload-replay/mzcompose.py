@@ -2291,6 +2291,7 @@ def run_query(
         cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
         stats["total"] += 1
         try:
+            # TODO: Replace 'REDACTED' with something more plausible (or just NULL)
             sql, params = pg_params_to_psycopg(query["sql"], query["params"])
             start_time = time.time()
             cur.execute(sql.encode(), params)
@@ -2338,6 +2339,7 @@ def continuous_queries(
                     "set_transaction",
                     "commit",
                     "rollback",
+                    "fetch",
                     # They will already exist statically, don't create
                     "create_connection",
                     "create_webhook",
