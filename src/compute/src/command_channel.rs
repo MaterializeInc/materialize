@@ -22,9 +22,9 @@
 //! compute protocol the command belongs to, allowing workers to recognize client reconnects that
 //! require a reconciliation.
 
+use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 
-use crossbeam_channel::TryRecvError;
 use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 /// A sender pushing commands onto the command channel.
 pub struct Sender {
-    tx: crossbeam_channel::Sender<(ComputeCommand, Uuid)>,
+    tx: mpsc::Sender<(ComputeCommand, Uuid)>,
     activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
@@ -60,7 +60,7 @@ impl Sender {
 
 /// A receiver reading commands from the command channel.
 pub struct Receiver {
-    rx: crossbeam_channel::Receiver<(ComputeCommand, Uuid)>,
+    rx: mpsc::Receiver<(ComputeCommand, Uuid)>,
 }
 
 impl Receiver {
@@ -81,8 +81,8 @@ impl Receiver {
 
 /// Render the command channel dataflow.
 pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Receiver) {
-    let (input_tx, input_rx) = crossbeam_channel::unbounded();
-    let (output_tx, output_rx) = crossbeam_channel::unbounded();
+    let (input_tx, input_rx) = mpsc::channel();
+    let (output_tx, output_rx) = mpsc::channel();
     let activator = Arc::new(Mutex::new(None));
 
     // TODO(teskje): This implementation relies on Timely channels preserving the order of their

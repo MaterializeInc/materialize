@@ -14,7 +14,6 @@ anyhow = "1.0.100"
 async-stream = "0.3.6"
 bytesize = "2.1.0"
 columnar = "0.11.1"
-crossbeam-channel = "0.5.15"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = "0.18.0"
 differential-dogs3 = "0.18.0"
