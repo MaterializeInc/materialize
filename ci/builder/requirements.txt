@@ -4,6 +4,7 @@
 # dependencies tend to be troublesome unless they ship binary
 # wheels for a wide variety of platforms, including M1 Macs.
 
+aiohttp==3.13.3
 black==24.4.2
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.41.5

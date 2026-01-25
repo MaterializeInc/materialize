@@ -15,6 +15,7 @@ Docker Compose.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import datetime
 import json
 import math
@@ -30,18 +31,19 @@ import time
 import urllib.parse
 import uuid
 from collections import defaultdict
+from functools import cache
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
 from typing import Literal as TypeLiteral
 
+import aiohttp
 import confluent_kafka  # type: ignore
 import matplotlib.pyplot as plt
 import numpy
 import psycopg
 import pymysql
 import pymysql.cursors
-import requests
 import yaml
 from confluent_kafka.admin import AdminClient  # type: ignore
 from confluent_kafka.schema_registry import SchemaRegistryClient  # type: ignore
@@ -970,7 +972,7 @@ class Column:
             raise ValueError(f"Unhandled data type {self.typ}")
 
 
-def ingest_webhook(
+async def ingest_webhook(
     c: Composition,
     db: str,
     schema: str,
@@ -978,7 +980,13 @@ def ingest_webhook(
     source: dict[str, Any],
     num_rows: int,
 ) -> None:
-    url = f"http://127.0.0.1:{c.port('materialized', 6876)}/api/webhook/{urllib.parse.quote(db, safe='')}/{urllib.parse.quote(schema, safe='')}/{urllib.parse.quote(name, safe='')}"
+    url = (
+        f"http://127.0.0.1:{c.port('materialized', 6876)}/api/webhook/"
+        f"{urllib.parse.quote(db, safe='')}/"
+        f"{urllib.parse.quote(schema, safe='')}/"
+        f"{urllib.parse.quote(name, safe='')}"
+    )
+
     body_column = None
     headers_column = None
     for column in source["columns"]:
@@ -1000,36 +1008,232 @@ def ingest_webhook(
             )
     assert body_column
 
-    def run(sleep: int, rng: random.Random) -> None:
-        result = requests.post(
-            url,
-            data=body_column.kafka_value(rng),
-            headers=(headers_column.kafka_value(rng) if headers_column else None),
-        )
-        if result.status_code == 429:
-            # hard-coded limit of 500 webhook requests/s
-            time.sleep(sleep)
-            run(sleep * 2, rng)
-        else:
-            assert (
-                result.status_code == 200
-            ), f"Webhook ingestion failed: {result.status_code}: {result.text}"
+    connector = aiohttp.TCPConnector(limit=5000)
+    timeout = aiohttp.ClientTimeout(total=None)
 
-    threads = [
-        PropagatingThread(
-            target=run,
-            name=f"{db}.{schema}.{name}-{i}",
-            args=(
-                1,
-                random.Random(random.randrange(SEED_RANGE)),
-            ),
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+
+        sem = asyncio.Semaphore(5000)
+
+        async def send_one(seed: int):
+            rng = random.Random(seed)
+            backoff = 0.01
+
+            while True:
+                async with sem:
+                    async with session.post(
+                        url,
+                        data=body_column.kafka_value(rng),
+                        headers=(
+                            headers_column.kafka_value(rng) if headers_column else None
+                        ),
+                    ) as resp:
+
+                        if resp.status == 200:
+                            return
+                        elif resp.status == 429:
+                            await asyncio.sleep(backoff)
+                            backoff = min(backoff * 2, 1.0)
+                        else:
+                            text = await resp.text()
+                            raise RuntimeError(
+                                f"Webhook ingestion failed: {resp.status}: {text}"
+                            )
+
+        await asyncio.gather(
+            *(send_one(random.randrange(SEED_RANGE)) for _ in range(num_rows))
         )
-        for i in range(num_rows)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+
+
+@cache
+def get_kafka_objects(
+    topic: str,
+    columns: tuple,
+    debezium: bool,
+    schema_registry_port: int,
+    kafka_port: int,
+):
+    """
+    Build and cache Kafka producer + Avro serializers for a topic/schema combo.
+    `columns` MUST be a tuple so this function can be cached.
+    """
+
+    registry = SchemaRegistryClient({"url": f"http://127.0.0.1:{schema_registry_port}"})
+
+    producer = confluent_kafka.Producer(
+        {
+            "bootstrap.servers": f"127.0.0.1:{kafka_port}",
+            "linger.ms": 20,
+            "batch.num.messages": 10000,
+            "queue.buffering.max.kbytes": 1048576,
+            "compression.type": "lz4",
+            "acks": "1",
+            "retries": 3,
+        }
+    )
+
+    col_names = [c.name for c in columns]
+
+    if debezium:
+        value_record_schema = {
+            "type": "record",
+            "name": "Value",
+            "fields": [
+                {
+                    "name": c.name,
+                    "type": c.avro_type(),
+                    **({"default": c.default} if c.default is not None else {}),
+                }
+                for c in columns
+            ],
+            "connect.name": f"{topic}.Value",
+        }
+
+        envelope_schema = {
+            "type": "record",
+            "name": "Envelope",
+            "namespace": topic,
+            "fields": [
+                {
+                    "name": "before",
+                    "type": ["null", value_record_schema],
+                    "default": None,
+                },
+                {"name": "after", "type": ["null", "Value"], "default": None},
+                {
+                    "name": "source",
+                    "type": {
+                        "type": "record",
+                        "name": "Source",
+                        "namespace": "io.debezium.connector.mysql",
+                        "fields": [
+                            {"name": "version", "type": "string"},
+                            {"name": "connector", "type": "string"},
+                            {"name": "name", "type": "string"},
+                            {"name": "ts_ms", "type": "long"},
+                            {
+                                "name": "snapshot",
+                                "type": ["null", "string"],
+                                "default": None,
+                            },
+                            {"name": "db", "type": "string"},
+                            {
+                                "name": "sequence",
+                                "type": ["null", "string"],
+                                "default": None,
+                            },
+                            {
+                                "name": "table",
+                                "type": ["null", "string"],
+                                "default": None,
+                            },
+                            {"name": "server_id", "type": "long"},
+                            {
+                                "name": "gtid",
+                                "type": ["null", "string"],
+                                "default": None,
+                            },
+                            {"name": "file", "type": "string"},
+                            {"name": "pos", "type": "long"},
+                            {"name": "row", "type": "int"},
+                            {
+                                "name": "thread",
+                                "type": ["null", "long"],
+                                "default": None,
+                            },
+                            {
+                                "name": "query",
+                                "type": ["null", "string"],
+                                "default": None,
+                            },
+                        ],
+                        "connect.name": "io.debezium.connector.mysql.Source",
+                    },
+                },
+                {"name": "op", "type": "string"},
+                {"name": "ts_ms", "type": ["null", "long"], "default": None},
+                {"name": "transaction", "type": ["null", "string"], "default": None},
+            ],
+            "connect.name": f"{topic}.Envelope",
+        }
+
+        key_schema = {
+            "type": "record",
+            "name": "Key",
+            "namespace": topic,
+            "fields": [
+                {
+                    "name": c.name,
+                    "type": c.avro_type(),
+                    **({"default": c.default} if c.default is not None else {}),
+                }
+                for c in columns
+            ],
+            "connect.name": f"{topic}.Key",
+        }
+
+        value_serializer = AvroSerializer(
+            registry,
+            json.dumps(envelope_schema),
+            lambda d, ctx: d,
+        )
+
+        key_serializer = AvroSerializer(
+            registry,
+            json.dumps(key_schema),
+            lambda d, ctx: d,
+        )
+
+    else:
+        key_col = columns[0]
+
+        value_schema = {
+            "type": "record",
+            "name": topic,
+            "namespace": "com.materialize",
+            "fields": [
+                {
+                    "name": c.name,
+                    "type": c.avro_type(),
+                    **({"default": c.default} if c.default is not None else {}),
+                }
+                for c in columns[1:]
+            ],
+        }
+
+        key_schema = {
+            "type": "record",
+            "name": f"{topic}_key",
+            "namespace": "com.materialize",
+            "fields": [
+                {
+                    "name": key_col.name,
+                    "type": key_col.avro_type(),
+                    **(
+                        {"default": key_col.default}
+                        if key_col.default is not None
+                        else {}
+                    ),
+                }
+            ],
+        }
+
+        value_serializer = AvroSerializer(
+            registry,
+            json.dumps(value_schema),
+            lambda d, ctx: d,
+        )
+
+        key_serializer = AvroSerializer(
+            registry,
+            json.dumps(key_schema),
+            lambda d, ctx: d,
+        )
+
+    value_ctx = SerializationContext(topic, MessageField.VALUE)
+    key_ctx = SerializationContext(topic, MessageField.KEY)
+
+    return producer, value_serializer, key_serializer, value_ctx, key_ctx, col_names
 
 
 def ingest(
@@ -1040,284 +1244,145 @@ def ingest(
     num_rows: int,
     rng: random.Random,
 ) -> None:
-    batch_values = []
-    batch_values_kafka = []
-    for _ in range(num_rows):
-        if source["type"] == "kafka":
-            row = [c.kafka_value(rng) for c in columns]
-            batch_values_kafka.append(row)
-        else:
-            row = [c.value(rng) for c in columns]
-            batch_values.append(f"({', '.join(row)})")
     if source["type"] == "postgres":
+        for _ in range(num_rows):
+            row = [c.value(rng) for c in columns]
+
         ref_database, ref_schema, ref_table = get_postgres_reference_db_schema_table(
             child
         )
-        c.sql(
-            SQL("INSERT INTO {}.{} VALUES ").format(
-                Identifier(ref_schema),
-                Identifier(ref_table),
-            )
-            + SQL(", ").join(map(SQL, batch_values)),
-            service="postgres",
+        conn = psycopg.connect(
+            host="127.0.0.1",
+            port=c.default_port("postgres"),
             user="postgres",
             password="postgres",
-            database=ref_database,
-            port=5432,
-            print_statement=False,
+            dbname=ref_database,
         )
+        conn.autocommit = True
+
+        col_names = [col.name for col in columns]
+        value_funcs = [col.value for col in columns]
+
+        with conn.cursor() as cur:
+            copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN BINARY").format(
+                Identifier(ref_schema),
+                Identifier(ref_table),
+                SQL(", ").join(map(Identifier, col_names)),
+            )
+
+            with cur.copy(copy_stmt) as copy:
+                for _ in range(num_rows):
+                    row = [fn(rng) for fn in value_funcs]
+                    copy.write_row(row)
+
     elif source["type"] == "mysql":
-        mysql_conn = pymysql.connect(
+        ref_database, ref_table = get_mysql_reference_db_table(child)
+
+        conn = pymysql.connect(
             host="127.0.0.1",
             user="root",
             password=MySql.DEFAULT_ROOT_PASSWORD,
-            database="mysql",
+            database=ref_database,
             port=c.default_port("mysql"),
+            autocommit=False,
         )
-        mysql_conn.autocommit(True)
-        with mysql_conn.cursor() as cur:
-            ref_database, ref_table = get_mysql_reference_db_table(child)
-            cur.execute(
-                f"INSERT INTO {ref_database}.{ref_table} VALUES "
-                + ", ".join(batch_values)
-            )
+
+        value_funcs = [col.value for col in columns]
+        placeholders = "(" + ",".join(["%s"] * len(columns)) + ")"
+        insert_sql = f"INSERT INTO {ref_table} VALUES {placeholders}"
+
+        rows = [[fn(rng) for fn in value_funcs] for _ in range(num_rows)]
+
+        with conn.cursor() as cur:
+            cur.executemany(insert_sql, rows)
+            conn.commit()
+
+        conn.close()
+
     elif source["type"] == "kafka":
-        schema_registry_conf = {
-            "url": f"http://127.0.0.1:{c.default_port('schema-registry')}"
-        }
-        registry = SchemaRegistryClient(schema_registry_conf)
-        kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
-        producer = confluent_kafka.Producer(kafka_conf)
+        batch_values_kafka = []
+        for _ in range(num_rows):
+            row = [c.kafka_value(rng) for c in columns]
+            batch_values_kafka.append(row)
+
         topic = get_kafka_topic(source)
+        debezium = "ENVELOPE DEBEZIUM" in child["create_sql"]
 
-        if "ENVELOPE DEBEZIUM" in child["create_sql"]:
-            value_record_schema = {
-                "type": "record",
-                "name": "Value",
-                "fields": [
-                    {
-                        "name": field.name,
-                        "type": field.avro_type(),
-                        **(
-                            {"default": field.default}
-                            if field.default is not None
-                            else {}
-                        ),
-                    }
-                    for field in columns
-                ],
-                "connect.name": f"{topic}.Value",
-            }
-
-            envelope_schema = {
-                "type": "record",
-                "name": "Envelope",
-                "namespace": topic,
-                "fields": [
-                    {
-                        "name": "before",
-                        "type": ["null", value_record_schema],
-                        "default": None,
-                    },
-                    {
-                        "name": "after",
-                        "type": ["null", "Value"],
-                        "default": None,
-                    },
-                    {
-                        "name": "source",
-                        "type": {
-                            "type": "record",
-                            "name": "Source",
-                            "namespace": "io.debezium.connector.mysql",
-                            "fields": [
-                                {"name": "version", "type": "string"},
-                                {"name": "connector", "type": "string"},
-                                {"name": "name", "type": "string"},
-                                {"name": "ts_ms", "type": "long"},
-                                {
-                                    "name": "snapshot",
-                                    "type": ["null", "string"],
-                                    "default": None,
-                                },
-                                {"name": "db", "type": "string"},
-                                {
-                                    "name": "sequence",
-                                    "type": ["null", "string"],
-                                    "default": None,
-                                },
-                                {
-                                    "name": "table",
-                                    "type": ["null", "string"],
-                                    "default": None,
-                                },
-                                {"name": "server_id", "type": "long"},
-                                {
-                                    "name": "gtid",
-                                    "type": ["null", "string"],
-                                    "default": None,
-                                },
-                                {"name": "file", "type": "string"},
-                                {"name": "pos", "type": "long"},
-                                {"name": "row", "type": "int"},
-                                {
-                                    "name": "thread",
-                                    "type": ["null", "long"],
-                                    "default": None,
-                                },
-                                {
-                                    "name": "query",
-                                    "type": ["null", "string"],
-                                    "default": None,
-                                },
-                            ],
-                            "connect.name": "io.debezium.connector.mysql.Source",
-                        },
-                    },
-                    {"name": "op", "type": "string"},
-                    {"name": "ts_ms", "type": ["null", "long"], "default": None},
-                    {
-                        "name": "transaction",
-                        "type": ["null", "string"],
-                        "default": None,
-                    },
-                ],
-                "connect.name": f"{topic}.Envelope",
-            }
-
-            key_schema = {
-                "type": "record",
-                "name": "Key",
-                "namespace": topic,
-                "fields": [
-                    {
-                        "name": field.name,
-                        "type": field.avro_type(),
-                        **(
-                            {"default": field.default}
-                            if field.default is not None
-                            else {}
-                        ),
-                    }
-                    for field in columns
-                ],
-                "connect.name": f"{topic}.Key",
-            }
-
-            serializer = AvroSerializer(
-                registry, json.dumps(envelope_schema), lambda d, ctx: d
+        producer, serializer, key_serializer, sctx, ksctx, col_names = (
+            get_kafka_objects(
+                topic,
+                tuple(columns),
+                debezium,
+                c.default_port("schema-registry"),
+                c.default_port("kafka"),
             )
-            key_serializer = AvroSerializer(
-                registry, json.dumps(key_schema), lambda d, ctx: d
-            )
-            serialization_context = SerializationContext(topic, MessageField.VALUE)
-            key_serialization_context = SerializationContext(topic, MessageField.KEY)
-            now_ms = int(time.time() * 1000)
-            for row in batch_values_kafka:
-                after_value = {col.name: val for col, val in zip(columns, row)}
-                envelope_value = {
-                    "before": None,
-                    "after": after_value,
-                    "source": {
-                        "version": "0",
-                        "connector": "mysql",
-                        "name": "materialize-generator",
-                        "ts_ms": now_ms,
-                        "snapshot": None,
-                        "db": "db",
-                        "sequence": None,
-                        "table": topic.split(".")[-1],
-                        "server_id": 0,
-                        "gtid": None,
-                        "file": "binlog.000001",
-                        "pos": 0,
-                        "row": 0,
-                        "thread": None,
-                        "query": None,
-                    },
-                    "op": "c",  # create
-                    "ts_ms": now_ms,
-                    "transaction": None,
-                }
-                key_value = {col.name: after_value[col.name] for col in columns}
-                producer.produce(
-                    topic=topic,
-                    key=key_serializer(key_value, key_serialization_context),
-                    value=serializer(envelope_value, serialization_context),
-                    on_delivery=delivery_report,
-                )
-            producer.flush()
-        else:
-            schema = {
-                "type": "record",
-                "name": topic,
-                "namespace": "com.materialize",
-                "fields": [
-                    {
-                        "name": field.name,
-                        "type": field.avro_type(),
-                        **(
-                            {"default": field.default}
-                            if field.default is not None
-                            else {}
-                        ),
-                    }
-                    for field in columns[1:]
-                ],
+        )
+        now_ms = int(time.time() * 1000)
+        if debezium:
+            source_struct = {
+                "version": "0",
+                "connector": "mysql",
+                "name": "materialize-generator",
+                "ts_ms": now_ms,
+                "snapshot": None,
+                "db": "db",
+                "sequence": None,
+                "table": topic.split(".")[-1],
+                "server_id": 0,
+                "gtid": None,
+                "file": "binlog.000001",
+                "pos": 0,
+                "row": 0,
+                "thread": None,
+                "query": None,
             }
+        producer.poll(0)
+        for row in batch_values_kafka:
+            while True:
+                try:
+                    if debezium:
+                        after_value = dict(zip(col_names, row))
 
-            key_field = columns[0]
-            key_schema = {
-                "type": "record",
-                "name": topic + "_key",
-                "namespace": "com.materialize",
-                "fields": [
-                    {
-                        "name": key_field.name,
-                        "type": key_field.avro_type(),
-                        **(
-                            {"default": key_field.default}
-                            if key_field.default is not None
-                            else {}
-                        ),
-                    }
-                ],
-            }
+                        envelope_value = {
+                            "before": None,
+                            "after": after_value,
+                            "source": source_struct,
+                            "op": "c",
+                            "ts_ms": now_ms,
+                            "transaction": None,
+                        }
 
-            serializer = AvroSerializer(registry, json.dumps(schema), lambda d, ctx: d)
+                        key_value = after_value
 
-            key_serializer = AvroSerializer(
-                registry, json.dumps(key_schema), lambda d, ctx: d
-            )
+                        producer.produce(
+                            topic=topic,
+                            key=key_serializer(key_value, ksctx),
+                            value=serializer(envelope_value, sctx),
+                            on_delivery=delivery_report,
+                        )
+                    else:
+                        key_dict = {col_names[0]: row[0]}
+                        value_dict = dict(zip(col_names[1:], row[1:]))
 
-            # registry.register_schema(
-            #     f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
-            # )
-            # registry.register_schema(
-            #     f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
-            # )
+                        producer.produce(
+                            topic=topic,
+                            key=key_serializer(key_dict, ksctx),
+                            value=serializer(value_dict, sctx),
+                            on_delivery=delivery_report,
+                        )
 
-            serialization_context = SerializationContext(topic, MessageField.VALUE)
-            key_serialization_context = SerializationContext(topic, MessageField.KEY)
+                    break
 
-            for row in batch_values_kafka:
-                producer.produce(
-                    topic=topic,
-                    key=key_serializer(
-                        {columns[0].name: row[0]},
-                        key_serialization_context,
-                    ),
-                    value=serializer(
-                        {
-                            column.name: value
-                            for column, value in zip(columns[1:], row[1:])
-                        },
-                        serialization_context,
-                    ),
-                    on_delivery=delivery_report,
-                )
-            producer.flush()
+                except BufferError:
+                    producer.poll(0.01)
+
+        producer.poll(0)
     elif source["type"] == "sql-server":
+        batch_values = []
+        for _ in range(num_rows):
+            row = [c.value(rng) for c in columns]
+            batch_values.append(f"({', '.join(row)})")
+
         ref_database, ref_schema, ref_table = get_sql_server_reference_db_schema_table(
             child
         )
@@ -1814,7 +1879,7 @@ def create_initial_data(
     factor_initial_data: float,
     rng: random.Random,
 ) -> bool:
-    batch_size = 2000
+    batch_size = 100000
     created_data = False
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
@@ -1861,23 +1926,25 @@ def create_initial_data(
                 if source["type"] == "webhook":
                     num_rows = int(source["messages_total"] * factor_initial_data)
                     print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
-                    for start in range(0, num_rows, batch_size):
-                        progress = min(start + batch_size, num_rows)
-                        print(
-                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                            end="\r",
-                            flush=True,
-                        )
+                    asyncio.run(
                         ingest_webhook(
                             c,
                             db,
                             schema,
                             name,
                             source,
-                            min(batch_size, num_rows - start),
+                            num_rows,
                         )
-                        created_data = True
-                    print()
+                    )
+                    # for start in range(0, num_rows, batch_size):
+                    #     progress = min(start + batch_size, num_rows)
+                    #     print(
+                    #         f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                    #         end="\r",
+                    #         flush=True,
+                    #     )
+                    #     created_data = True
+                    # print()
                 elif not source.get("children", {}):
                     num_rows = int(source["messages_total"] * factor_initial_data)
                     if not num_rows:
@@ -1957,7 +2024,6 @@ def create_ingestions(
     stats: dict[str, int],
 ) -> list[threading.Thread]:
     threads = []
-    batch_size = 1000
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
             for name, source in items["sources"].items():
@@ -1987,13 +2053,15 @@ def create_ingestions(
                                 if verbose:
                                     print(f"Ingesting {rate} rows for {pretty_name}")
                                 stats["total"] += 1
-                                ingest_webhook(
-                                    c,
-                                    db,
-                                    schema,
-                                    name,
-                                    source,
-                                    min(batch_size, rate),
+                                asyncio.run(
+                                    ingest_webhook(
+                                        c,
+                                        db,
+                                        schema,
+                                        name,
+                                        source,
+                                        rate,
+                                    )
                                 )
                                 time_to_sleep = (start_time + 1) - time.time()
                                 if time_to_sleep > 0:
@@ -2066,7 +2134,7 @@ def create_ingestions(
                                     source,
                                     source,
                                     data_columns,
-                                    min(batch_size, rate),
+                                    rate,
                                     rng,
                                 )
                                 time_to_sleep = (start_time + 1) - time.time()
@@ -2141,7 +2209,7 @@ def create_ingestions(
                                         child,
                                         source,
                                         data_columns,
-                                        min(batch_size, rate),
+                                        rate,
                                         rng,
                                     )
                                     time_to_sleep = (start_time + 1) - time.time()
