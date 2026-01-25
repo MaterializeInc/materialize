@@ -17,7 +17,7 @@ use mz_compute_client::controller::error::{
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{exit, soft_assert_no_log};
-use mz_repr::{RelationDesc, RowIterator, SqlScalarType};
+use mz_repr::{CatalogItemId, RelationDesc, RowIterator, SqlScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::metadata::SessionMetadata;
@@ -198,6 +198,7 @@ impl<T: Transmittable> Drop for ClientTransmitter<T> {
 pub fn index_sql(
     index_name: String,
     cluster_id: ClusterId,
+    view_id: CatalogItemId,
     view_name: FullItemName,
     view_desc: &RelationDesc,
     keys: &[usize],
@@ -206,7 +207,14 @@ pub fn index_sql(
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new_unchecked(index_name)),
-        on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
+        // We use `RawItemName::Id`, so that we include the item ID in the persisted `create_sql`.
+        // This is needed because we have the invariant that references in `create_sql`s persisted
+        // to the catalog should always include the item ID.
+        on_name: RawItemName::Id(
+            view_id.to_string(),
+            mz_sql::normalize::unresolve(view_name),
+            None,
+        ),
         in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
         key_parts: Some(
             keys.iter()

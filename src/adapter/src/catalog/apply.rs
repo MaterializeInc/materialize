@@ -1892,6 +1892,7 @@ impl CatalogState {
             create_sql: index_sql(
                 index_item_name,
                 cluster_id,
+                log_item_id,
                 source_name,
                 &log.variant.desc(),
                 &log.variant.index_by(),
