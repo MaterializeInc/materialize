@@ -31,14 +31,13 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Index, Log,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, DataSourceDesc, Database, Func, Log,
     NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
-use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument, soft_assert_no_log};
@@ -49,13 +48,15 @@ use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, Timestamp, Version
 use mz_sql::catalog::CatalogError as SqlCatalogError;
 use mz_sql::catalog::{CatalogItem as SqlCatalogItem, CatalogItemType, CatalogSchema, CatalogType};
 use mz_sql::names::{
-    FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
+    ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, SchemaSpecifier,
 };
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
-use mz_sql_parser::ast::Expr;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{
+    CreateIndexStatement, Expr, Ident, Raw, RawClusterName, RawItemName, UnresolvedItemName, Value,
+};
 use mz_storage_types::sources::Timeline;
 use tracing::{info_span, warn};
 
@@ -63,7 +64,6 @@ use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
-use crate::util::index_sql;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -305,6 +305,7 @@ impl CatalogState {
                     introspection_source_index,
                     diff,
                     retractions,
+                    local_expression_cache,
                 );
             }
             StateUpdateKind::ClusterReplica(cluster_replica) => {
@@ -536,6 +537,7 @@ impl CatalogState {
         introspection_source_index: mz_catalog::durable::IntrospectionSourceIndex,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) {
         let cluster = self
             .clusters_by_id
@@ -563,6 +565,7 @@ impl CatalogState {
                         introspection_source_index.cluster_id,
                         log,
                         introspection_source_index.index_id,
+                        local_expression_cache,
                     );
                     assert_eq!(entry.id, introspection_source_index.item_id);
                     assert_eq!(entry.oid, introspection_source_index.oid);
@@ -576,6 +579,7 @@ impl CatalogState {
                         introspection_source_index.item_id,
                         introspection_source_index.index_id,
                         introspection_source_index.oid,
+                        local_expression_cache,
                     );
                 }
             }
@@ -1845,9 +1849,14 @@ impl CatalogState {
         item_id: CatalogItemId,
         global_id: GlobalId,
         oid: u32,
+        local_expression_cache: &mut LocalExpressionCache,
     ) {
-        let (index_name, index) =
-            self.create_introspection_source_index(cluster_id, log, global_id);
+        let (index_name, index) = self.create_introspection_source_index(
+            cluster_id,
+            log,
+            global_id,
+            local_expression_cache,
+        );
         self.insert_item(
             item_id,
             oid,
@@ -1863,12 +1872,8 @@ impl CatalogState {
         cluster_id: ClusterId,
         log: &'static BuiltinLog,
         global_id: GlobalId,
+        local_expression_cache: &mut LocalExpressionCache,
     ) -> (QualifiedItemName, CatalogItem) {
-        let source_name = FullItemName {
-            database: RawDatabaseSpecifier::Ambient,
-            schema: log.schema.into(),
-            item: log.name.into(),
-        };
         let index_name = format!("{}_{}_primary_idx", log.name, cluster_id);
         let mut index_name = QualifiedItemName {
             qualifiers: ItemQualifiers {
@@ -1878,31 +1883,59 @@ impl CatalogState {
             item: index_name.clone(),
         };
         index_name = self.find_available_name(index_name, &SYSTEM_CONN_ID);
-        let index_item_name = index_name.item.clone();
-        let (log_item_id, log_global_id) = self.resolve_builtin_log(log);
-        let index = CatalogItem::Index(Index {
-            global_id,
-            on: log_global_id,
-            keys: log
-                .variant
-                .index_by()
-                .into_iter()
-                .map(MirScalarExpr::column)
-                .collect(),
-            create_sql: index_sql(
-                index_item_name,
-                cluster_id,
-                log_item_id,
-                source_name,
-                &log.variant.desc(),
-                &log.variant.index_by(),
-            ),
-            conn_id: None,
-            resolved_ids: [(log_item_id, log_global_id)].into_iter().collect(),
-            cluster_id,
-            is_retained_metrics_object: false,
-            custom_logical_compaction_window: None,
-        });
+
+        // (Name resolution in parse_item will convert this to `[id AS name]` format.)
+        let on_name = RawItemName::Name(UnresolvedItemName(vec![
+            Ident::new_unchecked(log.schema),
+            Ident::new_unchecked(log.name),
+        ]));
+
+        // Build key parts using get_unambiguous_name
+        let desc = log.variant.desc();
+        let key_parts = log
+            .variant
+            .index_by()
+            .iter()
+            .map(|i| match desc.get_unambiguous_name(*i) {
+                Some(n) => Expr::Identifier(vec![Ident::new_unchecked(n.to_string())]),
+                None => Expr::Value(Value::Number((i + 1).to_string())),
+            })
+            .collect();
+
+        // Build the CREATE INDEX statement
+        let create_sql = CreateIndexStatement::<Raw> {
+            name: Some(Ident::new_unchecked(&index_name.item)),
+            on_name,
+            in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
+            key_parts: Some(key_parts),
+            with_options: vec![],
+            if_not_exists: false,
+        }
+        .to_ast_string_stable();
+
+        // Use parse_item to go through the full pipeline (parsing, name resolution, planning)
+        let versions = BTreeMap::new();
+        let index = self
+            .parse_item(
+                global_id,
+                &create_sql,
+                &versions,
+                None,  // pcx
+                false, // is_retained_metrics_object
+                None,  // custom_logical_compaction_window
+                local_expression_cache,
+                None, // previous_item
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "internal error: failed to load introspection source index:\n\
+                     {}\n\
+                     error:\n\
+                     {:?}",
+                    create_sql, e
+                )
+            });
+
         (index_name, index)
     }
 
