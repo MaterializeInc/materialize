@@ -32,7 +32,7 @@ import threading
 import time
 import urllib.parse
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import cache
 from pathlib import Path
 from textwrap import dedent
@@ -2978,7 +2978,7 @@ def test(
 ) -> dict[str, Any]:
     print(f"--- {posixpath.relpath(file, LOCATION)}")
     with open(file) as f:
-        workload = yaml.load(f, Loader=yaml.Loader)
+        workload = yaml.load(f, Loader=yaml.CSafeLoader)
 
     services = set()
 
@@ -3194,7 +3194,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"-- Random seed is {args.seed}")
     random.seed(args.seed)
-
     update_recorded_workloads_repo()
 
     files_unsharded: list[pathlib.Path] = []
@@ -3301,3 +3300,171 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.early_initial_data,
         ),
     )
+
+
+def workflow_stats(c: Composition, parser: WorkflowArgumentParser) -> None:
+    with c.override(Materialized(sanity_restart=False)):
+        parser.add_argument(
+            "files",
+            nargs="*",
+            default=["*.yml"],
+            help="run against the specified files",
+        )
+        args = parser.parse_args()
+        update_recorded_workloads_repo()
+
+        files: list[pathlib.Path] = []
+        for file in args.files:
+            files.extend(LOCATION.rglob(file))
+        files.sort()
+
+        def p(label, value):
+            if isinstance(value, str):
+                s = value
+            elif isinstance(value, float):
+                s = f"{value:,.2f}"
+            else:
+                s = f"{value:,}"
+            print(f"  {label:<{17}} {s:>{12}}")
+
+        for file in files:
+            print()
+            print(posixpath.relpath(file, LOCATION))
+            p("size", f"{os.path.getsize(file) / (1024 * 1024):.1f} MiB")
+            with open(file) as f:
+                workload = yaml.load(f, Loader=yaml.CSafeLoader)
+
+            p("clusters", len(workload["clusters"]))
+            p("databases", len(workload["databases"]))
+            p(
+                "schemas",
+                sum(len(schemas) for schemas in workload["databases"].values()),
+            )
+            p(
+                "types",
+                sum(
+                    len(items["types"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            p(
+                "tables",
+                sum(
+                    len(items["tables"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            p(
+                "connections",
+                sum(
+                    len(items["connections"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            p(
+                "sources",
+                sum(
+                    len(items["sources"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            source_types = Counter(
+                source["type"]
+                for schemas in workload["databases"].values()
+                for items in schemas.values()
+                for source in items["sources"].values()
+            )
+            for t, n in sorted(source_types.items()):
+                p(f"  {t}", n)
+            p(
+                "subsources",
+                sum(
+                    len(source.get("children", {}))
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                    for source in items["sources"].values()
+                ),
+            )
+            p(
+                "views",
+                sum(
+                    len(items["views"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            p(
+                "mat. views",
+                sum(
+                    len(items["materialized_views"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            p(
+                "sinks",
+                sum(
+                    len(items["sinks"])
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                ),
+            )
+            sink_types = Counter(
+                sink["type"]
+                for schemas in workload["databases"].values()
+                for items in schemas.values()
+                for sink in items["sinks"].values()
+            )
+            for t, n in sorted(sink_types.items()):
+                p(f"  {t}", n)
+
+            rows = (
+                sum(
+                    table["rows"]
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                    for table in items["tables"].values()
+                )
+                + sum(
+                    source["messages_total"]
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                    for source in items["sources"].values()
+                )
+                + sum(
+                    child["messages_total"]
+                    for schemas in workload["databases"].values()
+                    for items in schemas.values()
+                    for source in items["sources"].values()
+                    for child in source.get("children", {}).values()
+                )
+            )
+            p("rows", rows)
+
+            rows_s = sum(
+                source.get("messages_second", 0.0)
+                for schemas in workload["databases"].values()
+                for items in schemas.values()
+                for source in items["sources"].values()
+            ) + sum(
+                child.get("messages_second", 0.0)
+                for schemas in workload["databases"].values()
+                for items in schemas.values()
+                for source in items["sources"].values()
+                for child in source.get("children", {}).values()
+            )
+            p("  /s", rows_s)
+
+            p("queries", len(workload["queries"]))
+            if workload["queries"]:
+                dur_s = (
+                    workload["queries"][-1]["began_at"]
+                    - workload["queries"][0]["began_at"]
+                ).total_seconds()
+                p("  span", f"{int(round(dur_s / 60))}min")
+                p("  last", workload["queries"][-1]["began_at"].date().isoformat())
+        print()
