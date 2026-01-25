@@ -155,7 +155,7 @@ unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
+zip = { version = "7.0.0", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.16", features = ["std"] }
@@ -305,7 +305,7 @@ unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
+zip = { version = "7.0.0", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.16", features = ["std"] }
