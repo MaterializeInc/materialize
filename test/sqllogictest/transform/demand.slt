@@ -112,7 +112,7 @@ Used Indexes:
 Target cluster: mz_catalog_server
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
