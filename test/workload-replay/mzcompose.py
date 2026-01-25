@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import csv
 import datetime
+import io
 import json
 import math
 import os
@@ -979,6 +981,7 @@ async def ingest_webhook(
     name: str,
     source: dict[str, Any],
     num_rows: int,
+    print_progress: bool = False,
 ) -> None:
     url = (
         f"http://127.0.0.1:{c.port('materialized', 6876)}/api/webhook/"
@@ -1012,8 +1015,21 @@ async def ingest_webhook(
     timeout = aiohttp.ClientTimeout(total=None)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-
         sem = asyncio.Semaphore(5000)
+
+        progress = 0
+        progress_lock = asyncio.Lock()
+
+        async def report_progress() -> None:
+            nonlocal progress
+            async with progress_lock:
+                progress += 1
+                if progress % 10000 == 0 or progress == num_rows:
+                    print(
+                        f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                        end="\r",
+                        flush=True,
+                    )
 
         async def send_one(seed: int):
             rng = random.Random(seed)
@@ -1028,8 +1044,9 @@ async def ingest_webhook(
                             headers_column.kafka_value(rng) if headers_column else None
                         ),
                     ) as resp:
-
                         if resp.status == 200:
+                            if print_progress:
+                                await report_progress()
                             return
                         elif resp.status == 429:
                             await asyncio.sleep(backoff)
@@ -1043,6 +1060,7 @@ async def ingest_webhook(
         await asyncio.gather(
             *(send_one(random.randrange(SEED_RANGE)) for _ in range(num_rows))
         )
+        print()
 
 
 @cache
@@ -1245,9 +1263,6 @@ def ingest(
     rng: random.Random,
 ) -> None:
     if source["type"] == "postgres":
-        for _ in range(num_rows):
-            row = [c.value(rng) for c in columns]
-
         ref_database, ref_schema, ref_table = get_postgres_reference_db_schema_table(
             child
         )
@@ -1264,7 +1279,9 @@ def ingest(
         value_funcs = [col.value for col in columns]
 
         with conn.cursor() as cur:
-            copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN BINARY").format(
+            copy_stmt = SQL(
+                "COPY {}.{} ({}) FROM STDIN WITH (FORMAT CSV, NULL 'NULL')"
+            ).format(
                 Identifier(ref_schema),
                 Identifier(ref_table),
                 SQL(", ").join(map(Identifier, col_names)),
@@ -1273,7 +1290,13 @@ def ingest(
             with cur.copy(copy_stmt) as copy:
                 for _ in range(num_rows):
                     row = [fn(rng) for fn in value_funcs]
-                    copy.write_row(row)
+
+                    # Convert a python row -> one CSV record
+                    buf = io.StringIO()
+                    writer = csv.writer(buf, lineterminator="\n")
+                    writer.writerow(row)
+
+                    copy.write(buf.getvalue())
 
     elif source["type"] == "mysql":
         ref_database, ref_table = get_mysql_reference_db_table(child)
@@ -1288,15 +1311,15 @@ def ingest(
         )
 
         value_funcs = [col.value for col in columns]
-        placeholders = "(" + ",".join(["%s"] * len(columns)) + ")"
-        insert_sql = f"INSERT INTO {ref_table} VALUES {placeholders}"
+        rows_sql = []
+        for _ in range(num_rows):
+            row = [fn(rng) for fn in value_funcs]
+            rows_sql.append("(" + ", ".join(row) + ")")
 
-        rows = [[fn(rng) for fn in value_funcs] for _ in range(num_rows)]
+        stmt = f"INSERT INTO {ref_table} VALUES " + ", ".join(rows_sql)
 
         with conn.cursor() as cur:
-            cur.executemany(insert_sql, rows)
-            conn.commit()
-
+            cur.execute(stmt)
         conn.close()
 
     elif source["type"] == "kafka":
@@ -1420,7 +1443,7 @@ def pg_params_to_psycopg(sql: str, params: list[Any]) -> tuple[str, list[Any]]:
     return PG_PARAM_RE.sub(replace, sql.replace("%", "%%")), out_params
 
 
-def run_create_objects(
+def run_create_objects_part_1(
     c: Composition, services: set[str], workload: dict[str, Any]
 ) -> None:
     c.sql("DROP CLUSTER IF EXISTS quickstart CASCADE", user="mz_system", port=6877)
@@ -1637,7 +1660,7 @@ def run_create_objects(
                 else:
                     raise ValueError(f"Unhandled connection type {connection['type']}")
 
-    print("Creating sources")
+    print("Preparing sources")
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for name, source in items["sources"].items():
@@ -1775,6 +1798,15 @@ def run_create_objects(
                         source["create_sql"],
                         flags=re.DOTALL | re.IGNORECASE,
                     )
+
+
+def run_create_objects_part_2(
+    c: Composition, services: set[str], workload: dict[str, Any]
+) -> None:
+    print("Creating sources")
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for name, source in items["sources"].items():
                 c.sql(source["create_sql"], user="mz_system", port=6877)
 
                 for child in source.get("children", {}).values():
@@ -1819,14 +1851,8 @@ def run_create_objects(
                 pending.add(view["create_sql"])
             for mv in items["materialized_views"].values():
                 pending.add(mv["create_sql"])
-            # for sink in items["sinks"].values():
-            #     create_sql = re.sub(
-            #         r'\s*\(REFERENCE\s*=\s*"?([^")]+)"?\s*\)',
-            #         r' (REFERENCE = "testdrive-\1-1")',
-            #         sink["create_sql"],
-            #         flags=re.IGNORECASE,
-            #     )
-            #     pending.add(create_sql)
+            for sink in items["sinks"].values():
+                pending.add(sink["create_sql"])
 
     # TODO: Handle sink -> source roundtrips: scan for topic names to create a dependency graph
     while pending:
@@ -1844,7 +1870,7 @@ def run_create_objects(
             raise RuntimeError(f"No progress, remaining creates: {pending}")
 
 
-def create_initial_data(
+def create_initial_data_requiring_mz(
     c: Composition,
     workload: dict[str, Any],
     factor_initial_data: float,
@@ -1852,50 +1878,76 @@ def create_initial_data(
 ) -> bool:
     batch_size = 10000
     created_data = False
+
+    conn = psycopg.connect(
+        host="127.0.0.1",
+        port=c.port("materialized", 6877),
+        user="mz_system",
+        password="materialize",
+        dbname="materialize",
+    )
+    conn.autocommit = True
+
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
             for name, table in items["tables"].items():
                 num_rows = int(table["rows"] * factor_initial_data)
                 if not num_rows:
                     continue
+
                 data_columns = [
                     Column(
-                        c["name"],
-                        c["type"],
-                        c["nullable"],
-                        c["default"],
-                        c.get("data_shape"),
+                        col["name"],
+                        col["type"],
+                        col["nullable"],
+                        col["default"],
+                        col.get("data_shape"),
                     )
-                    for c in table["columns"]
+                    for col in table["columns"]
                 ]
+
                 print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
-                for start in range(0, num_rows, batch_size):
-                    progress = min(start + batch_size, num_rows)
-                    print(
-                        f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                        end="\r",
-                        flush=True,
-                    )
-                    batch_values = []
-                    for _ in range(min(batch_size, num_rows - start)):
-                        row = [c.value(rng) for c in data_columns]
-                        batch_values.append(f"({', '.join(row)})")
-                    c.sql(
-                        SQL(
-                            "INSERT INTO {}.{}.{} VALUES " + ", ".join(batch_values)
+
+                col_names = [col.name for col in data_columns]
+                value_funcs = [col.value for col in data_columns]
+
+                with conn.cursor() as cur:
+                    for start in range(0, num_rows, batch_size):
+                        progress = min(start + batch_size, num_rows)
+                        print(
+                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                            end="\r",
+                            flush=True,
+                        )
+
+                        copy_stmt = SQL(
+                            "COPY {}.{}.{} ({}) FROM STDIN WITH (FORMAT CSV, NULL 'NULL')"
                         ).format(
                             Identifier(db),
                             Identifier(schema),
                             Identifier(name),
-                        ),
-                        user="mz_system",
-                        port=6877,
-                        print_statement=False,
-                    )
+                            SQL(", ").join(map(Identifier, col_names)),
+                        )
+
+                        with cur.copy(copy_stmt) as copy:
+                            buf = io.StringIO()
+                            writer = csv.writer(buf, lineterminator="\n")
+
+                            batch_rows = min(batch_size, num_rows - start)
+                            for _ in range(batch_rows):
+                                row = [fn(rng) for fn in value_funcs]
+                                writer.writerow(row)
+
+                            copy.write(buf.getvalue())
+
                 print()
+                created_data = True
+
             for name, source in items["sources"].items():
                 if source["type"] == "webhook":
                     num_rows = int(source["messages_total"] * factor_initial_data)
+                    if not num_rows:
+                        continue
                     print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
                     asyncio.run(
                         ingest_webhook(
@@ -1905,18 +1957,26 @@ def create_initial_data(
                             name,
                             source,
                             num_rows,
+                            print_progress=True,
                         )
                     )
-                    # for start in range(0, num_rows, batch_size):
-                    #     progress = min(start + batch_size, num_rows)
-                    #     print(
-                    #         f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                    #         end="\r",
-                    #         flush=True,
-                    #     )
-                    #     created_data = True
-                    # print()
-                elif not source.get("children", {}):
+                    created_data = True
+    conn.close()
+    return created_data
+
+
+def create_initial_data_external(
+    c: Composition,
+    workload: dict[str, Any],
+    factor_initial_data: float,
+    rng: random.Random,
+) -> bool:
+    batch_size = 10000
+    created_data = False
+    for db, schemas in workload["databases"].items():
+        for schema, items in schemas.items():
+            for name, source in items["sources"].items():
+                if source["type"] != "webhook" and not source.get("children", {}):
                     num_rows = int(source["messages_total"] * factor_initial_data)
                     if not num_rows:
                         continue
@@ -1946,7 +2006,7 @@ def create_initial_data(
                             min(batch_size, num_rows - start),
                             rng,
                         )
-                        created_data = True
+                    created_data = True
                     print()
                 else:
                     for child_name, child in source.get("children", {}).items():
@@ -1981,7 +2041,7 @@ def create_initial_data(
                                 min(batch_size, num_rows - start),
                                 rng,
                             )
-                            created_data = True
+                        created_data = True
                         print()
     return created_data
 
@@ -2798,6 +2858,7 @@ def benchmark(
     runtime: int,
     verbose: bool,
     seed: str,
+    early_initial_data: bool,
 ) -> None:
     services = [
         "materialized",
@@ -2830,6 +2891,7 @@ def benchmark(
             verbose,
             True,
             True,
+            early_initial_data,
             True,
             True,
         )
@@ -2855,6 +2917,7 @@ def benchmark(
             verbose,
             True,
             True,
+            early_initial_data,
             True,
             True,
         )
@@ -2907,6 +2970,7 @@ def test(
     verbose: bool,
     create_objects: bool,
     initial_data: bool,
+    early_initial_data: bool,
     run_ingestions: bool,
     run_queries: bool,
 ) -> dict[str, Any]:
@@ -2950,12 +3014,14 @@ def test(
     }
     if create_objects:
         start_time = time.time()
-        run_create_objects(c, services, workload)
+        run_create_objects_part_1(c, services, workload)
+        if not early_initial_data:
+            run_create_objects_part_2(c, services, workload)
         stats["object_creation"] = time.time() - start_time
+    created_data = False
     if initial_data:
         print("Creating initial data")
         stats["initial_data"] = {"docker": [], "time": 0.0}
-        # TODO: We should probably generate the data before even creating the sources to make hydration time faster, see https://materializeinc.slack.com/archives/C08ACQNGSQK/p1769188999814799
         stats_thread = PropagatingThread(
             target=docker_stats,
             name="docker-stats",
@@ -2963,7 +3029,18 @@ def test(
         )
         stats_thread.start()
         start_time = time.time()
-        created_data = create_initial_data(
+        created_data = create_initial_data_external(
+            c,
+            workload,
+            factor_initial_data,
+            random.Random(random.randrange(SEED_RANGE)),
+        )
+    if early_initial_data:
+        start_time = time.time()
+        run_create_objects_part_2(c, services, workload)
+        stats["object_creation"] += time.time() - start_time
+    if initial_data:
+        created_data = create_initial_data_requiring_mz(
             c,
             workload,
             factor_initial_data,
@@ -2972,6 +3049,7 @@ def test(
         stop_event.set()
         stats_thread.join()
         stop_event.clear()
+        stats["initial_data"]["time"] = time.time() - start_time
         if not created_data:
             del stats["initial_data"]
         while True:
@@ -3002,7 +3080,6 @@ def test(
                 time.sleep(1)
             else:
                 break
-        stats["initial_data"]["time"] = time.time() - start_time
     if run_ingestions:
         print("Starting continuous ingestions")
         threads.extend(
@@ -3100,6 +3177,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--initial-data", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--early-initial-data",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
+    )
+    parser.add_argument(
         "--run-ingestions", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
@@ -3131,6 +3214,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.verbose,
             args.create_objects,
             args.initial_data,
+            args.early_initial_data,
             args.run_ingestions,
             args.run_queries,
         ),
@@ -3182,6 +3266,12 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=None,
         help="compare performance and errors against another Materialize tag",
     )
+    parser.add_argument(
+        "--early-initial-data",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
+    )
     args = parser.parse_args()
 
     print(f"-- Random seed is {args.seed}")
@@ -3206,5 +3296,6 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.runtime,
             args.verbose,
             args.seed,
+            args.early_initial_data,
         ),
     )
