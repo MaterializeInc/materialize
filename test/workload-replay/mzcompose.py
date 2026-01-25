@@ -1758,13 +1758,6 @@ def run_create_objects(
                             )
                         ]
                     )
-                    # c.testdrive(f"$ kafka-create-topic topic={topic}")
-                    # source["create_sql"] = re.sub(
-                    #     r"(TOPIC\s*=\s*)'[^']+'",
-                    #     lambda m: f"{m.group(1)}'testdrive-{topic}-1'",
-                    #     source["create_sql"],
-                    #     flags=re.IGNORECASE | re.DOTALL,
-                    # )
 
                     # Have to wait for topics to be created before creating sources/tables using them
                     while True:
@@ -1774,10 +1767,6 @@ def run_create_objects(
                         print(f"Waiting for topic: {topic}")
                         time.sleep(1)
 
-                # if source["type"] == "mysql":
-                #    # TODO: This is weird, shouldn't it be part of the create_sql?
-                #    source["create_sql"] = re.sub(r"EXPOSE ", "FOR ALL TABLES EXPOSE ", source["create_sql"], flags=re.IGNORECASE)
-
                 if source["type"] == "webhook":
                     # Checking secrets makes ingestion into webhooks difficult, remove the check instead
                     source["create_sql"] = re.sub(
@@ -1786,17 +1775,6 @@ def run_create_objects(
                         source["create_sql"],
                         flags=re.DOTALL | re.IGNORECASE,
                     )
-                    # match = re.search(
-                    #     r'(?i)\bSECRET\s+((?:(?:[A-Za-z_][A-Za-z0-9_]*|"[^"]+")(?:\s*\.\s*(?:[A-Za-z_][A-Za-z0-9_]*|"[^"]+"))*))',
-                    #     source["create_sql"],
-                    # )
-                    # if match:
-                    #     secret = match.group(1)
-                    #     c.sql(
-                    #         f"CREATE SECRET IF NOT EXISTS {secret} AS ''",
-                    #         user="mz_system",
-                    #         port=6877,
-                    #     )
                 c.sql(source["create_sql"], user="mz_system", port=6877)
 
                 for child in source.get("children", {}).values():
@@ -1819,13 +1797,6 @@ def run_create_objects(
                                 create_sql,
                                 flags=re.IGNORECASE,
                             )
-                        # if source["type"] == "kafka":
-                        #     create_sql = re.sub(
-                        #         r'\s*\(REFERENCE\s*=\s*"?([^")]+)"?\s*\)',
-                        #         r' (REFERENCE = "testdrive-\1-1")',
-                        #         create_sql,
-                        #         flags=re.IGNORECASE,
-                        #     )
                         create_sql = re.sub(
                             r"\s*\(.*\)\s+FROM\s+",
                             " FROM ",
@@ -2859,7 +2830,6 @@ def benchmark(
             verbose,
             True,
             True,
-            False,
             True,
             True,
         )
@@ -2885,7 +2855,6 @@ def benchmark(
             verbose,
             True,
             True,
-            False,
             True,
             True,
         )
@@ -2938,7 +2907,6 @@ def test(
     verbose: bool,
     create_objects: bool,
     initial_data: bool,
-    run_mz_during_initial_data: bool,
     run_ingestions: bool,
     run_queries: bool,
 ) -> dict[str, Any]:
@@ -2987,12 +2955,7 @@ def test(
     if initial_data:
         print("Creating initial data")
         stats["initial_data"] = {"docker": [], "time": 0.0}
-        if not run_mz_during_initial_data:
-            try:
-                c.kill("materialized")
-            except:
-                pass
-
+        # TODO: We should probably generate the data before even creating the sources to make hydration time faster, see https://materializeinc.slack.com/archives/C08ACQNGSQK/p1769188999814799
         stats_thread = PropagatingThread(
             target=docker_stats,
             name="docker-stats",
@@ -3011,13 +2974,8 @@ def test(
         stop_event.clear()
         if not created_data:
             del stats["initial_data"]
-        if run_mz_during_initial_data:
-            c.up("materialized")
         while True:
-            c.sql(
-                "SELECT (SELECT bool_and(hydrated) FROM mz_internal.mz_hydration_statuses) AND (SELECT bool_and(hydrated) FROM mz_internal.mz_compute_hydration_statuses) AS all_hydrated;"
-            )
-            not_hydrated = c.sql(
+            not_hydrated: list[tuple[str]] | None = c.sql(
                 """
                 SELECT DISTINCT name
                     FROM (
@@ -3142,11 +3100,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--initial-data", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
-        "--run-mz-during-initial-data",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    parser.add_argument(
         "--run-ingestions", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
@@ -3178,7 +3131,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.verbose,
             args.create_objects,
             args.initial_data,
-            args.run_mz_during_initial_data,
             args.run_ingestions,
             args.run_queries,
         ),
