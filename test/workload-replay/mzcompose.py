@@ -1879,7 +1879,7 @@ def create_initial_data(
     factor_initial_data: float,
     rng: random.Random,
 ) -> bool:
-    batch_size = 100000
+    batch_size = 10000
     created_data = False
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
@@ -2859,6 +2859,7 @@ def benchmark(
             verbose,
             True,
             True,
+            False,
             True,
             True,
         )
@@ -2884,6 +2885,7 @@ def benchmark(
             verbose,
             True,
             True,
+            False,
             True,
             True,
         )
@@ -2936,6 +2938,7 @@ def test(
     verbose: bool,
     create_objects: bool,
     initial_data: bool,
+    run_mz_during_initial_data: bool,
     run_ingestions: bool,
     run_queries: bool,
 ) -> dict[str, Any]:
@@ -2984,6 +2987,12 @@ def test(
     if initial_data:
         print("Creating initial data")
         stats["initial_data"] = {"docker": [], "time": 0.0}
+        if not run_mz_during_initial_data:
+            try:
+                c.kill("materialized")
+            except:
+                pass
+
         stats_thread = PropagatingThread(
             target=docker_stats,
             name="docker-stats",
@@ -2997,12 +3006,45 @@ def test(
             factor_initial_data,
             random.Random(random.randrange(SEED_RANGE)),
         )
-        stats["initial_data"]["time"] = time.time() - start_time
         stop_event.set()
         stats_thread.join()
         stop_event.clear()
         if not created_data:
             del stats["initial_data"]
+        if run_mz_during_initial_data:
+            c.up("materialized")
+        while True:
+            c.sql(
+                "SELECT (SELECT bool_and(hydrated) FROM mz_internal.mz_hydration_statuses) AND (SELECT bool_and(hydrated) FROM mz_internal.mz_compute_hydration_statuses) AS all_hydrated;"
+            )
+            not_hydrated = c.sql(
+                """
+                SELECT DISTINCT name
+                    FROM (
+                      SELECT o.name
+                      FROM mz_objects o
+                      JOIN mz_internal.mz_hydration_statuses h
+                        ON o.id = h.object_id
+                      WHERE NOT h.hydrated
+
+                      UNION ALL
+
+                      SELECT o.name
+                      FROM mz_objects o
+                      JOIN mz_internal.mz_compute_hydration_statuses h
+                        ON o.id = h.object_id
+                      WHERE NOT h.hydrated
+                    ) x
+                    ORDER BY 1;"""
+            )
+            if not_hydrated:
+                print(
+                    f"Waiting to hydrate: {', '.join([nh[0] for nh in not_hydrated])}"
+                )
+                time.sleep(1)
+            else:
+                break
+        stats["initial_data"]["time"] = time.time() - start_time
     if run_ingestions:
         print("Starting continuous ingestions")
         threads.extend(
@@ -3100,6 +3142,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--initial-data", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
+        "--run-mz-during-initial-data",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
         "--run-ingestions", action=argparse.BooleanOptionalAction, default=True
     )
     parser.add_argument(
@@ -3131,6 +3178,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.verbose,
             args.create_objects,
             args.initial_data,
+            args.run_mz_during_initial_data,
             args.run_ingestions,
             args.run_queries,
         ),
