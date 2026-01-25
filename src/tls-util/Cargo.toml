@@ -14,7 +14,7 @@ anyhow = "1.0.100"
 openssl = { version = "0.10.75", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 postgres-openssl = { version = "0.5.2" }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tokio = { version = "1.48.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { version = "0.7.15" }
 tracing = "0.1.44"

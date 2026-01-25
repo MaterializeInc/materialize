@@ -15,7 +15,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 reqwest = { version = "0.12.28", features = ["json"] }
 serde = { version = "1.0.219", features = ["derive"] }
 url = "2.5.8"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tokio = "1.48.0"
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }

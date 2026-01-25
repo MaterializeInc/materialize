@@ -35,7 +35,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely = "0.25.1"
 tokio = { version = "1.48.0", features = ["net"] }
