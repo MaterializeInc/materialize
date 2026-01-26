@@ -349,3 +349,28 @@ SELECT quote_ident('this ident is too long and will return an error 🌎🌎🌎
 ----
 db error: ERROR: string is not a valid identifier: "this ident is too long and will return an error 🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎"
 DETAIL: identifier too long (len: 272, max: 255, value: "this ident is too long and will return an error 🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎🌎")
+
+# Only some of the following require quotations. This depends on whether `Parser::parse_prefix` checks the next token
+# before treating them as keywords. We took care to make this behavior exactly the same as Postgres.
+query TTTTTTTTTTTTTTTTTTT
+SELECT quote_ident('true'), quote_ident('false'), quote_ident('null'), quote_ident('array'), quote_ident('list'), quote_ident('map'), quote_ident('case'), quote_ident('cast'), quote_ident('coalesce'), quote_ident('greatest'), quote_ident('least'), quote_ident('nullif'), quote_ident('exists'), quote_ident('extract'), quote_ident('not'), quote_ident('row'), quote_ident('trim'), quote_ident('position'), quote_ident('substring')
+----
+"true"
+"false"
+"null"
+"array"
+list
+map
+"case"
+"cast"
+coalesce
+greatest
+least
+nullif
+exists
+extract
+"not"
+row
+trim
+position
+substring

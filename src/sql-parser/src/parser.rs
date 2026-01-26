@@ -625,6 +625,8 @@ impl<'a> Parser<'a> {
                     format!("expected expression, but found reserved keyword: {kw}"),
                 ));
             }
+            // (Some of the above keywords are recognized by `is_reserved_in_expression`, except the
+            // ones where we check for a following opening paren before treating them as keywords.)
             Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
             Token::Ident(id) => self.parse_qualified_identifier(self.new_identifier(id)?),
             Token::Op(op) if op == "-" => {
