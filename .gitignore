@@ -62,3 +62,6 @@ flake.lock
 my-local-mz/
 /test/orchestratord/cluster.yaml
 uv.lock
+/test/workload-replay/captured-workloads/
+/misc/kind/cache/
+/plots/
