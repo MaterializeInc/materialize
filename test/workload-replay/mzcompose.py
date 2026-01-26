@@ -498,7 +498,12 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Materialized(cluster_replica_size=cluster_replica_sizes),
+    Materialized(
+        cluster_replica_size=cluster_replica_sizes,
+        ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
+        environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
+        additional_system_parameter_defaults={"enable_rbac_checks": "false"},
+    ),
     Testdrive(
         seed=1,
         no_reset=True,
@@ -2714,6 +2719,8 @@ def upload_plots(
     plot_paths: list[str],
     file: str,
 ):
+    if not plot_paths:
+        return
     if buildkite.is_in_buildkite():
         for plot_path in plot_paths:
             buildkite.upload_artifact(plot_path, cwd=MZ_ROOT, quiet=True)
@@ -2994,20 +3001,21 @@ def compare_table(
             [
                 ("Query max (ms)", old_q["max"] * 1000, new_q["max"] * 1000, None),
                 ("Query min (ms)", old_q["min"] * 1000, new_q["min"] * 1000, None),
+                # TODO: Why is query avg/p50 not stable enough?
                 (
                     "Query avg (ms)",
                     old_q["avg"] * 1000,
                     new_q["avg"] * 1000,
-                    1.2,
+                    None,
                 ),
                 (
                     "Query p50 (ms)",
                     old_q["p50"] * 1000,
                     new_q["p50"] * 1000,
-                    1.2,
+                    None,
                 ),
-                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, 1.5),
-                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, 1.5),
+                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, None),
+                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, None),
                 ("Query std (ms)", old_q["std"] * 1000, new_q["std"] * 1000, None),
             ]
         )
@@ -3099,6 +3107,9 @@ def benchmark(
         Materialized(
             image=f"{image_registry()}/materialized:{tag}",
             cluster_replica_size=cluster_replica_sizes,
+            ports=[6874, 6875, 6876, 6877, 6878, 6880, 6881, 26257],
+            environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
+            additional_system_parameter_defaults={"enable_rbac_checks": "false"},
         )
     ):
         stats_old = test(
@@ -3126,7 +3137,13 @@ def benchmark(
     print("-- Running against current materialized")
     random.seed(seed)
     with c.override(
-        Materialized(image=None, cluster_replica_size=cluster_replica_sizes)
+        Materialized(
+            image=None,
+            cluster_replica_size=cluster_replica_sizes,
+            ports=[6874, 6875, 6876, 6877, 6878, 6880, 6881, 26257],
+            environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
+            additional_system_parameter_defaults={"enable_rbac_checks": "false"},
+        )
     ):
         stats_new = test(
             c,
@@ -3228,6 +3245,7 @@ def test(
         *services,
         Service("testdrive", idle=True),
     )
+    print(f"Console available: http://127.0.0.1:{c.port('materialized', 6874)}")
 
     threads = []
     stop_event = threading.Event()

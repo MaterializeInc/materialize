@@ -43,7 +43,7 @@ class MaterializeEmulator(Service):
 
         config: ServiceConfig = {
             "mzbuild": name,
-            "ports": [6875, 6876, 6877, 6878, 26257],
+            "ports": [6875, 6874, 6876, 6877, 6878, 26257],
             "healthcheck": {
                 "test": ["CMD", "curl", "-f", "localhost:6878/api/readyz"],
                 "interval": "1s",
@@ -79,7 +79,7 @@ class Materialized(Service):
         unsafe_mode: bool = True,
         restart: str | None = None,
         use_default_volumes: bool = True,
-        ports: list[str] | None = None,
+        ports: list[str] | list[int] | list[str | int] | None = None,
         system_parameter_defaults: dict[str, str] | None = None,
         additional_system_parameter_defaults: dict[str, str] | None = None,
         system_parameter_version: MzVersion | None = None,
