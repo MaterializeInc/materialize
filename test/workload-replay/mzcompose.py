@@ -1077,7 +1077,7 @@ class Column:
             if in_query:
                 return f"'{json.dumps(obj)}'::jsonb"
             else:
-                return obj
+                return json.dumps(obj)
 
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
             year = long_tail_choice(
@@ -1139,9 +1139,12 @@ class Column:
                 ]
                 return literal(f"{{{', '.join(values)}}}")
             else:
-                return {
-                    str(i): str(long_tail_int(-100, 100, rng=rng)) for i in range(0, 20)
-                }
+                # COPY text input for map expects the literal form too
+                values = [
+                    f'"{i}"=>"{str(long_tail_int(-100, 100, rng=rng))}"'
+                    for i in range(0, 20)
+                ]
+                return "{" + ",".join(values) + "}"
 
         elif self.typ == "text[]":
             if in_query:
@@ -2460,8 +2463,9 @@ def run_query(
         cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
         stats["total"] += 1
         try:
-            # TODO: Replace 'REDACTED' with something more plausible (or just NULL)
             sql, params = pg_params_to_psycopg(query["sql"], query["params"])
+            # TODO: Better repacements for <REDACTED>, but requires parsing the SQL, figuring out the column name, object name, looking up the data type, etc.
+            sql = sql.replace("'<REDACTED'>", "NULL")
             start_time = time.time()
             cur.execute(sql.encode(), params)
             end_time = time.time()
