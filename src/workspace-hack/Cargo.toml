@@ -191,7 +191,7 @@ bstr = { version = "1.12.1" }
 bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
 cast = { version = "0.3.0", default-features = false, features = ["std"] }
-cc = { version = "1.2.52", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.53", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
