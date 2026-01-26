@@ -62,8 +62,8 @@ operators:
   - operator: Project
     plan_types: "optimized,raw"
     description: |
-      Produces a subset of the [columns](#explain-plan-columns) in the input
-      rows. See also [column numbering](#explain-plan-columns).
+      Produces a subset of the [columns](/sql/explain-plan/#explain-plan-columns) in the input
+      rows. See also [column numbering](/sql/explain-plan/#explain-plan-columns).
     uses_memory: False
     memory_details: ""
     expansive: False
@@ -442,4 +442,4 @@ operators:
     uses_memory: False
     memory_details: ""
     expansive: False
-    example: "[See above](#reading-plans)"
+    example: "[See Reading plans](/sql/explain-plan/#reading-plans)"

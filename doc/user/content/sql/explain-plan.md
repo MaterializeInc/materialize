@@ -145,8 +145,8 @@ Plan Stage | Description
 **RAW PLAN** | Display the raw plan; this is closest to the original SQL.
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
-**OPTIMIZED PLAN** | Display the optimized plan.
-**PHYSICAL PLAN** | _(Default)_ Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+**OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
 
 ### Output modifiers
 
@@ -295,7 +295,7 @@ Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
-Each operator can also be annotated with additional metadata. Some details are shown in the default `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
+Each operator can also be annotated with additional metadata. Some details are shown in the `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
 name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
 PLAN`, details about the implementation in the `Join` operator can be requested
 with [the `join implementations` output modifier](#output-modifiers) (that is,
@@ -361,11 +361,11 @@ actually run).
 
 {{< tabs >}}
 
-{{< tab "In fully optimized physical (LIR) plans" >}}
+{{< tab "In fully optimized physical (LIR) plans (Default)" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="LIR" >}}
 {{< /tab >}}
 
-{{< tab "In decorrelated and optimized plans (default EXPLAIN)" >}}
+{{< tab "In decorrelated and optimized plans" >}}
 {{< explain-plans/operator-table data="explain_plan_operators" planType="optimized" >}}
 {{< /tab >}}
 
@@ -375,7 +375,7 @@ actually run).
 
 {{< /tabs >}}
 
-Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
+Operators are sometimes marked as `Fused ...`. This indicates that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
 
 ```
 →Fused X
