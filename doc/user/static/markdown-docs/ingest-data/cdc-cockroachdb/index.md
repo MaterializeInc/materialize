@@ -1,0 +1,259 @@
+# CockroachDB CDC using Kafka and Changefeeds
+
+How to propagate Change Data Capture (CDC) data from a CockroachDB database to Materialize
+
+
+
+> **Tip:** For help getting started with your own data, you can schedule a [free guided
+> trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+>
+>
+
+
+Change Data Capture (CDC) allows you to track and propagate changes in a
+CockroachDB database to downstream consumers. In this guide, we’ll cover how to
+use Materialize to create and efficiently maintain real-time views with
+incrementally updated results on top of CockroachDB CDC data.
+
+[//]: # "TODO(morsapaes) Add Before you begin section for consistency and
+details like the minimum required Cockroach version to follow this."
+
+## A. Configure CockroachDB
+
+### 1. Enable rangefeeds
+
+[//]: # "TODO(morsapaes) Add more detailed steps and best practices, including
+checking if rangefeeds are already enabled (true for CockroachDB serverless),
+creating a dedicated user for replication, granting it the appropriate
+permissions, using CDC queries to reduce the amount of data sent over the wire,
+and so on."
+
+As a first step, you must ensure [rangefeeds](https://www.cockroachlabs.com/docs/stable/create-and-configure-changefeeds#enable-rangefeeds)
+are enabled in your CockroachDB instance so you can create changefeeds for the
+tables you want to replicate to Materialize.
+
+1. As a user with the `admin` role, enable the `kv.rangefeed.enabled`
+   [cluster setting](https://www.cockroachlabs.com/docs/stable/set-cluster-setting):
+
+   ```sql
+   SET CLUSTER SETTING kv.rangefeed.enabled = true;
+   ```
+
+### 2. Configure per-table changefeeds
+
+[//]: # "TODO(morsapaes) Instructions to create a changefeed vary depending on
+whether users are on CockroachDB core or enterprise."
+
+[Changefeeds](https://www.cockroachlabs.com/docs/stable/change-data-capture-overview)
+capture row-level changes resulting from `INSERT`, `UPDATE`, and `DELETE`
+operations against CockroachDB tables and publish them as events to Kafka
+(or other Kafka API-compatible broker). You can then use the [Kafka source](/sql/create-source/kafka/#debezium-envelope)
+to consume these changefeed events into Materialize, making the data available
+for transformation.
+
+1. [Create a changefeed](https://www.cockroachlabs.com/docs/stable/create-and-configure-changefeeds?)
+   for each table you want to replicate:
+
+   ```sql
+   CREATE CHANGEFEED FOR TABLE my_table
+     INTO 'kafka://broker:9092'
+     WITH format = avro,
+       confluent_schema_registry = 'http://registry:8081',
+       diff,
+       envelope = wrapped
+   ```
+
+   We recommend creating changefeeds using the Avro format (`format = avro`) and
+   the default [diff envelope](https://www.cockroachlabs.com/docs/v24.3/create-changefeed#envelope)
+   (`envelope = wrapped`), which is compatible with the message format
+   Materialize expects. Each table will produce data to a dedicated Kafka
+   topic, which can then be consumed by Materialize.
+
+
+For detailed instructions on configuring your CockroachDB instance for CDC,
+refer to the [CockroachDB documentation](https://www.cockroachlabs.com/docs/stable/create-changefeed).
+
+## B. Ingest data in Materialize
+
+### 1. (Optional) Create a cluster
+
+> **Note:** If you are prototyping and already have a cluster to host your Kafka
+> source (e.g. `quickstart`), **you can skip this step**. For production
+> scenarios, we recommend separating your workloads into multiple clusters for
+> [resource isolation](/sql/create-cluster/#resource-isolation).
+>
+
+
+In Materialize, a [cluster](/concepts/clusters/) is an isolated environment,
+similar to a virtual warehouse in Snowflake. When you create a cluster, you
+choose the size of its compute resource allocation based on the work you need
+the cluster to do, whether ingesting data from a source, computing
+always-up-to-date query results, serving results to external clients, or a
+combination.
+
+In this step, you'll create a dedicated cluster for ingesting source data from
+topics in your Kafka (or Kafka-API compatible) broker.
+
+1. In the [SQL Shell](/console/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE CLUSTER`](/sql/create-cluster/)
+   command to create the new cluster:
+
+    ```mzsql
+    CREATE CLUSTER ingest_kafka (SIZE = '100cc');
+
+    SET CLUSTER = ingest_kafka;
+    ```
+
+    A cluster of [size](/sql/create-cluster/#size) `100cc` should be enough to
+    accommodate multiple Kafka sources, depending on the source
+    characteristics (e.g., sources with [`ENVELOPE UPSERT`](/sql/create-source/kafka/#upsert-envelope)
+    or [`ENVELOPE DEBEZIUM`](/sql/create-source/kafka/#debezium-envelope) will be more
+    memory-intensive) and the upstream traffic patterns. You can readjust the
+    size of the cluster at any time using the [`ALTER CLUSTER`](/sql/alter-cluster) command:
+
+    ```mzsql
+    ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
+    ```
+
+
+### 2. Create a connection
+
+
+Now that you've created an ingestion cluster, you can connect Materialize to
+your Kafka broker and start ingesting data. The exact steps depend on your
+authentication and networking configurations, so refer to the
+[`CREATE CONNECTION`](/sql/create-connection/#kafka) documentation for further
+guidance.
+
+1. In the [SQL Shell](/console/), or your preferred SQL
+   client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
+   command to securely store the credentials to connect to your Kafka broker
+   and, optionally, schema registry:
+
+    ```mzsql
+    CREATE SECRET kafka_ssl_key AS '<BROKER_SSL_KEY>';
+    CREATE SECRET kafka_ssl_crt AS '<BROKER_SSL_CRT>';
+    CREATE SECRET csr_password AS '<CSR_PASSWORD>';
+    ```
+
+1. Use the [`CREATE CONNECTION`](/sql/create-connection/#kafka) command to create
+   a connection object with access and authentication details for Materialize to
+   use:
+
+    ```mzsql
+    CREATE CONNECTION kafka_connection TO KAFKA (
+      BROKER '<host>',
+      SSL KEY = SECRET kafka_ssl_key,
+      SSL CERTIFICATE = SECRET kafka_ssl_crt
+    );
+    ```
+
+    If you're using a schema registry, create an additional connection object:
+
+    ```mzsql
+    CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
+      URL '<csr_url>',
+      SSL KEY = SECRET csr_ssl_key,
+      SSL CERTIFICATE = SECRET csr_ssl_crt,
+      USERNAME = 'foo',
+      PASSWORD = SECRET csr_password
+    );
+    ```
+
+### 3. Start ingesting data
+
+1. Use the [`CREATE SOURCE`](/sql/create-source/kafka/) command to connect Materialize
+   to your Kafka broker and start ingesting data from the target topic:
+
+   ```mzsql
+   CREATE SOURCE kafka_repl
+     IN CLUSTER ingest_kafka
+     FROM KAFKA CONNECTION kafka_connection (TOPIC 'my_table')
+     -- CockroachDB's default envelope structure for changefeed messages is
+     -- compatible with the Debezium format, so you can use ENVELOPE DEBEZIUM
+     -- to interpret the data.
+     ENVELOPE DEBEZIUM;
+   ```
+
+    By default, the source will be created in the active cluster; to use a
+    different cluster, use the `IN CLUSTER` clause.
+
+### 4. Monitor the ingestion status
+
+When a new source is created, Materialize performs a sync of all data available
+in the upstream Kafka topic before it starts ingesting new data — an operation
+known as _snapshotting_. Because the initial snapshot is persisted in the
+storage layer atomically (i.e., at the same ingestion timestamp), you
+will **not able to query the source until snapshotting is complete**.
+
+In this step, you'll monitor the progress of the initial snapshot using the
+observability features in the [Materialize Console](/console/).
+
+1. If not already logged in, [log in to the Materialize Console](/console/).
+
+1. Navigate to **Monitoring** > **Sources** and click through to the source you
+   created in the previous step. In the source overview page, you will see a
+   progress bar with the status and progress of the snapshot.
+
+1. For the duration of the snapshotting operation, the source status will show
+   as `Snapshotting`. Once the source status transitions from `Snapshotting` to
+   `Running`, the source is ready for querying and you can move on to the next
+   step.
+
+   If the source fails to transition to this state, check the
+   [ingestion troubleshooting guide](/ingest-data/troubleshooting/).
+
+
+### 5. Create a view
+
+A [view](/concepts/views/) saves a query under a name to provide a shorthand for
+referencing the query. During view creation, the underlying query is not
+executed.
+
+```mzsql
+CREATE VIEW cnt_table1 AS
+    SELECT field1,
+           COUNT(*) AS cnt
+    FROM kafka_repl
+    GROUP BY field1;
+```
+
+
+### 6. Create an index on the view
+
+In Materialize, [indexes](/concepts/indexes) on views compute and, as new data
+arrives, incrementally update view results in memory within a
+[cluster](/concepts/clusters/) instead of recomputing the results from scratch.
+
+Create an index on `cnt_table1` view. Then, as new change events stream in
+through Kafka (as the result of `INSERT`, `UPDATE` and `DELETE` operations in
+the upstream database), the index incrementally updates the view
+results in memory, such that the in-memory up-to-date results are immediately
+available and computationally free to query.
+
+```mzsql
+CREATE INDEX idx_cnt_table1_field1 ON cnt_table1(field1);
+```
+
+For best practices on when to index a view, see
+[Indexes](/concepts/indexes/) and [Views](/concepts/views/).
+
+
+## Next steps
+
+With Materialize ingesting your CockroachDB data into durable storage, you can
+start exploring the data, computing real-time results that stay up-to-date as
+new data arrives, and serving results efficiently.
+
+- Explore your data with [`SHOW SOURCES`](/sql/show-sources) and [`SELECT`](/sql/select/).
+
+- Compute real-time results in memory with [`CREATE VIEW`](/sql/create-view/)
+  and [`CREATE INDEX`](/sql/create-index/) or in durable
+  storage with [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/).
+
+- Serve results to a PostgreSQL-compatible SQL client or driver with [`SELECT`](/sql/select/)
+  or [`SUBSCRIBE`](/sql/subscribe/) or to an external message broker with
+  [`CREATE SINK`](/sql/create-sink/).
+
+- Check out the [tools and integrations](/integrations/) supported by
+  Materialize.

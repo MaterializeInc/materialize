@@ -1,0 +1,223 @@
+# ALTER SOURCE
+
+`ALTER SOURCE` changes certain characteristics of a source.
+
+
+
+Use `ALTER SOURCE` to:
+
+- Add a subsource to a source.
+- Rename a source.
+- Change owner of a source.
+- Change retain history configuration for the source.
+
+## Syntax
+
+
+**Add subsource:**
+
+### Add subsource
+
+To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Server source:
+
+
+
+```mzsql
+ALTER SOURCE [IF EXISTS] <name>
+  ADD SUBSOURCE|TABLE <table> [AS <subsrc>] [, ...]
+  [WITH (<options>)]
+;
+
+```
+
+| Syntax element | Description |
+| --- | --- |
+| `<name>` | The name of the PostgreSQL/MySQL/SQL Server source you want to alter.  |
+| `<table>` | The upstream table to add to the source.  |
+| **AS** `<subsrc>` | Optional. The name for the subsource in Materialize.  |
+| **WITH (TEXT COLUMNS (`<col>` [, ...]))** | Optional. List of columns to decode as `text` for types that are unsupported in Materialize.  |
+
+
+> **Note:** {{__hugo_ctx pid=34}}
+> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
+> process for the new subsource. During this snapshotting, the data ingestion for
+> the existing subsources for the same source is temporarily blocked. As such, if
+> possible, you can resize the cluster to speed up the snapshotting process and
+> once the process finishes, resize the cluster for steady-state.
+> {{__hugo_ctx/}}
+>
+>
+>
+>
+>
+
+
+
+
+**Rename:**
+
+### Rename
+
+To rename a source:
+
+
+
+```mzsql
+ALTER SOURCE <name> RENAME TO <new_name>;
+
+```
+
+| Syntax element | Description |
+| --- | --- |
+| `<name>` | The current name of the source you want to alter.  |
+| `<new_name>` | The new name of the source.  |
+See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+
+
+**Change owner:**
+
+### Change owner
+
+To change the owner of a source:
+
+
+
+```mzsql
+ALTER SOURCE <name> OWNER TO <new_owner_role>;
+
+```
+
+| Syntax element | Description |
+| --- | --- |
+| `<name>` | The name of the source you want to change ownership of.  |
+| `<new_owner_role>` | The new owner of the source.  |
+To change the owner of a source, you must be the owner of the source and have
+membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+
+
+
+**(Re)Set retain history config:**
+
+### (Re)Set retain history config
+
+To set the retention history for a source:
+
+
+
+```mzsql
+ALTER SOURCE [IF EXISTS] <name> SET (RETAIN HISTORY [=] FOR <retention_period>);
+
+```
+
+| Syntax element | Description |
+| --- | --- |
+| `<name>` | The name of the source you want to alter.  |
+| `<retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.  |
+
+
+To reset the retention history to the default for a source:
+
+
+
+```mzsql
+ALTER SOURCE [IF EXISTS] <name>  RESET (RETAIN HISTORY);
+
+```
+
+| Syntax element | Description |
+| --- | --- |
+| `<name>` | The name of the source you want to alter.  |
+
+
+
+
+
+
+## Context
+
+### Adding subsources to a PostgreSQL/MySQL/SQL Server source
+
+Note that using a combination of dropping and adding subsources lets you change
+the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
+
+> **Important:** {{__hugo_ctx pid=34}}
+> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
+> process for the new subsource. During this snapshotting, the data ingestion for
+> the existing subsources for the same source is temporarily blocked. As such, if
+> possible, you can resize the cluster to speed up the snapshotting process and
+> once the process finishes, resize the cluster for steady-state.
+> {{__hugo_ctx/}}
+>
+>
+>
+>
+>
+
+
+### Dropping subsources from a PostgreSQL/MySQL/SQL Server source
+
+Dropping a subsource prevents Materialize from ingesting any data from it, in
+addition to dropping any state that Materialize previously had for the table
+(such as its contents).
+
+If a subsource encounters a deterministic error, such as an incompatible schema
+change (e.g. dropping an ingested column), you can drop the subsource. If you
+want to ingest it with its new schema, you can then add it as a new subsource.
+
+You cannot drop the "progress subsource".
+
+## Examples
+
+### Adding subsources
+
+```mzsql
+ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
+```
+
+> **Important:** {{__hugo_ctx pid=34}}
+> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
+> process for the new subsource. During this snapshotting, the data ingestion for
+> the existing subsources for the same source is temporarily blocked. As such, if
+> possible, you can resize the cluster to speed up the snapshotting process and
+> once the process finishes, resize the cluster for steady-state.
+> {{__hugo_ctx/}}
+>
+>
+>
+>
+>
+
+
+### Dropping subsources
+
+To drop a subsource, use the [`DROP SOURCE`](/sql/drop-source/) command:
+
+```mzsql
+DROP SOURCE tbl_a, b CASCADE;
+```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+<ul>
+<li>Ownership of the source being altered.</li>
+<li>In addition, to change owners:
+<ul>
+<li>Role membership in <code>new_owner</code>.</li>
+<li><code>CREATE</code> privileges on the containing schema if the source is namespaced
+by a schema.</li>
+</ul>
+</li>
+</ul>
+
+
+## See also
+
+- [`CREATE SOURCE`](/sql/create-source/)
+- [`DROP SOURCE`](/sql/drop-source/)
+- [`SHOW SOURCES`](/sql/show-sources)

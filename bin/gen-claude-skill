@@ -54,6 +54,32 @@ if [[ -f "$OUTPUT_DIR/index.md" ]]; then
     mv "$OUTPUT_DIR/index.md" "$OUTPUT_DIR/SKILL.md"
 fi
 
+# Clean up generated markdown files: remove trailing whitespace and normalize trailing newline
+echo "Cleaning up generated markdown files..."
+find "$OUTPUT_DIR" -name "*.md" -type f | while read -r file; do
+    # Remove trailing whitespace from each line
+    if [[ "$(uname)" == "Darwin" ]]; then
+        sed -i '' 's/[[:space:]]*$//' "$file"
+    else
+        sed -i 's/[[:space:]]*$//' "$file"
+    fi
+    # Normalize trailing newlines to exactly one
+    if [[ -s "$file" ]]; then
+        # Remove all trailing newlines, then add exactly one
+        # Use perl to read entire file, remove trailing newlines, add exactly one
+        perl -i -0777 -pe 's/\n+$//; $_ .= "\n"' "$file" 2>/dev/null || {
+            # Fallback: remove trailing newlines manually, then add one
+            while [[ "$(tail -c1 "$file" 2>/dev/null)" == $'\n' ]] && [[ "$(wc -c < "$file")" -gt 1 ]]; do
+                truncate -s -1 "$file" 2>/dev/null || break
+            done
+            # Ensure exactly one newline at end
+            if [[ "$(tail -c1 "$file" 2>/dev/null)" != $'\n' ]]; then
+                echo >> "$file"
+            fi
+        }
+    fi
+done
+
 # Count generated files
 FILE_COUNT=$(find "$OUTPUT_DIR" -name "*.md" | wc -l | tr -d ' ')
 
