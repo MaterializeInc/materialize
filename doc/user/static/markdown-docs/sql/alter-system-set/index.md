@@ -1,0 +1,105 @@
+# ALTER SYSTEM SET
+
+`ALTER SYSTEM SET` globally modifies the value of a configuration parameter.
+
+
+
+Use `ALTER SYSTEM SET` to globally modify the value of a configuration parameter.
+
+To see the current value of a configuration parameter, use [`SHOW`](../show).
+
+## Syntax
+
+```mzsql
+ALTER SYSTEM SET <config> [TO|=] <value|DEFAULT>
+```
+
+Syntax element | Description
+---------------|------------
+`<config>`              | The name of the configuration parameter to modify.
+`<value>`               | The value to assign to the configuration parameter.
+**DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
+
+
+  {{__hugo_ctx pid=35}}
+### Key configuration parameters
+
+Name                                        | Default value             |  Description                                                          | Modifiable?
+--------------------------------------------|---------------------------|-----------------------------------------------------------------------|--------------
+`cluster`                                   | `quickstart`              | The current cluster.                                                  | Yes
+`cluster_replica`                           |                           | The target cluster replica for `SELECT` queries.                      | Yes
+`database`                                  | `materialize`             | The current database.                                                 | Yes
+`search_path`                               | `public`                  | The schema search order for names that are not schema-qualified.      | Yes
+`transaction_isolation`                     | `strict serializable`     | The transaction isolation level. For more information, see [Consistency guarantees](/overview/isolation-level/). <br/><br/> Accepts values: `serializable`, `strict serializable`. | Yes
+
+### Other configuration parameters
+
+Name                                        | Default value             |  Description                                                                                                                                                           | Modifiable?
+--------------------------------------------|---------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------
+`allowed_cluster_replica_sizes`             | *Varies*                  | The allowed sizes when creating a new cluster replica.                                                                                                                 | [Contact support]
+`application_name`                          |                           | The application name to be reported in statistics and logs. This parameter is typically set by an application upon connection to Materialize (e.g. `psql`).            | Yes
+`auto_route_catalog_queries`                | `true`                    | Boolean flag indicating whether to force queries that depend only on system tables to run on the `mz_catalog_server` cluster for improved performance.                 | Yes
+`client_encoding`                           | `UTF8`                    | The client's character set encoding. The only supported value is `UTF-8`.                                                                                              | Yes
+`client_min_messages`                       | `notice`                  | The message levels that are sent to the client. <br/><br/> Accepts values: `debug5`, `debug4`, `debug3`, `debug2`, `debug1`, `log`, `notice`, `warning`, `error`. Each level includes all the levels that follow it. | Yes
+`datestyle`                                 | `ISO, MDY`                | The display format for date and time values. The only supported value is `ISO, MDY`.                                                                                   | Yes
+`emit_introspection_query_notice`           | `true`                    | Whether to print a notice when querying replica introspection relations.                                                                                               | Yes
+`emit_timestamp_notice`                     | `false`                   | Boolean flag indicating whether to send a `notice` specifying query timestamps.                                                                                        | Yes
+`emit_trace_id_notice`                      | `false`                   | Boolean flag indicating whether to send a `notice` specifying the trace ID, when available.                                                                            | Yes
+`enable_rbac_checks`                        | `true`                    | Boolean flag indicating whether to apply RBAC checks before executing statements.                                                                                      | Yes
+`enable_session_rbac_checks`                | `false`                   | Boolean flag indicating whether RBAC is enabled for the current session.                                                                                               | No
+`extra_float_digits`                        | `3`                       | Boolean flag indicating whether to adjust the number of digits displayed for floating-point values.                                                                    | Yes
+`failpoints`                                |                           | Allows failpoints to be dynamically activated.                                                                                                                         | No
+`idle_in_transaction_session_timeout`       | `120s`                    | The maximum allowed duration that a session can sit idle in a transaction before being terminated. If this value is specified without units, it is taken as milliseconds (`ms`). A value of zero disables the timeout. | Yes
+`integer_datetimes`                         | `true`                    | Boolean flag indicating whether the server uses 64-bit-integer dates and times.                                                                                        | No
+`intervalstyle`                             | `postgres`                | The display format for interval values. The only supported value is `postgres`.                                                                                        | Yes
+`is_superuser`                              |                           | Reports whether the current session is a _superuser_ with admin privileges.                                                                                            | No
+`max_aws_privatelink_connections`           | `0`                       | The maximum number of AWS PrivateLink connections in the region, across all schemas.                                                                                   | [Contact support]
+`max_clusters`                              | `10`                      | The maximum number of clusters in the region                                                                                                                           | [Contact support]
+`max_connections`                           | `5000`                    | The maximum number of concurrent connections in the region                                                                                                             | [Contact support]
+`max_credit_consumption_rate`               | `1024`                    | The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use.                                                 | [Contact support]
+`max_databases`                             | `1000`                    | The maximum number of databases in the region.                                                                                                                         | [Contact support]
+`max_identifier_length`                     | `255`                     | The maximum length in bytes of object identifiers.                                                                                                                     | No
+`max_kafka_connections`                     | `1000`                    | The maximum number of Kafka connections in the region, across all schemas.                                                                                             | [Contact support]
+`max_mysql_connections`                     | `1000`                    | The maximum number of MySQL connections in the region, across all schemas.                                                                                             | [Contact support]
+`max_objects_per_schema`                    | `1000`                    | The maximum number of objects in a schema.                                                                                                                             | [Contact support]
+`max_postgres_connections`                  | `1000`                    | The maximum number of PostgreSQL connections in the region, across all schemas.                                                                                        | [Contact support]
+`max_query_result_size`                     | `1073741824`              | The maximum size in bytes for a single query's result.                                                                                                                 | Yes
+`max_replicas_per_cluster`                  | `5`                       | The maximum number of replicas of a single cluster                                                                                                                     | [Contact support]
+`max_result_size`                           | `1 GiB`                   | The maximum size in bytes for a single query's result.                                                                                                                 | [Contact support]
+`max_roles`                                 | `1000`                    | The maximum number of roles in the region.                                                                                                                             | [Contact support]
+`max_schemas_per_database`                  | `1000`                    | The maximum number of schemas in a database.                                                                                                                           | [Contact support]
+`max_secrets`                               | `100`                     | The maximum number of secrets in the region, across all schemas.                                                                                                       | [Contact support]
+`max_sinks`                                 | `1000`                    | The maximum number of sinks in the region, across all schemas.                                                                                                         | [Contact support]
+`max_sources`                               | `25`                      | The maximum number of sources in the region, across all schemas.                                                                                                       | [Contact support]
+`max_tables`                                | `200`                     | The maximum number of tables in the region, across all schemas                                                                                                         | [Contact support]
+`mz_version`                                | Version-dependent         | Shows the Materialize server version.                                                                                                                                  | No
+`network_policy`                            | `default`                 | The default network policy for the region. | Yes
+`real_time_recency`                         | `false`                   | Boolean flag indicating whether [real-time recency](/get-started/isolation-level/#real-time-recency) is enabled for the current session.                               | [Contact support]
+`real_time_recency_timeout`                 | `10s`                     | Sets the maximum allowed duration of `SELECT` statements that actively use [real-time recency](/get-started/isolation-level/#real-time-recency). If this value is specified without units, it is taken as milliseconds (`ms`).                      | Yes
+`server_version_num`                        | Version-dependent         | The PostgreSQL compatible server version as an integer.                                                                                                                | No
+`server_version`                            | Version-dependent         | The PostgreSQL compatible server version.                                                                                                                              | No
+`sql_safe_updates`                          | `false`                   | Boolean flag indicating whether to prohibit SQL statements that may be overly destructive.                                                                             | Yes
+`standard_conforming_strings`               | `true`                    | Boolean flag indicating whether ordinary string literals (`'...'`) should treat backslashes literally. The only supported value is `true`.                             | Yes
+`statement_timeout`                         | `10s`                     | The maximum allowed duration of the read portion of write operations; i.e., the `SELECT` portion of `INSERT INTO ... (SELECT ...)`; the `WHERE` portion of `UPDATE ... WHERE ...` and `DELETE FROM ... WHERE ...`. If this value is specified without units, it is taken as milliseconds (`ms`). | Yes
+`timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
+
+[Contact support]: /support
+{{__hugo_ctx/}}
+
+
+
+
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+<ul>
+<li><a href="/security/cloud/users-service-accounts/#organization-roles"><em>Superuser</em> privileges</a></li>
+</ul>
+
+
+## Related pages
+
+- [`ALTER SYSTEM RESET`](../alter-system-reset)
+- [`SHOW`](../show)

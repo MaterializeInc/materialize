@@ -1,0 +1,50 @@
+# SHOW CREATE TABLE
+
+`SHOW CREATE TABLE` returns the SQL used to create the table.
+
+
+
+`SHOW CREATE TABLE` returns the SQL used to create the table.
+
+## Syntax
+
+```sql
+SHOW [REDACTED] CREATE TABLE <table_name>;
+```
+
+
+| Syntax element | Description |
+| --- | --- |
+| <strong>REDACTED</strong> | If specified, literals will be redacted. |
+
+
+For available table names, see [`SHOW TABLES`](/sql/show-tables).
+
+## Examples
+
+```mzsql
+CREATE TABLE t (a int, b text NOT NULL);
+```
+
+```mzsql
+SHOW CREATE TABLE t;
+```
+```nofmt
+         name         |                                             create_sql
+----------------------+-----------------------------------------------------------------------------------------------------
+ materialize.public.t | CREATE TABLE "materialize"."public"."t" ("a" "pg_catalog"."int4", "b" "pg_catalog"."text" NOT NULL)
+```
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+<ul>
+<li><code>USAGE</code> privileges on the schema containing the table.</li>
+</ul>
+
+
+## Related pages
+
+- [`SHOW TABLES`](../show-tables)
+- [`CREATE TABLE`](../create-table)

@@ -1,0 +1,444 @@
+# Install on Azure
+
+Install Materialize on Azure using the new Terraform module.
+
+
+
+Materialize provides a set of modular [Terraform
+modules](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
+that can be used to deploy all services required for Materialize to run on Azure.
+The module is intended to provide a simple set of examples on how to deploy
+Materialize. It can be used as is or modules can be taken from the example and
+integrated with existing DevOps tooling.
+
+Self-managed Materialize requires: a Kubernetes (v1.31+) cluster; PostgreSQL as
+a metadata database; blob storage; and a license key.
+ The example on this page
+deploys a complete Materialize environment on Azure using the modular Terraform
+setup from this repository.
+
+> **Warning:** The Terraform modules used in this tutorial are intended for
+> evaluation/demonstration purposes and for serving as a template when building
+> your own production deployment. The modules should not be directly relied upon
+> for production deployments: **future releases of the modules will contain
+> breaking changes.** Instead, to use as a starting point for your own production
+> deployment, either:
+>
+> - Fork the repo and pin to a specific version; or
+>
+> - Use the code as a reference when developing your own deployment.
+>
+>
+>
+
+
+## What Gets Created
+
+This example provisions the following infrastructure:
+
+### Resource Group
+
+| Resource | Description |
+|----------|-------------|
+| Resource Group | New resource group to contain all resources |
+
+### Networking
+
+| Resource | Description |
+|----------|-------------|
+| Virtual Network | 20.0.0.0/16 address space |
+| AKS Subnet | 20.0.0.0/20 with NAT Gateway association and service endpoints for Storage and SQL |
+| PostgreSQL Subnet | 20.0.16.0/24 delegated to PostgreSQL Flexible Server |
+| NAT Gateway | Standard SKU with static public IP for outbound connectivity |
+| Private DNS Zone | For PostgreSQL private endpoint resolution with VNet link |
+
+### Compute
+
+| Resource | Description |
+|----------|-------------|
+| AKS Cluster | Version 1.32 with Cilium networking (network plugin: azure, data plane: cilium, policy: cilium) |
+| Default Node Pool | Standard_D4pds_v6 VMs, autoscaling 2-5 nodes, labeled for generic workloads |
+| Materialize Node Pool | Standard_E4pds_v6 VMs with 100GB disk, autoscaling 2-5 nodes, swap enabled, dedicated taints for Materialize workloads |
+| Managed Identities | AKS cluster identity (used by AKS control plane to provision Azure resources like load balancers and network interfaces) and Workload identity (used by Materialize pods for secure, passwordless authentication to Azure Storage) |
+
+### Database
+
+| Resource | Description |
+|----------|-------------|
+| Azure PostgreSQL Flexible Server | Version 15 |
+| SKU | GP_Standard_D2s_v3 (2 vCores, 4GB memory) |
+| Storage | 32GB with 7-day backup retention |
+| Network Access | Public Network Access is disabled, Private access only (no public endpoint) |
+| Database | `materialize` database pre-created |
+
+### Storage
+
+| Resource | Description |
+|----------|-------------|
+| Storage Account | Premium BlockBlobStorage with LRS replication for Materialize persistence |
+| Container | `materialize` blob container |
+| Access Control | Workload Identity federation for Kubernetes service account (passwordless authentication via OIDC) |
+| Network Access | Currently allows <red>**all traffic**</red>(production deployments should restrict to AKS subnet only traffic) |
+
+### Kubernetes Add-ons
+
+| Resource | Description |
+|----------|-------------|
+| cert-manager | Certificate management controller for Kubernetes that automates TLS certificate provisioning and renewal |
+| Self-signed ClusterIssuer | Provides self-signed TLS certificates for Materialize instance internal communication (balancerd, console). Used by the Materialize instance for secure inter-component communication. |
+
+### Materialize
+
+| Resource | Description |
+|----------|-------------|
+| Operator | Materialize Kubernetes operator in the `materialize` namespace |
+| Instance | Single Materialize instance in the `materialize-environment` namespace |
+| Load Balancers | Azure Load Balancers for access to Materialize
+| Port | Description |
+| --- | --- |
+| 6875 | For SQL connections to the database |
+| 6876 | For HTTP(S) connections to the database |
+| 8080 | For HTTP(S) connections to Materialize Console |
+  |
+
+## Prerequisites
+
+### Azure Account Requirements
+
+An active Azure subscription with appropriate permissions to create:
+- AKS clusters
+- Azure PostgreSQL Flexible Server instances
+- Storage accounts
+- Virtual networks and networking resources
+- Managed identities and role assignments
+
+### Required Tools
+
+- [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl/)
+- [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
+
+### License Key
+
+
+| License key type | Deployment type | Action |
+| --- | --- | --- |
+| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/"><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/">https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
+| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
+| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/">https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
+| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
+
+
+## Getting started: Simple example
+
+> **Warning:** The Terraform modules used in this tutorial are intended for
+> evaluation/demonstration purposes and for serving as a template when building
+> your own production deployment. The modules should not be directly relied upon
+> for production deployments: **future releases of the modules will contain
+> breaking changes.** Instead, to use as a starting point for your own production
+> deployment, either:
+>
+> - Fork the repo and pin to a specific version; or
+>
+> - Use the code as a reference when developing your own deployment.
+>
+>
+>
+
+
+### Step 1: Set Up the Environment
+
+1. Open a terminal window.
+
+1. Clone the Materialize Terraform repository and go to the
+   `azure/examples/simple` directory.
+
+   ```bash
+   git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
+   cd materialize-terraform-self-managed/azure/examples/simple
+   ```
+
+1. Authenticate with Azure.
+
+    ```bash
+    az login
+    ```
+
+   The command opens a browser window to sign in to Azure. Sign in.
+
+1. Select the subscription and tenant to use. After you have signed in, back in
+   the terminal, your tenant and subscription information is displayed.
+
+    ```none
+    Retrieving tenants and subscriptions for the selection...
+
+    [Tenant and subscription selection]
+
+    No     Subscription name    Subscription ID                       Tenant
+    -----  -------------------  ------------------------------------  ----------------
+    [1]*   ...                  ...                                   ...
+
+   The default is marked with an *; the default tenant is '<Tenant>' and
+   subscription is '<Subscription Name>' (<Subscription ID>).
+   ```
+
+   Select the subscription and tenant.
+
+### Step 2: Configure Terraform Variables
+
+1. Create a `terraform.tfvars` file with the following variables:
+
+   - `subscription_id`: Azure subscription ID
+   - `resource_group_name`: Name for the resource group to create (e.g.
+     `mz-demo-rg`)
+   - `name_prefix`: Prefix for all resource names (e.g., `simple-demo`)
+   - `location`: Azure region for deployment (e.g., `westus2`)
+   - `license_key`: Materialize license key
+   - `tags`: Map of tags to apply to resources
+
+   ```hcl
+   subscription_id     = "your-subscription-id"
+   resource_group_name = "mz-demo-rg"
+   name_prefix         = "simple-demo"
+   location            = "westus2"
+   license_key         = "your-materialize-license-key"
+   tags = {
+     environment = "demo"
+   }
+   # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
+   # ingress_cidr_blocks = ["x.x.x.x/n", ...]
+   # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   ```
+
+   <p><strong>Optional variables</strong>:</p>
+   <ul>
+   <li><code>internal_load_balancer</code>: Flag that determines whether the load balancer
+   is internal (default) or public.</li>
+   <li><code>ingress_cidr_blocks</code>: List of CIDR blocks allowed to reach the load
+   balancer if the load balancer is public (<code>internal_load_balancer: false</code>).
+   If unset, defaults to <code>[&quot;0.0.0.0/0&quot;]</code> (i.e., <red><strong>all</strong></red> IPv4
+   addresses on the internet). <strong>Only applied when the load balancer is public</strong>.</li>
+   <li><code>k8s_apiserver_authorized_networks</code>: List of CIDR
+   blocks allowed to access your cluster endpoint. If unset, defaults to
+   <code>[&quot;0.0.0.0/0&quot;]</code> (<red><strong>all</strong></red> IPv4 addresses on the internet).</li>
+   </ul>
+   > **Note:** Refer to your organization's security practices to set these values accordingly.
+   >
+
+### Step 3: Apply the Terraform
+
+1. Initialize the Terraform directory to download the required providers
+   and modules:
+
+   ```bash
+   terraform init
+   ```
+
+1. Apply the Terraform configuration to create the infrastructure.
+
+   ```bash
+   terraform apply
+   ```
+
+   If you are satisfied with the planned changes, type `yes` when prompted
+   to proceed.
+
+1. From the output, you will need the following field(s) to connect:
+   - `console_load_balancer_ip` for the Materialize Console
+   - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible
+     clients/drivers.
+   - `external_login_password_mz_system`.
+
+   ```bash
+   terraform output -raw <field_name>
+   ```
+
+   > **Tip:** Your shell may show an ending marker (such as `%`) because the
+>    output did not end with a newline. Do not include the marker when using the value.
+>
+
+
+1. Configure `kubectl` to connect to your cluster, replacing:
+   - `<your-resource-group-name>` with your resource group name; i.e., the
+     `resource_group_name` in the Terraform output or in the
+     `terraform.tfvars` file.
+
+   - `<your-aks-cluster-name>` with your cluster name; i.e., the
+     `aks_cluster_name` in the Terraform output. For the sample example,
+     your cluster name has the form `{prefix_name}-aks`; e.g., `simple-demo-aks`.
+
+   ```bash
+   # az aks get-credentials --resource-group <your-resource-group-name> --name <your-aks-cluster-name>
+   az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -raw aks_cluster_name)
+   ```
+
+### Step 4. Optional. Verify the deployment.
+
+1. Check the status of your deployment:
+   **Operator:**
+   To check the status of the Materialize operator, which runs in the `materialize` namespace:
+   ```bash
+   kubectl -n materialize get all
+   ```
+
+   **Materialize instance:**
+   To check the status of the Materialize instance, which runs in the `materialize-environment` namespace:
+   ```bash
+   kubectl -n materialize-environment get all
+   ```
+
+
+   <p>If you run into an error during deployment, refer to the
+   <a href="/self-managed-deployments/troubleshooting/">Troubleshooting</a>.</p>
+
+### Step 5: Connect to Materialize
+
+You can connect to Materialize via the Materialize Console or
+PostgreSQL-compatible tools/drivers using the following ports:
+
+
+| Port | Description |
+| --- | --- |
+| 6875 | For SQL connections to the database |
+| 6876 | For HTTP(S) connections to the database |
+| 8080 | For HTTP(S) connections to Materialize Console |
+
+
+#### Connect using the Materialize Console
+
+> **Note:** - **If using a public NLB:** Both SQL and Console are available via the
+> public NLB. You can connect directly using the NLB's DNS name from anywhere
+> on the internet (subject to your `ingress_cidr_blocks` configuration).
+>
+> - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
+>
+
+
+
+Using the `console_load_balancer_ip` and `external_login_password_mz_system`
+from the Terraform output, you can connect to Materialize via the Materialize
+Console.
+
+1. To connect to the Materialize Console, open a browser to
+   `https://<console_load_balancer_ip>:8080`, substituting your
+   `<console_load_balancer_ip>`.
+
+   From the terminal, you can type:
+
+   ```sh
+   open "https://$(terraform output -raw  console_load_balancer_ip):8080/materialize"
+   ```
+
+   > **Tip:** The example uses a self-signed ClusterIssuer. As such, you may encounter a
+>    warning with regards to the certificate. In production, run with
+>    certificates from an official Certificate Authority (CA) rather than
+>    self-signed certificates.
+>
+>
+
+
+1. Log in as `mz_system`, using `external_login_password_mz_system` as the
+   password.
+
+1. Create new users and log out.
+
+   In general, other than the initial login to create new users for new
+   deployments, avoid using `mz_system` since `mz_system` also used by the
+   Materialize Operator for upgrades and maintenance tasks.
+
+   For more information on authentication and authorization for Self-Managed
+   Materialize, see:
+
+   - [Authentication](/security/self-managed/authentication/)
+   - [Access Control](/security/self-managed/access-control/)
+
+1. Login as one of the created user.
+
+#### Connect using `psql`
+
+> **Note:** - **If using a public NLB:** Both SQL and Console are available via the
+> public NLB. You can connect directly using the NLB's DNS name from anywhere
+> on the internet (subject to your `ingress_cidr_blocks` configuration).
+>
+> - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
+>
+
+
+
+Using the `balancerd_load_balancer_ip` and `external_login_password_mz_system`
+from the Terraform output, you can connect to Materialize via
+PostgreSQL-compatible clients/drivers, such as `psql`.
+
+1. To connect using `psql`, in the connection string, specify:
+   - `mz_system` as the user
+   - `balancerd_load_balancer_ip` as the host
+   - `6875` as the port:
+
+   ```bash
+   psql "postgres://mz_system@$(terraform output -raw balancerd_load_balancer_ip):6875/materialize"
+   ```
+
+   When prompted for the password, enter the
+   `external_login_password_mz_system` value.
+
+1. Create new users and log out.
+
+   In general, other than the initial login to create new users for new
+   deployments, avoid using `mz_system` since `mz_system` also used by the
+   Materialize Operator for upgrades and maintenance tasks.
+
+   For more information on authentication and authorization for Self-Managed
+   Materialize, see:
+
+   - [Authentication](/security/self-managed/authentication/)
+   - [Access Control](/security/self-managed/access-control/)
+
+1. Login as one of the created user.
+
+
+## Customizing Your Deployment
+
+> **Tip:** To reduce cost in your demo environment, you can tweak VM sizes and database tiers in `main.tf`.
+>
+
+
+You can customize each Terraform module independently.
+
+- For details on the Terraform modules, see both the [top
+level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
+and [Azure
+specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure) modules.
+
+- For details on recommended instance sizing and configuration, see the [Azure
+deployment
+guide](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/).
+
+> **Note:** Autoscaling: Uses Azure's native cluster autoscaler that integrates directly with Azure Virtual Machine Scale Sets for automated node scaling.
+>
+
+
+See also:
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
+- [Materialize CRD Field
+  Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
+
+## Cleanup
+
+
+To delete the whole sample infrastructure and deployment (including the
+Materialize operator and Materialize instances and data), run from the Terraform
+directory:
+
+```bash
+terraform destroy
+```
+
+When prompted to proceed, type `yes` to confirm the deletion.
+
+
+## See Also
+
+- [Materialize Operator Configuration](/installation/configuration/)
+- [Troubleshooting](/installation/troubleshooting/)

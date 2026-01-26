@@ -1,0 +1,236 @@
+# Amazon S3
+
+How to export results from Materialize to Amazon S3.
+
+
+
+This guide walks you through the steps required to export results from
+Materialize to Amazon S3. Copying results to S3 is
+useful to perform tasks like periodic backups for auditing, or downstream
+processing in analytical data warehouses like [Snowflake](/serve-results/snowflake/),
+Databricks or BigQuery.
+
+## Before you begin
+
+- Ensure you have access to an AWS account, and permissions to create and manage
+  IAM policies and roles. If you're not an account administrator, you will need
+  support from one!
+
+## Step 1. Set up an Amazon S3 bucket
+
+First, you must set up an S3 bucket and give Materialize enough permissions to
+write files to it. We **strongly** recommend using [role assumption-based authentication](/sql/create-connection/#aws-permissions)
+to manage access to the target bucket.
+
+### Create a bucket
+
+1. Log in to your AWS account.
+
+1. Navigate to **AWS Services**, then **S3**.
+
+1. Create a new, general purpose S3 bucket with the suggested default
+   configurations.
+
+### Create an IAM policy
+
+Once you create an S3 bucket, you must associate it with an [IAM policy](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html)
+that specifies what actions can be performed on the bucket by the Materialize
+exporter role. For Materialize to be able to write data into the bucket, the
+IAM policy must allow the following actions:
+
+Action type  | Action name                                                                            | Action description
+-------------|----------------------------------------------------------------------------------------|---------------
+Write        | [`s3:PutObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html)      | Grants permission to add an object to a bucket.
+List         | [`s3:ListBucket`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html) | Grants permission to list some or all of the objects in a bucket.
+Write        | [`s3:DeleteObject`](https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html)| Grants permission to remove an object from a bucket.
+
+To create a new IAM policy:
+
+1. Navigate to **AWS Services**, then **AWS IAM**.
+
+1. In the **IAM Dashboard**, click **Policies**, then **Create policy**.
+
+1. For **Policy editor**, choose **JSON**.
+
+1. Copy and paste the policy below into the editor, replacing `<bucket>` with
+   the bucket name and `<prefix>` with the folder path prefix.
+
+   ```json
+   {
+       "Version": "2012-10-17",
+       "Statement": [
+           {
+               "Effect": "Allow",
+               "Action": [
+                 "s3:PutObject",
+                 "s3:DeleteObject"
+               ],
+               "Resource": "arn:aws:s3:::<bucket>/<prefix>/*"
+           },
+           {
+               "Effect": "Allow",
+               "Action": [
+                   "s3:ListBucket"
+               ],
+               "Resource": "arn:aws:s3:::<bucket>",
+               "Condition": {
+                   "StringLike": {
+                       "s3:prefix": [
+                           "<prefix>/*"
+                       ]
+                   }
+               }
+           }
+       ]
+   }
+   ```
+
+1. Click **Next**.
+
+1. Enter a name for the policy, and click **Create policy**.
+
+### Create an IAM role
+
+Next, you must attach the policy you just created to a Materialize-specific
+[IAM role](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles.html).
+
+1. Navigate to **AWS Services**, then **AWS IAM**.
+
+1. In the **IAM Dashboard**, click **Roles**, then **Create role**.
+
+1. In **Trusted entity type**, select **Custom trust policy**, and copy and
+   paste the policy below.
+
+   ```json
+   {
+       "Version": "2012-10-17",
+       "Statement": [
+           {
+               "Effect": "Allow",
+               "Principal": {
+                   "AWS": "arn:aws:iam::664411391173:role/MaterializeConnection"
+               },
+               "Action": "sts:AssumeRole",
+               "Condition": {
+                   "StringEquals": {
+                       "sts:ExternalId": "PENDING"
+                   }
+               }
+           }
+       ]
+   }
+   ```
+
+   Materialize **always uses the provided IAM principal** to assume the role, and
+   also generates an **external ID** which uniquely identifies your AWS connection
+   across all Materialize regions (see [AWS connection permissions](/sql/create-connection/#aws-permissions)).
+   For now, you'll set this ID to a dummy value; later, you'll update it with
+   the unique identifier for your Materialize region.
+
+1. Click **Next**.
+
+1. In **Add permissions**, select the IAM policy you created in [Create an IAM policy](#create-an-iam-policy),
+   and click **Next**.
+
+1. Enter a name for the role, and click **Create role**.
+
+1. Click **View role** to see the role summary page, and note down the
+   role **ARN**. You will need it in the next step to create an AWS connection in
+   Materialize.
+
+## Step 2. Create a connection
+
+1. In the [SQL Shell](/console/), or your preferred SQL
+   client connected to Materialize, create an [AWS connection](/sql/create-connection/#aws),
+   replacing `<account-id>` with the 12-digit number that identifies your
+   AWS account, and  `<role>` with the name of the role you created in the
+   previous step:
+
+   ```mzsql
+   CREATE CONNECTION aws_connection
+      TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::<account-id>:role/<role>');
+   ```
+
+1. Retrieve the external ID for the connection:
+
+   ```mzsql
+   SELECT awsc.id, external_id
+    FROM mz_internal.mz_aws_connections awsc
+    JOIN mz_connections c ON awsc.id = c.id
+    WHERE c.name = 'aws_connection';
+   ```
+
+   The external ID will have the following format:
+
+   ```text
+   mz_XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX_uXXX
+   ```
+
+1. In your AWS account, find the IAM role you created in [Create an IAM role](#create-an-iam-role)
+   and, under **Trust relationships**, click **Edit trust policy**. Use the
+   `external_id` from the previous step to update the trust policy's
+   `sts:ExternalId`, then click **Update policy**.
+
+   > **Warning:** Failing to constrain the external ID in your role trust policy
+>    will allow other Materialize customers to assume your role and use AWS
+>    privileges you have granted the role!
+>
+
+
+1. Back in Materialize, validate the AWS connection you created using the
+   [`VALIDATE CONNECTION`](/sql/validate-connection) command.
+
+   ```mzsql
+   VALIDATE CONNECTION aws_connection;
+   ```
+
+   If no validation error is returned, you're ready to use this connection to
+   run a bulk export from Materialize to your target S3 bucket! 🔥
+
+## Step 3. Run a bulk export
+
+To export data to your target S3 bucket, use the [`COPY TO`](/sql/copy-to/#copy-to-s3)
+command, and the AWS connection you created in the previous step.
+
+
+**Parquet:**
+
+```mzsql
+COPY some_object TO 's3://<bucket>/<path>'
+WITH (
+    AWS CONNECTION = aws_connection,
+    FORMAT = 'parquet'
+  );
+```
+
+For details on the Parquet writer settings Materialize uses, as well as data
+type support and conversion, check the [reference documentation](/sql/copy-to/#copy-to-s3-parquet).
+
+
+
+**CSV:**
+
+```mzsql
+COPY some_object TO 's3://<bucket>/<path>'
+WITH (
+    AWS CONNECTION = aws_connection,
+    FORMAT = 'csv'
+  );
+```
+
+
+
+
+
+You might notice that Materialize first writes a sentinel file to the target S3
+bucket. When the copy operation is complete, this file is deleted. This allows
+using the [`s3:ObjectRemoved` event](https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-event-types-and-destinations.html#supported-notification-event-types)
+to trigger downstream processing.
+
+## Step 4. (Optional) Add scheduling
+
+Bulk exports to Amazon S3 using the `COPY TO` command are _one-shot_: every time
+you want to export results, you must run the command. To automate running bulk
+exports on a regular basis, you can set up scheduling, for example using a
+simple `cron`-like service or an orchestration platform like Airflow or
+Dagster.
