@@ -13,7 +13,7 @@ aliases:
 ---
 
 {{< public-preview >}}
-This feature is only recommended for use in development environments. It 
+This feature is only recommended for use in development environments, and 
 {{< /public-preview >}}
 
 This guide walks you through the steps required to modify the definition of an existing materialized view, while preserving all downstream dependencies.
@@ -236,9 +236,9 @@ depends on the size of your data and the complexity of the query.
 
 ### Step 4. Apply the replacement, and verify the results
 
-Once the replacement materialized view is fully hydrated, apply it. 
-When you apply the view, Materialize calculates the diff between the 
-and original and the replacement. At this point, the diff is applied 
+Once the replacement materialized view is fully hydrated, apply it.
+When you apply the view, Materialize calculates the diff between the
+original and the replacement. At this point, the diff is applied
 to the original view, along with all downstream objects.
 
 {{< warning >}}
@@ -319,10 +319,10 @@ This removes the replacement view and leaves the original unchanged.
 Since applying a replacement temporarily increases memory usage, consider
 [resizing your clusters](/sql/alter-cluster/#resizing) to a larger size before
 applying the replacement. This helps ensure sufficient memory is available while
-the diff is being processed, and will prevent out of memory errors. 
+the diff is being processed, and will prevent out of memory errors.
 
 You can resize back down after the replacement is complete. To automate this
-process, you can consider using [mz-clusterctl](https://github.com/MaterializeInc/mz-clusterctl), 
+process, you can consider using [mz-clusterctl](https://github.com/MaterializeInc/mz-clusterctl),
 which will auto-scale cluster sizes based on cluster activity.
 
 ### Use separate clusters for replacements
