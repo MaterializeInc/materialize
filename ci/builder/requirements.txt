@@ -15,7 +15,7 @@ docker==7.1.0
 ec2instanceconnectcli==1.0.3
 python-frontmatter==1.1.0
 humanize==4.15.0
-ipympl==0.9.8
+ipympl==0.10.0
 ipywidgets==8.1.8
 junit-xml==1.9
 junitparser==4.0.2
