@@ -20,7 +20,7 @@ mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 phf = { version = "0.13.1", features = ["uncased"] }
 serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tracing = "0.1.44"
 uncased = "0.9.7"
 unicode-width = { version = "0.2.2", optional = true }

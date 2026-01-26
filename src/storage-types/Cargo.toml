@@ -66,7 +66,7 @@ regex = "1.12.2"
 reqwest = "0.12.28"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely = "0.25.1"
 tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util", "time"] }
