@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 
+use mz_auth::Authenticated;
 use mz_sql::session::user::SYSTEM_USER;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -28,14 +29,17 @@ pub struct SystemParameterBackend {
 impl SystemParameterBackend {
     pub async fn new(client: Client) -> Result<Self, AdapterError> {
         let conn_id = client.new_conn_id()?;
-        let session = client.new_session(SessionConfig {
-            conn_id,
-            uuid: Uuid::new_v4(),
-            user: SYSTEM_USER.name.clone(),
-            client_ip: None,
-            external_metadata_rx: None,
-            helm_chart_version: None,
-        });
+        let session = client.new_session(
+            SessionConfig {
+                conn_id,
+                uuid: Uuid::new_v4(),
+                user: SYSTEM_USER.name.clone(),
+                client_ip: None,
+                external_metadata_rx: None,
+                helm_chart_version: None,
+            },
+            Authenticated,
+        );
         let session_client = client.startup(session).await?;
         Ok(Self { session_client })
     }

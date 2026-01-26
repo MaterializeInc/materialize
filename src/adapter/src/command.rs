@@ -372,6 +372,9 @@ pub struct Response<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SuperuserAttribute(pub Option<bool>);
+
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -382,7 +385,7 @@ pub struct StartupResponse {
     /// This attribute is None for Cloud. Cloud is able
     /// to derive the role's superuser status from
     /// external_metadata_rx.
-    pub superuser_attribute: Option<bool>,
+    pub superuser_attribute: SuperuserAttribute,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
     pub write_notify: BuiltinTableAppendNotify,

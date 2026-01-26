@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
+use mz_auth::Authenticated;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -311,23 +312,14 @@ impl GenericOidcAuthenticatorInner {
 impl GenericOidcAuthenticator {
     pub async fn authenticate(
         &self,
-        expected_user: &str,
-        password: &str,
-    ) -> Result<OidcClaims, OidcError> {
-        // The password is the JWT token
-        let claims = self
-            .validate_access_token(password, Some(expected_user))
-            .await?;
-
-        Ok(claims)
-    }
-
-    pub async fn validate_access_token(
-        &self,
         token: &str,
         expected_user: Option<&str>,
-    ) -> Result<OidcClaims, OidcError> {
-        self.inner.validate_access_token(token, expected_user).await
+    ) -> Result<(OidcClaims, Authenticated), OidcError> {
+        let claims = self
+            .inner
+            .validate_access_token(token, expected_user)
+            .await?;
+        Ok((claims, Authenticated))
     }
 }
 

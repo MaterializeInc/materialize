@@ -5577,7 +5577,6 @@ dependencies = [
 name = "mz-auth"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "base64 0.22.1",
  "itertools 0.14.0",
  "mz-ore",

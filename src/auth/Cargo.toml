@@ -10,7 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
 base64 = "0.22.1"
 mz-ore = { path = "../ore", features = ["test"] }
 mz-repr = { path = "../repr", default-features = false }

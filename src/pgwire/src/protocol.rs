@@ -29,6 +29,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
+use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
 use mz_ore::cast::CastFrom;
@@ -200,15 +201,18 @@ where
 
             let auth_response = frontegg.authenticate(&user, &password).await;
             match auth_response {
-                Ok(mut auth_session) => {
-                    let session = adapter_client.new_session(SessionConfig {
-                        conn_id: conn.conn_id().clone(),
-                        uuid: conn_uuid,
-                        user: auth_session.user().into(),
-                        client_ip: conn.peer_addr().clone(),
-                        external_metadata_rx: Some(auth_session.external_metadata_rx()),
-                        helm_chart_version,
-                    });
+                Ok((mut auth_session, authenticated)) => {
+                    let session = adapter_client.new_session(
+                        SessionConfig {
+                            conn_id: conn.conn_id().clone(),
+                            uuid: conn_uuid,
+                            user: auth_session.user().into(),
+                            client_ip: conn.peer_addr().clone(),
+                            external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                            helm_chart_version,
+                        },
+                        authenticated,
+                    );
                     let expired = async move { auth_session.expired().await };
                     (session, expired.left_future())
                 }
@@ -233,18 +237,22 @@ where
                 }
             };
 
-            let auth_response = oidc.authenticate(&user, &jwt).await;
-
+            let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
             match auth_response {
-                Ok(auth_session) => {
-                    let session = adapter_client.new_session(SessionConfig {
-                        conn_id: conn.conn_id().clone(),
-                        uuid: conn_uuid,
-                        user: auth_session.username().into(),
-                        client_ip: conn.peer_addr().clone(),
-                        external_metadata_rx: None,
-                        helm_chart_version,
-                    });
+                Ok((claims, authenticated)) => {
+                    let session = adapter_client.new_session(
+                        SessionConfig {
+                            conn_id: conn.conn_id().clone(),
+                            uuid: conn_uuid,
+                            user: claims.username().into(),
+                            client_ip: conn.peer_addr().clone(),
+                            external_metadata_rx: None,
+                            helm_chart_version,
+                        },
+                        authenticated,
+                    );
+                    // No invalidation of the auth session once authenticated,
+                    // so auth session lasts indefinitely.
                     (session, pending().right_future())
                 }
                 Err(err) => {
@@ -266,7 +274,7 @@ where
                     return conn.send(e).await;
                 }
             };
-            match adapter_client.authenticate(&user, &password).await {
+            let authenticated = match adapter_client.authenticate(&user, &password).await {
                 Ok(resp) => resp,
                 Err(err) => {
                     warn!(?err, "pgwire connection failed authentication");
@@ -278,14 +286,17 @@ where
                         .await;
                 }
             };
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                },
+                authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)
@@ -388,7 +399,7 @@ where
                 }
             };
 
-            match conn.recv().await? {
+            let authenticated = match conn.recv().await? {
                 Some(FrontendMessage::RawAuthentication(data)) => {
                     match decode_sasl_response(Cursor::new(&data)).ok() {
                         Some(FrontendMessage::SASLResponse(response)) => {
@@ -415,17 +426,18 @@ where
                                 )
                                 .await
                             {
-                                Ok(resp) => {
+                                Ok((proof_response, authenticated)) => {
                                     conn.send(BackendMessage::AuthenticationSASLFinal(
                                         SASLServerFinalMessage {
                                             kind: SASLServerFinalMessageKinds::Verifier(
-                                                resp.verifier,
+                                                proof_response.verifier,
                                             ),
                                             extensions: vec![],
                                         },
                                     ))
                                     .await?;
                                     conn.flush().await?;
+                                    authenticated
                                 }
                                 Err(_) => {
                                     return conn
@@ -457,28 +469,34 @@ where
                 }
             };
 
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                },
+                authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)
         }
 
         Authenticator::None => {
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                },
+                Authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)

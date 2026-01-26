@@ -20,6 +20,7 @@ use futures::FutureExt;
 use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
+use mz_auth::Authenticated;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -174,12 +175,12 @@ impl Authenticator {
         &self,
         expected_user: &str,
         password: &str,
-    ) -> Result<AuthSessionHandle, Error> {
+    ) -> Result<(AuthSessionHandle, Authenticated), Error> {
         let password: AppPassword = password.parse()?;
         match self.authenticate_inner(expected_user, password).await {
             Ok(handle) => {
                 tracing::debug!("authentication successful");
-                Ok(handle)
+                Ok((handle, Authenticated))
             }
             Err(e) => {
                 tracing::debug!(error = ?e, "authentication failed");
@@ -313,8 +314,9 @@ impl Authenticator {
         &self,
         token: &str,
         expected_user: Option<&str>,
-    ) -> Result<ValidatedClaims, Error> {
-        self.inner.validate_access_token(token, expected_user)
+    ) -> Result<(ValidatedClaims, Authenticated), Error> {
+        let claims = self.inner.validate_access_token(token, expected_user)?;
+        Ok((claims, Authenticated))
     }
 }
 
