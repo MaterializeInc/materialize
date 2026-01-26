@@ -2381,6 +2381,15 @@ impl<'a> Parser<'a> {
             self.expected(self.peek_pos(), "UPSERT, DEBEZIUM", self.peek_token())
         }
     }
+
+    fn parse_iceberg_sink_mode(&mut self) -> Result<IcebergSinkMode, ParserError> {
+        if self.parse_keyword(UPSERT) {
+            Ok(IcebergSinkMode::Upsert)
+        } else {
+            self.expected(self.peek_pos(), "UPSERT", self.peek_token())
+        }
+    }
+
     /// Parse a `VALIDATE` statement
     fn parse_validate(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(CONNECTION)?;
@@ -3250,8 +3259,8 @@ impl<'a> Parser<'a> {
         if_not_exists: bool,
         connection: CreateSinkConnection<Raw>,
     ) -> Result<CreateSinkStatement<Raw>, ParserError> {
-        let envelope = if self.parse_keyword(ENVELOPE) {
-            Some(self.parse_sink_envelope()?)
+        let mode = if self.parse_keyword(MODE) {
+            Some(self.parse_iceberg_sink_mode()?)
         } else {
             None
         };
@@ -3271,7 +3280,8 @@ impl<'a> Parser<'a> {
             from,
             connection,
             format: None,
-            envelope,
+            envelope: None,
+            mode,
             if_not_exists,
             with_options,
         })
@@ -3319,6 +3329,7 @@ impl<'a> Parser<'a> {
             connection,
             format,
             envelope,
+            mode: None,
             if_not_exists,
             with_options,
         })

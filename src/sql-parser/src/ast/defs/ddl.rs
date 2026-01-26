@@ -676,6 +676,22 @@ impl AstDisplay for SinkEnvelope {
 impl_display!(SinkEnvelope);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IcebergSinkMode {
+    Upsert,
+}
+
+impl AstDisplay for IcebergSinkMode {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Upsert => {
+                f.write_str("UPSERT");
+            }
+        }
+    }
+}
+impl_display!(IcebergSinkMode);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SubscribeOutput<T: AstInfo> {
     Diffs,
     WithinTimestampOrderBy { order_by: Vec<OrderByExpr<T>> },

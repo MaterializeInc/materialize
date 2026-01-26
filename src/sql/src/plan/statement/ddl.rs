@@ -3433,6 +3433,7 @@ fn plan_sink(
         connection,
         format,
         envelope,
+        mode,
         if_not_exists,
         with_options,
     } = stmt.clone();
@@ -3442,10 +3443,30 @@ fn plan_sink(
     };
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name)?)?;
 
-    let envelope = match envelope {
-        Some(ast::SinkEnvelope::Upsert) => SinkEnvelope::Upsert,
-        Some(ast::SinkEnvelope::Debezium) => SinkEnvelope::Debezium,
-        None => sql_bail!("ENVELOPE clause is required"),
+    let envelope = match (&connection, envelope, mode) {
+        // Kafka sinks use ENVELOPE
+        (CreateSinkConnection::Kafka { .. }, Some(ast::SinkEnvelope::Upsert), None) => {
+            SinkEnvelope::Upsert
+        }
+        (CreateSinkConnection::Kafka { .. }, Some(ast::SinkEnvelope::Debezium), None) => {
+            SinkEnvelope::Debezium
+        }
+        (CreateSinkConnection::Kafka { .. }, None, None) => {
+            sql_bail!("ENVELOPE clause is required")
+        }
+        (CreateSinkConnection::Kafka { .. }, _, Some(_)) => {
+            sql_bail!("MODE is not supported for Kafka sinks, use ENVELOPE instead")
+        }
+        // Iceberg sinks use MODE
+        (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Upsert)) => {
+            SinkEnvelope::Upsert
+        }
+        (CreateSinkConnection::Iceberg { .. }, None, None) => {
+            sql_bail!("MODE clause is required")
+        }
+        (CreateSinkConnection::Iceberg { .. }, Some(_), _) => {
+            sql_bail!("ENVELOPE is not supported for Iceberg sinks, use MODE instead")
+        }
     };
 
     let from_name = &from;

@@ -30,9 +30,9 @@ use crate::ast::{
     AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, ContinualTaskOption,
     CreateConnectionOption, CreateConnectionType, CreateSinkConnection, CreateSourceConnection,
     CreateSourceOption, CreateSourceOptionName, CteMutRecColumnDef, DeferredItemName, Expr, Format,
-    FormatSpecifier, Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query,
-    SelectItem, SinkEnvelope, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias,
-    TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
+    FormatSpecifier, IcebergSinkMode, Ident, IntervalValue, KeyConstraint, MaterializedViewOption,
+    Query, SelectItem, SinkEnvelope, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput,
+    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
     UnresolvedObjectName, UnresolvedSchemaName, Value,
 };
 
@@ -1287,6 +1287,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connection: CreateSinkConnection<T>,
     pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SinkEnvelope>,
+    pub mode: Option<IcebergSinkMode>,
     pub with_options: Vec<CreateSinkOption<T>>,
 }
 
@@ -1316,6 +1317,10 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
         if let Some(envelope) = &self.envelope {
             f.write_str(" ENVELOPE ");
             f.write_node(envelope);
+        }
+        if let Some(mode) = &self.mode {
+            f.write_str(" MODE ");
+            f.write_node(mode);
         }
 
         if !self.with_options.is_empty() {

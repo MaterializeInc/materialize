@@ -26,7 +26,7 @@
     )
     USING AWS CONNECTION aws_assume_role_s3tablesrest_e2e
     KEY (a) NOT ENFORCED
-    ENVELOPE UPSERT
+    MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
 
 # Iceberg sinks commit data asynchronously, need to wait for at least one commit interval

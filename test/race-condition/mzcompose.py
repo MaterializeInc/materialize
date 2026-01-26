@@ -645,7 +645,7 @@ class IcebergSink(Object):
               FROM {self.references_str}
               INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table}')
               USING AWS CONNECTION aws_conn
-              ENVELOPE DEBEZIUM WITH (COMMIT INTERVAL '1s')"""
+              MODE UPSERT WITH (COMMIT INTERVAL '1s')"""
             )
         )
         return "\n".join(cmds)
