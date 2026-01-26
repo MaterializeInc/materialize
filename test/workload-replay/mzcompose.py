@@ -16,9 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import csv
 import datetime
-import io
 import json
 import math
 import os
@@ -83,6 +81,7 @@ from materialize.mzcompose.test_result import (
 from materialize.util import PropagatingThread
 from materialize.version_list import resolve_ancestor_image_tag
 
+LOCATION = MZ_ROOT / "test" / "workload-replay" / "recorded-workloads"
 WORKLOAD_REPLAY_VERSION = "1.0.0"  # Used for uploading test analytics results
 SEED_RANGE = 1_000_000
 
@@ -513,7 +512,154 @@ SERVICES = [
     SqlServer(),
 ]
 
-LOCATION = MZ_ROOT / "test" / "workload-replay" / "recorded-workloads"
+
+def p(label, value):
+    if isinstance(value, str):
+        s = value
+    elif isinstance(value, float):
+        s = f"{value:,.2f}"
+    else:
+        s = f"{value:,}"
+    print(f"  {label:<{17}} {s:>{12}}")
+
+
+def print_workload_stats(file: pathlib.Path, workload: dict[str, Any]) -> None:
+    filename = posixpath.relpath(file, LOCATION)
+    print(filename)
+    p("size", f"{os.path.getsize(file) / (1024 * 1024):.1f} MiB")
+
+    p("clusters", len(workload["clusters"]))
+    p("databases", len(workload["databases"]))
+    p(
+        "schemas",
+        sum(len(schemas) for schemas in workload["databases"].values()),
+    )
+    p(
+        "types",
+        sum(
+            len(items["types"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    p(
+        "tables",
+        sum(
+            len(items["tables"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    p(
+        "connections",
+        sum(
+            len(items["connections"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    p(
+        "sources",
+        sum(
+            len(items["sources"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    source_types = Counter(
+        source["type"]
+        for schemas in workload["databases"].values()
+        for items in schemas.values()
+        for source in items["sources"].values()
+    )
+    for t, n in sorted(source_types.items()):
+        p(f"  {t}", n)
+    p(
+        "subsources",
+        sum(
+            len(source.get("children", {}))
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+            for source in items["sources"].values()
+        ),
+    )
+    p(
+        "views",
+        sum(
+            len(items["views"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    p(
+        "mat. views",
+        sum(
+            len(items["materialized_views"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    p(
+        "sinks",
+        sum(
+            len(items["sinks"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    sink_types = Counter(
+        sink["type"]
+        for schemas in workload["databases"].values()
+        for items in schemas.values()
+        for sink in items["sinks"].values()
+    )
+    for t, n in sorted(sink_types.items()):
+        p(f"  {t}", n)
+
+    rows = (
+        sum(
+            table["rows"]
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+            for table in items["tables"].values()
+        )
+        + sum(
+            source["messages_total"]
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+            for source in items["sources"].values()
+        )
+        + sum(
+            child["messages_total"]
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+            for source in items["sources"].values()
+            for child in source.get("children", {}).values()
+        )
+    )
+    p("rows", rows)
+
+    rows_s = sum(
+        source.get("messages_second", 0.0)
+        for schemas in workload["databases"].values()
+        for items in schemas.values()
+        for source in items["sources"].values()
+    ) + sum(
+        child.get("messages_second", 0.0)
+        for schemas in workload["databases"].values()
+        for items in schemas.values()
+        for source in items["sources"].values()
+        for child in source.get("children", {}).values()
+    )
+    p("  /s", rows_s)
+
+    p("queries", len(workload["queries"]))
+    if workload["queries"]:
+        dur_s = (
+            workload["queries"][-1]["began_at"] - workload["queries"][0]["began_at"]
+        ).total_seconds()
+        p("  span", f"{int(round(dur_s / 60))}min")
+        p("  last", workload["queries"][-1]["began_at"].date().isoformat())
 
 
 def resolve_tag(tag: str) -> str | None:
@@ -860,115 +1006,155 @@ class Column:
         else:
             raise ValueError(f"Unhandled data type {self.typ}")
 
-    def value(self, rng: random.Random) -> str:
+    def value(self, rng: random.Random, in_query: bool = True) -> Any:
         if self.default and rng.randrange(10) == 0 and self.default != "NULL":
-            return str(self.default)
+            return str(self.default) if in_query else self.default
+
         if self.nullable and rng.randrange(10) == 0:
-            return "NULL"
+            return "NULL" if in_query else None
 
         if self.typ == "boolean":
-            return "true" if (rng.random() < 0.2) else "false"
+            val = rng.random() < 0.2
+            return ("true" if val else "false") if in_query else val
 
         elif self.typ == "smallint":
-            return str(long_tail_int(-32768, 32767, rng=rng))
+            val = long_tail_int(-32768, 32767, rng=rng)
+            return str(val) if in_query else val
+
         elif self.typ == "integer":
-            return str(long_tail_int(-2147483648, 2147483647, rng=rng))
+            val = long_tail_int(-2147483648, 2147483647, rng=rng)
+            return str(val) if in_query else val
+
         elif self.typ == "bigint":
-            return str(
-                long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
-            )
+            val = long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng)
+            return str(val) if in_query else val
 
         elif self.typ == "uint2":
-            return str(long_tail_int(0, 65535, rng=rng))
+            val = long_tail_int(0, 65535, rng=rng)
+            return str(val) if in_query else val
+
         elif self.typ == "uint4":
-            return str(long_tail_int(0, 4294967295, rng=rng))
+            val = long_tail_int(0, 4294967295, rng=rng)
+            return str(val) if in_query else val
+
         elif self.typ == "uint8":
-            return str(long_tail_int(0, 18446744073709551615, rng=rng))
+            val = long_tail_int(0, 18446744073709551615, rng=rng)
+            return str(val) if in_query else val
 
         elif self.typ in ("float", "double precision", "numeric"):
-            return str(long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng))
+            val = long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng)
+            return str(val) if in_query else val
 
         elif self.typ in ("text", "bytea"):
             if self.data_shape == "datetime":
                 year = long_tail_choice(
                     [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
                 )
-                return literal(
-                    f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}T{rng.randrange(0, 23):02}:{rng.randrange(0, 59):02}:{rng.randrange(0, 59):02}Z"
+                s = (
+                    f"{year}-{rng.randrange(1, 13):02}-{rng.randrange(1, 29):02}"
+                    f"T{rng.randrange(0, 23):02}:{rng.randrange(0, 59):02}:{rng.randrange(0, 59):02}Z"
                 )
+                return literal(s) if in_query else s
+
             elif self.data_shape:
                 raise ValueError(f"Unhandled text shape {self.data_shape}")
-            return literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
+
+            s = long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
+            return literal(s) if in_query else s
 
         elif self.typ in ("character", "character varying"):
-            return literal(long_tail_text(self.chars, 10, self._hot_strings, rng=rng))
+            s = long_tail_text(self.chars, 10, self._hot_strings, rng=rng)
+            return literal(s) if in_query else s
 
         elif self.typ == "uuid":
-            return str(uuid.UUID(int=rng.getrandbits(128), version=4))
+            u = uuid.UUID(int=rng.getrandbits(128), version=4)
+            return str(u) if in_query else u
 
         elif self.typ == "jsonb":
-            result = {
+            obj = {
                 f"key{key}": str(long_tail_int(-100, 100, rng=rng)) for key in range(20)
             }
-            return f"'{json.dumps(result)}'::jsonb"
+            if in_query:
+                return f"'{json.dumps(obj)}'::jsonb"
+            else:
+                return obj
 
         elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
             year = long_tail_choice(
                 [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
+            s = f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            return literal(s) if in_query else s
 
         elif self.typ == "mz_timestamp":
             year = long_tail_choice(
                 [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
+            s = f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            return literal(s) if in_query else s
 
         elif self.typ == "date":
             year = long_tail_choice(
                 [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng
             )
-            return literal(f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}")
+            s = f"{year}-{rng.randrange(1, 13)}-{rng.randrange(1, 29)}"
+            return literal(s) if in_query else s
 
         elif self.typ == "time":
             if rng.random() < 0.8:
-                return literal(
-                    rng.choice(
-                        ["00:00:00.000000", "12:00:00.000000", "23:59:59.000000"]
-                    )
+                s = rng.choice(
+                    ["00:00:00.000000", "12:00:00.000000", "23:59:59.000000"]
                 )
-            return literal(
-                f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}.{rng.randrange(0, 1000000)}"
+                return literal(s) if in_query else s
+
+            s = (
+                f"{rng.randrange(0, 24)}:{rng.randrange(0, 60)}:{rng.randrange(0, 60)}"
+                f".{rng.randrange(0, 1000000)}"
             )
+            return literal(s) if in_query else s
 
         elif self.typ == "int2range":
             a = str(long_tail_int(-32768, 32767, rng=rng))
             b = str(long_tail_int(-32768, 32767, rng=rng))
-            return literal(f"[{a},{b})")
+            s = f"[{a},{b})"
+            return literal(s) if in_query else s
 
         elif self.typ == "int4range":
             a = str(long_tail_int(-2147483648, 2147483647, rng=rng))
             b = str(long_tail_int(-2147483648, 2147483647, rng=rng))
-            return literal(f"[{a},{b})")
+            s = f"[{a},{b})"
+            return literal(s) if in_query else s
 
         elif self.typ == "int8range":
             a = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
             b = str(long_tail_int(-9223372036854775808, 9223372036854775807, rng=rng))
-            return literal(f"[{a},{b})")
+            s = f"[{a},{b})"
+            return literal(s) if in_query else s
 
         elif self.typ == "map":
-            values = [
-                f"'{i}' => {str(long_tail_int(-100, 100, rng=rng))}"
-                for i in range(0, 20)
-            ]
-            return literal(f"{{{', '.join(values)}}}")
+            if in_query:
+                values = [
+                    f"'{i}' => {str(long_tail_int(-100, 100, rng=rng))}"
+                    for i in range(0, 20)
+                ]
+                return literal(f"{{{', '.join(values)}}}")
+            else:
+                return {
+                    str(i): str(long_tail_int(-100, 100, rng=rng)) for i in range(0, 20)
+                }
 
         elif self.typ == "text[]":
-            values = [
-                literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
-                for _ in range(5)
-            ]
-            return literal(f"{{{', '.join(values)}}}")
+            if in_query:
+                values = [
+                    literal(long_tail_text(self.chars, 100, self._hot_strings, rng=rng))
+                    for _ in range(5)
+                ]
+                return literal(f"{{{', '.join(values)}}}")
+            else:
+                return [
+                    long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
+                    for _ in range(5)
+                ]
 
         else:
             raise ValueError(f"Unhandled data type {self.typ}")
@@ -1276,12 +1462,9 @@ def ingest(
         conn.autocommit = True
 
         col_names = [col.name for col in columns]
-        value_funcs = [col.value for col in columns]
 
         with conn.cursor() as cur:
-            copy_stmt = SQL(
-                "COPY {}.{} ({}) FROM STDIN WITH (FORMAT CSV, NULL 'NULL')"
-            ).format(
+            copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN").format(
                 Identifier(ref_schema),
                 Identifier(ref_table),
                 SQL(", ").join(map(Identifier, col_names)),
@@ -1289,14 +1472,8 @@ def ingest(
 
             with cur.copy(copy_stmt) as copy:
                 for _ in range(num_rows):
-                    row = [fn(rng) for fn in value_funcs]
-
-                    # Convert a python row -> one CSV record
-                    buf = io.StringIO()
-                    writer = csv.writer(buf, lineterminator="\n")
-                    writer.writerow(row)
-
-                    copy.write(buf.getvalue())
+                    row = [col.value(rng, in_query=False) for col in columns]
+                    copy.write_row(row)
 
     elif source["type"] == "mysql":
         ref_database, ref_table = get_mysql_reference_db_table(child)
@@ -1909,7 +2086,6 @@ def create_initial_data_requiring_mz(
                 print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
 
                 col_names = [col.name for col in data_columns]
-                value_funcs = [col.value for col in data_columns]
 
                 with conn.cursor() as cur:
                     for start in range(0, num_rows, batch_size):
@@ -1920,9 +2096,7 @@ def create_initial_data_requiring_mz(
                             flush=True,
                         )
 
-                        copy_stmt = SQL(
-                            "COPY {}.{}.{} ({}) FROM STDIN WITH (FORMAT CSV, NULL 'NULL')"
-                        ).format(
+                        copy_stmt = SQL("COPY {}.{}.{} ({}) FROM STDIN").format(
                             Identifier(db),
                             Identifier(schema),
                             Identifier(name),
@@ -1930,18 +2104,13 @@ def create_initial_data_requiring_mz(
                         )
 
                         with cur.copy(copy_stmt) as copy:
-                            buf = io.StringIO()
-                            writer = csv.writer(buf, lineterminator="\n")
-
                             batch_rows = min(batch_size, num_rows - start)
                             for _ in range(batch_rows):
-                                row = [fn(rng) for fn in value_funcs]
-                                writer.writerow(row)
-
-                            copy.write(buf.getvalue())
-
-                print()
-                created_data = True
+                                row = [
+                                    col.value(rng, in_query=False)
+                                    for col in data_columns
+                                ]
+                                copy.write_row(row)
 
             for name, source in items["sources"].items():
                 if source["type"] == "webhook":
@@ -2465,7 +2634,7 @@ def docker_stats(
         stats.append((timestamp, result))
 
 
-def print_stats(stats: dict[str, Any]) -> None:
+def print_replay_stats(stats: dict[str, Any]) -> None:
     print("Queries:")
     print(f"   Total: {stats['queries']['total']}")
     failed = (
@@ -2627,7 +2796,7 @@ def plot_docker_stats_compare(
             ys_old=old.cpu_percent,
             t_new=new.t,
             ys_new=new.cpu_percent,
-            title=f"{file} - Initial Data CPU\n{old_version} [old] vs {new_version} [new]",
+            title=f"{file} - Initial Data Phase CPU\n{old_version} [old] vs {new_version} [new]",
             ylabel="CPU [%]",
             out_path=plot_path,
         )
@@ -2639,7 +2808,7 @@ def plot_docker_stats_compare(
             ys_old=old.mem_percent,
             t_new=new.t,
             ys_new=new.mem_percent,
-            title=f"{file} - Initial Data Memory\n{old_version} [old] vs {new_version} [new]",
+            title=f"{file} - Initial Data Phase Memory\n{old_version} [old] vs {new_version} [new]",
             ylabel="Memory [%]",
             out_path=plot_path,
         )
@@ -2873,6 +3042,12 @@ def benchmark(
         "ssh-bastion-host",
         "testdrive",
     ]
+
+    with open(file) as f:
+        workload = yaml.load(f, Loader=yaml.CSafeLoader)
+
+    print_workload_stats(file, workload)
+
     tag = resolve_tag(compare_against)
     print(f"-- Running against materialized:{tag} (reference)")
     # TODO: Threads all need an rng with an initialized seed so we get the same data in each run!
@@ -2885,6 +3060,7 @@ def benchmark(
     ):
         stats_old = test(
             c,
+            workload,
             file,
             factor_initial_data,
             factor_ingestions,
@@ -2911,6 +3087,7 @@ def benchmark(
     ):
         stats_new = test(
             c,
+            workload,
             file,
             factor_initial_data,
             factor_ingestions,
@@ -2964,6 +3141,7 @@ def benchmark(
 
 def test(
     c: Composition,
+    workload: dict[str, Any],
     file: pathlib.Path,
     factor_initial_data: float,
     factor_ingestions: float,
@@ -2977,9 +3155,6 @@ def test(
     run_queries: bool,
 ) -> dict[str, Any]:
     print(f"--- {posixpath.relpath(file, LOCATION)}")
-    with open(file) as f:
-        workload = yaml.load(f, Loader=yaml.CSafeLoader)
-
     services = set()
 
     for schemas in workload["databases"].values():
@@ -3021,36 +3196,39 @@ def test(
             run_create_objects_part_2(c, services, workload)
         stats["object_creation"] = time.time() - start_time
     created_data = False
-    if initial_data:
-        print("Creating initial data")
-        stats["initial_data"] = {"docker": [], "time": 0.0}
-        stats_thread = PropagatingThread(
-            target=docker_stats,
-            name="docker-stats",
-            args=(stats["initial_data"]["docker"], stop_event),
-        )
-        stats_thread.start()
-        start_time = time.time()
-        created_data = create_initial_data_external(
-            c,
-            workload,
-            factor_initial_data,
-            random.Random(random.randrange(SEED_RANGE)),
-        )
-    if early_initial_data:
-        start_time = time.time()
-        run_create_objects_part_2(c, services, workload)
-        stats["object_creation"] += time.time() - start_time
-    if initial_data:
-        created_data = create_initial_data_requiring_mz(
-            c,
-            workload,
-            factor_initial_data,
-            random.Random(random.randrange(SEED_RANGE)),
-        )
+    try:
+        if initial_data:
+            print("Creating initial data")
+            stats["initial_data"] = {"docker": [], "time": 0.0}
+            stats_thread = PropagatingThread(
+                target=docker_stats,
+                name="docker-stats",
+                args=(stats["initial_data"]["docker"], stop_event),
+            )
+            stats_thread.start()
+            start_time = time.time()
+            created_data = create_initial_data_external(
+                c,
+                workload,
+                factor_initial_data,
+                random.Random(random.randrange(SEED_RANGE)),
+            )
+        if early_initial_data:
+            start_time = time.time()
+            run_create_objects_part_2(c, services, workload)
+            stats["object_creation"] += time.time() - start_time
+        if initial_data:
+            created_data = created_data or create_initial_data_requiring_mz(
+                c,
+                workload,
+                factor_initial_data,
+                random.Random(random.randrange(SEED_RANGE)),
+            )
+    finally:
         stop_event.set()
         stats_thread.join()
         stop_event.clear()
+    if initial_data:
         stats["initial_data"]["time"] = time.time() - start_time
         if not created_data:
             del stats["initial_data"]
@@ -3126,7 +3304,7 @@ def test(
             stop_event.set()
             for thread in threads:
                 thread.join()
-            print_stats(stats)
+            print_replay_stats(stats)
     else:
         print("No continuous ingestions or queries defined, skipping phase")
 
@@ -3203,10 +3381,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         sorted(files_unsharded),
         lambda file: str(file),
     )
-    c.test_parts(
-        files,
-        lambda file: test(
+
+    def run(file: pathlib.Path) -> None:
+        with open(file) as f:
+            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        print_workload_stats(file, workload)
+        test(
             c,
+            workload,
             file,
             args.factor_initial_data,
             args.factor_ingestions,
@@ -3218,8 +3400,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.early_initial_data,
             args.run_ingestions,
             args.run_queries,
-        ),
-    )
+        )
+
+    c.test_parts(files, run)
 
 
 def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -3318,153 +3501,9 @@ def workflow_stats(c: Composition, parser: WorkflowArgumentParser) -> None:
             files.extend(LOCATION.rglob(file))
         files.sort()
 
-        def p(label, value):
-            if isinstance(value, str):
-                s = value
-            elif isinstance(value, float):
-                s = f"{value:,.2f}"
-            else:
-                s = f"{value:,}"
-            print(f"  {label:<{17}} {s:>{12}}")
-
         for file in files:
-            print()
-            print(posixpath.relpath(file, LOCATION))
-            p("size", f"{os.path.getsize(file) / (1024 * 1024):.1f} MiB")
             with open(file) as f:
                 workload = yaml.load(f, Loader=yaml.CSafeLoader)
-
-            p("clusters", len(workload["clusters"]))
-            p("databases", len(workload["databases"]))
-            p(
-                "schemas",
-                sum(len(schemas) for schemas in workload["databases"].values()),
-            )
-            p(
-                "types",
-                sum(
-                    len(items["types"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            p(
-                "tables",
-                sum(
-                    len(items["tables"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            p(
-                "connections",
-                sum(
-                    len(items["connections"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            p(
-                "sources",
-                sum(
-                    len(items["sources"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            source_types = Counter(
-                source["type"]
-                for schemas in workload["databases"].values()
-                for items in schemas.values()
-                for source in items["sources"].values()
-            )
-            for t, n in sorted(source_types.items()):
-                p(f"  {t}", n)
-            p(
-                "subsources",
-                sum(
-                    len(source.get("children", {}))
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                    for source in items["sources"].values()
-                ),
-            )
-            p(
-                "views",
-                sum(
-                    len(items["views"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            p(
-                "mat. views",
-                sum(
-                    len(items["materialized_views"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            p(
-                "sinks",
-                sum(
-                    len(items["sinks"])
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                ),
-            )
-            sink_types = Counter(
-                sink["type"]
-                for schemas in workload["databases"].values()
-                for items in schemas.values()
-                for sink in items["sinks"].values()
-            )
-            for t, n in sorted(sink_types.items()):
-                p(f"  {t}", n)
-
-            rows = (
-                sum(
-                    table["rows"]
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                    for table in items["tables"].values()
-                )
-                + sum(
-                    source["messages_total"]
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                    for source in items["sources"].values()
-                )
-                + sum(
-                    child["messages_total"]
-                    for schemas in workload["databases"].values()
-                    for items in schemas.values()
-                    for source in items["sources"].values()
-                    for child in source.get("children", {}).values()
-                )
-            )
-            p("rows", rows)
-
-            rows_s = sum(
-                source.get("messages_second", 0.0)
-                for schemas in workload["databases"].values()
-                for items in schemas.values()
-                for source in items["sources"].values()
-            ) + sum(
-                child.get("messages_second", 0.0)
-                for schemas in workload["databases"].values()
-                for items in schemas.values()
-                for source in items["sources"].values()
-                for child in source.get("children", {}).values()
-            )
-            p("  /s", rows_s)
-
-            p("queries", len(workload["queries"]))
-            if workload["queries"]:
-                dur_s = (
-                    workload["queries"][-1]["began_at"]
-                    - workload["queries"][0]["began_at"]
-                ).total_seconds()
-                p("  span", f"{int(round(dur_s / 60))}min")
-                p("  last", workload["queries"][-1]["began_at"].date().isoformat())
+            print()
+            print_workload_stats(file, workload)
         print()
