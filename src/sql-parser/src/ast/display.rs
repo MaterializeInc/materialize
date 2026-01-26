@@ -73,9 +73,9 @@ where
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FormatMode {
     /// Simple is the normal way of printing for human consumption. Identifiers are quoted only if
-    /// necessary and sensitive information is not redacted.
+    /// necessary, and sensitive information is not redacted.
     Simple,
-    /// SimpleRedacted is like Simple, but strips out literals, e.g. strings and numbers.
+    /// SimpleRedacted is like Simple, but strips out literals, e.g., strings and numbers.
     /// This makes SQL queries be "usage data", rather than "customer data" according to our
     /// data management policy, allowing us to introspect it.
     SimpleRedacted,

@@ -100,3 +100,33 @@ SELECT pretty_sql(create_sql) FROM mz_types WHERE name = 'ty'
 ----
 CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s6 AS pg_catalog.bool]);
 EOF
+
+# Only some of the following require quotations. This depends on whether `Parser::parse_prefix` checks the next token
+# before treating them as keywords. We took care to make this behavior exactly the same as Postgres.
+query T multiline
+SELECT pretty_sql('SELECT "true", "false", "null", "array", "list", "map", "case", "cast", "coalesce", "greatest", "least", "nullif", "exists", "extract", "not", "row", "trim", "position", "substring", "normalize"
+                   FROM iffy_colnames')
+----
+SELECT
+    "true",
+    "false",
+    "null",
+    "array",
+    list,
+    map,
+    "case",
+    "cast",
+    coalesce,
+    greatest,
+    least,
+    nullif,
+    exists,
+    extract,
+    "not",
+    row,
+    trim,
+    position,
+    substring,
+    normalize
+FROM iffy_colnames;
+EOF

@@ -96,3 +96,73 @@ query T
 SELECT count(*) AS "count" FROM "q"
 ----
 3
+
+# Postgres requires quoting some of these keywords in CREATE TABLE column names. I think it's fine that we don't require
+# this in Materialize.
+statement ok
+CREATE TABLE iffy_colnames(
+  true int, false int, null int,
+  array int,
+  list int, map int,
+  case int,
+  cast int,
+  coalesce int, greatest int, least int, nullif int, exists int, extract int,
+  not int,
+  row int, trim int, position int, substring int, normalize int
+);
+
+statement ok
+INSERT INTO iffy_colnames VALUES (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+
+# Test Parser::parse_prefix's keyword handling's Postgres compatibility
+# https://github.com/MaterializeInc/database-issues/issues/9005
+#
+# For each of the above col names, we try to refer to them once quoted and once unquoted. The quoted references should
+# always work, while some of the unquoted versions work but some fail (either with an error, or producing a value that
+# is not the value of the column, e.g., `true`). All these tests have exactly the same outcome as in Postgres.
+
+query IIIIIIIIIIIIIIIIIIII
+SELECT "true", "false", "null", "array", "list", "map", "case", "cast", "coalesce", "greatest", "least", "nullif", "exists", "extract", "not", "row", "trim", "position", "substring", "normalize"
+FROM iffy_colnames;
+----
+0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+
+query BBI
+SELECT true, false, null
+FROM iffy_colnames;
+----
+true  false  NULL
+
+query error Expected left square bracket, found FROM
+SELECT array
+FROM iffy_colnames;
+
+query II
+SELECT list, map
+FROM iffy_colnames;
+----
+0  0
+
+query error expected expression, but found reserved keyword: FROM
+SELECT case
+FROM iffy_colnames;
+
+query error Expected left parenthesis, found FROM
+SELECT cast
+FROM iffy_colnames;
+
+query IIIIII
+SELECT coalesce, greatest, least, nullif, exists, extract
+FROM iffy_colnames;
+----
+0  0  0  0  0  0
+
+query error expected expression, but found reserved keyword: FROM
+SELECT not
+FROM iffy_colnames;
+
+query IIIII
+SELECT row, trim, position, substring, normalize
+FROM iffy_colnames;
+----
+0  0  0  0  0
