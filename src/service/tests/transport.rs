@@ -103,7 +103,7 @@ fn test_bidirectional_communication() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
                 TIMEOUT,
@@ -125,7 +125,7 @@ fn test_bidirectional_communication() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+        let mut client = connect_ctp("server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.send(1).await?;
         client.send(2).await?;
@@ -158,7 +158,7 @@ fn test_server_error() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
                 TIMEOUT,
@@ -174,8 +174,7 @@ fn test_server_error() {
     });
 
     sim.client("client", async move {
-        let mut client =
-            connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+        let mut client = connect_ctp::<i32, ()>("server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.send(1).await?;
 
@@ -202,19 +201,15 @@ fn test_handshake_magic_mismatch() {
     let mut sim = setup();
 
     sim.host("server", move || async {
-        let listener = Listener::bind("turmoil:0.0.0.0:7777").await?;
+        let listener = Listener::bind("0.0.0.0:7777").await?;
         let (mut stream, _) = listener.accept().await?;
         stream.write_u64(0xbad).await?;
         Ok(())
     });
 
     sim.client("client", async move {
-        connect_ctp_error::<(), ()>(
-            "turmoil:server:7777",
-            VERSION,
-            "invalid protocol magic: 0xbad",
-        )
-        .await?;
+        connect_ctp_error::<(), ()>("server:7777", VERSION, "invalid protocol magic: 0xbad")
+            .await?;
 
         Ok(())
     });
@@ -239,7 +234,7 @@ fn test_handshake_version_mismatch() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 SERVER_VERSION,
                 Some("server".into()),
                 TIMEOUT,
@@ -256,7 +251,7 @@ fn test_handshake_version_mismatch() {
 
     sim.client("client", async move {
         connect_ctp_error::<(), ()>(
-            "turmoil:server:7777",
+            "server:7777",
             CLIENT_VERSION,
             "version mismatch: 1.2.3 != 1.2.4",
         )
@@ -282,7 +277,7 @@ fn test_handshake_fqdn_mismatch() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("wrong.server".into()),
                 TIMEOUT,
@@ -299,7 +294,7 @@ fn test_handshake_fqdn_mismatch() {
 
     sim.client("client", async move {
         connect_ctp_error::<(), ()>(
-            "turmoil:server:7777",
+            "server:7777",
             VERSION,
             "server FQDN mismatch: wrong.server != server",
         )
@@ -325,7 +320,7 @@ fn test_idle_timeout() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
                 TIMEOUT,
@@ -342,7 +337,7 @@ fn test_idle_timeout() {
 
     sim.client("client", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
         ready_tx.send(1).unwrap();
@@ -379,7 +374,7 @@ fn test_keepalive() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
                 TIMEOUT,
@@ -397,7 +392,7 @@ fn test_keepalive() {
 
     sim.client("client", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
 
@@ -418,7 +413,7 @@ fn test_connection_cancelation() {
 
     sim.host("server", move || async {
         transport::serve(
-            "turmoil:0.0.0.0:7777".parse().unwrap(),
+            "0.0.0.0:7777".parse().unwrap(),
             VERSION,
             Some("server".into()),
             TIMEOUT,
@@ -434,7 +429,7 @@ fn test_connection_cancelation() {
 
     sim.client("client1", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
         ready_tx.send(1).unwrap();
@@ -456,7 +451,7 @@ fn test_connection_cancelation() {
 
     sim.client("client2", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
 
@@ -508,7 +503,7 @@ fn test_metrics() {
         mz_ore::task::spawn(
             || "serve",
             transport::serve(
-                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                "0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
                 TIMEOUT,
@@ -534,8 +529,7 @@ fn test_metrics() {
     sim.client("client", async move {
         let metrics = Metrics::default();
 
-        let mut client =
-            connect_ctp("turmoil:server:7777", VERSION, TIMEOUT, metrics.clone()).await;
+        let mut client = connect_ctp("server:7777", VERSION, TIMEOUT, metrics.clone()).await;
 
         client.send("short".into()).await?;
         assert_eq!(

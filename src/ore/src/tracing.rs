@@ -501,7 +501,6 @@ where
                 let path = addr.as_pathname().unwrap().as_ref();
                 builder.server_addr(path)
             }
-            SocketAddr::Turmoil(_) => unimplemented!(),
         };
         Some(builder.spawn())
     } else {
@@ -604,7 +603,6 @@ where
         let endpoint = match console_config.listen_addr {
             SocketAddr::Inet(addr) => format!("http://{addr}"),
             SocketAddr::Unix(addr) => format!("file://localhost{addr}"),
-            SocketAddr::Turmoil(_) => unimplemented!(),
         };
         tracing::info!("starting tokio console on {endpoint}");
     }

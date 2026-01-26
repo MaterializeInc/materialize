@@ -10,13 +10,11 @@
 //! Process-local transport for the [client](crate::client) module.
 
 use std::fmt;
-use std::thread::Thread;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use crossbeam_channel::Sender;
 use itertools::Itertools;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -27,8 +25,7 @@ use crate::client::{GenericClient, Partitionable, Partitioned};
 #[derive(Debug)]
 pub struct LocalClient<C, R> {
     rx: UnboundedReceiver<R>,
-    tx: Sender<C>,
-    thread: Thread,
+    tx: UnboundedSender<C>,
 }
 
 #[async_trait]
@@ -39,7 +36,6 @@ where
 {
     async fn send(&mut self, cmd: C) -> Result<(), anyhow::Error> {
         self.tx.send(cmd).map_err(|_| anyhow!("receiver dropped"))?;
-        self.thread.unpark();
 
         Ok(())
     }
@@ -57,15 +53,14 @@ where
 
 impl<C, R> LocalClient<C, R> {
     /// Create a new instance of [`LocalClient`] from its parts.
-    pub fn new(rx: UnboundedReceiver<R>, tx: Sender<C>, thread: Thread) -> Self {
-        Self { rx, tx, thread }
+    pub fn new(rx: UnboundedReceiver<R>, tx: UnboundedSender<C>) -> Self {
+        Self { rx, tx }
     }
 
     /// Create a new partitioned local client from parts for each client.
     pub fn new_partitioned(
         rxs: Vec<UnboundedReceiver<R>>,
-        txs: Vec<Sender<C>>,
-        threads: Vec<Thread>,
+        txs: Vec<UnboundedSender<C>>,
     ) -> Partitioned<Self, C, R>
     where
         (C, R): Partitionable<C, R>,
@@ -73,15 +68,8 @@ impl<C, R> LocalClient<C, R> {
         let clients = rxs
             .into_iter()
             .zip_eq(txs)
-            .zip_eq(threads)
-            .map(|((rx, tx), thread)| LocalClient::new(rx, tx, thread))
+            .map(|(rx, tx)| LocalClient::new(rx, tx))
             .collect();
         Partitioned::new(clients)
-    }
-}
-
-impl<C, R> Drop for LocalClient<C, R> {
-    fn drop(&mut self) {
-        self.thread.unpark();
     }
 }

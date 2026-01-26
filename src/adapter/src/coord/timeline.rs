@@ -26,6 +26,7 @@ use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use mz_timestamp_oracle::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig,
 };
+use mz_timestamp_oracle::simulation_oracle::SimulationTimestampOracle;
 use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{Instrument, debug, error, info};
@@ -235,26 +236,25 @@ impl Coordinator {
                 NowFn::from(|| Timestamp::minimum().into())
             };
 
-            let pg_oracle_config = pg_oracle_config.expect(
-                        "missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
-
-            let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
-
-            let pg_oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> = Arc::new(
-                PostgresTimestampOracle::open(
-                    pg_oracle_config,
-                    timeline.to_string(),
-                    initially,
-                    now_fn,
-                    read_only,
-                )
-                .await,
-            );
-
-            let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
-
-            let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
-                Arc::new(batching_oracle);
+            let oracle: Arc<dyn TimestampOracle<_> + Send + Sync + 'static> =
+                if let Some(config) = pg_oracle_config {
+                    let batching_metrics = Arc::clone(&config.metrics);
+                    let pg_oracle = Arc::new(
+                        PostgresTimestampOracle::open(
+                            config,
+                            timeline.to_string(),
+                            initially,
+                            now_fn,
+                            read_only,
+                        )
+                        .await,
+                    );
+                    let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
+                    Arc::new(batching_oracle)
+                } else {
+                    let sim_oracle = SimulationTimestampOracle::new(initially, now_fn);
+                    Arc::new(sim_oracle)
+                };
 
             global_timelines.insert(
                 timeline.clone(),

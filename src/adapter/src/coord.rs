@@ -75,7 +75,6 @@ use std::ops::Neg;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
@@ -84,7 +83,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use fail::fail_point;
 use futures::StreamExt;
-use futures::future::{BoxFuture, FutureExt, LocalBoxFuture};
+use futures::future::{FutureExt, LocalBoxFuture};
 use http::Uri;
 use ipnet::IpNet;
 use itertools::{Either, Itertools};
@@ -124,10 +123,9 @@ use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_ore::task::{JoinHandle, spawn};
-use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
-use mz_ore::{assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, stack};
+use mz_ore::{assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_persist_client::PersistClient;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
@@ -169,9 +167,9 @@ use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
-use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::task::LocalSet;
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -3632,6 +3630,7 @@ impl Coordinator {
                     }
                 }
             }
+
             // Try and cleanup as a best effort. There may be some async tasks out there holding a
             // reference that prevents us from cleaning up.
             if let Some(catalog) = Arc::into_inner(self.catalog) {
@@ -4093,7 +4092,7 @@ pub fn serve(
         external_login_password_mz_system,
         force_builtin_schema_migration,
     }: Config,
-) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
+) -> LocalBoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
         let coord_start = Instant::now();
         info!("startup: coordinator init: beginning");
@@ -4266,12 +4265,6 @@ pub fn serve(
         let session_id = catalog.config().session_id;
         let start_instant = catalog.config().start_instant;
 
-        // In order for the coordinator to support Rc and Refcell types, it cannot be
-        // sent across threads. Spawn it in a thread and have this parent thread wait
-        // for bootstrap completion before proceeding.
-        let (bootstrap_tx, bootstrap_rx) = oneshot::channel();
-        let handle = TokioHandle::current();
-
         let metrics = Metrics::register_into(&metrics_registry);
         let metrics_clone = metrics.clone();
         let optimizer_metrics = OptimizerMetrics::register_into(
@@ -4356,162 +4349,132 @@ pub fn serve(
 
         let (group_commit_tx, group_commit_rx) = appends::notifier();
 
-        let parent_span = tracing::Span::current();
-        let thread = thread::Builder::new()
-            // The Coordinator thread tends to keep a lot of data on its stack. To
-            // prevent a stack overflow we allocate a stack three times as big as the default
-            // stack.
-            .stack_size(3 * stack::STACK_SIZE)
-            .name("coordinator".to_string())
-            .spawn(move || {
-                let span = info_span!(parent: parent_span, "coord::coordinator").entered();
+        let controller = catalog.initialize_controller(
+            controller_config,
+            controller_envd_epoch,
+            read_only_controllers,
+        ).await
+        .unwrap_or_terminate("failed to initialize storage_controller");
 
-                let controller = handle
-                    .block_on({
-                        catalog.initialize_controller(
-                            controller_config,
-                            controller_envd_epoch,
-                            read_only_controllers,
-                        )
-                    })
-                    .unwrap_or_terminate("failed to initialize storage_controller");
-                // Initializing the controller uses one or more timestamps, so push the boot timestamp up to the
-                // current catalog upper.
-                let catalog_upper = handle.block_on(catalog.current_upper());
-                boot_ts = std::cmp::max(boot_ts, catalog_upper);
-                if !read_only_controllers {
-                    let epoch_millis_oracle = &timestamp_oracles
-                        .get(&Timeline::EpochMilliseconds)
-                        .expect("inserted above")
-                        .oracle;
-                    handle.block_on(epoch_millis_oracle.apply_write(boot_ts));
-                }
-
-                let catalog = Arc::new(catalog);
-
-                let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
-                let mut coord = Coordinator {
-                    controller,
-                    catalog,
-                    internal_cmd_tx,
-                    group_commit_tx,
-                    strict_serializable_reads_tx,
-                    global_timelines: timestamp_oracles,
-                    transient_id_gen: Arc::new(TransientIdGen::new()),
-                    active_conns: BTreeMap::new(),
-                    txn_read_holds: Default::default(),
-                    pending_peeks: BTreeMap::new(),
-                    client_pending_peeks: BTreeMap::new(),
-                    pending_linearize_read_txns: BTreeMap::new(),
-                    serialized_ddl: LockedVecDeque::new(),
-                    active_compute_sinks: BTreeMap::new(),
-                    active_webhooks: BTreeMap::new(),
-                    active_copies: BTreeMap::new(),
-                    staged_cancellation: BTreeMap::new(),
-                    introspection_subscribes: BTreeMap::new(),
-                    write_locks: BTreeMap::new(),
-                    deferred_write_ops: BTreeMap::new(),
-                    pending_writes: Vec::new(),
-                    advance_timelines_interval,
-                    secrets_controller,
-                    caching_secrets_reader,
-                    cloud_resource_controller,
-                    storage_usage_client,
-                    storage_usage_collection_interval,
-                    segment_client,
-                    metrics,
-                    optimizer_metrics,
-                    tracing_handle,
-                    statement_logging: StatementLogging::new(coord_now.clone()),
-                    webhook_concurrency_limit,
-                    pg_timestamp_oracle_config,
-                    check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
-                    cluster_scheduling_decisions: BTreeMap::new(),
-                    caught_up_check_interval: clusters_caught_up_check_interval,
-                    caught_up_check: clusters_caught_up_check,
-                    installed_watch_sets: BTreeMap::new(),
-                    connection_watch_sets: BTreeMap::new(),
-                    cluster_replica_statuses: ClusterReplicaStatuses::new(),
-                    read_only_controllers,
-                    buffered_builtin_table_updates: Some(Vec::new()),
-                    license_key,
-                    persist_client,
-                };
-                let bootstrap = handle.block_on(async {
-                    coord
-                        .bootstrap(
-                            boot_ts,
-                            migrated_storage_collections_0dt,
-                            builtin_table_updates,
-                            cached_global_exprs,
-                            uncached_local_exprs,
-                            audit_logs_iterator,
-                        )
-                        .await?;
-                    coord
-                        .controller
-                        .remove_orphaned_replicas(
-                            coord.catalog().get_next_user_replica_id().await?,
-                            coord.catalog().get_next_system_replica_id().await?,
-                        )
-                        .await
-                        .map_err(AdapterError::Orchestrator)?;
-
-                    if let Some(retention_period) = storage_usage_retention_period {
-                        coord
-                            .prune_storage_usage_events_on_startup(retention_period)
-                            .await;
-                    }
-
-                    Ok(())
-                });
-                let ok = bootstrap.is_ok();
-                drop(span);
-                bootstrap_tx
-                    .send(bootstrap)
-                    .expect("bootstrap_rx is not dropped until it receives this message");
-                if ok {
-                    handle.block_on(coord.serve(
-                        internal_cmd_rx,
-                        strict_serializable_reads_rx,
-                        cmd_rx,
-                        group_commit_rx,
-                    ));
-                }
-            })
-            .expect("failed to create coordinator thread");
-        match bootstrap_rx
-            .await
-            .expect("bootstrap_tx always sends a message or panics/halts")
-        {
-            Ok(()) => {
-                info!(
-                    "startup: coordinator init: coordinator thread start complete in {:?}",
-                    coord_thread_start.elapsed()
-                );
-                info!(
-                    "startup: coordinator init: complete in {:?}",
-                    coord_start.elapsed()
-                );
-                let handle = Handle {
-                    session_id,
-                    start_instant,
-                    _thread: thread.join_on_drop(),
-                };
-                let client = Client::new(
-                    build_info,
-                    cmd_tx,
-                    metrics_clone,
-                    now,
-                    environment_id,
-                    segment_client_clone,
-                );
-                Ok((handle, client))
-            }
-            Err(e) => Err(e),
+        // Initializing the controller uses one or more timestamps, so push the boot timestamp up to the
+        // current catalog upper.
+        let catalog_upper = catalog.current_upper().await;
+        boot_ts = std::cmp::max(boot_ts, catalog_upper);
+        if !read_only_controllers {
+            let epoch_millis_oracle = &timestamp_oracles
+                .get(&Timeline::EpochMilliseconds)
+                .expect("inserted above")
+                .oracle;
+            epoch_millis_oracle.apply_write(boot_ts).await;
         }
+
+        let catalog = Arc::new(catalog);
+
+        let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+        let mut coord = Coordinator {
+            controller,
+            catalog,
+            internal_cmd_tx,
+            group_commit_tx,
+            strict_serializable_reads_tx,
+            global_timelines: timestamp_oracles,
+            transient_id_gen: Arc::new(TransientIdGen::new()),
+            active_conns: BTreeMap::new(),
+            txn_read_holds: Default::default(),
+            pending_peeks: BTreeMap::new(),
+            client_pending_peeks: BTreeMap::new(),
+            pending_linearize_read_txns: BTreeMap::new(),
+            serialized_ddl: LockedVecDeque::new(),
+            active_compute_sinks: BTreeMap::new(),
+            active_webhooks: BTreeMap::new(),
+            active_copies: BTreeMap::new(),
+            staged_cancellation: BTreeMap::new(),
+            introspection_subscribes: BTreeMap::new(),
+            write_locks: BTreeMap::new(),
+            deferred_write_ops: BTreeMap::new(),
+            pending_writes: Vec::new(),
+            advance_timelines_interval,
+            secrets_controller,
+            caching_secrets_reader,
+            cloud_resource_controller,
+            storage_usage_client,
+            storage_usage_collection_interval,
+            segment_client,
+            metrics,
+            optimizer_metrics,
+            tracing_handle,
+            statement_logging: StatementLogging::new(coord_now.clone()),
+            webhook_concurrency_limit,
+            pg_timestamp_oracle_config,
+            check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
+            cluster_scheduling_decisions: BTreeMap::new(),
+            caught_up_check_interval: clusters_caught_up_check_interval,
+            caught_up_check: clusters_caught_up_check,
+            installed_watch_sets: BTreeMap::new(),
+            connection_watch_sets: BTreeMap::new(),
+            cluster_replica_statuses: ClusterReplicaStatuses::new(),
+            read_only_controllers,
+            buffered_builtin_table_updates: Some(Vec::new()),
+            license_key,
+            persist_client,
+        };
+
+        coord.bootstrap(
+                boot_ts,
+                migrated_storage_collections_0dt,
+                builtin_table_updates,
+                cached_global_exprs,
+                uncached_local_exprs,
+                audit_logs_iterator,
+            )
+            .await?;
+        coord.controller
+            .remove_orphaned_replicas(
+                coord.catalog().get_next_user_replica_id().await?,
+                coord.catalog().get_next_system_replica_id().await?,
+            )
+            .await
+            .map_err(AdapterError::Orchestrator)?;
+
+        if let Some(retention_period) = storage_usage_retention_period {
+            coord
+                .prune_storage_usage_events_on_startup(retention_period)
+                .await;
+        }
+
+        let local = LocalSet::new();
+        local.spawn_local(coord.serve(
+            internal_cmd_rx,
+            strict_serializable_reads_rx,
+            cmd_rx,
+            group_commit_rx,
+        ));
+
+        info!(
+            "startup: coordinator init: coordinator thread start complete in {:?}",
+            coord_thread_start.elapsed()
+        );
+        info!(
+            "startup: coordinator init: complete in {:?}",
+            coord_start.elapsed()
+        );
+        let handle = Handle {
+            session_id,
+            start_instant,
+            local,
+        };
+        let client = Client::new(
+            build_info,
+            cmd_tx.clone(),
+            metrics_clone,
+            now,
+            environment_id,
+            segment_client_clone,
+        );
+
+        Ok((handle, client))
     }
-    .boxed()
+    .boxed_local()
 }
 
 // Determines and returns the highest timestamp for each timeline, for all known

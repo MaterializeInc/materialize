@@ -16,11 +16,9 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use crossbeam_channel::SendError;
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
@@ -37,6 +35,7 @@ use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
@@ -161,7 +160,7 @@ impl CommandReceiver {
 /// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
+    inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
     worker_id: usize,
     /// The nonce identifying the current cluster protocol incarnation.
@@ -169,7 +168,7 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -221,12 +220,12 @@ impl ClusterSpec for Config {
     type Command = ComputeCommand;
     type Response = ComputeResponse;
 
-    fn run_worker<A: Allocate + 'static>(
+    async fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedReceiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
         )>,
     ) {
@@ -242,7 +241,7 @@ impl ClusterSpec for Config {
         // up creating incompatible sides of the channel dataflow after reconnects.
         // See database-issues#8964.
         let (cmd_tx, cmd_rx) = command_channel::render(timely_worker);
-        let (resp_tx, resp_rx) = crossbeam_channel::unbounded();
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
@@ -258,6 +257,7 @@ impl ClusterSpec for Config {
             tracing_handle: Arc::clone(&self.tracing_handle),
         }
         .run()
+        .await
     }
 }
 
@@ -307,14 +307,17 @@ fn set_core_affinity(_worker_id: usize) {
 
 impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Runs a compute worker.
-    pub fn run(&mut self) {
+    pub async fn run(&mut self) {
         // The command receiver is initialized without an nonce, so receiving the first command
         // always triggers a nonce change.
-        let NonceChange(nonce) = self.recv_command().expect_err("change to first nonce");
+        let NonceChange(nonce) = self
+            .recv_command()
+            .await
+            .expect_err("change to first nonce");
         self.set_nonce(nonce);
 
         loop {
-            let Err(NonceChange(nonce)) = self.run_client();
+            let Err(NonceChange(nonce)) = self.run_client().await;
             self.set_nonce(nonce);
         }
     }
@@ -324,8 +327,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 
     /// Handles commands for a client connection, returns when the nonce changes.
-    fn run_client(&mut self) -> Result<Infallible, NonceChange> {
-        self.reconcile()?;
+    async fn run_client(&mut self) -> Result<Infallible, NonceChange> {
+        self.reconcile().await?;
 
         // The last time we did periodic maintenance.
         let mut last_maintenance = Instant::now();
@@ -363,7 +366,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 
             // Step the timely worker, recording the time taken.
             let timer = self.metrics.timely_step_duration_seconds.start_timer();
-            self.timely_worker.step_or_park(sleep_duration);
+            self.timely_worker.step_or_park(sleep_duration).await;
             timer.observe_duration();
 
             self.handle_pending_commands()?;
@@ -415,14 +418,14 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     ///
     /// This method blocks if no command is currently available, but takes care to step the Timely
     /// worker while doing so.
-    fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
+    async fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
         loop {
             if let Some(cmd) = self.command_rx.try_recv()? {
                 return Ok(cmd);
             }
 
             let start = Instant::now();
-            self.timely_worker.step_or_park(None);
+            self.timely_worker.step_or_park(None).await;
             self.metrics
                 .timely_step_duration_seconds
                 .observe(start.elapsed().as_secs_f64());
@@ -447,12 +450,12 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
     /// subscribe response buffer. We will need to be vigilant with future modifications to `ComputeState` to
     /// line up changes there with clean resets here.
-    fn reconcile(&mut self) -> Result<(), NonceChange> {
+    async fn reconcile(&mut self) -> Result<(), NonceChange> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
         loop {
-            match self.recv_command()? {
+            match self.recv_command().await? {
                 ComputeCommand::InitializationComplete => break,
                 command => new_commands.push(command),
             }
@@ -733,78 +736,75 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
-    client_rx: crossbeam_channel::Receiver<(
+    mut client_rx: mpsc::UnboundedReceiver<(
         Uuid,
-        crossbeam_channel::Receiver<ComputeCommand>,
+        mpsc::UnboundedReceiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    response_rx: crossbeam_channel::Receiver<(ComputeResponse, Uuid)>,
+    mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
     worker_id: usize,
 ) {
-    thread::Builder::new()
-        // "cca" stands for "compute channel adapter". We need to shorten that because Linux has a
-        // 15-character limit for thread names.
-        .name(format!("cca-{worker_id}"))
-        .spawn(move || {
-            // To make workers aware of the individual client connections, we tag forwarded
-            // commands with the client nonce. Additionally, we use the nonce to filter out
-            // responses with a different nonce, which are intended for different client
-            // connections.
-            //
-            // It's possible that we receive responses with nonces from the past but also from the
-            // future: Worker 0 might have received a new nonce before us and broadcasted it to our
-            // Timely cluster. When we receive a response with a future nonce, we need to wait with
-            // forwarding it until we have received the same nonce from a client connection.
-            //
-            // Nonces are not ordered so we don't know whether a response nonce is from the past or
-            // the future. We thus assume that every response with an unknown nonce might be from
-            // the future and stash them all. Every time we reconnect, we immediately send all
-            // stashed responses with a matching nonce. Every time we receive a new response with a
-            // nonce that matches our current one, we can discard the entire response stash as we
-            // know that all stashed responses must be from the past.
-            let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
+    mz_ore::task::spawn(|| format!("cca-{worker_id}"), async move {
+        // To make workers aware of the individual client connections, we tag forwarded
+        // commands with the client nonce. Additionally, we use the nonce to filter out
+        // responses with a different nonce, which are intended for different client
+        // connections.
+        //
+        // It's possible that we receive responses with nonces from the past but also from the
+        // future: Worker 0 might have received a new nonce before us and broadcasted it to our
+        // Timely cluster. When we receive a response with a future nonce, we need to wait with
+        // forwarding it until we have received the same nonce from a client connection.
+        //
+        // Nonces are not ordered so we don't know whether a response nonce is from the past or
+        // the future. We thus assume that every response with an unknown nonce might be from
+        // the future and stash them all. Every time we reconnect, we immediately send all
+        // stashed responses with a matching nonce. Every time we receive a new response with a
+        // nonce that matches our current one, we can discard the entire response stash as we
+        // know that all stashed responses must be from the past.
+        let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
 
-            while let Ok((nonce, command_rx, response_tx)) = client_rx.recv() {
-                // Send stashed responses for this client.
-                if let Some(resps) = stashed_responses.remove(&nonce) {
-                    for resp in resps {
-                        let _ = response_tx.send(resp);
-                    }
+        while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
+            // Send stashed responses for this client.
+            if let Some(resps) = stashed_responses.remove(&nonce) {
+                for resp in resps {
+                    let _ = response_tx.send(resp);
                 }
+            }
 
-                // Wait for a new response while forwarding received commands.
-                let serve_rx_channels = || loop {
-                    crossbeam_channel::select! {
-                        recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send((cmd, nonce)),
-                            Err(_) => return Err(()),
+            // Wait for a new response while forwarding received commands.
+            let mut serve_rx_channels = async || {
+                loop {
+                    tokio::select! {
+                        msg = command_rx.recv() => match msg {
+                            Some(cmd) => command_tx.send((cmd, nonce)),
+                            None => return Err(()),
                         },
-                        recv(response_rx) -> msg => {
+                        msg = response_rx.recv() => {
                             return Ok(msg.expect("worker connected"));
                         }
                     }
+                }
+            };
+
+            // Serve this connection until we see any of the channels disconnect.
+            loop {
+                let Ok((resp, resp_nonce)) = serve_rx_channels().await else {
+                    break;
                 };
 
-                // Serve this connection until we see any of the channels disconnect.
-                loop {
-                    let Ok((resp, resp_nonce)) = serve_rx_channels() else {
+                if resp_nonce == nonce {
+                    // Response for the current connection; forward it.
+                    stashed_responses.clear();
+                    if response_tx.send(resp).is_err() {
                         break;
-                    };
-
-                    if resp_nonce == nonce {
-                        // Response for the current connection; forward it.
-                        stashed_responses.clear();
-                        if response_tx.send(resp).is_err() {
-                            break;
-                        }
-                    } else {
-                        // Response for a past or future connection; stash it.
-                        let stash = stashed_responses.entry(resp_nonce).or_default();
-                        stash.push(resp);
                     }
+                } else {
+                    // Response for a past or future connection; stash it.
+                    let stash = stashed_responses.entry(resp_nonce).or_default();
+                    stash.push(resp);
                 }
             }
-        })
-        .unwrap();
+        }
+    });
 }

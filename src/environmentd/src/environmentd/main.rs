@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use std::{cmp, env, iter, thread};
+use std::{cmp, env, iter};
 
 use anyhow::{Context, bail};
 use clap::{ArgAction, Parser, ValueEnum};
@@ -1193,10 +1193,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
     println!(" Root trace ID: {id}");
 
-    // Block forever.
-    loop {
-        thread::park();
-    }
+    runtime.block_on(server.run());
+    unreachable!();
 }
 
 fn build_info() -> Vec<String> {

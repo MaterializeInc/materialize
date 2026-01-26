@@ -93,12 +93,12 @@ impl ClusterSpec for Config {
     type Command = StorageCommand;
     type Response = StorageResponse;
 
-    fn run_worker<A: Allocate + 'static>(
+    async fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<StorageCommand>,
+            mpsc::UnboundedReceiver<StorageCommand>,
             mpsc::UnboundedSender<StorageResponse>,
         )>,
     ) {
@@ -114,6 +114,7 @@ impl ClusterSpec for Config {
             Arc::clone(&self.tracing_handle),
             self.shared_rocksdb_write_buffer_manager.clone(),
         )
-        .run();
+        .run()
+        .await;
     }
 }

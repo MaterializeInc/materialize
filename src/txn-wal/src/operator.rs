@@ -587,8 +587,8 @@ impl DataSubscribe {
     }
 
     /// Steps the dataflow, capturing output.
-    pub fn step(&mut self) {
-        self.worker.step();
+    pub async fn step(&mut self) {
+        self.worker.step().await;
         self.capture_output()
     }
 
@@ -613,7 +613,7 @@ impl DataSubscribe {
                 "progress at {:?}",
                 self.txns.with_frontier(|x| x.to_owned()).elements()
             );
-            self.step();
+            self.step().await;
             tokio::task::yield_now().await;
         }
     }
@@ -648,9 +648,9 @@ impl DataSubscribeTask {
     ) -> Self {
         let cache = TxnsCache::open(&client, txns_id, Some(data_id)).await;
         let (tx, rx) = std::sync::mpsc::channel();
-        let task = mz_ore::task::spawn_blocking(
+        let task = mz_ore::task::spawn_local(
             || "data_subscribe task",
-            move || Self::task(client, cache, data_id, as_of, rx),
+            Self::task(client, cache, data_id, as_of, rx),
         );
         DataSubscribeTask {
             tx,
@@ -695,7 +695,7 @@ impl DataSubscribeTask {
         self.task.await
     }
 
-    fn task(
+    async fn task(
         client: PersistClient,
         cache: TxnsCache<u64>,
         data_id: ShardId,
@@ -719,7 +719,7 @@ impl DataSubscribeTask {
                 Ok(x) => x,
                 Err(TryRecvError::Empty) => {
                     // No requests, continue stepping so nothing deadlocks.
-                    subscribe.step();
+                    subscribe.step().await;
                     continue;
                 }
                 Err(TryRecvError::Disconnected) => {
@@ -728,11 +728,11 @@ impl DataSubscribeTask {
                 }
             };
             // Always step at least once.
-            subscribe.step();
+            subscribe.step().await;
             // If we got a ts, make sure to step past it.
             if let Some(ts) = ts {
                 while subscribe.progress() <= ts {
-                    subscribe.step();
+                    subscribe.step().await;
                 }
             }
             let new_output = std::mem::take(&mut subscribe.output);
@@ -872,7 +872,7 @@ mod tests {
             .unwrap()
             .unwrap();
         while sub.txns.less_than(&u64::MAX) {
-            sub.step();
+            sub.step().await;
             tokio::task::yield_now().await;
         }
 
@@ -944,7 +944,7 @@ mod tests {
         // `DataSubscribe` helper because we're interested in all captured
         // events.
         while sub.txns.less_equal(&5) {
-            sub.worker.step();
+            sub.worker.step().await;
             tokio::task::yield_now().await;
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
