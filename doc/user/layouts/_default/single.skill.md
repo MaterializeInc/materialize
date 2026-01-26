@@ -2,9 +2,9 @@
 {{- $excludedSections := .Site.Params.excludeFromSkill | default slice -}}
 {{- if not (in $excludedSections .Section) -}}
 # {{ .Title }}
-{{ if .Description }}
+{{- if .Description }}
 {{ .Description }}
-{{ end }}
+{{- end -}}
 
-{{ .RenderShortcodes }}
+{{- .RenderShortcodes -}}
 {{- end -}}

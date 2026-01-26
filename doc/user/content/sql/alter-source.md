@@ -111,7 +111,7 @@ DROP SOURCE tbl_a, b CASCADE;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-source.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-source" %}}
 
 ## See also
 

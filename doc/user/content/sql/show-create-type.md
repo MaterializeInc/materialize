@@ -33,8 +33,7 @@ SHOW CREATE TYPE point;
 
 ## Privileges
 
-{{< include-md
-file="shared-content/sql-command-privileges/show-create-type.md" >}}
+{{% include-headless "/headless/sql-command-privileges/show-create-type" %}}
 
 ## Related pages
 

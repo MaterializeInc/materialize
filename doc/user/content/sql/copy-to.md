@@ -62,7 +62,7 @@ orchestration platform like Airflow or Dagster.
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/copy-to.md" >}}
+{{% include-headless "/headless/sql-command-privileges/copy-to" %}}
 
 ## Examples
 

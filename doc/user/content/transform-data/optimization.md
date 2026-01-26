@@ -373,7 +373,7 @@ The following are the possible index usage types:
 
 ### Limitations
 
-{{% index_usage/index-ordering %}}
+{{% include-headless "/headless/index-ordering" %}}
 
 ## Query hints
 

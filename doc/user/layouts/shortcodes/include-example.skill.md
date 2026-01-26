@@ -14,6 +14,8 @@
 {{- if $indent }}
 {{- $code = replaceRE "(?m)^" "   " $code -}}
 {{- end }}
+{{- /* Trim trailing whitespace from each line */ -}}
+{{- $code = replaceRE "(?m)[ \t]+$" "" $code -}}
 
 {{ if $indent }}   {{ end }}```mzsql
 {{ $code | safeHTML }}

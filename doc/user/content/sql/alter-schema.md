@@ -72,7 +72,7 @@ SELECT * FROM blue.tags;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-schema.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-schema" %}}
 
 ## See also
 

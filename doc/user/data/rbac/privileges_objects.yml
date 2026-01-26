@@ -70,7 +70,7 @@ rows:
       any role in the system.
 
       {{< warning >}}
-      {{< include-md file="shared-content/rbac-cloud/createrole-consideration.md" >}}
+      {{% include-headless "/headless/rbac-cloud/createrole-consideration" %}}
       {{</ warning >}}
 
     Abbreviation: "`R`"

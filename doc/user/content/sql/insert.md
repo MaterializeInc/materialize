@@ -82,7 +82,7 @@ SELECT * FROM t;
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/insert.md" >}}
+{{% include-headless "/headless/sql-command-privileges/insert" %}}
 
 ## Related pages
 

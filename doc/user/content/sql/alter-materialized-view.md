@@ -73,7 +73,7 @@ This operation replaces the definition of the target materialized view with the 
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-materialized-view.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-materialized-view" %}}
 
 ## Related pages
 

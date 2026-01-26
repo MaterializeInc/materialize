@@ -60,7 +60,7 @@ COPY t FROM STDIN (DELIMITER '|');
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/copy-from.md" >}}
+{{% include-headless "/headless/sql-command-privileges/copy-from" %}}
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
 

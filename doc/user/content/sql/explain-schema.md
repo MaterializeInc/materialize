@@ -69,5 +69,4 @@ EXPLAIN VALUE SCHEMA FOR
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-schema.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/explain-schema" %}}

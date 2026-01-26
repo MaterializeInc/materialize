@@ -34,8 +34,7 @@ SHOW CREATE SOURCE market_orders_raw;
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/show-create-source.md" >}}
+{{% include-headless "/headless/sql-command-privileges/show-create-source" %}}
 
 ## Related pages
 

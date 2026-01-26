@@ -1,2 +1,0 @@
-- Ownership of the dropped index.
-- `USAGE` privileges on the containing schema.

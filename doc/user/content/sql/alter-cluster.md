@@ -240,7 +240,7 @@ When provisioning replicas,
 
 To execute the `ALTER CLUSTER` command, you need:
 
-{{< include-md file="shared-content/sql-command-privileges/alter-cluster.md" >}}
+{{% include-headless "/headless/sql-command-privileges/alter-cluster" %}}
 
 See also:
 

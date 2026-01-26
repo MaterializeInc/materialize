@@ -167,5 +167,4 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/explain-timestamp.md"
->}}
+{{% include-headless "/headless/sql-command-privileges/explain-timestamp" %}}

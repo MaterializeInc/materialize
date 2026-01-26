@@ -1,0 +1,19 @@
+columns:
+  - column: "Role management operations"
+  - column: "Required privileges"
+
+rows:
+  - "Role management operations": "To create/revoke/grant roles"
+    "Required privileges": |
+      {{% include-headless "/headless/sql-command-privileges/create-role" %}}
+      {{<warning >}}
+      {{% include-headless "/headless/rbac-sm/createrole-consideration"%}}
+      {{</ warning >}}
+  - "Role management operations": "To view privileges for a role"
+    "Required privileges": "None"
+  - "Role management operations": "To grant/revoke role privileges"
+    "Required privileges": |
+      {{% include-headless "/headless/sql-command-privileges/grant-privilege" %}}
+  - "Role management operations": "To alter default privileges"
+    "Required privileges": |
+      {{% include-headless "/headless/sql-command-privileges/alter-default-privileges" %}}

@@ -36,8 +36,7 @@ change the default value.
 
 The privileges required to execute this statement are:
 
-{{< include-md
-file="shared-content/sql-command-privileges/create-network-policy.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-network-policy" %}}
 
 ## Examples
 

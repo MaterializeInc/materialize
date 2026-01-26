@@ -26,28 +26,27 @@ roles](/security/self-managed/access-control/manage-roles/).
 
 ## Enabling RBAC
 
-{{< include-md file="shared-content/rbac-sm/enable-rbac.md" >}}
+{{% include-headless "/headless/rbac-sm/enable-rbac" %}}
 
 ## Roles and privileges
 
-{{% include-md file="shared-content/rbac-sm/db-roles.md" %}}
+{{% include-headless "/headless/rbac-sm/db-roles" %}}
 
-- {{< include-md file="shared-content/rbac-sm/create-users.md" >}}
+- {{% include-headless "/headless/rbac-sm/create-users" %}}
 
-- {{< include-md file="shared-content/rbac-sm/create-functional-roles.md" >}}
+- {{% include-headless "/headless/rbac-sm/create-functional-roles" %}}
 
 ### Managing privileges
 
-{{% include-md file="shared-content/rbac-sm/db-roles-managing-privileges.md" %}}
+{{% include-headless "/headless/rbac-sm/db-roles-managing-privileges" %}}
 
 {{< annotation type="Disambiguation" >}}
-{{% include-md file="shared-content/rbac-sm/grant-vs-alter-default-privilege.md"
-%}}
+{{% include-headless "/headless/rbac-sm/grant-vs-alter-default-privilege" %}}
 {{</ annotation >}}
 
 ### Initial privileges
 
-{{< include-md file="shared-content/rbac-sm/db-roles-initial-privileges.md" >}}
+{{% include-headless "/headless/rbac-sm/db-roles-initial-privileges" %}}
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the modify default privileges for `PUBLIC`.
@@ -68,7 +67,7 @@ combining existing roles, enabling modular access control. However:
 
 - Inheritance only applies to role privileges; role attributes and parameters
   are not inherited.
-- {{% include-md file="shared-content/rbac-sm/revoke-roles-consideration.md" %}}
+- {{% include-headless "/headless/rbac-sm/revoke-roles-consideration" %}}
 
 ## Best practices
 

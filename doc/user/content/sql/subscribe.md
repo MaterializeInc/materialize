@@ -569,4 +569,4 @@ subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 The privileges required to execute this statement are:
 
-{{< include-md file="shared-content/sql-command-privileges/subscribe.md" >}}
+{{% include-headless "/headless/sql-command-privileges/subscribe" %}}

@@ -135,8 +135,8 @@ application password")
 1. **For a new service account only**.
 
    For a new service account, after creating the new app password, you must
-   connect with the service account to complete the account creation. {{<
-   include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
+   connect with the service account to complete the account creation. {{%
+   include-headless "headless/rbac-cloud/service-account-creation.md" %}}
 
    To connect:
 

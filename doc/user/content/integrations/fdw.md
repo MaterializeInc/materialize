@@ -7,12 +7,12 @@ menu:
     weight: 30
 ---
 
-{{< include-md file="shared-content/fdw-setup-intro.md" >}}
+{{% include-headless "/headless/fdw/fdw-setup-intro" %}}
 
 ## Prerequisite
 
-{{< include-md file="shared-content/fdw-setup-prereq.md" >}}
+{{% include-headless "/headless/fdw/fdw-setup-prereq" %}}
 
 ## Setup FDW in PostgreSQL
 
-{{< include-md file="shared-content/fdw-setup-postgres.md" >}}
+{{% include-headless "/headless/fdw/fdw-setup-postgres" %}}
