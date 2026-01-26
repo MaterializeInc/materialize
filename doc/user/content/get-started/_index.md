@@ -14,6 +14,8 @@ menu:
 {{% include-from-yaml data="materialize_intro"
 name="materialize-intro" %}}
 
+## Materialize offerings
+
 {{% include-from-yaml data="materialize_intro"
 name="materialize-offerings" %}}
 

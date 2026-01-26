@@ -25,5 +25,7 @@ name="materialize-intro" %}}
 
 {{</ callout >}}
 
+## Materialize offerings
+
 {{% include-from-yaml data="materialize_intro"
 name="materialize-offerings" %}}
