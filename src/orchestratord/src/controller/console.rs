@@ -27,6 +27,7 @@ use k8s_openapi::{
         apis::meta::v1::{Condition, LabelSelector, Time},
         util::intstr::IntOrString,
     },
+    jiff::Timestamp,
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
@@ -144,7 +145,7 @@ impl Context {
         status.conditions = vec![Condition {
             type_: "Ready".to_string(),
             status: ready_str.to_string(),
-            last_transition_time: Time(chrono::offset::Utc::now()),
+            last_transition_time: Time(Timestamp::now()),
             message: format!(
                 "console deployment is{} ready",
                 if ready { "" } else { " not" }
@@ -159,7 +160,7 @@ impl Context {
             .replace_status(
                 &console.name_unchecked(),
                 &PostParams::default(),
-                serde_json::to_vec(&new_console).unwrap(),
+                &new_console,
             )
             .await?;
 
@@ -601,7 +602,7 @@ impl k8s_controller::Context for Context {
                 .replace_status(
                     &console.name_unchecked(),
                     &PostParams::default(),
-                    serde_json::to_vec(&new_console).unwrap(),
+                    &new_console,
                 )
                 .await?;
             // Updating the status should trigger a reconciliation

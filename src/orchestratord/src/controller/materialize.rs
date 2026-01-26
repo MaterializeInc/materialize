@@ -18,6 +18,7 @@ use http::HeaderValue;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
+    jiff::Timestamp,
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
@@ -177,11 +178,7 @@ impl Context {
 
         new_mz.status = Some(status);
         mz_api
-            .replace_status(
-                &mz.name_unchecked(),
-                &PostParams::default(),
-                serde_json::to_vec(&new_mz).unwrap(),
-            )
+            .replace_status(&mz.name_unchecked(), &PostParams::default(), &new_mz)
             .await
     }
 
@@ -215,7 +212,7 @@ impl Context {
                 conditions: vec![Condition {
                     type_: "UpToDate".into(),
                     status: "True".into(),
-                    last_transition_time: Time(chrono::offset::Utc::now()),
+                    last_transition_time: Time(Timestamp::now()),
                     message: format!(
                         "Successfully applied changes for generation {desired_generation}"
                     ),
@@ -434,7 +431,7 @@ impl k8s_controller::Context for Context {
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
                                     status: "Unknown".into(),
-                                    last_transition_time: Time(chrono::offset::Utc::now()),
+                                    last_transition_time: Time(Timestamp::now()),
                                     message: format!(
                                         "Applying changes for generation {desired_generation}"
                                     ),
@@ -464,7 +461,7 @@ impl k8s_controller::Context for Context {
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
                                 status: "False".into(),
-                                last_transition_time: Time(chrono::offset::Utc::now()),
+                                last_transition_time: Time(Timestamp::now()),
                                 message: format!(
                         "Refusing to upgrade from {} to {}. More than one major version from last successful rollout. If coming from Self Managed 25.2, upgrade to materialize/environmentd:v0.147.20 first.",
                         last_completed_rollout_environmentd_image_ref.expect("should be set if upgrade window check fails"),
@@ -521,7 +518,7 @@ impl k8s_controller::Context for Context {
                                     conditions: vec![Condition {
                                         type_: "UpToDate".into(),
                                         status: "Unknown".into(),
-                                        last_transition_time: Time(chrono::offset::Utc::now()),
+                                        last_transition_time: Time(Timestamp::now()),
                                         message: format!(
                                             "Ready to promote generation {desired_generation}"
                                         ),
@@ -559,7 +556,7 @@ impl k8s_controller::Context for Context {
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
                                     status: "Unknown".into(),
-                                    last_transition_time: Time(chrono::offset::Utc::now()),
+                                    last_transition_time: Time(Timestamp::now()),
                                     message: format!(
                                         "Attempting to promote generation {desired_generation}"
                                     ),
@@ -598,7 +595,7 @@ impl k8s_controller::Context for Context {
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
                                     status: "False".into(),
-                                    last_transition_time: Time(chrono::offset::Utc::now()),
+                                    last_transition_time: Time(Timestamp::now()),
                                     message: format!(
                                         "Failed to apply changes for generation {desired_generation}: {e}"
                                     ),
@@ -636,7 +633,7 @@ impl k8s_controller::Context for Context {
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
                                 status: "False".into(),
-                                last_transition_time: Time(chrono::offset::Utc::now()),
+                                last_transition_time: Time(Timestamp::now()),
                                 message: format!(
                                     "Changes detected, waiting for approval for generation {desired_generation}"
                                 ),
@@ -678,7 +675,7 @@ impl k8s_controller::Context for Context {
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
                                 status: "True".into(),
-                                last_transition_time: Time(chrono::offset::Utc::now()),
+                                last_transition_time: Time(Timestamp::now()),
                                 message: format!(
                                     "No changes found from generation {active_generation}"
                                 ),

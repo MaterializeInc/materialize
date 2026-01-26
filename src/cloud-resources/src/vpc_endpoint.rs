@@ -14,8 +14,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use futures::stream::BoxStream;
+use k8s_openapi::jiff::Timestamp;
 use mz_repr::CatalogItemId;
 use mz_repr::Row;
 use serde::{Deserialize, Serialize};
@@ -128,7 +129,7 @@ pub fn vpc_endpoint_host(id: CatalogItemId, availability_zone: Option<&str>) -> 
 pub struct VpcEndpointEvent {
     pub connection_id: CatalogItemId,
     pub status: VpcEndpointState,
-    pub time: DateTime<Utc>,
+    pub time: Timestamp,
 }
 
 impl From<VpcEndpointEvent> for Row {
@@ -136,7 +137,13 @@ impl From<VpcEndpointEvent> for Row {
         use mz_repr::Datum;
 
         Row::pack_slice(&[
-            Datum::TimestampTz(value.time.try_into().expect("must fit")),
+            Datum::TimestampTz(
+                DateTime::from_timestamp_nanos(
+                    value.time.as_nanosecond().try_into().expect("must fit"),
+                )
+                .try_into()
+                .expect("must fit"),
+            ),
             Datum::String(&value.connection_id.to_string()),
             Datum::String(&value.status.to_string()),
         ])

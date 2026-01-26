@@ -16,7 +16,7 @@ use std::{env, fmt};
 
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::DateTime;
 use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
 use futures::TryFutureExt;
@@ -37,6 +37,7 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
+use k8s_openapi::jiff::Timestamp;
 use kube::ResourceExt;
 use kube::api::{Api, DeleteParams, ObjectMeta, PartialObjectMetaExt, Patch, PatchParams};
 use kube::client::Client;
@@ -1303,14 +1304,16 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             let time = if let Some(time) = last_probe_time {
                 time.0
             } else {
-                Utc::now()
+                Timestamp::now()
             };
 
             Ok(ServiceEvent {
                 service_id,
                 process_id,
                 status,
-                time,
+                time: DateTime::from_timestamp_nanos(
+                    time.as_nanosecond().try_into().expect("must fit"),
+                ),
             })
         }
 

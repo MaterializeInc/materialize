@@ -29,7 +29,7 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.5.18", default-features = false, features = ["event-stream", "http-02x"] }
-aws-sdk-sts = { version = "1.95.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sts = { version = "1.96.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.7", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.7", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.62.6", default-features = false, features = ["event-stream"] }
@@ -76,11 +76,13 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
+jiff = { version = "0.2.18", features = ["serde"] }
 libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -147,7 +149,7 @@ tower-http = { version = "0.6.8", features = ["auth", "cors", "decompression-br"
 tracing = { version = "0.1.44", features = ["log"] }
 tracing-core = { version = "0.1.36" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
-tungstenite = { version = "0.27.0" }
+tungstenite = { version = "0.28.0" }
 twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32", "xxhash64"] }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
@@ -173,7 +175,7 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.5.18", default-features = false, features = ["event-stream", "http-02x"] }
-aws-sdk-sts = { version = "1.95.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sts = { version = "1.96.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.7", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.7", default-features = false, features = ["rt-tokio"] }
 aws-smithy-http = { version = "0.62.6", default-features = false, features = ["event-stream"] }
@@ -223,11 +225,13 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
+jiff = { version = "0.2.18", features = ["serde"] }
 libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -297,7 +301,7 @@ tower-http = { version = "0.6.8", features = ["auth", "cors", "decompression-br"
 tracing = { version = "0.1.44", features = ["log"] }
 tracing-core = { version = "0.1.36" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
-tungstenite = { version = "0.27.0" }
+tungstenite = { version = "0.28.0" }
 twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32", "xxhash64"] }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
