@@ -595,7 +595,7 @@ impl<'a> Parser<'a> {
             (Token::Keyword(ROW), Some(Token::LParen)) => self.parse_row_expr(),
             (Token::Keyword(TRIM), Some(Token::LParen)) => self.parse_trim_expr(),
             (Token::Keyword(POSITION), Some(Token::LParen)) => self.parse_position_expr(),
-            (Token::Keyword(NORMALIZE), _) => self.parse_normalize_expr(),
+            (Token::Keyword(NORMALIZE), Some(Token::LParen)) => self.parse_normalize_expr(),
             (Token::Keyword(SUBSTRING), Some(Token::LParen)) => self.parse_substring_expr(),
             (Token::Keyword(kw), _) if kw.is_always_reserved() => {
                 return Err(self.error(
@@ -603,8 +603,9 @@ impl<'a> Parser<'a> {
                     format!("expected expression, but found reserved keyword: {kw}"),
                 ));
             }
-            // (Some of the above keywords are recognized by `is_reserved_in_expression`, except the
-            // ones where we check for a following opening paren before treating them as keywords.)
+            // (Some of the above keywords are recognized by `is_reserved_in_scalar_expression`,
+            // except the ones where we check for a following opening paren before treating them as
+            // keywords.)
             (Token::Keyword(id), _) => self.parse_qualified_identifier(id.into()),
             (Token::Ident(id), _) => self.parse_qualified_identifier(self.new_identifier(id)?),
             (Token::Op(op), _) if op == "-" => {

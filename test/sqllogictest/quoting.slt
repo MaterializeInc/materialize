@@ -108,11 +108,11 @@ CREATE TABLE iffy_colnames(
   cast int,
   coalesce int, greatest int, least int, nullif int, exists int, extract int,
   not int,
-  row int, trim int, position int, substring int
+  row int, trim int, position int, substring int, normalize int
 );
 
 statement ok
-INSERT INTO iffy_colnames VALUES (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+INSERT INTO iffy_colnames VALUES (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
 
 # Test Parser::parse_prefix's keyword handling's Postgres compatibility
 # https://github.com/MaterializeInc/database-issues/issues/9005
@@ -121,11 +121,11 @@ INSERT INTO iffy_colnames VALUES (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
 # always work, while some of the unquoted versions work but some fail (either with an error, or producing a value that
 # is not the value of the column, e.g., `true`). All these tests have exactly the same outcome as in Postgres.
 
-query IIIIIIIIIIIIIIIIIII
-SELECT "true", "false", "null", "array", "list", "map", "case", "cast", "coalesce", "greatest", "least", "nullif", "exists", "extract", "not", "row", "trim", "position", "substring"
+query IIIIIIIIIIIIIIIIIIII
+SELECT "true", "false", "null", "array", "list", "map", "case", "cast", "coalesce", "greatest", "least", "nullif", "exists", "extract", "not", "row", "trim", "position", "substring", "normalize"
 FROM iffy_colnames;
 ----
-0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
 
 query BBI
 SELECT true, false, null
@@ -161,8 +161,8 @@ query error expected expression, but found reserved keyword: FROM
 SELECT not
 FROM iffy_colnames;
 
-query IIII
-SELECT row, trim, position, substring
+query IIIII
+SELECT row, trim, position, substring, normalize
 FROM iffy_colnames;
 ----
-0  0  0  0
+0  0  0  0  0
