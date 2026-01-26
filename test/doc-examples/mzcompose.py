@@ -69,11 +69,25 @@ INCLUDE_RE = re.compile(
     re.VERBOSE,
 )
 
+INCLUDE_HEADLESS_RE = re.compile(
+    r"""\{\{\s*[%<]\s*include-headless  # {{% include-headless  or {{< include-headless
+        [\s\S]*?"(/headless/[^"]+)"     # "/headless/path" - must start with /headless/
+        [\s\S]*?[%>]\s*\}\}             # %}} or >}}
+    """,
+    re.VERBOSE,
+)
+
 
 def md_include(text: str) -> str:
     while True:
         new = INCLUDE_RE.sub(
             lambda m: (pathlib.Path("doc/user") / m.group(1)).read_text(), text
+        )
+        new = INCLUDE_HEADLESS_RE.sub(
+            lambda m: (pathlib.Path("doc/user/content") / m.group(1).lstrip("/"))
+            .with_suffix(".md")
+            .read_text(),
+            new,
         )
         if new == text:
             return new
