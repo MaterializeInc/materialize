@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """
-Simulates workloads recorded via `bin/mz-workload-record` in a local run using
+Simulates workloads captured via `bin/mz-workload-capture` in a local run using
 Docker Compose.
 """
 
@@ -81,7 +81,7 @@ from materialize.mzcompose.test_result import (
 from materialize.util import PropagatingThread
 from materialize.version_list import resolve_ancestor_image_tag
 
-LOCATION = MZ_ROOT / "test" / "workload-replay" / "recorded-workloads"
+LOCATION = MZ_ROOT / "test" / "workload-replay" / "captured-workloads"
 WORKLOAD_REPLAY_VERSION = "1.0.0"  # Used for uploading test analytics results
 SEED_RANGE = 1_000_000
 
@@ -669,8 +669,8 @@ def resolve_tag(tag: str) -> str | None:
     return tag
 
 
-def update_recorded_workloads_repo() -> None:
-    path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "recorded-workloads")
+def update_captured_workloads_repo() -> None:
+    path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "captured-workloads")
     if (path / ".git").is_dir():
         if ui.env_is_truthy("CI"):
             spawn.runv(["git", "-C", str(path), "pull"])
@@ -691,9 +691,7 @@ def update_recorded_workloads_repo() -> None:
                 [
                     "git",
                     "clone",
-                    # This is currently way slower, I guess GitHub doesn't have it cached:
-                    # "--depth=1",
-                    f"https://materializebot:{urllib.parse.quote(github_token, safe='')}@github.com/MaterializeInc/recorded-workloads",
+                    f"https://materializebot:{urllib.parse.quote(github_token, safe='')}@github.com/MaterializeInc/captured-workloads",
                     str(path),
                 ]
             )
@@ -703,9 +701,7 @@ def update_recorded_workloads_repo() -> None:
                     [
                         "git",
                         "clone",
-                        # This is currently way slower, I guess GitHub doesn't have it cached:
-                        # "--depth=1",
-                        "https://github.com/MaterializeInc/recorded-workloads",
+                        "https://github.com/MaterializeInc/captured-workloads",
                         str(path),
                     ]
                 )
@@ -714,9 +710,7 @@ def update_recorded_workloads_repo() -> None:
                     [
                         "git",
                         "clone",
-                        # This is currently way slower, I guess GitHub doesn't have it cached:
-                        # "--depth=1",
-                        "git@github.com:MaterializeInc/recorded-workloads",
+                        "git@github.com:MaterializeInc/captured-workloads",
                         str(path),
                     ]
                 )
@@ -733,7 +727,7 @@ def get_kafka_topic(source: dict[str, Any]) -> str:
 
 
 def delivery_report(err: str, msg: Any) -> None:
-    assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
+    assert err is None, f"Delivery failed for user record {msg.key()}: {err}"
 
 
 def get_postgres_reference_db_schema_table(
@@ -3013,7 +3007,7 @@ def compare_table(
     if regressed:
         failures.append(
             TestFailureDetails(
-                message=f"Workload recording {filename} regressed",
+                message=f"Workload {filename} regressed",
                 details="\n".join(output_lines),
                 test_class_name_override=filename,
             )
@@ -3133,7 +3127,7 @@ def benchmark(
         if new_errors:
             failures.append(
                 TestFailureDetails(
-                    message=f"Workload recording {filename} has new errors",
+                    message=f"Workload {filename} has new errors",
                     details="\n".join(new_errors),
                     test_class_name_override=filename,
                 )
@@ -3376,7 +3370,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"-- Random seed is {args.seed}")
     random.seed(args.seed)
-    update_recorded_workloads_repo()
+    update_captured_workloads_repo()
 
     files_unsharded: list[pathlib.Path] = []
     for file in args.files:
@@ -3463,7 +3457,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     print(f"-- Random seed is {args.seed}")
-    update_recorded_workloads_repo()
+    update_captured_workloads_repo()
 
     files_unsharded: list[pathlib.Path] = []
     for file in args.files:
@@ -3498,7 +3492,7 @@ def workflow_stats(c: Composition, parser: WorkflowArgumentParser) -> None:
             help="run against the specified files",
         )
         args = parser.parse_args()
-        update_recorded_workloads_repo()
+        update_captured_workloads_repo()
 
         files: list[pathlib.Path] = []
         for file in args.files:

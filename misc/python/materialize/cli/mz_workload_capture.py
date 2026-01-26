@@ -92,9 +92,9 @@ def attach_source_statistics(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        prog="mz-workload-record",
+        prog="mz-workload-capture",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Records a workload profile from a running Materialize instance",
+        description="Records a workload profile from a running Materialize instance (without actual data)",
     )
 
     parser.add_argument("mz_url", type=str)
@@ -108,7 +108,7 @@ def main() -> int:
     parser.add_argument(
         "--time",
         type=int,
-        help="How long to record the workload, in seconds",
+        help="How long of a query/data ingestion history to capture, in seconds",
         default=360,
     )
     parser.add_argument("--expensive", action=argparse.BooleanOptionalAction)
@@ -497,7 +497,7 @@ def main() -> int:
     if args.output == "-":
         yaml.dump(workload, sys.stdout)
     else:
-        print(f"Writing workload recording to {args.output}", file=sys.stderr)
+        print(f"Writing captured workload to {args.output}", file=sys.stderr)
         with open(args.output, "w") as f:
             yaml.dump(workload, f)
 
