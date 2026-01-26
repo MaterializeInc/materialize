@@ -535,7 +535,7 @@ def print_workload_stats(file: pathlib.Path, workload: dict[str, Any]) -> None:
         sum(len(schemas) for schemas in workload["databases"].values()),
     )
     p(
-        "types",
+        "data types",
         sum(
             len(items["types"])
             for schemas in workload["databases"].values()
@@ -595,6 +595,14 @@ def print_workload_stats(file: pathlib.Path, workload: dict[str, Any]) -> None:
         "mat. views",
         sum(
             len(items["materialized_views"])
+            for schemas in workload["databases"].values()
+            for items in schemas.values()
+        ),
+    )
+    p(
+        "indexes",
+        sum(
+            len(items["indexes"])
             for schemas in workload["databases"].values()
             for items in schemas.values()
         ),
@@ -2227,12 +2235,17 @@ def create_ingestions(
                 if source["type"] == "webhook":
                     if "messages_second" not in source:
                         continue
-                    rate = math.ceil(source["messages_second"] * factor_ingestions)
-                    if not rate:
+                    target_rps = source["messages_second"] * factor_ingestions
+                    if target_rps <= 0:
                         continue
 
+                    batch_size = 1
+                    period_s = min(batch_size / target_rps, 60)
+
                     pretty_name = f"{db}.{schema}.{name}"
-                    print(f"Starting {rate} ing./s for {pretty_name}")
+                    print(
+                        f"{target_rps:.3f} ing./s for {pretty_name} ({batch_size} every {period_s:.2f}s)"
+                    )
 
                     def continuous_ingestion_webhook(
                         db: str,
@@ -2240,15 +2253,27 @@ def create_ingestions(
                         name: str,
                         source: dict[str, Any],
                         pretty_name: str,
-                        rate: int,
+                        batch_size: int,
+                        period_s: float,
                         rng: random.Random,
                     ) -> None:
                         nonlocal stop_event
                         try:
+                            next_time = time.time()
+
                             while not stop_event.is_set():
-                                start_time = time.time()
+                                now = time.time()
+                                if now < next_time:
+                                    stop_event.wait(timeout=next_time - now)
+                                    continue
+
+                                next_time += period_s
+
                                 if verbose:
-                                    print(f"Ingesting {rate} rows for {pretty_name}")
+                                    print(
+                                        f"Ingesting {batch_size} rows for {pretty_name}"
+                                    )
+
                                 stats["total"] += 1
                                 asyncio.run(
                                     ingest_webhook(
@@ -2257,18 +2282,17 @@ def create_ingestions(
                                         schema,
                                         name,
                                         source,
-                                        rate,
+                                        batch_size,
                                     )
                                 )
-                                time_to_sleep = (start_time + 1) - time.time()
-                                if time_to_sleep > 0:
-                                    stop_event.wait(timeout=time_to_sleep)
-                                    if stop_event.is_set():
-                                        return
-                                else:
+
+                                after = time.time()
+                                if after > next_time:
                                     stats["slow"] += 1
+                                    next_time = after
                                     if verbose:
                                         print(f"Can't keep up: {pretty_name}")
+
                         except Exception as e:
                             stats["failed"] += 1
                             print(f"Failed: {pretty_name}")
@@ -2276,28 +2300,15 @@ def create_ingestions(
                             stop_event.set()
                             raise
 
-                    threads.append(
-                        PropagatingThread(
-                            target=continuous_ingestion_webhook,
-                            name=f"ingest-{pretty_name}",
-                            args=(
-                                db,
-                                schema,
-                                name,
-                                source,
-                                pretty_name,
-                                rate,
-                                random.Random(random.randrange(SEED_RANGE)),
-                            ),
-                        )
-                    )
-
                 elif not source.get("children", {}):
                     if "messages_second" not in source:
                         continue
-                    rate = math.ceil(source["messages_second"] * factor_ingestions)
-                    if not rate:
+                    target_rps = source["messages_second"] * factor_ingestions
+                    if target_rps <= 0:
                         continue
+
+                    batch_size = 1
+                    period_s = min(batch_size / target_rps, 60)
 
                     data_columns = [
                         Column(
@@ -2309,40 +2320,55 @@ def create_ingestions(
                         )
                         for c in source["columns"]
                     ]
+
                     pretty_name = f"{db}.{schema}.{name}"
-                    print(f"Starting {rate} ing./s for {pretty_name}")
+                    print(
+                        f"{target_rps:.3f} ing./s for {pretty_name} "
+                        f"({batch_size} every {period_s:.2f}s)"
+                    )
 
                     def continuous_ingestion_source(
                         source: dict[str, Any],
                         pretty_name: str,
                         data_columns: list[Column],
-                        rate: int,
+                        batch_size: int,
+                        period_s: float,
                         rng: random.Random,
                     ) -> None:
                         nonlocal stop_event
                         try:
+                            next_time = time.time()
+
                             while not stop_event.is_set():
-                                start_time = time.time()
+                                now = time.time()
+                                if now < next_time:
+                                    stop_event.wait(timeout=next_time - now)
+                                    continue
+
+                                next_time += period_s
+
                                 if verbose:
-                                    print(f"Ingesting {rate} rows for {pretty_name}")
+                                    print(
+                                        f"Ingesting {batch_size} rows for {pretty_name}"
+                                    )
+
                                 stats["total"] += 1
                                 ingest(
                                     c,
                                     source,
                                     source,
                                     data_columns,
-                                    rate,
+                                    batch_size,
                                     rng,
                                 )
-                                time_to_sleep = (start_time + 1) - time.time()
-                                if time_to_sleep > 0:
-                                    stop_event.wait(timeout=time_to_sleep)
-                                    if stop_event.is_set():
-                                        return
-                                else:
+
+                                after = time.time()
+                                if after > next_time:
                                     stats["slow"] += 1
+                                    next_time = after
                                     if verbose:
                                         print(f"Can't keep up: {pretty_name}")
+
                         except Exception as e:
                             stats["failed"] += 1
                             print(f"Failed: {pretty_name}")
@@ -2358,7 +2384,8 @@ def create_ingestions(
                                 source,
                                 pretty_name,
                                 data_columns,
-                                rate,
+                                batch_size,
+                                period_s,
                                 random.Random(random.randrange(SEED_RANGE)),
                             ),
                         )
@@ -2367,9 +2394,12 @@ def create_ingestions(
                     for child_name, child in source.get("children", {}).items():
                         if "messages_second" not in child:
                             continue
-                        rate = math.ceil(child["messages_second"] * factor_ingestions)
-                        if not rate:
+                        target_rps = child["messages_second"] * factor_ingestions
+                        if target_rps <= 0:
                             continue
+
+                        batch_size = 1
+                        period_s = min(batch_size / target_rps, 60)
 
                         data_columns = [
                             Column(
@@ -2381,43 +2411,56 @@ def create_ingestions(
                             )
                             for c in child["columns"]
                         ]
+
                         pretty_name = f"{db}.{schema}.{name}->{child_name}"
-                        print(f"Starting {rate} ing./s for {pretty_name}")
+                        print(
+                            f"{target_rps:.3f} ing./s for {pretty_name} "
+                            f"({batch_size} every {period_s:.2f}s)"
+                        )
 
                         def continuous_ingestion_child(
                             source: dict[str, Any],
                             child: dict[str, Any],
                             pretty_name: str,
                             data_columns: list[Column],
-                            rate: int,
+                            batch_size: int,
+                            period_s: float,
                             rng: random.Random,
                         ) -> None:
                             nonlocal stop_event
                             try:
+                                next_time = time.time()
+
                                 while not stop_event.is_set():
-                                    start_time = time.time()
+                                    now = time.time()
+                                    if now < next_time:
+                                        stop_event.wait(timeout=next_time - now)
+                                        continue
+
+                                    next_time += period_s
+
                                     if verbose:
                                         print(
-                                            f"Ingesting {rate} rows for {pretty_name}"
+                                            f"Ingesting {batch_size} rows for {pretty_name}"
                                         )
+
                                     stats["total"] += 1
                                     ingest(
                                         c,
                                         child,
                                         source,
                                         data_columns,
-                                        rate,
+                                        batch_size,
                                         rng,
                                     )
-                                    time_to_sleep = (start_time + 1) - time.time()
-                                    if time_to_sleep > 0:
-                                        stop_event.wait(timeout=time_to_sleep)
-                                        if stop_event.is_set():
-                                            return
-                                    else:
+
+                                    after = time.time()
+                                    if after > next_time:
                                         stats["slow"] += 1
+                                        next_time = after
                                         if verbose:
                                             print(f"Can't keep up: {pretty_name}")
+
                             except Exception as e:
                                 stats["failed"] += 1
                                 print(f"Failed: {pretty_name}")
@@ -2434,11 +2477,13 @@ def create_ingestions(
                                     child,
                                     pretty_name,
                                     data_columns,
-                                    rate,
+                                    batch_size,
+                                    period_s,
                                     random.Random(random.randrange(SEED_RANGE)),
                                 ),
                             )
                         )
+
     return threads
 
 
@@ -2953,16 +2998,16 @@ def compare_table(
                     "Query avg (ms)",
                     old_q["avg"] * 1000,
                     new_q["avg"] * 1000,
-                    None,
-                ),  # TODO: Why is this unstable?
+                    1.5,
+                ),
                 (
                     "Query p50 (ms)",
                     old_q["p50"] * 1000,
                     new_q["p50"] * 1000,
-                    None,
-                ),  # TODO: Why is this unstable?
-                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, 1.5),
-                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, 1.5),
+                    1.5,
+                ),
+                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, None),
+                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, None),
                 ("Query std (ms)", old_q["std"] * 1000, new_q["std"] * 1000, None),
             ]
         )
