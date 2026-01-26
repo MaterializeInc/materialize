@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import datetime
 import json
 import math
@@ -2530,7 +2531,6 @@ def run_query(
             elif verbose:
                 print(f"Failed expectedly: {sql} (params: {params})")
                 print(f"{e.sqlstate}: {e}")
-        # SELECT mz_indexes.name, schema_name, database FROM mz_indexes JOIN mz_internal.mz_object_fully_qualified_names AS ofqn ON on_id = ofqn.id WHERE schema_name NOT IN ('mz_catalog', 'mz_internal', 'mz_introspection')
 
 
 def continuous_queries(
@@ -2541,65 +2541,80 @@ def continuous_queries(
     verbose: bool,
     stats: dict[str, int],
     rng: random.Random,
+    max_concurrent_queries: bool,
 ) -> None:
     if not workload["queries"]:
         return
-    i = 0
+
+    start = workload["queries"][0]["began_at"]
+    futures: set[concurrent.futures.Future[None]] = set()
+
+    def submit_query(query: dict[str, Any]) -> None:
+        fut = executor.submit(run_query, c, query, stats, verbose)
+        futures.add(fut)
+
     try:
-        while True:
-            i += 1
-            start = workload["queries"][0]["began_at"]
-            replay_start = datetime.datetime.now(datetime.timezone.utc)
-            for query in workload["queries"]:
-                if stop_event.is_set():
-                    return
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_concurrent_queries
+        ) as executor:
+            i = 0
+            while True:
+                i += 1
+                replay_start = datetime.datetime.now(datetime.timezone.utc)
 
-                if query["statement_type"] in (
-                    # TODO: Requires recreating transactions in which these have to be run
-                    "start_transaction",
-                    "set_transaction",
-                    "commit",
-                    "rollback",
-                    "fetch",
-                    # They will already exist statically, don't create
-                    "create_connection",
-                    "create_webhook",
-                    "create_source",
-                    "create_subsource",
-                    "create_sink",
-                    "create_table_from_source",
-                ):
-                    continue
-
-                offset = (query["began_at"] - start) / factor_queries
-                scheduled = replay_start + offset
-                sleep_seconds = (
-                    scheduled - datetime.datetime.now(datetime.timezone.utc)
-                ).total_seconds()
-                if sleep_seconds > 0:
-                    stop_event.wait(timeout=sleep_seconds)
+                for query in workload["queries"]:
                     if stop_event.is_set():
                         return
-                elif sleep_seconds < 0:
-                    stats["slow"] += 1
-                    if verbose:
-                        print(f"Can't keep up: {query}")
-                thread = PropagatingThread(
-                    target=run_query,
-                    name=f"query-{i}",
-                    args=(
-                        c,
-                        query,
-                        stats,
-                        verbose,
-                    ),
-                )
-                thread.start()
+
+                    if query["statement_type"] in (
+                        # TODO: Requires recreating transactions in which these have to be run
+                        "start_transaction",
+                        "set_transaction",
+                        "commit",
+                        "rollback",
+                        "fetch",
+                        # They will already exist statically, don't create
+                        "create_connection",
+                        "create_webhook",
+                        "create_source",
+                        "create_subsource",
+                        "create_sink",
+                        "create_table_from_source",
+                    ):
+                        continue
+
+                    offset = (query["began_at"] - start) / factor_queries
+                    scheduled = replay_start + offset
+                    sleep_seconds = (
+                        scheduled - datetime.datetime.now(datetime.timezone.utc)
+                    ).total_seconds()
+
+                    if sleep_seconds > 0:
+                        stop_event.wait(timeout=sleep_seconds)
+                        if stop_event.is_set():
+                            return
+                    elif sleep_seconds < 0:
+                        stats["slow"] += 1
+                        if verbose:
+                            print(f"Can't keep up: {query}")
+
+                    done = {f for f in futures if f.done()}
+                    for f in done:
+                        futures.remove(f)
+                        f.result()
+
+                    submit_query(query)
+
     except Exception as e:
         print(f"Failed: {query['sql']}")
         print(e)
         stop_event.set()
         raise
+
+    finally:
+        for f in futures:
+            f.cancel()
+        concurrent.futures.wait(futures)
 
 
 _SI_UNITS = {
@@ -2977,6 +2992,14 @@ def compare_table(
                 stats_new["initial_data"]["docker"], "materialized"
             )
         )
+        rows.append(
+            (
+                "Data ingestion time (s)",
+                stats_old["data_ingestion"]["time"],
+                stats_new["object_creation"]["time"],
+                1.2,
+            )
+        )
         rows.extend(
             [
                 (
@@ -3085,6 +3108,7 @@ def benchmark(
     verbose: bool,
     seed: str,
     early_initial_data: bool,
+    max_concurrent_queries: int,
 ) -> None:
     services = [
         "materialized",
@@ -3129,6 +3153,7 @@ def benchmark(
             early_initial_data,
             True,
             True,
+            max_concurrent_queries,
         )
         old_version = c.query_mz_version()
     try:
@@ -3162,6 +3187,7 @@ def benchmark(
             early_initial_data,
             True,
             True,
+            max_concurrent_queries,
         )
         new_version = c.query_mz_version()
     try:
@@ -3219,6 +3245,7 @@ def test(
     early_initial_data: bool,
     run_ingestions: bool,
     run_queries: bool,
+    max_concurrent_queries: int,
 ) -> dict[str, Any]:
     print(f"--- {posixpath.relpath(file, LOCATION)}")
     services = set()
@@ -3351,6 +3378,7 @@ def test(
                     verbose,
                     stats["queries"],
                     random.Random(random.randrange(SEED_RANGE)),
+                    max_concurrent_queries,
                 ),
             )
         )
@@ -3405,6 +3433,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(
+        "--max-concurrent-queries",
+        type=int,
+        default=1000,
+        help="max. number of concurrent queries during continuous phase",
+    )
+    parser.add_argument(
         "--seed",
         metavar="SEED",
         type=str,
@@ -3427,7 +3461,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--early-initial-data",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        # Seems faster in the existing workloads, the behavior afterwards is
+        # about the same since we wait for hydration before continuing
+        default=False,
         help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
     )
     parser.add_argument(
@@ -3468,6 +3504,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.early_initial_data,
             args.run_ingestions,
             args.run_queries,
+            args.max_concurrent_queries,
         )
 
     c.test_parts(files, run)
@@ -3499,6 +3536,12 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(
+        "--max-concurrent-queries",
+        type=int,
+        default=1000,
+        help="max. number of concurrent queries during continuous phase",
+    )
+    parser.add_argument(
         "--seed",
         metavar="SEED",
         type=str,
@@ -3521,7 +3564,9 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--early-initial-data",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        # Seems faster in the existing workloads, the behavior afterwards is
+        # about the same since we wait for hydration before continuing
+        default=False,
         help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
     )
     args = parser.parse_args()
@@ -3549,6 +3594,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.verbose,
             args.seed,
             args.early_initial_data,
+            args.max_concurrent_queries,
         ),
     )
 
