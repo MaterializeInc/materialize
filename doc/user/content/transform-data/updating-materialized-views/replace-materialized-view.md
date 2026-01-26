@@ -13,7 +13,7 @@ aliases:
 ---
 
 {{< public-preview >}}
-This feature is only recommended for use in development environments, and 
+This feature is only recommended for use in development environments. It
 {{< /public-preview >}}
 
 This guide walks you through the steps required to modify the definition of an existing materialized view, while preserving all downstream dependencies.
