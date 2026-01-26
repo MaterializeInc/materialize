@@ -454,6 +454,11 @@ pub fn optimize_dataflow_monotonic(
 
 /// Determine whether we require snapshots from our durable source imports.
 /// (For example, these can often be skipped for simple subscribe queries.)
+///
+/// # Panics
+///
+/// Panics if any of the imports or objects in the dataflow are unreferenced.
+/// (Unreferenced objects should be removed by a previous pass.)
 pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), TransformError> {
     // For every global id, true iff we need a snapshot for that global ID.
     // This is computed bottom-up: subscribes may or may not require a snapshot from their inputs,
@@ -489,8 +494,8 @@ pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), Tra
     }
     for (id, import) in &mut dataflow.source_imports {
         let with_snapshot = downstream_requires_snapshot
-            .entry(Id::Global(*id))
-            .or_default();
+            .get_mut(&Id::Global(*id))
+            .unwrap_or_else(|| unreachable!("source id {id} was present but unreferenced"));
 
         // As above, fetch the snapshot if there are any transformations on the raw source data.
         // (And we'll always need to check for things like temporal filters, since those allow
@@ -500,14 +505,16 @@ pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), Tra
         import.with_snapshot = *with_snapshot;
     }
     for (id, import) in &mut dataflow.index_imports {
-        let index_with_snapshot = *downstream_requires_snapshot
-            .entry(Id::Global(*id))
-            .or_default();
-        let object_with_snapshot = *downstream_requires_snapshot
-            .entry(Id::Global(import.desc.on_id))
-            .or_default();
+        let with_snapshot = *downstream_requires_snapshot
+            .get(&Id::Global(import.desc.on_id))
+            .unwrap_or_else(|| {
+                unreachable!(
+                    "index id {id} on {on_id} was present but unreferenced",
+                    on_id = import.desc.on_id
+                )
+            });
 
-        import.with_snapshot = index_with_snapshot || object_with_snapshot;
+        import.with_snapshot = with_snapshot;
     }
 
     Ok(())
