@@ -37,7 +37,7 @@ impl OptimizerNoticeApi for EqualsNull {
     ) -> fmt::Result {
         write!(
             f,
-            "Comparison with NULL using `=` or `<>` always returns NULL."
+            "Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL."
         )
     }
 

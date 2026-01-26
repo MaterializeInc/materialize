@@ -32,7 +32,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -48,7 +48,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -68,7 +68,7 @@ Source materialize.public.t1
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -84,7 +84,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -100,7 +100,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -180,7 +180,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -196,7 +196,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -214,7 +214,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -230,7 +230,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
@@ -246,7 +246,7 @@ Explained Query (fast path):
 Target cluster: quickstart
 
 Notices:
-  - Notice: Comparison with NULL using `=` or `<>` always returns NULL.
+  - Notice: Comparison with NULL using `=`, `<>`, or `!=` always evaluates to NULL.
     Hint: Use `IS NULL` or `IS NOT NULL` instead.
 
 EOF
