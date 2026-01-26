@@ -8,7 +8,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-async-trait = "0.1"
 jsonwebtoken = "9.3.1"
 mz-adapter = { path = "../adapter", default-features = false }
 mz-auth = { path = "../auth", default-features = false }

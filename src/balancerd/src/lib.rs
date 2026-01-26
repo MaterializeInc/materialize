@@ -39,7 +39,6 @@ use futures::stream::BoxStream;
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
-use mz_auth::OidcAuthenticator;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;

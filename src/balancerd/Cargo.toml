@@ -27,7 +27,6 @@ jsonwebtoken = "9.3.1"
 launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
-mz-auth = { path = "../auth", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
 mz-dyncfg-file= { path = "../dyncfg-file" }

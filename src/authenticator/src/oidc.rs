@@ -16,9 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
-use mz_auth::{OidcAuthSessionHandle, OidcAuthenticator};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -127,25 +125,6 @@ struct OidcDecodingKey(DecodingKey);
 impl std::fmt::Debug for OidcDecodingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JWKS").field("key", &"<redacted>").finish()
-    }
-}
-
-/// Session handle for generic OIDC authentication.
-#[derive(Debug)]
-pub struct GenericOidcSessionHandle {
-    user: String,
-}
-
-#[async_trait]
-impl OidcAuthSessionHandle for GenericOidcSessionHandle {
-    fn user(&self) -> &str {
-        &self.user
-    }
-
-    async fn expired(&mut self) {
-        // This session never expires - wait forever
-        // TODO (SangJunBak): Implement expiration.
-        std::future::pending().await
     }
 }
 
@@ -292,7 +271,7 @@ impl GenericOidcAuthenticatorInner {
         Err(OidcError::NoMatchingKey)
     }
 
-    async fn validate_access_token(
+    pub async fn validate_access_token(
         &self,
         token: &str,
         expected_user: Option<&str>,
@@ -329,28 +308,21 @@ impl GenericOidcAuthenticatorInner {
     }
 }
 
-#[async_trait]
-impl OidcAuthenticator for GenericOidcAuthenticator {
-    type Error = OidcError;
-    type SessionHandle = GenericOidcSessionHandle;
-    type ValidatedClaims = OidcClaims;
-
-    async fn authenticate(
+impl GenericOidcAuthenticator {
+    pub async fn authenticate(
         &self,
         expected_user: &str,
         password: &str,
-    ) -> Result<Self::SessionHandle, Self::Error> {
+    ) -> Result<OidcClaims, OidcError> {
         // The password is the JWT token
         let claims = self
             .validate_access_token(password, Some(expected_user))
             .await?;
 
-        Ok(GenericOidcSessionHandle {
-            user: claims.username().to_string(),
-        })
+        Ok(claims)
     }
 
-    async fn validate_access_token(
+    pub async fn validate_access_token(
         &self,
         token: &str,
         expected_user: Option<&str>,

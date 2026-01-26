@@ -30,7 +30,6 @@ use mz_adapter::{
     verify_datum_desc,
 };
 use mz_auth::password::Password;
-use mz_auth::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_authenticator::Authenticator;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -210,7 +209,7 @@ where
                         external_metadata_rx: Some(auth_session.external_metadata_rx()),
                         helm_chart_version,
                     });
-                    let expired = async move { auth_session.expired().await }.boxed();
+                    let expired = async move { auth_session.expired().await };
                     (session, expired.left_future())
                 }
                 Err(err) => {
@@ -237,17 +236,16 @@ where
             let auth_response = oidc.authenticate(&user, &jwt).await;
 
             match auth_response {
-                Ok(mut auth_session) => {
+                Ok(auth_session) => {
                     let session = adapter_client.new_session(SessionConfig {
                         conn_id: conn.conn_id().clone(),
                         uuid: conn_uuid,
-                        user: auth_session.user().into(),
+                        user: auth_session.username().into(),
                         client_ip: conn.peer_addr().clone(),
                         external_metadata_rx: None,
                         helm_chart_version,
                     });
-                    let expired = async move { auth_session.expired().await }.boxed();
-                    (session, expired.left_future())
+                    (session, pending().right_future())
                 }
                 Err(err) => {
                     warn!(?err, "pgwire connection failed authentication");

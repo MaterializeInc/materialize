@@ -5594,7 +5594,6 @@ dependencies = [
 name = "mz-authenticator"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "jsonwebtoken",
  "mz-adapter",
  "mz-auth",
@@ -5697,7 +5696,6 @@ dependencies = [
  "launchdarkly-server-sdk",
  "mz-alloc",
  "mz-alloc-default",
- "mz-auth",
  "mz-build-info",
  "mz-dyncfg",
  "mz-dyncfg-file",
@@ -6572,7 +6570,6 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "clap",
