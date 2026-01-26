@@ -13,7 +13,7 @@ dbt-core==1.11.2
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.10.0
-dbt-protos==1.0.419
+dbt-protos==1.0.422
 dbt-semantic-interfaces==0.9.0
 dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git@f6ee73c42f1d34132ed489defb9eb9ef83221256#subdirectory=dbt-tests-adapter
 deepdiff==8.6.1
