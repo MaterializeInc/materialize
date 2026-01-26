@@ -256,8 +256,9 @@ def run_one_scenario(
 
         testdrive_entrypoint_extra = []
         if iceberg_credentials:
-            _, key = iceberg_credentials
+            user, key = iceberg_credentials
             testdrive_entrypoint_extra = [
+                f"--var=s3-access-user={user}",
                 f"--var=s3-access-key={key}",
                 "--var=aws-endpoint=minio:9000",
             ]

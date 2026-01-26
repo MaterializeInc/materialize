@@ -30,6 +30,7 @@ from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
@@ -51,6 +52,8 @@ SERVICES = [
     Postgres(),
     MySql(),
     SqlServer(),
+    PolarisBootstrap(),
+    Polaris(),
     Zookeeper(),
     Kafka(
         auto_create_topics=False,

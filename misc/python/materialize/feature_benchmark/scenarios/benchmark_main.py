@@ -1460,10 +1460,6 @@ class IcebergSink(Sink):
         # Enable feature flag and set up connections
         return TdAction(
             f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-$ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_iceberg_sink = true;
-
 > CREATE SECRET iceberg_secret AS '${{arg.s3-access-key}}';
 
 > CREATE CONNECTION aws_conn TO AWS (
@@ -1552,7 +1548,7 @@ true
 true
 
 $ duckdb-execute name=iceberg
-CREATE SECRET s3_secret (TYPE S3, KEY_ID 'tduser', SECRET '${{arg.s3-access-key}}', ENDPOINT '${{arg.aws-endpoint}}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+CREATE SECRET s3_secret (TYPE S3, KEY_ID '${{arg.s3-access-user}}', SECRET '${{arg.s3-access-key}}', ENDPOINT '${{arg.aws-endpoint}}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
 SET unsafe_enable_version_guessing = true;
 
 $ duckdb-query name=iceberg
