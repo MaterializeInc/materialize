@@ -2443,6 +2443,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
+dependencies = [
+ "darling_core 0.23.0",
+ "darling_macro 0.23.0",
+]
+
+[[package]]
 name = "darling_core"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2471,6 +2481,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "darling_core"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9865a50f7c335f53564bb694ef660825eb8610e0a53d3e11bf1b0d3df31e03b0"
+dependencies = [
+ "ident_case",
+ "proc-macro2",
+ "quote",
+ "strsim",
+ "syn 2.0.111",
+]
+
+[[package]]
 name = "darling_macro"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2488,6 +2511,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce154b9bea7fb0c8e8326e62d00354000c36e79770ff21b8c84e3aa267d9d531"
 dependencies = [
  "darling_core 0.21.2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
+name = "darling_macro"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
+dependencies = [
+ "darling_core 0.23.0",
  "quote",
  "syn 2.0.111",
 ]
@@ -3350,6 +3384,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3725,7 +3765,7 @@ checksum = "84b26c544d002229e640969970a2e74021aadf6e2f96372b9c58eff97de08eb3"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
 ]
 
 [[package]]
@@ -3733,6 +3773,11 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "allocator-api2",
+ "equivalent",
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -4524,6 +4569,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonpath-rust"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633a7320c4bb672863a3782e89b9094ad70285e097ff6832cddd0ec615beadfa"
+dependencies = [
+ "pest",
+ "pest_derive",
+ "regex",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "jsonptr"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4568,8 +4626,8 @@ checksum = "6be3655c8e864565ffdaf32d4cf3b8878adb97c464c697259eb2d2cd74be43f2"
 dependencies = [
  "async-trait",
  "futures",
- "kube",
- "kube-runtime",
+ "kube 2.0.1",
+ "kube-runtime 2.0.1",
  "rand 0.9.2",
  "serde",
  "thiserror 2.0.18",
@@ -4590,6 +4648,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "k8s-openapi"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05a6d6f3611ad1d21732adbd7a2e921f598af6c92d71ae6e2620da4b67ee1f0d"
+dependencies = [
+ "base64 0.22.1",
+ "jiff",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "keyed_priority_queue"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4604,11 +4674,22 @@ version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e7bb0b6a46502cc20e4575b6ff401af45cfea150b34ba272a3410b78aa014e"
 dependencies = [
- "k8s-openapi",
- "kube-client",
- "kube-core",
+ "k8s-openapi 0.26.0",
+ "kube-client 2.0.1",
+ "kube-core 2.0.1",
+]
+
+[[package]]
+name = "kube"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0dae7229247e4215781e5c5104a056e1e2163943e577f9084cf8bba7b5248f7a"
+dependencies = [
+ "k8s-openapi 0.27.0",
+ "kube-client 3.0.0",
+ "kube-core 3.0.0",
  "kube-derive",
- "kube-runtime",
+ "kube-runtime 3.0.0",
 ]
 
 [[package]]
@@ -4627,12 +4708,45 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.8.1",
+ "hyper-timeout 0.5.1",
+ "hyper-util",
+ "jsonpath-rust 0.7.5",
+ "k8s-openapi 0.26.0",
+ "kube-core 2.0.1",
+ "pem",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tower 0.5.3",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
+name = "kube-client"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "010875e291a9c0a4e076f4f9c35b97d82fd2372cb3bc713252c3d08b7e73ce5b"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "either",
+ "futures",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.8.1",
  "hyper-openssl",
  "hyper-timeout 0.5.1",
  "hyper-util",
- "jsonpath-rust",
- "k8s-openapi",
- "kube-core",
+ "jiff",
+ "jsonpath-rust 1.0.4",
+ "k8s-openapi 0.27.0",
+ "kube-core 3.0.0",
  "openssl",
  "pem",
  "secrecy",
@@ -4641,7 +4755,7 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite 0.27.0",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tower 0.5.3",
  "tower-http",
@@ -4659,7 +4773,25 @@ dependencies = [
  "form_urlencoded",
  "http 1.4.0",
  "json-patch",
- "k8s-openapi",
+ "k8s-openapi 0.26.0",
+ "serde",
+ "serde-value",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kube-core"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac76281aa698dd34111e25b21f5f6561932a30feabab5357152be273f8a81bb"
+dependencies = [
+ "derive_more",
+ "form_urlencoded",
+ "http 1.4.0",
+ "jiff",
+ "json-patch",
+ "k8s-openapi 0.27.0",
  "schemars",
  "serde",
  "serde-value",
@@ -4669,11 +4801,11 @@ dependencies = [
 
 [[package]]
 name = "kube-derive"
-version = "2.0.1"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03dee8252be137772a6ab3508b81cd797dee62ee771112a2453bc85cbbe150d2"
+checksum = "599c09721efcccc0e6a26e93df28c587da60ff5e099c657626fff2af0ae4cbb8"
 dependencies = [
- "darling 0.21.2",
+ "darling 0.23.0",
  "proc-macro2",
  "quote",
  "serde",
@@ -4696,8 +4828,35 @@ dependencies = [
  "hashbrown 0.15.3",
  "hostname",
  "json-patch",
- "k8s-openapi",
- "kube-client",
+ "k8s-openapi 0.26.0",
+ "kube-client 2.0.1",
+ "parking_lot",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
+name = "kube-runtime"
+version = "3.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6db43d26700f564baf850f681f3cb0f1195d2699bd379bfa70750ecec4dcb209"
+dependencies = [
+ "ahash 0.8.12",
+ "async-broadcast",
+ "async-stream",
+ "backon",
+ "educe",
+ "futures",
+ "hashbrown 0.16.1",
+ "hostname",
+ "json-patch",
+ "k8s-openapi 0.27.0",
+ "kube-client 3.0.0",
  "parking_lot",
  "pin-project",
  "serde",
@@ -5834,8 +5993,8 @@ dependencies = [
  "chrono",
  "futures",
  "indexmap 2.11.4",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.26.0",
+ "kube 3.0.0",
  "mz-ore",
  "mz-repr",
  "mz-server-core",
@@ -6084,8 +6243,8 @@ dependencies = [
  "clap",
  "csv-async",
  "futures",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.26.0",
+ "kube 3.0.0",
  "mz-build-info",
  "mz-cloud-resources",
  "mz-ore",
@@ -6826,8 +6985,8 @@ dependencies = [
  "clap",
  "fail",
  "futures",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.26.0",
+ "kube 3.0.0",
  "maplit",
  "mz-cloud-resources",
  "mz-orchestrator",
@@ -6909,8 +7068,8 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "k8s-controller",
- "k8s-openapi",
- "kube",
+ "k8s-openapi 0.26.0",
+ "kube 3.0.0",
  "maplit",
  "mz-alloc",
  "mz-alloc-default",
@@ -9198,20 +9357,19 @@ dependencies = [
 
 [[package]]
 name = "pest"
-version = "2.7.10"
+version = "2.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "560131c633294438da9f7c4b08189194b20946c8274c6b9e38881a7874dc8ee8"
+checksum = "2c9eb05c21a464ea704b53158d358a31e6425db2f63a1a7312268b05fe2b75f7"
 dependencies = [
  "memchr",
- "thiserror 1.0.69",
  "ucd-trie",
 ]
 
 [[package]]
 name = "pest_derive"
-version = "2.7.10"
+version = "2.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "26293c9193fbca7b1a3bf9b79dc1e388e927e6cacaa78b4a3ab705a1d3d41459"
+checksum = "68f9dbced329c441fa79d80472764b1a2c7e57123553b8519b36663a2fb234ed"
 dependencies = [
  "pest",
  "pest_generator",
@@ -9219,9 +9377,9 @@ dependencies = [
 
 [[package]]
 name = "pest_generator"
-version = "2.7.10"
+version = "2.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ec22af7d3fb470a85dd2ca96b7c577a1eb4ef6f1683a9fe9a8c16e136c04687"
+checksum = "3bb96d5051a78f44f43c8f712d8e810adb0ebf923fc9ed2655a7f66f63ba8ee5"
 dependencies = [
  "pest",
  "pest_meta",
@@ -9232,11 +9390,10 @@ dependencies = [
 
 [[package]]
 name = "pest_meta"
-version = "2.7.10"
+version = "2.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7a240022f37c361ec1878d646fc5b7d7c4d28d5946e1a80ad5a7a4f4ca0bdcd"
+checksum = "602113b5b5e8621770cfd490cfd90b9f84ab29bd2b0e49ad83eb6d186cef2365"
 dependencies = [
- "once_cell",
  "pest",
  "sha2",
 ]
@@ -12146,14 +12303,14 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
+checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
 dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tungstenite 0.27.0",
+ "tungstenite 0.28.0",
 ]
 
 [[package]]
@@ -12597,6 +12754,23 @@ name = "tungstenite"
 version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.4.0",
+ "httparse",
+ "log",
+ "rand 0.9.2",
+ "sha1",
+ "thiserror 2.0.18",
+ "utf-8",
+]
+
+[[package]]
+name = "tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
 dependencies = [
  "bytes",
  "data-encoding",
