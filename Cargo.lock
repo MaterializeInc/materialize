@@ -6314,7 +6314,7 @@ dependencies = [
  "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "tungstenite 0.27.0",
+ "tungstenite 0.28.0",
  "url",
  "uuid",
  "workspace-hack",
@@ -12610,6 +12610,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tungstenite"
+version = "0.28.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8628dcc84e5a09eb3d8423d6cb682965dea9133204e8fb3efee74c2a0c259442"
+dependencies = [
+ "bytes",
+ "data-encoding",
+ "http 1.4.0",
+ "httparse",
+ "log",
+ "rand 0.9.2",
+ "sha1",
+ "thiserror 2.0.18",
+ "utf-8",
+]
+
+[[package]]
 name = "turmoil"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13524,7 +13541,7 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "tungstenite 0.27.0",
+ "tungstenite 0.28.0",
  "twox-hash",
  "uncased",
  "unicode-bidi",
