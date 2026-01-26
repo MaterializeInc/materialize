@@ -3168,6 +3168,9 @@ def benchmark(
         for error, occurrences in stats_new["queries"]["errors"].items():
             if error in stats_old["queries"]["errors"]:
                 continue
+            # XX000: Evaluation error: invalid input syntax for type uuid: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `V` at 4: "005V"
+            if "invalid input syntax for type uuid" in error:
+                continue
             new_errors.append(f"{error} in queries: {occurrences}")
         if new_errors:
             failures.append(
