@@ -4,7 +4,6 @@ description: "Learn about the key components and architecture of self-managed Ma
 disable_list: true
 aliases:
   - /self-hosted/concepts/
-  - /self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/
 menu:
   main:
     identifier: "sm-deployments"
@@ -327,6 +326,7 @@ which provides concrete examples and an opinionated model for deploying Material
 
 {{< yaml-table data="self_managed/terraform_list" >}}
 
+See also [Terraform releases](/self-managed-deployments/release-versions/#terraform-releases).
 {{< /tab >}}
 {{< tab "Legacy Terraform Modules" >}}
 ### Legacy Terraform Modules

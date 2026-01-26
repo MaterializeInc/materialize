@@ -11,4 +11,21 @@ aliases:
 
 # Materialize documentation
 
-{{< include-md file="shared-content/materialize-intro.md" >}}
+{{% include-from-yaml data="materialize_intro"
+name="materialize-intro" %}}
+
+{{< callout >}}
+## What's new!
+
+- **Self-Managed v26!** For details, see [Release Notes](/releases/). To upgrade
+  from v25 to v26, you must [upgrade first to
+  v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216)
+
+- **New Terraforms for Self-Managed!** For details, see [Terraform releases](/releases/terraform-releases/).
+
+{{</ callout >}}
+
+## Materialize offerings
+
+{{% include-from-yaml data="materialize_intro"
+name="materialize-offerings" %}}

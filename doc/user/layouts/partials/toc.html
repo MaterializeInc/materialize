@@ -141,7 +141,7 @@
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
       return {
         id: h.id,
-        offset: rect.top + scrollTop - 125,  // 65px banner + 60px menubar = 125px total
+        offset: rect.top + scrollTop - 65,  // 65px banner + 60px menubar = 125px total
       };
     });
     const cutoff = $(document).height() - $(window).height() - SLOP;

@@ -1,0 +1,16 @@
+columns:
+  - column: "Terraform version"
+  - column: "Notable changes"
+
+rows:
+
+- "Terraform version": |
+    v1.0.2
+  "Notable changes": |
+    General availability. Available for use with v26 or greater.
+    For examples on using the modules, see the following guides:
+    |  Guide         | Description  |
+    | ------------- | -------|
+    | [Install on AWS](/self-managed-deployments/installation/install-on-aws/) |Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Install on Azure](/self-managed-deployments/installation/install-on-azure/) | Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Install on GCP](/self-managed-deployments/installation/install-on-gcp/) |Uses Terraform module to deploy Materialize to Google Kubernetes Engine(GKE).

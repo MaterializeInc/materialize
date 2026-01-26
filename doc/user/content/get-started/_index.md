@@ -11,7 +11,13 @@ menu:
     weight: 5
 ---
 
-{{< include-md file="shared-content/materialize-intro.md" >}}
+{{% include-from-yaml data="materialize_intro"
+name="materialize-intro" %}}
+
+## Materialize offerings
+
+{{% include-from-yaml data="materialize_intro"
+name="materialize-offerings" %}}
 
 ## Key features
 
