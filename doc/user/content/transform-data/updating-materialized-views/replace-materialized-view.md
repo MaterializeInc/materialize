@@ -37,16 +37,26 @@ Before using this guide, you should be familiar with:
 - [Indexes](/concepts/indexes/) and how they improve query performance
 - [Clusters](/concepts/clusters/) and compute resource management
 
+This guide uses a [three-tier cluster architecture](/manage/operational-guidelines/#three-tier-architecture),
+with separate clusters for ingestion, computation, and serving.
+
 ### Step 1. Set up a data source
 
 For this guide, we'll use the Materialize auction load generator as our data source.
 
-Create a schema and the source:
+First, create a cluster for ingestion and a schema for the project:
 
 ```mzsql
+-- Create an ingestion cluster
+CREATE CLUSTER ingest_cluster SIZE = 'M.1-small';
+
 -- Create a schema for the project
 CREATE SCHEMA IF NOT EXISTS auction_house;
+```
 
+Next, create the source in the ingestion cluster:
+
+```mzsql
 -- Create auction load generator source
 CREATE SOURCE auction_house.auction_source
   IN CLUSTER ingest_cluster
@@ -58,6 +68,13 @@ This creates several tables including `auctions`, `bids`, `users`, and
 `organizations` that simulate a live auction environment.
 
 ### Step 2. Create cascading materialized views and indexes
+
+Create a compute cluster for the materialized views:
+
+```mzsql
+-- Create a compute cluster for materialized views
+CREATE CLUSTER compute_cluster SIZE = 'M.1-small';
+```
 
 Create a materialized view that identifies winning bids for completed auctions:
 
@@ -111,10 +128,13 @@ FROM auction_house.mv_winning_bids
 GROUP BY winner_org_id, winner_org_name;
 ```
 
-Create an index on the winning bids view to make results available in memory for
-fast queries:
+Create a serving cluster and an index on the winning bids view to make results
+available in memory for fast queries:
 
 ```mzsql
+-- Create a serving cluster for indexes
+CREATE CLUSTER serving_cluster SIZE = 'M.1-small';
+
 -- Index on the winning bids view
 -- Makes results available in memory within the serving cluster
 CREATE INDEX idx_winning_bids
@@ -156,11 +176,16 @@ require recreating all downstream objects), you can create a replacement.
 
 Use `CREATE REPLACEMENT MATERIALIZED VIEW` to define the updated materialized view:
 
+```mszql
+-- Create a new cluster for the replacement materialized view
+CREATE CLUSTER replacement_mv_cluster SIZE = 'M.1-small';
+```
+
 ```mzsql
 -- Create a replacement for the winning bids view
 CREATE REPLACEMENT MATERIALIZED VIEW auction_house.mv_winning_bids_v2
   FOR auction_house.mv_winning_bids
-  IN CLUSTER staging_cluster
+  IN CLUSTER replacement_mv_cluster
 AS
 SELECT
     a.id AS auction_id,
@@ -261,8 +286,7 @@ flowchart LR
 You can confirm the materialized view is now using the updated definition:
 
 ```mzsql
--- Query the updated view for winning bids <= 50
--- This should return 0 rows since the new definition filters for amounts > 50
+-- Query the updated view for winning bids <= 50. This should return 0 rows
 SELECT * FROM auction_house.mv_winning_bids
 WHERE winning_amount <= 50;
 ```

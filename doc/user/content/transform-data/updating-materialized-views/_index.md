@@ -37,7 +37,7 @@ For detailed instructions, see the [Blue/green deployment guide](/manage/dbt/blu
 
 The `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` command allows you to update
 a single materialized view's definition while preserving its name, downstream
-dependencies, and indexes. Materialize calculates the diff between the original
+dependencies, and indexes. Materialize calculates the *diff* between the original
 and replacement views, then propagates the changes to all dependent objects.
 
 This strategy is ideal when:
