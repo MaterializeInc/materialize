@@ -3,5 +3,10 @@
   - Role membership in `new_owner`.
   - `CREATE` privileges on the containing schema if the materialized view is
   namespaced by a schema.
+
+{{< if-released "v26.11" >}}
+
 - In addition, to apply a replacement:
   - Ownership of the replacement materialized view.
+
+{{< /if-released >}}

@@ -23,9 +23,14 @@ If you do not need durability or cross-cluster sharing, and you are primarily in
 {{% include-syntax file="examples/create_materialized_view" example="syntax" %}}
 
 {{< /tab >}}
+
+{{< if-released "v26.11" >}}
+
 {{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
 
 ### Create replacement materialized view
+
+{{< public-preview />}}
 
 Create a replacement for an existing materialized view that can be applied without recreating downstream objects.
 See [Replacement materialized views](#replacement-materialized-views).
@@ -33,6 +38,8 @@ See [Replacement materialized views](#replacement-materialized-views).
 {{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
 
 {{< /tab >}}
+
+{{< /if-released >}}
 {{< /tabs >}}
 
 ## Details
@@ -261,7 +268,10 @@ JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs
 JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
 
+{{< if-released "v26.11" >}}
 ### Replacement materialized views
+
+{{< public-preview />}}
 
 Materialize supports a two-step process for replacing materialized views
 in-place, i.e., without recreating downstream objects:
@@ -305,6 +315,8 @@ When the replacement is applied to a materialized view, the materialized view
 emits a diff representing the changes between the old and new output. All
 downstream objects must process this diff, which may cause temporary CPU and
 memory spikes depending on the size of the changes.
+
+{{< /if-released >}}
 
 ## Examples
 

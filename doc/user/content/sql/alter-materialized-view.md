@@ -11,7 +11,12 @@ Use `ALTER MATERIALIZED VIEW` to:
 - Rename a materialized view.
 - Change owner of a materialized view.
 - Change retain history configuration for the materialized view.
-- Apply a replacement materialized view.
+
+{{< if-released "v26.11" >}}
+
+- Apply a replacement materialized view. *Public preview*.
+
+{{< /if-released >}}
 
 ## Syntax
 
@@ -47,9 +52,12 @@ To reset the retention history to the default for a materialized view:
 {{% include-syntax file="examples/alter_materialized_view" example="syntax-reset-retain-history" %}}
 
 {{< /tab >}}
+{{< if-released "v26.11" >}}
 {{< tab "Apply replacement" >}}
 
 ### Apply replacement
+
+{{< public-preview />}}
 
 To apply a replacement materialized view:
 
@@ -58,6 +66,7 @@ To apply a replacement materialized view:
 This operation replaces the definition of the target materialized view with the definition of the replacement, and drops the replacement at the same time.
 
 {{< /tab >}}
+{{< /if-released >}}
 {{< /tabs >}}
 
 ## Privileges
