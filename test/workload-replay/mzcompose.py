@@ -1663,7 +1663,11 @@ def run_create_objects_part_1(
     print("Creating clusters")
     for name, cluster in workload["clusters"].items():
         if cluster["managed"]:
-            c.sql(cluster["create_sql"], user="mz_system", port=6877)
+            # Need at least one replica for everything to hydrate
+            create_sql = cluster["create_sql"].replace(
+                "REPLICATION FACTOR = 0", "REPLICATION FACTOR = 1"
+            )
+            c.sql(create_sql, user="mz_system", port=6877)
         else:
             raise ValueError("Handle unmanaged clusters")
 
@@ -2551,7 +2555,7 @@ def continuous_queries(
                     return
 
                 if query["statement_type"] in (
-                    # Requires recreating transactions in which these have to be run
+                    # TODO: Requires recreating transactions in which these have to be run
                     "start_transaction",
                     "set_transaction",
                     "commit",
@@ -3101,13 +3105,12 @@ def benchmark(
 
     tag = resolve_tag(compare_against)
     print(f"-- Running against materialized:{tag} (reference)")
-    # TODO: Threads all need an rng with an initialized seed so we get the same data in each run!
     random.seed(seed)
     with c.override(
         Materialized(
             image=f"{image_registry()}/materialized:{tag}",
             cluster_replica_size=cluster_replica_sizes,
-            ports=[6874, 6875, 6876, 6877, 6878, 6880, 6881, 26257],
+            ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
             environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
             additional_system_parameter_defaults={"enable_rbac_checks": "false"},
         )
@@ -3140,7 +3143,7 @@ def benchmark(
         Materialized(
             image=None,
             cluster_replica_size=cluster_replica_sizes,
-            ports=[6874, 6875, 6876, 6877, 6878, 6880, 6881, 26257],
+            ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
             environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
             additional_system_parameter_defaults={"enable_rbac_checks": "false"},
         )
