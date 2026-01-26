@@ -30,7 +30,7 @@ http = "1.4.0"
 hyper-tls = "0.5.0"
 ipnet = "2.11.0"
 itertools = "0.14.0"
-launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
+launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 maplit = "1.0.2"
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }

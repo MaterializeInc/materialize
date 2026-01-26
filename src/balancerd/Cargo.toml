@@ -24,7 +24,7 @@ hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.19"
 jsonwebtoken = "9.3.1"
-launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
+launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
