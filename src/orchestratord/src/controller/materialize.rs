@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 use crate::{
     Error,
-    controller::materialize::environmentd::V161,
+    controller::materialize::generation::V161,
     k8s::{apply_resource, delete_resource, make_reflector},
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
@@ -48,7 +48,8 @@ use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
-pub mod environmentd;
+pub mod generation;
+pub mod global;
 
 pub struct Config {
     pub cloud_provider: CloudProvider,
@@ -186,7 +187,7 @@ impl Context {
         &self,
         client: &Client,
         mz: &Materialize,
-        resources: environmentd::Resources,
+        resources: generation::Resources,
         active_generation: u64,
         desired_generation: u64,
         resources_hash: String,
@@ -357,13 +358,17 @@ impl k8s_controller::Context for Context {
 
         self.check_environment_id_conflicts(mz)?;
 
+        global::Resources::new(&self.config, mz)
+            .apply(&client, &mz.namespace())
+            .await?;
+
         // we compare the hash against the environment resources generated
         // for the current active generation, since that's what we expect to
         // have been applied earlier, but we don't want to use these
         // environment resources because when we apply them, we want to apply
         // them with data that uses the new generation
         let active_resources =
-            environmentd::Resources::new(&self.config, mz, status.active_generation);
+            generation::Resources::new(&self.config, mz, status.active_generation);
         let has_current_changes = status.resources_hash != active_resources.generate_hash();
         let active_generation = status.active_generation;
         let next_generation = active_generation + 1;
@@ -375,7 +380,7 @@ impl k8s_controller::Context for Context {
 
         // here we regenerate the environment resources using the
         // same inputs except with an updated generation
-        let resources = environmentd::Resources::new(&self.config, mz, desired_generation);
+        let resources = generation::Resources::new(&self.config, mz, desired_generation);
         let resources_hash = resources.generate_hash();
 
         let mut result = match (
