@@ -75,3 +75,29 @@
       description: |
         The [`SELECT` statement](/sql/select) whose results you want to
         maintain incrementally updated.
+
+- name: "syntax-replacement"
+  code: |
+    CREATE REPLACEMENT MATERIALIZED VIEW <name>
+    FOR <target_name>
+    [IN CLUSTER <cluster_name>]
+    [WITH (<with_options>)]
+    AS <select_stmt>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        A name for the replacement materialized view.
+    - name: "`<target_name>`"
+      description: |
+        The name of the existing materialized view to be replaced.
+    - name: "`IN CLUSTER <cluster_name>`"
+      description: |
+        The cluster to maintain this replacement materialized view. If not
+        specified, defaults to the active cluster.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        Same options as `CREATE MATERIALIZED VIEW`.
+    - name: "`<select_stmt>`"
+      description: |
+        The [`SELECT` statement](/sql/select) for the replacement. Must produce
+        the same schema as the target materialized view.

@@ -6,11 +6,12 @@ menu:
     parent: 'commands'
 ---
 
-Use `ALTER  MATERIALIZED VIEW` to:
+Use `ALTER MATERIALIZED VIEW` to:
 
 - Rename a materialized view.
 - Change owner of a materialized view.
 - Change retain history configuration for the materialized view.
+- Apply a replacement materialized view.
 
 ## Syntax
 
@@ -46,9 +47,18 @@ To reset the retention history to the default for a materialized view:
 {{% include-syntax file="examples/alter_materialized_view" example="syntax-reset-retain-history" %}}
 
 {{< /tab >}}
-{{< /tabs >}}
+{{< tab "Apply replacement" >}}
 
-## Details
+### Apply replacement
+
+To apply a replacement materialized view:
+
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-apply-replacement" %}}
+
+This operation replaces the definition of the target materialized view with the definition of the replacement, and drops the replacement at the same time.
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Privileges
 
@@ -58,5 +68,7 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
+- [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](/sql/show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](/sql/show-create-materialized-view)
+- [`DROP MATERIALIZED VIEW`](/sql/drop-materialized-view)

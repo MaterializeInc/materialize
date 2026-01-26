@@ -43,3 +43,14 @@
     - name: "`<name>`"
       description: |
         The name of the materialized view you want to alter.
+
+- name: "syntax-apply-replacement"
+  code: |
+    ALTER MATERIALIZED VIEW <name> APPLY REPLACEMENT <replacement_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the materialized view to replace.
+    - name: "`<replacement_name>`"
+      description: |
+        The name of a replacement materialized view created with [`CREATE REPLACEMENT MATERIALIZED VIEW`](/sql/create-materialized-view).
