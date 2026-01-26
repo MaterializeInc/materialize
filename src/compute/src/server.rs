@@ -16,11 +16,9 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Error;
-use crossbeam_channel::SendError;
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute_client::protocol::command::ComputeCommand;
@@ -37,6 +35,7 @@ use timely::communication::Allocate;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tracing::{info, trace, warn};
 use uuid::Uuid;
 
@@ -161,7 +160,7 @@ impl CommandReceiver {
 /// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>,
+    inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
     worker_id: usize,
     /// The nonce identifying the current cluster protocol incarnation.
@@ -169,7 +168,7 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: crossbeam_channel::Sender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -224,9 +223,9 @@ impl ClusterSpec for Config {
     fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
-        client_rx: crossbeam_channel::Receiver<(
+        client_rx: mpsc::UnboundedReceiver<(
             Uuid,
-            crossbeam_channel::Receiver<ComputeCommand>,
+            mpsc::UnboundedReceiver<ComputeCommand>,
             mpsc::UnboundedSender<ComputeResponse>,
         )>,
     ) {
@@ -242,7 +241,7 @@ impl ClusterSpec for Config {
         // up creating incompatible sides of the channel dataflow after reconnects.
         // See database-issues#8964.
         let (cmd_tx, cmd_rx) = command_channel::render(timely_worker);
-        let (resp_tx, resp_rx) = crossbeam_channel::unbounded();
+        let (resp_tx, resp_rx) = mpsc::unbounded_channel();
 
         spawn_channel_adapter(client_rx, cmd_tx, resp_rx, worker_id);
 
@@ -728,25 +727,23 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     }
 }
 
-/// Spawn a thread to bridge between [`ClusterClient`] and [`Worker`] channels.
+/// Spawn a task to bridge between [`ClusterClient`] and [`Worker`] channels.
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
 fn spawn_channel_adapter(
-    client_rx: crossbeam_channel::Receiver<(
+    mut client_rx: mpsc::UnboundedReceiver<(
         Uuid,
-        crossbeam_channel::Receiver<ComputeCommand>,
+        mpsc::UnboundedReceiver<ComputeCommand>,
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    response_rx: crossbeam_channel::Receiver<(ComputeResponse, Uuid)>,
+    mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
     worker_id: usize,
 ) {
-    thread::Builder::new()
-        // "cca" stands for "compute channel adapter". We need to shorten that because Linux has a
-        // 15-character limit for thread names.
-        .name(format!("cca-{worker_id}"))
-        .spawn(move || {
+    mz_ore::task::spawn(
+        || format!("compute-channel-adapter-{worker_id}"),
+        async move {
             // To make workers aware of the individual client connections, we tag forwarded
             // commands with the client nonce. Additionally, we use the nonce to filter out
             // responses with a different nonce, which are intended for different client
@@ -765,7 +762,7 @@ fn spawn_channel_adapter(
             // know that all stashed responses must be from the past.
             let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
 
-            while let Ok((nonce, command_rx, response_tx)) = client_rx.recv() {
+            while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
                 // Send stashed responses for this client.
                 if let Some(resps) = stashed_responses.remove(&nonce) {
                     for resp in resps {
@@ -774,13 +771,13 @@ fn spawn_channel_adapter(
                 }
 
                 // Wait for a new response while forwarding received commands.
-                let serve_rx_channels = || loop {
-                    crossbeam_channel::select! {
-                        recv(command_rx) -> msg => match msg {
-                            Ok(cmd) => command_tx.send((cmd, nonce)),
-                            Err(_) => return Err(()),
+                let mut serve_rx_channels = async || loop {
+                    tokio::select! {
+                        msg = command_rx.recv() => match msg {
+                            Some(cmd) => command_tx.send((cmd, nonce)),
+                            None => return Err(()),
                         },
-                        recv(response_rx) -> msg => {
+                        msg = response_rx.recv() => {
                             return Ok(msg.expect("worker connected"));
                         }
                     }
@@ -788,7 +785,7 @@ fn spawn_channel_adapter(
 
                 // Serve this connection until we see any of the channels disconnect.
                 loop {
-                    let Ok((resp, resp_nonce)) = serve_rx_channels() else {
+                    let Ok((resp, resp_nonce)) = serve_rx_channels().await else {
                         break;
                     };
 
@@ -805,6 +802,6 @@ fn spawn_channel_adapter(
                     }
                 }
             }
-        })
-        .unwrap();
+        },
+    );
 }
