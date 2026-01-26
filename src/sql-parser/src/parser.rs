@@ -560,66 +560,44 @@ impl<'a> Parser<'a> {
         let tok = self
             .next_token()
             .ok_or_else(|| self.error(self.peek_prev_pos(), "Unexpected EOF".to_string()))?;
-        let expr = match tok {
-            Token::LBracket => {
+        let expr = match (tok, self.peek_token()) {
+            (Token::LBracket, _) => {
                 self.prev_token();
                 let function = self.parse_named_function()?;
                 Ok(Expr::Function(function))
             }
-            Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL) => {
+            (Token::Keyword(TRUE) | Token::Keyword(FALSE) | Token::Keyword(NULL), _) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
-            Token::Keyword(ARRAY) => self.parse_array(),
-            Token::Keyword(LIST)
-                if self.peek_token() == Some(Token::LBracket)
-                    || self.peek_token() == Some(Token::LParen) =>
-            {
+            (Token::Keyword(ARRAY), _) => self.parse_array(),
+            (Token::Keyword(LIST), Some(Token::LBracket) | Some(Token::LParen)) => {
                 self.parse_list()
             }
-            Token::Keyword(MAP)
-                if self.peek_token() == Some(Token::LBracket)
-                    || self.peek_token() == Some(Token::LParen) =>
-            {
-                self.parse_map()
-            }
-            Token::Keyword(CASE) => self.parse_case_expr(),
-            Token::Keyword(CAST) => self.parse_cast_expr(),
-            Token::Keyword(COALESCE) if self.peek_token() == Some(Token::LParen) => {
+            (Token::Keyword(MAP), Some(Token::LBracket) | Some(Token::LParen)) => self.parse_map(),
+            (Token::Keyword(CASE), _) => self.parse_case_expr(),
+            (Token::Keyword(CAST), _) => self.parse_cast_expr(),
+            (Token::Keyword(COALESCE), Some(Token::LParen)) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
             }
-            Token::Keyword(GREATEST) if self.peek_token() == Some(Token::LParen) => {
+            (Token::Keyword(GREATEST), Some(Token::LParen)) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Greatest)
             }
-            Token::Keyword(LEAST) if self.peek_token() == Some(Token::LParen) => {
+            (Token::Keyword(LEAST), Some(Token::LParen)) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Least)
             }
-            Token::Keyword(NULLIF) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_nullif_expr()
-            }
-            Token::Keyword(EXISTS) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_exists_expr()
-            }
-            Token::Keyword(EXTRACT) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_extract_expr()
-            }
-            Token::Keyword(NOT) => Ok(Expr::Not {
+            (Token::Keyword(NULLIF), Some(Token::LParen)) => self.parse_nullif_expr(),
+            (Token::Keyword(EXISTS), Some(Token::LParen)) => self.parse_exists_expr(),
+            (Token::Keyword(EXTRACT), Some(Token::LParen)) => self.parse_extract_expr(),
+            (Token::Keyword(NOT), _) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
-            Token::Keyword(ROW) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_row_expr()
-            }
-            Token::Keyword(TRIM) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_trim_expr()
-            }
-            Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_position_expr()
-            }
-            Token::Keyword(NORMALIZE) => self.parse_normalize_expr(),
-            Token::Keyword(SUBSTRING) if self.peek_token() == Some(Token::LParen) => {
-                self.parse_substring_expr()
-            }
-            Token::Keyword(kw) if kw.is_always_reserved() => {
+            (Token::Keyword(ROW), Some(Token::LParen)) => self.parse_row_expr(),
+            (Token::Keyword(TRIM), Some(Token::LParen)) => self.parse_trim_expr(),
+            (Token::Keyword(POSITION), Some(Token::LParen)) => self.parse_position_expr(),
+            (Token::Keyword(NORMALIZE), _) => self.parse_normalize_expr(),
+            (Token::Keyword(SUBSTRING), Some(Token::LParen)) => self.parse_substring_expr(),
+            (Token::Keyword(kw), _) if kw.is_always_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
                     format!("expected expression, but found reserved keyword: {kw}"),
@@ -627,9 +605,9 @@ impl<'a> Parser<'a> {
             }
             // (Some of the above keywords are recognized by `is_reserved_in_expression`, except the
             // ones where we check for a following opening paren before treating them as keywords.)
-            Token::Keyword(id) => self.parse_qualified_identifier(id.into()),
-            Token::Ident(id) => self.parse_qualified_identifier(self.new_identifier(id)?),
-            Token::Op(op) if op == "-" => {
+            (Token::Keyword(id), _) => self.parse_qualified_identifier(id.into()),
+            (Token::Ident(id), _) => self.parse_qualified_identifier(self.new_identifier(id)?),
+            (Token::Op(op), _) if op == "-" => {
                 if let Some(Token::Number(n)) = self.peek_token() {
                     let n = match n.parse::<f64>() {
                         Ok(n) => n,
@@ -651,27 +629,29 @@ impl<'a> Parser<'a> {
                     expr2: None,
                 })
             }
-            Token::Op(op) if op == "+" => Ok(Expr::Op {
+            (Token::Op(op), _) if op == "+" => Ok(Expr::Op {
                 op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
-            Token::Op(op) if op == "~" => Ok(Expr::Op {
+            (Token::Op(op), _) if op == "~" => Ok(Expr::Op {
                 op: Op::bare(op),
                 expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
                 expr2: None,
             }),
-            Token::Number(_) | Token::String(_) | Token::HexString(_) => {
+            (Token::Number(_) | Token::String(_) | Token::HexString(_), _) => {
                 self.prev_token();
                 Ok(Expr::Value(self.parse_value()?))
             }
-            Token::Parameter(n) => Ok(Expr::Parameter(n)),
-            Token::LParen => {
+            (Token::Parameter(n), _) => Ok(Expr::Parameter(n)),
+            (Token::LParen, _) => {
                 let expr = self.parse_parenthesized_fragment()?.into_expr();
                 self.expect_token(&Token::RParen)?;
                 Ok(expr)
             }
-            unexpected => self.expected(self.peek_prev_pos(), "an expression", Some(unexpected)),
+            (unexpected, _) => {
+                self.expected(self.peek_prev_pos(), "an expression", Some(unexpected))
+            }
         }?;
 
         Ok(expr)
