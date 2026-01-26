@@ -15,24 +15,61 @@ from typing import Any, LiteralString
 
 import psycopg
 import yaml
-from psycopg.sql import SQL, Composed, Identifier, Literal
+from psycopg.sql import SQL, Composable, Composed, Identifier, Literal
+
+
+def to_sql_string(q: bytes | SQL | Composable | LiteralString, conn) -> str:
+    if isinstance(q, Composable):
+        return q.as_string(conn)
+    if isinstance(q, bytes):
+        return q.decode()
+    return q
 
 
 def query(
     conn: psycopg.Connection, sql: LiteralString | bytes | SQL | Composed
 ) -> list[Any]:
-    with conn.cursor() as cur:
-        cur.execute(sql)
-        return cur.fetchall()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchall()
+    except KeyboardInterrupt:
+        print(f"\n> {to_sql_string(sql, conn)}")
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            return cur.fetchall()
 
 
 def attach_source_statistics(
+    conn: psycopg.Connection,
+    name: str,
+    source: dict[str, Any],
+    start_time: float,
+    end_time: float,
+) -> None:
+    try:
+        attach_source_statistics_internal(conn, source, start_time, end_time)
+    except KeyboardInterrupt:
+        print(f"\nSubscribing to mz_source_statistics_with_history for {name}")
+        conn.cancel()
+        attach_source_statistics_internal(conn, source, start_time, end_time)
+
+
+def attach_source_statistics_internal(
     conn: psycopg.Connection,
     source: dict[str, Any],
     start_time: float,
     end_time: float,
 ) -> None:
     source_id = source["id"]
+    if "bytes_total" in source:
+        del source["bytes_total"]
+    if "bytes_second" in source:
+        del source["bytes_second"]
+    if "messages_total" in source:
+        del source["messages_total"]
+    if "messages_second" in source:
+        del source["messages_second"]
     with conn.cursor() as cur:
         cur.execute("SET CLUSTER = mz_catalog_server")
         sql = SQL(
@@ -112,7 +149,6 @@ def main() -> int:
         default=360,
     )
     parser.add_argument("--expensive", action=argparse.BooleanOptionalAction)
-    parser.add_argument("--anonymize", action=argparse.BooleanOptionalAction)
 
     args = parser.parse_args()
 
@@ -126,11 +162,14 @@ def main() -> int:
         "mz_workload_version": "1.0.0",
     }
 
-    print("Fetching databases", file=sys.stderr)
+    print("Fetching databases", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for (db,) in query(conn, "SELECT name FROM mz_databases"):
         workload["databases"][db] = {}
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching schemas", file=sys.stderr)
+    print("Fetching schemas", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for schema, db in query(
         conn,
         "SELECT mz_schemas.name, mz_databases.name FROM mz_schemas JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -145,8 +184,10 @@ def main() -> int:
             "sources": {},
             "sinks": {},
         }
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching views", file=sys.stderr)
+    print("Fetching views", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for view, schema, db in query(
         conn,
         "SELECT mz_views.name, mz_schemas.name, mz_databases.name FROM mz_views JOIN mz_schemas ON mz_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -158,8 +199,10 @@ def main() -> int:
             ),
         )[0][0]
         workload["databases"][db][schema]["views"][view] = {"create_sql": create_sql}
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching materialized views", file=sys.stderr)
+    print("Fetching materialized views", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for mv, schema, db in query(
         conn,
         "SELECT mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -173,8 +216,10 @@ def main() -> int:
         workload["databases"][db][schema]["materialized_views"][mv] = {
             "create_sql": create_sql
         }
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching data types", file=sys.stderr)
+    print("Fetching data types", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for typ, schema, db in query(
         conn,
         "SELECT mz_types.name, mz_schemas.name, mz_databases.name FROM mz_types JOIN mz_schemas ON mz_types.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -186,8 +231,10 @@ def main() -> int:
             ),
         )[0][0]
         workload["databases"][db][schema]["types"][typ] = {"create_sql": create_sql}
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching connections", file=sys.stderr)
+    print("Fetching connections", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for connection, schema, db, typ in query(
         conn,
         "SELECT mz_connections.name, mz_schemas.name, mz_databases.name, mz_connections.type FROM mz_connections JOIN mz_schemas ON mz_connections.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -202,8 +249,10 @@ def main() -> int:
             "create_sql": create_sql,
             "type": typ,
         }
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching sources", file=sys.stderr)
+    print("Fetching sources", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for source_id, source, schema, db, typ in query(
         conn,
         "SELECT mz_sources.id, mz_sources.name, mz_schemas.name, mz_databases.name, mz_sources.type FROM mz_sources JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE type not in ('subsource', 'progress')",
@@ -237,8 +286,10 @@ def main() -> int:
         if columns:
             obj["columns"] = columns
         workload["databases"][db][schema]["sources"][source] = obj
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching subsources", file=sys.stderr)
+    print("Fetching subsources", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for (
         subsource_id,
         subsource,
@@ -318,8 +369,10 @@ def main() -> int:
         workload["databases"][source_db][source_schema]["sources"][source].setdefault(
             "children", {}
         )[f"{db}.{schema}.{subsource}"] = obj
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching tables", file=sys.stderr)
+    print("Fetching tables", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for table, schema, db, id in query(
         conn,
         "SELECT mz_tables.name, mz_schemas.name, mz_databases.name, mz_tables.id FROM mz_tables JOIN mz_schemas ON mz_tables.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -397,8 +450,10 @@ def main() -> int:
                 ),
             )[0][0]
             workload["databases"][db][schema]["tables"][table] = obj
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching sinks", file=sys.stderr)
+    print("Fetching sinks", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for sink, schema, db, typ in query(
         conn,
         "SELECT mz_sinks.name, mz_schemas.name, mz_databases.name, mz_sinks.type FROM mz_sinks JOIN mz_schemas ON mz_sinks.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -413,8 +468,10 @@ def main() -> int:
             "create_sql": create_sql,
             "type": typ,
         }
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching indexes", file=sys.stderr)
+    print("Fetching indexes", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for index, schema, database in query(
         conn,
         "SELECT mz_indexes.name, schema_name, database_name FROM mz_indexes JOIN mz_internal.mz_object_fully_qualified_names AS ofqn ON on_id = ofqn.id WHERE schema_name NOT IN ('mz_catalog', 'mz_internal', 'mz_introspection')",
@@ -428,8 +485,10 @@ def main() -> int:
         workload["databases"][database][schema]["indexes"][index] = {
             "create_sql": create_sql
         }
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching clusters", file=sys.stderr)
+    print("Fetching clusters", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for cluster, managed in query(
         conn, "SELECT name, managed FROM mz_clusters WHERE id LIKE 'u%'"
     ):
@@ -441,11 +500,13 @@ def main() -> int:
                     Identifier(cluster)
                 ),
             )[0][0]
+    print(f" [{time.time() - start:.2f}s]")
 
     end_time = time.time()
     start_time = end_time - args.time
 
-    print("Fetching queries", file=sys.stderr)
+    print("Fetching queries", file=sys.stderr, end="", flush=True)
+    start = time.time()
     for (
         sql,
         cluster,
@@ -482,24 +543,40 @@ def main() -> int:
                 "result_size": result_size,
             }
         )
+    print(f" [{time.time() - start:.2f}s]")
 
-    print("Fetching source/subsource/table statistics", file=sys.stderr)
+    print(
+        "Fetching source/subsource/table statistics",
+        file=sys.stderr,
+        end="",
+        flush=True,
+    )
+    start = time.time()
     for schemas in workload["databases"].values():
         for items in schemas.values():
-            for source in items["sources"].values():
-                attach_source_statistics(conn, source, start_time, end_time)
-                for child in source.get("children", {}).values():
-                    attach_source_statistics(conn, child, start_time, end_time)
-
-    if args.anonymize:
-        raise NotImplementedError  # TODO
+            for source_name, source in items["sources"].items():
+                attach_source_statistics(
+                    conn, source_name, source, start_time, end_time
+                )
+                for child_name, child in source.get("children", {}).items():
+                    attach_source_statistics(
+                        conn, child_name, child, start_time, end_time
+                    )
+    print(f" [{time.time() - start:.2f}s]")
 
     if args.output == "-":
-        yaml.dump(workload, sys.stdout)
+        yaml.dump(workload, sys.stdout, Dumper=yaml.CSafeDumper)
     else:
-        print(f"Writing captured workload to {args.output}", file=sys.stderr)
+        start = time.time()
+        print(
+            f"Writing captured workload to {args.output}",
+            file=sys.stderr,
+            end="",
+            flush=True,
+        )
         with open(args.output, "w") as f:
-            yaml.dump(workload, f)
+            yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
+        print(f" [{time.time() - start:.2f}s]")
 
     return 0
 
