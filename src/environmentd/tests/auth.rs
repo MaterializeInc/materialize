@@ -119,6 +119,7 @@ enum TestCase<'a> {
         user_reported_by_system: &'a str,
         password: Option<Cow<'a, str>>,
         ssl_mode: SslMode,
+        options: Option<&'a str>,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<
             // A non-retrying, raw error.
@@ -168,21 +169,26 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 user_reported_by_system,
                 password,
                 ssl_mode,
+                options,
                 configure,
                 assert,
             } => {
                 println!(
-                    "pgwire user={} password={:?} ssl_mode={:?}",
-                    user_to_auth_as, password, ssl_mode
+                    "pgwire user={} password={:?} ssl_mode={:?} options={:?}",
+                    user_to_auth_as, password, ssl_mode, options
                 );
 
                 let tls = make_pg_tls(configure);
                 let password = password.as_ref().unwrap_or(&Cow::Borrowed(""));
-                let conn_config = server
+                let mut conn_config = server
                     .connect()
                     .ssl_mode(*ssl_mode)
                     .user(user_to_auth_as)
                     .password(password);
+
+                if let Some(opts) = options {
+                    conn_config = conn_config.options(opts);
+                }
 
                 match assert {
                     Assert::Success => {
@@ -861,6 +867,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -878,6 +885,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -909,6 +917,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(format!("mzp_{}", URL_SAFE.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -923,6 +932,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(format!("mzp_{}", URL_SAFE_NO_PAD.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -937,6 +947,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(password.clone()))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -955,6 +966,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -978,6 +990,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "materialize",
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1001,6 +1014,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed("bad password")),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1024,6 +1038,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Owned(format!("mznope_{client_id}{secret}"))),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1050,6 +1065,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1120,6 +1136,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1150,6 +1167,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1162,6 +1180,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1198,6 +1217,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(Cow::Borrowed(frontegg_service_system_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1235,6 +1255,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1351,6 +1372,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1397,6 +1419,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Disable,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -1421,6 +1444,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed("invalid-jwt-token")),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1433,6 +1457,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&expired_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1445,6 +1470,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&wrong_user_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1457,6 +1483,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&wrong_issuer_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1550,6 +1577,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&valid_aud_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1559,6 +1587,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&valid_multi_aud_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1568,6 +1597,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&wrong_aud_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1580,6 +1610,7 @@ async fn test_auth_oidc_audience_validation() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&no_aud_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1653,6 +1684,7 @@ async fn test_auth_oidc_audience_optional() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&no_aud_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1662,8 +1694,102 @@ async fn test_auth_oidc_audience_optional() {
                 user_reported_by_system: oidc_user,
                 password: Some(Cow::Borrowed(&valid_aud_token)),
                 ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC password fallback.
+///
+/// This test verifies that when oidc_auth_enabled is false or not set,
+/// the OIDC authenticator falls back to password authentication.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_password_fallback() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
+        oidc_issuer: oidc_server.issuer.clone(),
+        oidc_audience: None,
+    })
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let user_password = "secure_password";
+
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(&oidc_auth)
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .with_password_auth(Password("mz_system_password".to_owned()))
+        .start()
+        .await;
+
+    let admin_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(&format!(
+            "CREATE ROLE \"{}\" LOGIN PASSWORD '{}'",
+            oidc_user, user_password
+        ))
+        .await
+        .unwrap();
+
+    run_tests(
+        "OIDC Password Fallback (oidc_auth_enabled=false or not set)",
+        &server,
+        &[
+            // Password auth should work (oidc_auth_enabled not set, defaults to false)
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(user_password)),
+                ssl_mode: SslMode::Prefer,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Explicitly set to false
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(user_password)),
+                ssl_mode: SslMode::Prefer,
+                options: Some("--oidc_auth_enabled=false"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Invalid password should fail
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed("wrong_password")),
+                ssl_mode: SslMode::Prefer,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
             },
         ],
     )
@@ -1688,6 +1814,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
@@ -1705,6 +1832,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
@@ -1714,6 +1842,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
@@ -1742,6 +1871,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
@@ -1789,6 +1919,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1816,6 +1947,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -1839,6 +1971,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1848,6 +1981,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1865,6 +1999,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
@@ -1905,6 +2040,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1974,6 +2110,7 @@ async fn test_auth_intermediate_ca() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Success,
             },
@@ -2110,6 +2247,7 @@ async fn test_auth_admin_non_superuser() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(false),
             },
@@ -2255,6 +2393,7 @@ async fn test_auth_admin_superuser() {
                 user_reported_by_system: admin_frontegg_user,
                 password: Some(Cow::Borrowed(admin_frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(true),
             },
