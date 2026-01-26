@@ -2998,16 +2998,16 @@ def compare_table(
                     "Query avg (ms)",
                     old_q["avg"] * 1000,
                     new_q["avg"] * 1000,
-                    1.5,
+                    1.2,
                 ),
                 (
                     "Query p50 (ms)",
                     old_q["p50"] * 1000,
                     new_q["p50"] * 1000,
-                    1.5,
+                    1.2,
                 ),
-                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, None),
-                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, None),
+                ("Query p95 (ms)", old_q["p95"] * 1000, new_q["p95"] * 1000, 1.5),
+                ("Query p99 (ms)", old_q["p99"] * 1000, new_q["p99"] * 1000, 1.5),
                 ("Query std (ms)", old_q["std"] * 1000, new_q["std"] * 1000, None),
             ]
         )
@@ -3270,42 +3270,43 @@ def test(
                 factor_initial_data,
                 random.Random(random.randrange(SEED_RANGE)),
             )
+            stats["initial_data"]["time"] = time.time() - start_time
+            if not created_data:
+                del stats["initial_data"]
+            while True:
+                not_hydrated: list[str] = [
+                    entry[0]
+                    for entry in c.sql_query(
+                        """
+                    SELECT DISTINCT name
+                        FROM (
+                          SELECT o.name
+                          FROM mz_objects o
+                          JOIN mz_internal.mz_hydration_statuses h
+                            ON o.id = h.object_id
+                          WHERE NOT h.hydrated
+
+                          UNION ALL
+
+                          SELECT o.name
+                          FROM mz_objects o
+                          JOIN mz_internal.mz_compute_hydration_statuses h
+                            ON o.id = h.object_id
+                          WHERE NOT h.hydrated
+                        ) x
+                        ORDER BY 1;"""
+                    )
+                    if not entry[0].startswith("mz_")
+                ]
+                if not_hydrated:
+                    print(f"Waiting to hydrate: {', '.join(not_hydrated)}")
+                    time.sleep(1)
+                else:
+                    break
     finally:
         stop_event.set()
         stats_thread.join()
         stop_event.clear()
-    if initial_data:
-        stats["initial_data"]["time"] = time.time() - start_time
-        if not created_data:
-            del stats["initial_data"]
-        while True:
-            not_hydrated: list[tuple[str]] | None = c.sql(
-                """
-                SELECT DISTINCT name
-                    FROM (
-                      SELECT o.name
-                      FROM mz_objects o
-                      JOIN mz_internal.mz_hydration_statuses h
-                        ON o.id = h.object_id
-                      WHERE NOT h.hydrated
-
-                      UNION ALL
-
-                      SELECT o.name
-                      FROM mz_objects o
-                      JOIN mz_internal.mz_compute_hydration_statuses h
-                        ON o.id = h.object_id
-                      WHERE NOT h.hydrated
-                    ) x
-                    ORDER BY 1;"""
-            )
-            if not_hydrated:
-                print(
-                    f"Waiting to hydrate: {', '.join([nh[0] for nh in not_hydrated])}"
-                )
-                time.sleep(1)
-            else:
-                break
     if run_ingestions:
         print("Starting continuous ingestions")
         threads.extend(
