@@ -32,7 +32,7 @@ more-itertools==10.8.0
 msgpack==1.1.2
 networkx==3.4.2
 orderly-set==5.5.0
-packaging==25.0
+packaging==26.0
 parsedatetime==2.6
 pathspec==0.12.1
 pluggy==1.6.0
