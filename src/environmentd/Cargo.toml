@@ -41,9 +41,8 @@ maplit = "1.0.2"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
-mz-auth = { path = "../auth" }
+mz-auth = { path = "../auth", default-features = false }
 mz-authenticator = { path = "../authenticator" }
-mz-authenticator-types = { path = "../authenticator-types", default-features = false }
 mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
 mz-adapter = { path = "../adapter" }

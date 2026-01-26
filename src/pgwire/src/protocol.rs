@@ -30,8 +30,8 @@ use mz_adapter::{
     verify_datum_desc,
 };
 use mz_auth::password::Password;
+use mz_auth::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_authenticator::Authenticator;
-use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
 use mz_ore::now::{EpochMillis, SYSTEM_TIME};

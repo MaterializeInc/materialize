@@ -21,7 +21,7 @@ use futures::FutureExt;
 use futures::future::Shared;
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use lru::LruCache;
-use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
+use mz_auth::{OidcAuthSessionHandle, OidcAuthenticator};
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;

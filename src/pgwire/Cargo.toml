@@ -21,9 +21,8 @@ futures = "0.3.31"
 itertools = "0.14.0"
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
-mz-auth = { path = "../auth" }
+mz-auth = { path = "../auth", default-features = false }
 mz-authenticator = { path = "../authenticator" }
-mz-authenticator-types = { path = "../authenticator-types", default-features = false }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["tracing"] }
 mz-pgcopy = { path = "../pgcopy" }

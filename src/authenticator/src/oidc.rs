@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
-use mz_authenticator_types::{OidcAuthSessionHandle, OidcAuthenticator};
+use mz_auth::{OidcAuthSessionHandle, OidcAuthenticator};
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Deserializer, Serialize};
 

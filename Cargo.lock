@@ -5577,9 +5577,11 @@ dependencies = [
 name = "mz-auth"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "itertools 0.14.0",
  "mz-ore",
+ "mz-repr",
  "openssl",
  "proptest",
  "proptest-derive",
@@ -5595,7 +5597,7 @@ dependencies = [
  "async-trait",
  "jsonwebtoken",
  "mz-adapter",
- "mz-authenticator-types",
+ "mz-auth",
  "mz-frontegg-auth",
  "mz-ore",
  "reqwest",
@@ -5604,15 +5606,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "workspace-hack",
-]
-
-[[package]]
-name = "mz-authenticator-types"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "mz-repr",
  "workspace-hack",
 ]
 
@@ -5704,7 +5697,7 @@ dependencies = [
  "launchdarkly-server-sdk",
  "mz-alloc",
  "mz-alloc-default",
- "mz-authenticator-types",
+ "mz-auth",
  "mz-build-info",
  "mz-dyncfg",
  "mz-dyncfg-file",
@@ -6330,7 +6323,6 @@ dependencies = [
  "mz-alloc-default",
  "mz-auth",
  "mz-authenticator",
- "mz-authenticator-types",
  "mz-aws-secrets-controller",
  "mz-build-info",
  "mz-catalog",
@@ -6588,7 +6580,7 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "lru 0.16.3",
- "mz-authenticator-types",
+ "mz-auth",
  "mz-ore",
  "mz-repr",
  "prometheus",
@@ -7381,7 +7373,6 @@ dependencies = [
  "mz-adapter-types",
  "mz-auth",
  "mz-authenticator",
- "mz-authenticator-types",
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgcopy",
