@@ -15,7 +15,32 @@ If you do not need durability or cross-cluster sharing, and you are primarily in
 
 ## Syntax
 
+{{< tabs >}}
+{{< tab "CREATE MATERIALIZED VIEW" >}}
+
+### Create materialized view
+
 {{% include-syntax file="examples/create_materialized_view" example="syntax" %}}
+
+{{< /tab >}}
+
+{{< if-released "v26.10" >}}
+
+{{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
+
+### Create replacement materialized view
+
+{{< public-preview />}}
+
+Create a replacement for an existing materialized view that can be applied without recreating downstream objects.
+See [Replacement materialized views](#replacement-materialized-views).
+
+{{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
+
+{{< /tab >}}
+
+{{< /if-released >}}
+{{< /tabs >}}
 
 ## Details
 
@@ -243,6 +268,56 @@ JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs
 JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
 
+{{< if-released "v26.10" >}}
+### Replacement materialized views
+
+{{< public-preview />}}
+
+Materialize supports a two-step process for replacing materialized views
+in-place, i.e., without recreating downstream objects:
+
+1. **Create a replacement**: Use `CREATE REPLACEMENT MATERIALIZED VIEW` to
+   define a new materialized view that will replace an existing one. The
+   replacement materialized view begins hydrating immediately.
+
+2. **Apply the replacement**: Once the replacement is ready, use [`ALTER
+   MATERIALIZED VIEW ... APPLY REPLACEMENT`](/sql/alter-materialized-view) to
+   apply it. This updates the target view's definition and drops the
+   replacement.
+
+This approach allows you to:
+
+- **Preserve downstream objects**: Dependent views, materialized views,
+  indexes, and sinks remain intact and do not need to be recreated.
+- **Avoid downtime**: The replacement materialized view hydrates in the
+  background while the original continues computing results.
+- **Validate before applying**: You can verify the replacement produces correct
+  results and has the expected performance characteristics before committing to
+  the change.
+
+#### Restrictions
+
+- The replacement must have the same schema as the target materialized view:
+  column names, column types, nullability, and keys must all match.
+
+#### Performance
+
+You can query a replacement materialized view directly using `SELECT` to
+validate its results. However, these queries will be slower and more
+computationally expensive than queries against regular materialized views
+because the staged data is not available for direct reading until the
+replacement is applied.
+Instead, the replacement is treated like a [view](/sql/create-view), which
+means its query is inlined into the `SELECT` query and its results are
+re-computed as part of computing the `SELECT` query.
+
+When the replacement is applied to a materialized view, the materialized view
+emits a diff representing the changes between the old and new output. All
+downstream objects must process this diff, which may cause temporary CPU and
+memory spikes depending on the size of the changes.
+
+{{< /if-released >}}
+
 ## Examples
 
 ### Creating a materialized view
@@ -308,6 +383,7 @@ file="shared-content/sql-command-privileges/create-materialized-view.md" >}}
 
 ## Related pages
 
+- [`ALTER MATERIALIZED VIEW`](../alter-materialized-view)
 - [`SHOW MATERIALIZED VIEWS`](../show-materialized-views)
 - [`SHOW CREATE MATERIALIZED VIEW`](../show-create-materialized-view)
 - [`DROP MATERIALIZED VIEW`](../drop-materialized-view)
