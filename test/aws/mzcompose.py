@@ -105,6 +105,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 sql="""
                 ALTER SYSTEM SET enable_connection_validation_syntax = true;
                 ALTER SYSTEM SET enable_iceberg_sink = true;
+                ALTER SYSTEM SET enable_s3_tables_region_check = true;
                 """,
             )
 

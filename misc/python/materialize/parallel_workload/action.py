@@ -1526,6 +1526,7 @@ class FlipFlagsAction(Action):
             "linear_join_yielding",
             "enable_lgalloc",
             "enable_lgalloc_eager_reclamation",
+            "enable_s3_tables_region_check",
             "lgalloc_background_interval",
             "lgalloc_file_growth_dampener",
             "lgalloc_local_buffer_bytes",
