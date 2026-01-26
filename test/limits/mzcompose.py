@@ -1373,11 +1373,9 @@ class FilterSubqueries(Generator):
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print("> INSERT INTO t1 VALUES (1);")
 
-        # Increase SQL timeout to 10 minutes (~5 should be enough).
-        #
-        # Update: Now 20 minutes, not 10. This query appears to scale
-        # super-linear with COUNT.
-        print("$ set-sql-timeout duration=1200s")
+        # TODO: Slow optimization, possibly due to https://github.com/MaterializeInc/database-issues/issues/8777
+        print("$ set-sql-timeout duration=3600s")
+        print("> SET statement_timeout = '3600s'")
 
         cls.store_explain_and_run(
             f"SELECT * FROM t1 AS a1 WHERE {' AND '.join(f'f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})' for i in cls.all())}"
