@@ -2952,18 +2952,14 @@ def compare_table(
     filename: str, stats_old: dict[str, Any], stats_new: dict[str, Any]
 ) -> list[TestFailureDetails]:
     rows = []
-    if "docker" in stats_old:
-        old_avg_cpu, old_avg_mem = average_cpu_mem_for_container(
-            stats_old["docker"], "materialized"
-        )
-        new_avg_cpu, new_avg_mem = average_cpu_mem_for_container(
-            stats_new["docker"], "materialized"
-        )
-        rows.extend(
-            [
-                ("CPU avg (%)", old_avg_cpu, new_avg_cpu, 1.2),
-                ("Mem avg (%)", old_avg_mem, new_avg_mem, 1.2),
-            ]
+    if "object_creation" in stats_old:
+        rows.append(
+            (
+                "Object creation (s)",
+                stats_old["object_creation"],
+                stats_new["object_creation"],
+                1.2,
+            )
         )
 
     if "initial_data" in stats_old:
@@ -2994,6 +2990,20 @@ def compare_table(
             ]
         )
 
+    if "docker" in stats_old:
+        old_avg_cpu, old_avg_mem = average_cpu_mem_for_container(
+            stats_old["docker"], "materialized"
+        )
+        new_avg_cpu, new_avg_mem = average_cpu_mem_for_container(
+            stats_new["docker"], "materialized"
+        )
+        rows.extend(
+            [
+                ("CPU avg (%)", old_avg_cpu, new_avg_cpu, 1.2),
+                ("Mem avg (%)", old_avg_mem, new_avg_mem, 1.2),
+            ]
+        )
+
     if "timings" in stats_old["queries"]:
         old_q = query_timing_stats(stats_old)
         new_q = query_timing_stats(stats_new)
@@ -3020,21 +3030,11 @@ def compare_table(
             ]
         )
 
-    if "object_creation" in stats_old:
-        rows.append(
-            (
-                "Object creation (s)",
-                stats_old["object_creation"],
-                stats_new["object_creation"],
-                1.2,
-            )
-        )
-
     failures: list[TestFailureDetails] = []
 
     output_lines = [
-        f"{'METRIC':<25} | {'OLD':^12} | {'NEW':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
-        "-" * 106,
+        f"{'METRIC':<24} | {'OLD':^12} | {'NEW':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
+        "-" * 93,
     ]
 
     regressed = False
@@ -3050,7 +3050,7 @@ def compare_table(
             flag = "no"
         threshold_field = f"{threshold:>9.3f}" if threshold is not None else ""
         output_lines.append(
-            f"{name:<25} | "
+            f"{name:<24} | "
             f"{old:>12.3f} | "
             f"{new:>12.3f} | "
             f"{fmt_pct(delta):>9} | "
