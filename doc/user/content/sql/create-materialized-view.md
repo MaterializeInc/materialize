@@ -24,7 +24,7 @@ If you do not need durability or cross-cluster sharing, and you are primarily in
 
 {{< /tab >}}
 
-{{< if-released "v26.11" >}}
+{{< if-released "v26.10" >}}
 
 {{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
 
@@ -268,7 +268,7 @@ JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs
 JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
 
-{{< if-released "v26.11" >}}
+{{< if-released "v26.10" >}}
 ### Replacement materialized views
 
 {{< public-preview />}}

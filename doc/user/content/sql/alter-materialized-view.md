@@ -12,7 +12,7 @@ Use `ALTER MATERIALIZED VIEW` to:
 - Change owner of a materialized view.
 - Change retain history configuration for the materialized view.
 
-{{< if-released "v26.11" >}}
+{{< if-released "v26.10" >}}
 
 - Apply a replacement materialized view. *Public preview*.
 
@@ -52,7 +52,7 @@ To reset the retention history to the default for a materialized view:
 {{% include-syntax file="examples/alter_materialized_view" example="syntax-reset-retain-history" %}}
 
 {{< /tab >}}
-{{< if-released "v26.11" >}}
+{{< if-released "v26.10" >}}
 {{< tab "Apply replacement" >}}
 
 ### Apply replacement
