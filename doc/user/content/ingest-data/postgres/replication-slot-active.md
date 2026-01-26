@@ -55,6 +55,7 @@ between Materialize and PostgreSQL.
 Connect to your PostgreSQL database and run:
 
 ```sql
+-- Replace <slot_name> with the replication slot name shown in the error message
 SELECT
   slot_name,
   active,
@@ -62,7 +63,7 @@ SELECT
   restart_lsn,
   confirmed_flush_lsn
 FROM pg_replication_slots
-WHERE slot_name LIKE '%materialize%';
+WHERE slot_name LIKE '<slot_name>';
 ```
 
 Look for:
@@ -76,6 +77,7 @@ Look for:
 Check which connections are using the replication slot:
 
 ```sql
+-- Replace <slot_name> with the replication slot name shown in the error message
 SELECT
   pid,
   usename,
@@ -87,7 +89,7 @@ FROM pg_stat_activity
 WHERE pid IN (
   SELECT active_pid
   FROM pg_replication_slots
-  WHERE slot_name LIKE '%materialize%'
+  WHERE slot_name LIKE '<slot_name>'
 );
 ```
 
@@ -111,11 +113,12 @@ active replication connection will interrupt data ingestion.
 
 ```sql
 -- First, identify the PID from the error message or from pg_replication_slots
+-- Replace <slot_name> with the replication slot name shown in the error message
 SELECT
   slot_name,
   active_pid
 FROM pg_replication_slots
-WHERE slot_name LIKE 'materialize%' AND active = true;
+WHERE slot_name LIKE '<slot_name>' AND active = true;
 
 -- Terminate the connection (replace ### with the actual PID)
 SELECT pg_terminate_backend(###);
