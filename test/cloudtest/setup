@@ -33,4 +33,15 @@ for f in misc/kind/configmaps/*; do
     run kubectl --context="$K8S_CONTEXT" apply -f "$f"
 done
 
+run kubectl --context="$K8S_CONTEXT" -n kube-system patch deployment coredns -p "{
+    \"spec\": {
+        \"template\": {
+            \"spec\": {
+                \"nodeSelector\": {
+                    \"kubernetes.io/hostname\": \"${K8S_CLUSTER_NAME}-control-plane\"
+                }
+            }
+        }
+    }
+}"
 run kubectl --context="$K8S_CONTEXT" rollout restart -n kube-system deployment/coredns
