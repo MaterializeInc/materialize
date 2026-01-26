@@ -42,7 +42,7 @@ with separate clusters for ingestion, computation, and serving.
 
 ### Step 1. Set up a data source
 
-For this guide, we'll use the Materialize auction load generator as our data source.
+For this guide, we'll use the [Materialize auction load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) as our data source.
 
 First, create a cluster for ingestion and a schema for the project:
 
