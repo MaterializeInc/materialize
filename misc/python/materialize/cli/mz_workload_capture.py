@@ -9,6 +9,7 @@
 
 import argparse
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -38,18 +39,42 @@ def to_sql_string(q: bytes | SQL | Composable | LiteralString, conn) -> str:
     return q
 
 
+VERBOSE = False
+
+
 def query(
-    conn: psycopg.Connection, sql: LiteralString | bytes | SQL | Composed
+    conn: psycopg.Connection,
+    sql: LiteralString | bytes | SQL | Composed,
+    timeout: int | None = None,
 ) -> list[Any]:
+    if VERBOSE:
+        print(f"\n> {to_sql_string(sql, conn)}")
+
+    cancel_timer: threading.Timer | None = None
+
     try:
+        if timeout is not None:
+            cancel_timer = threading.Timer(timeout, conn.cancel)
+            cancel_timer.start()
+
         with conn.cursor() as cur:
             cur.execute(sql)
             return cur.fetchall()
+    except psycopg.errors.QueryCanceled:
+        if VERBOSE:
+            print("Too slow")
+        return []
     except KeyboardInterrupt:
+        conn.cancel()
+        if VERBOSE:
+            raise
         print(f"\n> {to_sql_string(sql, conn)}")
         with conn.cursor() as cur:
             cur.execute(sql)
             return cur.fetchall()
+    finally:
+        if cancel_timer is not None:
+            cancel_timer.cancel()
 
 
 def attach_source_statistics(
@@ -60,10 +85,14 @@ def attach_source_statistics(
     end_time: float,
 ) -> None:
     try:
+        if VERBOSE:
+            print(f"Subscribing to mz_source_statistics_with_history for {name}")
         attach_source_statistics_internal(conn, source, start_time, end_time)
     except KeyboardInterrupt:
-        print(f"\nSubscribing to mz_source_statistics_with_history for {name}")
         conn.cancel()
+        if VERBOSE:
+            raise
+        print(f"\nSubscribing to mz_source_statistics_with_history for {name}")
         attach_source_statistics_internal(conn, source, start_time, end_time)
 
 
@@ -139,6 +168,35 @@ def attach_source_statistics_internal(
                     break
 
 
+def attach_avg_column_sizes(
+    conn: psycopg.Connection,
+    db: str,
+    schema: str,
+    obj_name: str,
+    obj: dict[str, Any],
+) -> None:
+    if "columns" not in obj:
+        return
+
+    avg_exprs = [
+        SQL("avg(pg_column_size({}))").format(Identifier(col["name"]))
+        for col in obj["columns"]
+    ]
+
+    query_sql = SQL("SELECT {} FROM {}.{}.{} LIMIT 100").format(
+        SQL(", ").join(avg_exprs),
+        Identifier(db),
+        Identifier(schema),
+        Identifier(obj_name),
+    )
+
+    rows = query(conn, query_sql, timeout=60)
+    if not rows:
+        return
+    for col, avg_size in zip(obj["columns"], rows[0]):
+        col["avg_size"] = int(avg_size) if avg_size is not None else None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mz-workload-capture",
@@ -160,9 +218,14 @@ def main() -> int:
         help="How long of a query/data ingestion history to capture, in seconds",
         default=360,
     )
-    parser.add_argument("--expensive", action=argparse.BooleanOptionalAction)
+    # Currently too slow to always enable
+    parser.add_argument("--avg-column-size", action=argparse.BooleanOptionalAction)
+    parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
 
     args = parser.parse_args()
+
+    global VERBOSE
+    VERBOSE = args.verbose
 
     conn = psycopg.connect(args.mz_url)
     conn.autocommit = True
@@ -269,6 +332,7 @@ def main() -> int:
                 )
             if columns:
                 obj["columns"] = columns
+
             workload["databases"][db][schema]["sources"][source] = obj
 
     with timed("Fetching subsources"):
@@ -316,35 +380,6 @@ def main() -> int:
                     }
                 )
 
-                if args.expensive:
-                    avg_size = query(
-                        conn,
-                        SQL("SELECT avg(pg_column_size({})) FROM {}.{}.{}").format(
-                            Identifier(column),
-                            Identifier(db),
-                            Identifier(schema),
-                            Identifier(subsource),
-                        ),
-                    )[0][0]
-                    columns[-1]["avg_size"] = (
-                        int(avg_size) if avg_size is not None else None
-                    )
-                else:
-                    # TODO: This goes OoM, can we sample better?
-                    # avg_size = query(
-                    #     conn,
-                    #     SQL(
-                    #         "SELECT avg(pg_column_size({})) FROM (SELECT {} FROM {}.{}.{} LIMIT 100)"
-                    #     ).format(
-                    #         Identifier(column),
-                    #         Identifier(column),
-                    #         Identifier(db),
-                    #         Identifier(schema),
-                    #         Identifier(subsource),
-                    #     ),
-                    # )[0][0]
-                    pass
-
             if columns:
                 obj["columns"] = columns
 
@@ -378,34 +413,6 @@ def main() -> int:
                         "default": default,
                     }
                 )
-                if args.expensive:
-                    avg_size = query(
-                        conn,
-                        SQL("SELECT avg(pg_column_size({})) FROM {}.{}.{}").format(
-                            Identifier(column),
-                            Identifier(db),
-                            Identifier(schema),
-                            Identifier(table),
-                        ),
-                    )[0][0]
-                    columns[-1]["avg_size"] = (
-                        int(avg_size) if avg_size is not None else None
-                    )
-                else:
-                    # TODO: This goes OoM, can we sample better?
-                    # avg_size = query(
-                    #     conn,
-                    #     SQL(
-                    #         "SELECT avg(pg_column_size({})) FROM (SELECT {} FROM {}.{}.{} LIMIT 100)"
-                    #     ).format(
-                    #         Identifier(column),
-                    #         Identifier(column),
-                    #         Identifier(db),
-                    #         Identifier(schema),
-                    #         Identifier(table),
-                    #     ),
-                    # )[0][0]
-                    pass
 
             obj = {
                 "create_sql": create_sql,
@@ -579,6 +586,29 @@ def main() -> int:
                     "result_size": result_size,
                 }
             )
+
+    if args.avg_column_size:
+        with timed("Fetching average column sizes"):
+            for db_name, schemas in workload["databases"].items():
+                for schema_name, items in schemas.items():
+                    for table_name, table in items["tables"].items():
+                        attach_avg_column_sizes(
+                            conn, db_name, schema_name, table_name, table
+                        )
+                    for source_name, source in items["sources"].items():
+                        if source["type"] == "load-generator":
+                            continue
+                        attach_avg_column_sizes(
+                            conn, db_name, schema_name, source_name, source
+                        )
+                        for child in source.get("children", {}).values():
+                            attach_avg_column_sizes(
+                                conn,
+                                child["database"],
+                                child["schema"],
+                                child["name"],
+                                child,
+                            )
 
     with timed("Fetching source/subsource/table statistics"):
         for schemas in workload["databases"].values():
