@@ -376,3 +376,45 @@ FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 ----
 u21  u20
+
+statement ok
+DROP MATERIALIZED VIEW mv CASCADE
+
+
+# Test: privileges are preserved after replacement
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
+
+statement ok
+CREATE ROLE test_role
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER quickstart TO test_role
+----
+COMPLETE 0
+
+statement ok
+GRANT SELECT ON mv TO test_role
+
+simple conn=test_role,user=test_role
+SELECT * FROM mv
+----
+1,2
+3,4
+5,6
+COMPLETE 3
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + 1 AS a, b FROM t
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+simple conn=test_role,user=test_role
+SELECT * FROM mv
+----
+2,2
+4,4
+6,6
+COMPLETE 3
