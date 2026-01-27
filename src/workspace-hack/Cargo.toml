@@ -66,6 +66,7 @@ event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
 flate2 = { version = "1.1.8", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.2" }
+foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.31" }
@@ -112,6 +113,7 @@ portable-atomic = { version = "1.13.0", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "3.1.3" }
+prettyplease = { version = "0.2.37", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
 proptest = { version = "1.9.0" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
@@ -189,7 +191,7 @@ aws-smithy-types = { version = "1.4.0", default-features = false, features = ["b
 axum = { version = "0.8.8", features = ["ws"] }
 axum-core = { version = "0.5.6", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
-bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
+bindgen = { version = "0.72.1" }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 brotli = { version = "8.0.2" }
@@ -219,6 +221,7 @@ event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
 flate2 = { version = "1.1.8", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.2" }
+foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.31" }
@@ -265,6 +268,7 @@ portable-atomic = { version = "1.13.0", features = ["require-cas"] }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4"] }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", default-features = false, features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 predicates = { version = "3.1.3" }
+prettyplease = { version = "0.2.37", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
 proptest = { version = "1.9.0" }
 proptest-derive = { version = "0.7.0", default-features = false, features = ["boxed_union"] }

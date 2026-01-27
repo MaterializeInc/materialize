@@ -256,10 +256,11 @@ def main() -> int:
             _handle_lingering_services(kill=args.reset)
             scratch = MZ_ROOT / "scratch"
             dbconn = _connect_sql(args.postgres)
-            for schema in ["consensus", "tsoracle", "storage"]:
-                if args.reset:
-                    _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-                _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            if dbconn:
+                for schema in ["consensus", "tsoracle", "storage"]:
+                    if args.reset:
+                        _run_sql(dbconn, f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                    _run_sql(dbconn, f"CREATE SCHEMA IF NOT EXISTS {schema}")
             # Keep this after clearing out Postgres. Otherwise there is a race
             # where a ctrl-c could leave persist with references in Postgres to
             # files that have been deleted. There's no race if we reset in the
@@ -530,7 +531,10 @@ def _macos_codesign(path: str) -> None:
     spawn.runv(command, env=env)
 
 
-def _connect_sql(urlstr: str) -> psycopg.Connection:
+def _connect_sql(urlstr: str) -> psycopg.Connection | None:
+    if urlstr.startswith("foundationdb:"):
+        return None
+
     hint = """Have you correctly configured CockroachDB or PostgreSQL?
 
 For CockroachDB:

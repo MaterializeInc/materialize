@@ -282,6 +282,31 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: testdrive-fdb
+    label: "Testdrive (FoundationDB)"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/testdrive]
+    parallelism: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          env:
+            - EXTERNAL_METADATA_STORE: foundationdb
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
+  - id: fdb
+    label: "FoundationDB"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/foundationdb]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: foundationdb
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: cluster-tests
     label: "Cluster tests"
     depends_on: build-aarch64

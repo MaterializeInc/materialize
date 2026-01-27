@@ -35,6 +35,17 @@ if read_list BUILDKITE_PLUGIN_MZCOMPOSE_ARGS; then
     done
 fi
 
+# Export environment variables passed via the env parameter
+# Buildkite creates vars like BUILDKITE_PLUGIN_MZCOMPOSE_ENV_0_VARNAME=value
+# We need to strip the prefix and the index number (0_, 1_, etc.)
+while IFS='=' read -r name value; do
+    # Strip the BUILDKITE_PLUGIN_MZCOMPOSE_ENV_ prefix
+    env_name="${name#BUILDKITE_PLUGIN_MZCOMPOSE_ENV_}"
+    # Strip the index number and underscore (e.g., "0_VARNAME" -> "VARNAME")
+    env_name="${env_name#*_}"
+    export "$env_name=$value"
+done < <(env | grep "^BUILDKITE_PLUGIN_MZCOMPOSE_ENV_" || true)
+
 STEP_START_TIMESTAMP=$(date +"%Y-%m-%d %H:%M:%S")
 
 # Clean up cores here so that just killed processes' core files are ignored

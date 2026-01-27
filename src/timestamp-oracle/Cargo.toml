@@ -14,8 +14,11 @@ anyhow = "1.0.100"
 async-trait = "0.1.89"
 dec = "0.4.8"
 deadpool-postgres = "0.10.3"
+foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"], optional = true }
 futures = "0.3.31"
+futures-util = "0.3.31"
 mz-adapter-types = { path = "../adapter-types" }
+mz-foundationdb = { path = "../foundationdb", optional = true }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
@@ -28,8 +31,14 @@ tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+# On Linux, enable FoundationDB by default
+[target.'cfg(target_os = "linux")'.dependencies]
+foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
+mz-foundationdb = { path = "../foundationdb" }
+
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
+fdb = ["dep:foundationdb", "dep:mz-foundationdb"]

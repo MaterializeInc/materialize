@@ -2,6 +2,4 @@
 source: src/expr-derive-impl/src/lib.rs
 expression: "#[sqlfunc()]\nfn unary_fn<'a>(a: Datum<'a>, temp_storage: &RowArena) -> bool {\n    unimplemented!()\n}\n"
 ---
-::core::compile_error! {
-    "Unary functions do not yet support RowArena."
-}
+::core::compile_error!("Unary functions do not yet support RowArena.")

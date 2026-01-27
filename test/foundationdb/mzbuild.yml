@@ -7,19 +7,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: mzcompose
-description: Runs an mzcompose file
-author: "Materialize, Inc."
-requirements: []
-configuration:
-  properties:
-    args:
-      type: array
-    env:
-      type: object
-    run:
-      type: string
-    composition:
-      type: string
-  required: ["composition"]
-  additionalProperties: false
+name: foundationdb

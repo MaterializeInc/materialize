@@ -21,6 +21,8 @@ pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;
+#[cfg(any(feature = "fdb", target_os = "linux"))]
+pub mod foundationdb;
 pub mod generated;
 pub mod indexed;
 pub mod intercept;
