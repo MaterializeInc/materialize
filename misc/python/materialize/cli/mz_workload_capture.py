@@ -20,13 +20,14 @@ from psycopg.sql import SQL, Composable, Composed, Identifier, Literal
 
 
 @contextmanager
-def timed(label: str, *, width: int = 52, file=sys.stderr):
+def timed(label: str, *, width: int = 52):
     start = time.time()
+    print(f"{label:<{width}} ", file=sys.stderr, end="", flush=True)
     try:
         yield
     finally:
         dt = time.time() - start
-        print(f"{label:<{width}} [{dt:7.2f}s]", file=file)
+        print(f" [{dt:7.2f}s]", file=sys.stderr)
 
 
 def to_sql_string(q: bytes | SQL | Composable | LiteralString, conn) -> str:
@@ -436,9 +437,9 @@ def main() -> int:
                 workload["databases"][db][schema]["tables"][table] = obj
 
     with timed("Fetching views"):
-        for view, schema, db in query(
+        for view_id, view, schema, db in query(
             conn,
-            "SELECT mz_views.name, mz_schemas.name, mz_databases.name FROM mz_views JOIN mz_schemas ON mz_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
+            "SELECT mz_views.id, mz_views.name, mz_schemas.name, mz_databases.name FROM mz_views JOIN mz_schemas ON mz_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
             create_sql = query(
                 conn,
@@ -446,15 +447,35 @@ def main() -> int:
                     Identifier(db), Identifier(schema), Identifier(view)
                 ),
             )[0][0]
-            workload["databases"][db][schema]["views"][view] = {
-                "create_sql": create_sql
-            }
+
+            obj = {"create_sql": create_sql}
+
+            columns = []
+            for column, nullable, column_type, default in query(
+                conn,
+                SQL(
+                    "SELECT name, nullable, type, default FROM mz_columns WHERE id = {} ORDER BY position"
+                ).format(Literal(view_id)),
+            ):
+                columns.append(
+                    {
+                        "name": column,
+                        "nullable": nullable,
+                        "type": column_type,
+                        "default": default,
+                    }
+                )
+
+            if columns:
+                obj["columns"] = columns
+
+            workload["databases"][db][schema]["views"][view] = obj
 
     with timed("Fetching materialized views"):
         time.time()
-        for mv, schema, db in query(
+        for mv_id, mv, schema, db in query(
             conn,
-            "SELECT mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
+            "SELECT mz_materialized_views.id, mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
             create_sql = query(
                 conn,
@@ -462,9 +483,28 @@ def main() -> int:
                     "SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW {}.{}.{})"
                 ).format(Identifier(db), Identifier(schema), Identifier(mv)),
             )[0][0]
-            workload["databases"][db][schema]["materialized_views"][mv] = {
-                "create_sql": create_sql
-            }
+            obj = {"create_sql": create_sql}
+
+            columns = []
+            for column, nullable, column_type, default in query(
+                conn,
+                SQL(
+                    "SELECT name, nullable, type, default FROM mz_columns WHERE id = {} ORDER BY position"
+                ).format(Literal(mv_id)),
+            ):
+                columns.append(
+                    {
+                        "name": column,
+                        "nullable": nullable,
+                        "type": column_type,
+                        "default": default,
+                    }
+                )
+
+            if columns:
+                obj["columns"] = columns
+
+            workload["databases"][db][schema]["materialized_views"][mv] = obj
 
     with timed("Fetching sinks"):
         for sink, schema, db, typ in query(
