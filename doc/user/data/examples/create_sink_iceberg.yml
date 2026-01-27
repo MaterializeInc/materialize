@@ -9,7 +9,7 @@
     )
     USING AWS CONNECTION <aws_connection>
     KEY ( <key_col> [, ...] ) [NOT ENFORCED]
-    ENVELOPE UPSERT
+    MODE UPSERT
     WITH (COMMIT INTERVAL = '<interval>')
   syntax_elements:
     - name: "`<sink_name>`"
@@ -42,7 +42,7 @@
     - name: "**NOT ENFORCED**"
       description: |
         Disable validation of key uniqueness. Use only when you have outside knowledge that the key is unique.
-    - name: "**ENVELOPE UPSERT**"
+    - name: "**MODE UPSERT**"
       description: |
         **Required.** Specifies that the sink uses upsert semantics based on the `KEY`.
     - name: "**COMMIT INTERVAL** `'<interval>'`"

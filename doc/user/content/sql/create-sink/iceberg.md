@@ -142,7 +142,7 @@ CREATE SINK user_events_iceberg
   )
   USING AWS CONNECTION aws_connection
   KEY (user_id, event_timestamp)
-  ENVELOPE UPSERT
+  MODE UPSERT
   WITH (COMMIT INTERVAL = '1m');
 ```
 
@@ -165,7 +165,7 @@ CREATE SINK deduped_sink
   )
   USING AWS CONNECTION aws_connection
   KEY (event_id) NOT ENFORCED
-  ENVELOPE UPSERT
+  MODE UPSERT
   WITH (COMMIT INTERVAL = '10s');
 ```
 
