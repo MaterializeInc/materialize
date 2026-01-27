@@ -16,7 +16,7 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
-from materialize.mzcompose.services.postgres import METADATA_STORE
+from materialize.mzcompose.services.metadata_store import METADATA_STORE
 
 
 class MaterializedUpgradeArgs(TypedDict):

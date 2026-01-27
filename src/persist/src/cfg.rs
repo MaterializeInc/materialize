@@ -264,7 +264,7 @@ impl ConsensusConfig {
     ) -> Result<Self, ExternalError> {
         let config = match url.scheme() {
             #[cfg(any(feature = "fdb", target_os = "linux"))]
-            "fdb" | "foundationdb" => Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
+            "foundationdb" => Ok(ConsensusConfig::FoundationDB(FdbConsensusConfig::new(
                 url.clone(),
             )?)),
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(

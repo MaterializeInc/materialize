@@ -81,7 +81,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 version = "0.10.9"
 features = ["asm"]
 
-# On Linux, enable FoundationDB by default
+# On Linux, FoundationDB support is always enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
 foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
 mz-foundationdb = { path = "../foundationdb" }

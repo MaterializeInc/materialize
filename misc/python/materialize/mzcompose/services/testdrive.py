@@ -19,11 +19,11 @@ from materialize.mzcompose.service import (
 )
 from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
-from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.services.postgres import (
+from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
     REQUIRES_EXTERNAL_METADATA_STORE,
 )
+from materialize.mzcompose.services.minio import minio_blob_uri
 
 
 class Testdrive(Service):

@@ -28,12 +28,10 @@ from materialize.mzcompose.services.materialized import (
     DeploymentStatus,
     Materialized,
 )
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
     SqlServer,

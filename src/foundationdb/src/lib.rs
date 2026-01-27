@@ -16,7 +16,6 @@
 use std::sync::Mutex;
 
 use foundationdb::api::NetworkAutoStop;
-use foundationdb::options::NetworkOption;
 use mz_ore::url::SensitiveUrl;
 
 /// FoundationDB network handle, stored in a Mutex for proper lifecycle management.
@@ -26,37 +25,31 @@ static FDB_NETWORK: Mutex<Option<NetworkAutoStop>> = Mutex::new(None);
 ///
 /// This function is safe to call multiple times - only the first call will
 /// actually initialize the network, subsequent calls return immediately.
-///
-/// # Safety
-///
-/// The underlying `foundationdb::boot()` call is unsafe because it must only
-/// be called once per process. This function uses a mutex to ensure
-/// that guarantee is upheld.
 pub fn init_network() {
     let mut guard = FDB_NETWORK.lock().expect("FDB_NETWORK mutex poisoned");
     if guard.is_none() {
+        // SAFETY: The `foundationdb::boot()` call is unsafe because it must only
+        // be called once per process. We use a mutex to ensure this guarantee
+        // is upheld - subsequent calls to `init_network()` will see `guard.is_some()`
+        // and return early without calling `boot()` again.
         let network = unsafe { foundationdb::boot() };
-
-        // Disable client statistics logging to reduce metrics overhead.
-        let _ = unsafe { NetworkOption::DisableClientStatisticsLogging.apply() };
 
         *guard = Some(network);
     }
 }
 
-/// Shut down the FoundationDB network.
-///
-/// This properly stops the network thread and cleans up resources.
-/// Should be called at the end of tests that use FoundationDB.
-///
-/// # Warning
-///
-/// FDB can only be initialized once per process. After calling this function,
-/// any subsequent calls to `init_network()` will fail.
-pub fn shutdown_network() {
+/// Handle exit on process termination.
+#[ctor::dtor]
+fn shutdown_network() {
     if let Ok(mut guard) = FDB_NETWORK.lock() {
-        // Dropping the NetworkAutoStop calls fdb_stop_network() and joins the thread.
-        drop(guard.take());
+        if let Some(network) = guard.take() {
+            // Exit immediately as it is too late to properly shutdown the FDB network.
+            use std::io::Write;
+            std::io::stdout().flush();
+            std::io::stderr().flush();
+            // SAFETY: Called with correct parameters.
+            unsafe { libc::_exit(0) };
+        }
     }
 }
 

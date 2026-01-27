@@ -585,3 +585,34 @@ where
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::TimestampOracle;
+    use mz_ore::now::NowFn;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    async fn test_fdb_timestamp_oracle() -> Result<(), anyhow::Error> {
+        let config = FdbTimestampOracleConfig::new_for_test();
+
+        crate::tests::timestamp_oracle_impl_test(|timeline, now_fn: NowFn, initial_ts| {
+            let config = config.clone();
+            async move {
+                let oracle = FdbTimestampOracle::open(config, timeline, initial_ts, now_fn, false)
+                    .await
+                    .expect("failed to open FdbTimestampOracle");
+
+                let arced_oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync> =
+                    Arc::new(oracle);
+
+                arced_oracle
+            }
+        })
+        .await?;
+
+        Ok(())
+    }
+}

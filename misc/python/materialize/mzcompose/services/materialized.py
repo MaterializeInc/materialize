@@ -32,11 +32,11 @@ from materialize.mzcompose.service import (
 )
 from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
-from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.services.postgres import (
+from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
     REQUIRES_EXTERNAL_METADATA_STORE,
 )
+from materialize.mzcompose.services.minio import minio_blob_uri
 
 
 class MaterializeEmulator(Service):
@@ -354,7 +354,7 @@ class Materialized(Service):
 
                 volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
 
-        if image_version is None or image_version >= MzVersion.parse_mz("v26.8.0"):
+        if image_version is None or image_version >= MzVersion.parse_mz("v26.9.0"):
             # Generate fdb.cluster file dynamically based on the metadata store address
             volumes += foundationdb.fdb_cluster_file(
                 metadata_store, external_metadata_store

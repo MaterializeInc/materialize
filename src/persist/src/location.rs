@@ -165,6 +165,7 @@ impl std::error::Error for Indeterminate {
 }
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
+#[cfg(any(test, debug_assertions))]
 impl PartialEq for Indeterminate {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
@@ -222,6 +223,7 @@ impl std::error::Error for ExternalError {
 }
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
+#[cfg(any(test, debug_assertions))]
 impl PartialEq for ExternalError {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
@@ -637,7 +639,7 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
 }
 
 /// Test helpers for the crate.
-// TODO: Gate this with a `#[cfg(test)]` once FDB tests are moved back to unit tests.
+#[cfg(test)]
 pub mod tests {
     use std::future::Future;
 
