@@ -25,6 +25,7 @@ node_modules
 /test/feature-benchmark/tmp/*.td
 /test/zippy/tmp/*.td
 /test/**/tmp_*.toml
+/test/**/fdb_*.cluster
 junit_*.xml
 parallel-workload-queries.log
 perf.data*

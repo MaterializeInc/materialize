@@ -83,6 +83,11 @@ impl SeqNo {
     pub fn minimum() -> Self {
         SeqNo(0)
     }
+
+    /// A maximum value.
+    pub fn maximum() -> Self {
+        SeqNo(u64::MAX)
+    }
 }
 
 impl RustType<u64> for SeqNo {
@@ -112,6 +117,12 @@ impl std::fmt::Display for Determinate {
 impl std::error::Error for Determinate {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.inner.source()
+    }
+}
+
+impl From<anyhow::Error> for Determinate {
+    fn from(inner: anyhow::Error) -> Self {
+        Self::new(inner)
     }
 }
 
@@ -154,7 +165,6 @@ impl std::error::Error for Indeterminate {
 }
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
-#[cfg(any(test, debug_assertions))]
 impl PartialEq for Indeterminate {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
@@ -212,7 +222,6 @@ impl std::error::Error for ExternalError {
 }
 
 /// An impl of PartialEq purely for convenience in tests and debug assertions.
-#[cfg(any(test, debug_assertions))]
 impl PartialEq for ExternalError {
     fn eq(&self, other: &Self) -> bool {
         self.to_string() == other.to_string()
@@ -429,6 +438,11 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
+
+    /// Returns true if [`Self::truncate`] returns the number of versions deleted.
+    fn truncate_counts(&self) -> bool {
+        true
+    }
 }
 
 #[async_trait]
@@ -491,6 +505,10 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
             async move { backing.truncate(&key, seqno).await }.instrument(Span::current()),
         )
         .await
+    }
+
+    fn truncate_counts(&self) -> bool {
+        self.0.truncate_counts()
     }
 }
 
@@ -619,13 +637,13 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
 }
 
 /// Test helpers for the crate.
-#[cfg(test)]
+// TODO: Gate this with a `#[cfg(test)]` once FDB tests are moved back to unit tests.
 pub mod tests {
     use std::future::Future;
 
     use anyhow::anyhow;
     use futures_util::TryStreamExt;
-    use mz_ore::assert_err;
+    use mz_ore::{assert_err, assert_ok};
     use uuid::Uuid;
 
     use crate::location::Blob;
@@ -1012,7 +1030,11 @@ pub mod tests {
         );
 
         // Can remove the previous write with the appropriate truncation.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
+        if consensus.truncate_counts() {
+            assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
+        } else {
+            assert_ok!(consensus.truncate(&key, SeqNo(6)).await);
+        }
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
@@ -1022,7 +1044,11 @@ pub mod tests {
 
         // Truncate is idempotent and can be repeated. The return value
         // indicates we didn't do any work though.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(0));
+        if consensus.truncate_counts() {
+            assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(0));
+        } else {
+            assert_ok!(consensus.truncate(&key, SeqNo(6)).await);
+        }
 
         // Make sure entries under different keys don't clash.
         let other_key = Uuid::new_v4().to_string();
@@ -1079,7 +1105,11 @@ pub mod tests {
             consensus.compare_and_set(&key, Some(SeqNo(11)), v12).await,
             Ok(CaSResult::Committed),
         );
-        assert_eq!(consensus.truncate(&key, SeqNo(12)).await, Ok(2));
+        if consensus.truncate_counts() {
+            assert_eq!(consensus.truncate(&key, SeqNo(12)).await, Ok(2));
+        } else {
+            assert_ok!(consensus.truncate(&key, SeqNo(12)).await);
+        }
 
         // Sequence numbers used within Consensus have to be within [0, i64::MAX].
 

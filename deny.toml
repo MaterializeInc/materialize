@@ -186,6 +186,7 @@ name = "log"
 wrappers = [
     "azure_svc_blobstorage",
     "apache-avro",
+    "bindgen",
     "buildid",
     "cookie_store",
     "deadpool-postgres",

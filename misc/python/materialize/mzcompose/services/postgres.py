@@ -16,6 +16,7 @@ from materialize.mzcompose.service import (
     ServiceConfig,
 )
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 
 
 class Postgres(Service):
@@ -90,10 +91,38 @@ class PostgresMetadata(Postgres):
         )
 
 
-CockroachOrPostgresMetadata = (
-    Cockroach if os.getenv("BUILDKITE_TAG", "") != "" else PostgresMetadata
-)
+def determine_external_metadata_store() -> (
+    type[Cockroach | FoundationDB | PostgresMetadata]
+):
+    external_metadata_store = os.getenv("EXTERNAL_METADATA_STORE")
+    if external_metadata_store == "cockroach":
+        return Cockroach
+    elif external_metadata_store == "foundationdb":
+        return FoundationDB
+    elif external_metadata_store == "postgres-metadata":
+        return PostgresMetadata
+    elif external_metadata_store is not None:
+        raise ValueError(f"Unknown EXTERNAL_METADATA_STORE: {external_metadata_store}")
+    return Cockroach if os.getenv("BUILDKITE_TAG", "") != "" else PostgresMetadata
 
-METADATA_STORE: str = (
-    "cockroach" if CockroachOrPostgresMetadata == Cockroach else "postgres-metadata"
+
+CockroachOrPostgresMetadata = determine_external_metadata_store()
+
+
+def _determine_metadata_store_name() -> str:
+    if CockroachOrPostgresMetadata == Cockroach:
+        return "cockroach"
+    elif CockroachOrPostgresMetadata == PostgresMetadata:
+        return "postgres-metadata"
+    elif CockroachOrPostgresMetadata == FoundationDB:
+        return "foundationdb"
+    else:
+        raise ValueError("Unknown metadata store")
+
+
+METADATA_STORE: str = _determine_metadata_store_name()
+
+FORCE_EXTERNAL_METADATA_STORE: bool = (
+    os.getenv("EXTERNAL_METADATA_STORE") is not None
+    or os.getenv("BUILDKITE_TAG") is not None
 )

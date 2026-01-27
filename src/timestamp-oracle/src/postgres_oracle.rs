@@ -94,7 +94,7 @@ where
 #[derive(Clone, Debug)]
 pub struct PostgresTimestampOracleConfig {
     url: SensitiveUrl,
-    pub metrics: Arc<Metrics>,
+    metrics: Arc<Metrics>,
 
     /// Configurations that can be dynamically updated.
     pub dynamic: Arc<DynamicConfig>,
@@ -152,6 +152,11 @@ impl PostgresTimestampOracleConfig {
 
         Some(config)
     }
+
+    /// Returns the metrics associated with this config.
+    pub(crate) fn metrics(&self) -> &Arc<Metrics> {
+        &self.metrics
+    }
 }
 
 /// Part of [`PostgresTimestampOracleConfig`] that can be dynamically updated.
@@ -162,8 +167,8 @@ impl PostgresTimestampOracleConfig {
 /// defined by the tradeoffs of complexity vs promptness.
 ///
 /// These are hooked up to LaunchDarkly. Specifically, LaunchDarkly configs are
-/// serialized into a [`PostgresTimestampOracleParameters`]. In environmentd,
-/// these are applied directly via [`PostgresTimestampOracleParameters::apply`]
+/// serialized into a [`TimestampOracleParameters`]. In environmentd,
+/// these are applied directly via [`TimestampOracleParameters::apply`]
 /// to the [`PostgresTimestampOracleConfig`].
 #[derive(Debug)]
 pub struct DynamicConfig {
@@ -350,7 +355,7 @@ impl PostgresClientKnobs for PostgresTimestampOracleConfig {
 /// Parameters can be set (`Some`) or unset (`None`). Unset parameters should be
 /// interpreted to mean "use the previous value".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PostgresTimestampOracleParameters {
+pub struct TimestampOracleParameters {
     /// Configures `DynamicConfig::pg_connection_pool_max_size`.
     pub pg_connection_pool_max_size: Option<usize>,
     /// Configures `DynamicConfig::pg_connection_pool_max_wait`.
@@ -378,9 +383,9 @@ pub struct PostgresTimestampOracleParameters {
     pub pg_connection_pool_keepalives_retries: Option<u32>,
 }
 
-impl PostgresTimestampOracleParameters {
+impl TimestampOracleParameters {
     /// Update the parameter values with the set ones from `other`.
-    pub fn update(&mut self, other: PostgresTimestampOracleParameters) {
+    pub fn update(&mut self, other: TimestampOracleParameters) {
         // Deconstruct self and other so we get a compile failure if new fields
         // are added.
         let Self {

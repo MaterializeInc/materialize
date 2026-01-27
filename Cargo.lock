@@ -591,6 +591,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-recursion"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+]
+
+[[package]]
 name = "async-signal"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1450,7 +1461,9 @@ dependencies = [
  "bitflags 2.9.4",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
+ "log",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -3441,6 +3454,68 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "foundationdb"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "310c638e34e54f56daa986ed6c8dadecf4e4825245b73e577feb25c808222ae8"
+dependencies = [
+ "async-recursion",
+ "async-trait",
+ "foundationdb-gen",
+ "foundationdb-macros",
+ "foundationdb-sys",
+ "foundationdb-tuple",
+ "futures",
+ "rand 0.9.2",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "static_assertions",
+ "uuid",
+]
+
+[[package]]
+name = "foundationdb-gen"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b749fc82bb7576794d4679f166a5cfa0a856122e05635437f7231e5e679fa2f6"
+dependencies = [
+ "xml-rs",
+]
+
+[[package]]
+name = "foundationdb-macros"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4ca5370149145ec3741cd7e82832f17f893b9421ee4e484d9511c6702bd9911"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.111",
+ "try_map",
+]
+
+[[package]]
+name = "foundationdb-sys"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f3f231ff5b8465063b2bf8af3b975222b4fa3cc8c07b43d01fe8e0ae15c9dd"
+dependencies = [
+ "bindgen",
+ "libc",
+]
+
+[[package]]
+name = "foundationdb-tuple"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8cd42c159de9b90a91efc0ce350e3142099571ef498e7fa1a1dcc1d1eeccd9d"
+dependencies = [
+ "memchr",
+ "uuid",
 ]
 
 [[package]]
@@ -6555,6 +6630,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-foundationdb"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "foundationdb",
+ "mz-ore",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
@@ -7124,12 +7209,14 @@ dependencies = [
  "deadpool-postgres",
  "differential-dataflow",
  "fail",
+ "foundationdb",
  "futures-util",
  "itertools 0.14.0",
  "md-5",
  "mz-aws-util",
  "mz-build-tools",
  "mz-dyncfg",
+ "mz-foundationdb",
  "mz-ore",
  "mz-persist-types",
  "mz-postgres-client",
@@ -8386,8 +8473,11 @@ dependencies = [
  "async-trait",
  "deadpool-postgres",
  "dec",
+ "foundationdb",
  "futures",
+ "futures-util",
  "mz-adapter-types",
+ "mz-foundationdb",
  "mz-ore",
  "mz-pgrepr",
  "mz-postgres-client",
@@ -12649,6 +12739,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e604eb7b43c06650e854be16a2a03155743d3752dd1c943f6829e26b7a36e382"
 
 [[package]]
+name = "try_map"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb1626d07cb5c1bb2cf17d94c0be4852e8a7c02b041acec9a8c5bdda99f9d580"
+
+[[package]]
 name = "tungstenite"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13509,6 +13605,7 @@ dependencies = [
  "fastrand 2.3.0",
  "flate2",
  "form_urlencoded",
+ "foundationdb",
  "futures-channel",
  "futures-core",
  "futures-executor",
@@ -13526,7 +13623,7 @@ dependencies = [
  "hyper-util",
  "idna",
  "insta",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "jiff",
  "libc",
  "libz-sys",
@@ -13559,6 +13656,7 @@ dependencies = [
  "postgres",
  "postgres-types",
  "predicates 3.1.3",
+ "prettyplease",
  "proc-macro2",
  "proptest",
  "proptest-derive",
@@ -13639,6 +13737,21 @@ dependencies = [
  "libc",
  "linux-raw-sys 0.4.15",
  "rustix 0.38.44",
+]
+
+[[package]]
+name = "xml"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8aa498d22c9bbaf482329839bc5620c46be275a19a812e9a22a2b07529a642a"
+
+[[package]]
+name = "xml-rs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3a56132a0d6ecbe77352edc10232f788fc4ceefefff4cab784a98e0e16b6b51"
+dependencies = [
+ "xml",
 ]
 
 [[package]]

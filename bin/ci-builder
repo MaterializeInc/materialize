@@ -290,6 +290,8 @@ case "$cmd" in
             --env BUILDKITE_PULL_REQUEST
             --env DOCKERHUB_USERNAME
             --env DOCKERHUB_ACCESS_TOKEN
+            # For configuring the metadata store
+            --env EXTERNAL_METADATA_STORE
         )
 
         if [[ $detach_container == "true" ]]; then

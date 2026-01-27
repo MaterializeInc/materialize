@@ -30,9 +30,12 @@ from materialize.mzcompose.service import (
     ServiceConfig,
     ServiceDependency,
 )
+from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
-from materialize.mzcompose.services.postgres import METADATA_STORE
+from materialize.mzcompose.services.postgres import (
+    METADATA_STORE,
+)
 
 
 class MaterializeEmulator(Service):
@@ -243,24 +246,30 @@ class Materialized(Service):
         )
 
         if external_metadata_store:
+            depends_graph[metadata_store] = {"condition": "service_healthy"}
             address = (
                 metadata_store
                 if external_metadata_store == True
                 else external_metadata_store
             )
-            depends_graph[metadata_store] = {"condition": "service_healthy"}
-            command += [
-                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
-            ]
-            environment += [
-                f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
-                "MZ_NO_BUILTIN_POSTGRES=1",
-                # For older Materialize versions
-                "MZ_NO_BUILTIN_COCKROACH=1",
-                # Set the adapter stash URL for older environments that need it (versions before
-                # v0.92.0).
-                f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
-            ]
+            if metadata_store == "postgres-metadata" or metadata_store == "cockroach":
+                command += [
+                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                ]
+                environment += [
+                    f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
+                    "MZ_NO_BUILTIN_POSTGRES=1",
+                    # For older Materialize versions
+                    "MZ_NO_BUILTIN_COCKROACH=1",
+                    # Set the adapter stash URL for older environments that need it (versions before
+                    # v0.92.0).
+                    f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+                ]
+            elif metadata_store == "foundationdb":
+                command += [
+                    "--persist-consensus-url=foundationdb:?options=--search_path=consensus",
+                    "--timestamp-oracle-url=foundationdb:?options=--search_path=ts_oracle",
+                ]
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -343,6 +352,12 @@ class Materialized(Service):
                 environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
 
                 volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
+
+        if image_version is None or image_version >= MzVersion.parse_mz("v26.8.0"):
+            # Generate fdb.cluster file dynamically based on the metadata store address
+            volumes += foundationdb.fdb_cluster_file(
+                metadata_store, external_metadata_store
+            )
 
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES
