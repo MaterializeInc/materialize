@@ -2052,15 +2052,17 @@ CREATE TABLE t2 (a int, b date)
 statement ok
 INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
 
+# With no ORDER BY, jsonb_agg sorts by payload (the JSONB object) for deterministic output.
+# DatumMap/Datum compare by datum (Datum::Null is last in enum order = PostgreSQL nulls last).
 query T
 SELECT jsonb_agg((a, b)) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]
+[{"f1":1,"f2":"2020-01-01"},{"f1":null,"f2":"2020-01-02"}]
 
 query TTT
 SELECT jsonb_agg((a, b)), jsonb_agg(a), jsonb_agg(b) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]  [1,null]  ["2020-01-01","2020-01-02"]
+[{"f1":1,"f2":"2020-01-01"},{"f1":null,"f2":"2020-01-02"}]  [1,null]  ["2020-01-01","2020-01-02"]
 
 # jsonb_object_agg
 
