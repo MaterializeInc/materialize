@@ -22,6 +22,7 @@ from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import (
     METADATA_STORE,
+    REQUIRES_EXTERNAL_METADATA_STORE,
 )
 
 
@@ -56,7 +57,7 @@ class Testdrive(Service):
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
         check_statement_logging: bool = False,
-        external_metadata_store: bool = False,
+        external_metadata_store: bool = REQUIRES_EXTERNAL_METADATA_STORE,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
         fivetran_destination: bool = False,
