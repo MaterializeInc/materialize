@@ -731,10 +731,10 @@ impl AdapterError {
     }
 
     pub fn concurrent_dependency_drop_from_instance_peek_error(
-        e: mz_compute_client::controller::instance::PeekError,
+        e: mz_compute_client::controller::instance_client::PeekError,
         compute_instance: ComputeInstanceId,
     ) -> AdapterError {
-        use mz_compute_client::controller::instance::PeekError::*;
+        use mz_compute_client::controller::instance_client::PeekError::*;
         match e {
             ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",
