@@ -110,8 +110,8 @@ skip = [
     { name = "tower", version = "0.4.13" },
     # Used by tracing-capture
     { name = "predicates", version = "2.1.5" },
-    # Used by aws-sdk-s3, launchdarkly-server-sdk, and hashbrown@v0.15.5
-    { name = "lru", version = "0.12.5" },
+    # mysql_async
+    { name = "lru", version = "0.14.0" },
     # Used by tower-lsp
     { name = "dashmap", version = "5.5.3" },
     # Used by bindgen
@@ -144,6 +144,8 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
+    # aws-lc-rs
+    { name = "untrusted", version = "0.7.1" },
 ]
 
 [[bans.deny]]
@@ -278,6 +280,7 @@ allow = [
     "ISC",
     "MIT",
     "MPL-2.0",
+    "OpenSSL",
     "Zlib",
     "Unicode-3.0",
 ]

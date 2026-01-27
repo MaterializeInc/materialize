@@ -331,7 +331,7 @@ serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
 
 # Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "23666d095c39adc53a151969c1aa1e1ec484f3e6" }
+launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
