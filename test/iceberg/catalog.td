@@ -36,7 +36,7 @@
     )
     USING AWS CONNECTION aws_conn
     KEY (a) NOT ENFORCED
-    ENVELOPE UPSERT
+    MODE UPSERT
     WITH (COMMIT INTERVAL '1s');
 
 # Iceberg sinks commit data asynchronously, need to wait for at least one commit interval

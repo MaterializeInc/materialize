@@ -452,6 +452,7 @@ async fn purify_create_sink(
         if_not_exists: _,
         from,
         envelope: _,
+        mode: _,
     } = &mut create_sink_stmt;
 
     // The list of options that the user is allowed to specify.
