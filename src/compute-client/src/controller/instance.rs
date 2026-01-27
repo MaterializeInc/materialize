@@ -48,7 +48,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
+    CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
@@ -670,19 +670,15 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// This also returns `true` in case this cluster does not have any
     /// replicas.
     #[mz_ore::instrument(level = "debug")]
-    pub fn collection_hydrated(
-        &self,
-        collection_id: GlobalId,
-    ) -> Result<bool, CollectionLookupError> {
+    pub fn collection_hydrated(&self, collection_id: GlobalId) -> Result<bool, CollectionMissing> {
         if self.replicas.is_empty() {
             return Ok(true);
         }
-
         for replica_state in self.replicas.values() {
             let collection_state = replica_state
                 .collections
                 .get(&collection_id)
-                .ok_or(CollectionLookupError::CollectionMissing(collection_id))?;
+                .ok_or(CollectionMissing(collection_id))?;
 
             if collection_state.hydrated() {
                 return Ok(true);

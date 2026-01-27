@@ -32,7 +32,7 @@ use tokio::sync::{mpsc, oneshot};
 use tracing::debug_span;
 use uuid::Uuid;
 
-use crate::controller::error::CollectionLookupError;
+use crate::controller::error::CollectionMissing;
 use crate::controller::instance::{Command, Instance, SharedCollectionState};
 use crate::controller::{
     ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, ReplicaId,
@@ -66,6 +66,29 @@ pub enum PeekError {
 }
 
 impl From<InstanceShutDown> for PeekError {
+    fn from(_error: InstanceShutDown) -> Self {
+        Self::InstanceShutDown
+    }
+}
+
+/// Errors arising from `InstanceClient::acquire_read_holds_and_collection_write_frontiers`.
+#[derive(Error, Debug)]
+pub enum AcquireReadHoldsError {
+    /// The compute collection does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+    /// The instance has shut down.
+    #[error("the instance has shut down")]
+    InstanceShutDown,
+}
+
+impl From<CollectionMissing> for AcquireReadHoldsError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<InstanceShutDown> for AcquireReadHoldsError {
     fn from(_error: InstanceShutDown) -> Self {
         Self::InstanceShutDown
     }
@@ -183,7 +206,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
     pub async fn acquire_read_holds_and_collection_write_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionLookupError> {
+    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, AcquireReadHoldsError> {
         self.call_sync(move |i| {
             let mut result = Vec::new();
             for id in ids.into_iter() {

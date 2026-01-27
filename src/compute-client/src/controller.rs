@@ -67,7 +67,7 @@ use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
+    CollectionFrontiersError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
     HydrationCheckBadTarget, InstanceExists, InstanceMissing, PeekError, ReadPolicyError,
     ReplicaCreationError, ReplicaDropError,
 };
@@ -373,7 +373,7 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         &self,
         collection_id: GlobalId,
         instance_id: Option<ComputeInstanceId>,
-    ) -> Result<CollectionFrontiers<T>, CollectionLookupError> {
+    ) -> Result<CollectionFrontiers<T>, CollectionFrontiersError> {
         let collection = match instance_id {
             Some(id) => self.instance(id)?.collection(collection_id)?,
             None => self

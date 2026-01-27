@@ -22,7 +22,6 @@ use thiserror::Error;
 
 pub use mz_storage_types::errors::CollectionMissing;
 
-use crate::controller::instance_client::InstanceShutDown;
 use crate::controller::{ComputeInstanceId, ReplicaId};
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
@@ -45,33 +44,24 @@ pub struct InstanceExists(pub ComputeInstanceId);
 #[error("No replicas found in cluster for target list.")]
 pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
 
-/// Errors arising during compute collection lookup.
+/// Errors arising during compute collection frontiers lookup.
 #[derive(Error, Debug)]
-pub enum CollectionLookupError {
+pub enum CollectionFrontiersError {
     /// The specified compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// The specified compute instance has shut down.
-    #[error("the instance has shut down")]
-    InstanceShutDown,
     /// The compute collection does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
 
-impl From<InstanceMissing> for CollectionLookupError {
+impl From<InstanceMissing> for CollectionFrontiersError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
     }
 }
 
-impl From<InstanceShutDown> for CollectionLookupError {
-    fn from(_error: InstanceShutDown) -> Self {
-        Self::InstanceShutDown
-    }
-}
-
-impl From<CollectionMissing> for CollectionLookupError {
+impl From<CollectionMissing> for CollectionFrontiersError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
     }
