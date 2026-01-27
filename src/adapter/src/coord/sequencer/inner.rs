@@ -31,7 +31,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_assert_or_log};
+use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -4704,11 +4704,10 @@ impl Coordinator {
             // has advanced to the empty frontier. In this case the MV is sealed for all times and
             // applying the replacement wouldn't have any effect. We use this opportunity to alert
             // the user by returning an error, rather than applying the useless replacement.
-            soft_assert_or_log!(
-                target_upper.is_empty(),
-                "replacement frontier is empty but target frontier is not: {:?}",
-                target_upper.elements(),
-            );
+            //
+            // Note that we can't assert on `target_upper` being empty here, because the reporting
+            // of the target's frontier might be delayed. We'd have to fetch the current frontier
+            // from persist, which we cannot do without incurring I/O.
             ctx.retire(Err(AdapterError::ReplaceMaterializedViewSealed {
                 name: target.name().item.clone(),
             }));
