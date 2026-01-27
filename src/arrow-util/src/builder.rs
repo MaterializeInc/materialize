@@ -27,6 +27,7 @@ use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
 
+pub const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
 const EXTENSION_PREFIX: &str = "materialize.v1.";
 
 pub struct ArrowBuilder {
@@ -343,6 +344,26 @@ fn scalar_to_arrow_datatype(
                 "map",
             )
         }
+        SqlScalarType::Record {
+            fields,
+            custom_id: _,
+        } => {
+            // Records are represented as Arrow Structs with one field per record field.
+            // At runtime, records are stored as Datum::List with field values in order.
+            let mut arrow_fields = Vec::with_capacity(fields.len());
+            for (field_name, field_type) in fields.iter() {
+                let (inner_type, inner_extension_name) =
+                    scalar_to_arrow_datatype(&field_type.scalar_type)?;
+                let field = field_with_typename(
+                    field_name.as_str(),
+                    inner_type,
+                    field_type.nullable,
+                    &inner_extension_name,
+                );
+                arrow_fields.push(Arc::new(field));
+            }
+            (DataType::Struct(arrow_fields.into()), "record")
+        }
         _ => anyhow::bail!("{:?} unimplemented", scalar_type),
     };
     Ok((data_type, extension_name.to_lowercase()))
@@ -493,22 +514,29 @@ fn field_with_typename(
     extension_type_name: &str,
 ) -> Field {
     Field::new(name, data_type, nullable).with_metadata(HashMap::from([(
-        "ARROW:extension:name".to_string(),
+        ARROW_EXTENSION_NAME_KEY.to_string(),
         format!("{}{}", EXTENSION_PREFIX, extension_type_name),
     )]))
 }
 
 /// Extract the materialize 'type name' from the metadata of a Field.
+/// Returns an error if the field doesn't have extension metadata.
 fn typename_from_field(field: &Field) -> Result<String, anyhow::Error> {
     let metadata = field.metadata();
     let extension_name = metadata
-        .get("ARROW:extension:name")
-        .ok_or_else(|| anyhow::anyhow!("Missing extension name in metadata"))?;
-    if let Some(name) = extension_name.strip_prefix(EXTENSION_PREFIX) {
-        Ok(name.to_string())
-    } else {
-        anyhow::bail!("Extension name {} does not match expected", extension_name,)
-    }
+        .get(ARROW_EXTENSION_NAME_KEY)
+        .ok_or_else(|| anyhow::anyhow!("Field '{}' missing extension metadata", field.name()))?;
+    extension_name
+        .strip_prefix(EXTENSION_PREFIX)
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Field '{}' extension name '{}' missing expected prefix '{}'",
+                field.name(),
+                extension_name,
+                EXTENSION_PREFIX
+            )
+        })
 }
 
 impl ArrowColumn {
@@ -765,6 +793,25 @@ impl ArrowColumn {
                     builder.values().append_datum(value)?;
                 }
                 builder.append(true).unwrap()
+            }
+            // Records are stored as Datum::List at runtime but written to a StructBuilder.
+            // Arrays use Datum::Array (handled above), so Datum::List with StructBuilder is a record.
+            (ColBuilder::StructBuilder(struct_builder), Datum::List(list)) => {
+                let field_count = struct_builder.num_fields();
+                for (i, datum) in list.into_iter().enumerate() {
+                    if i >= field_count {
+                        anyhow::bail!(
+                            "Record has more elements ({}) than struct fields ({})",
+                            i + 1,
+                            field_count
+                        );
+                    }
+                    let field_builder: &mut ArrowColumn = struct_builder
+                        .field_builder(i)
+                        .ok_or_else(|| anyhow::anyhow!("Missing field builder at index {}", i))?;
+                    field_builder.append_datum(datum)?;
+                }
+                struct_builder.append(true);
             }
             (builder, datum) => {
                 anyhow::bail!("Datum {:?} does not match builder {:?}", datum, builder)
