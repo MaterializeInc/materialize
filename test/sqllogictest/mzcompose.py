@@ -29,8 +29,8 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.sql_logic_test import SqlLogicTest
 from materialize.ui import CommandFailureCausedUIError
 

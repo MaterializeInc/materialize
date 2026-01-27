@@ -36,9 +36,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that Materialize works with FoundationDB as the timestamp oracle backend."""
 
     c.down(destroy_volumes=True, sanity_restart_mz=False)
-    c.up("foundationdb")
-
-    c.up("materialized")
+    c.up("foundationdb", "materialized")
 
     # Basic smoke test - create objects and verify they work
     c.testdrive(

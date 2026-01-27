@@ -31,13 +31,13 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.service import ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
+from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
     CockroachOrPostgresMetadata,
-    Postgres,
 )
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
