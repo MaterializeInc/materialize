@@ -11,6 +11,8 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
+from materialize.checks.executors import Executor
+from materialize.mz_version import MzVersion
 
 
 class MaterializedViews(Check):
@@ -304,6 +306,81 @@ class MaterializedViewsRefresh(Check):
                 >[version>=13900] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_3 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User<>])): [<> <>]\\n"
            """
+            )
+        )
+
+
+class MaterializedViewReplacement(Check):
+    def _can_run(self, e: Executor) -> bool:
+        return self.base_version >= MzVersion.parse_mz("v26.8.0")
+
+    def initialize(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > CREATE TABLE mv_replacement_table (a INT, b INT)
+                > INSERT INTO mv_replacement_table VALUES (1, 2), (3, 4), (5, 6)
+                > CREATE MATERIALIZED VIEW mv_replacement_target AS SELECT a, b FROM mv_replacement_table
+                """
+            )
+        )
+
+    def manipulate(self) -> list[Testdrive]:
+        return [
+            Testdrive(dedent(s))
+            for s in [
+                """
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement_replacement FOR mv_replacement_target AS SELECT a + b AS a, b FROM mv_replacement_table
+
+                > SELECT * FROM mv_replacement_target
+                1 2
+                3 4
+                5 6
+
+                > SELECT * FROM mv_replacement_replacement
+                3  2
+                7  4
+                11 6
+                """,
+                """
+                > ALTER MATERIALIZED VIEW mv_replacement_target APPLY REPLACEMENT mv_replacement_replacement
+
+                > SELECT * FROM mv_replacement_target
+                3  2
+                7  4
+                11 6
+
+                > INSERT INTO mv_replacement_table VALUES (10, 20)
+                """,
+            ]
+        ]
+
+    def validate(self) -> Testdrive:
+        return Testdrive(
+            dedent(
+                """
+                > SELECT * FROM mv_replacement_target
+                3  2
+                7  4
+                11 6
+                30 20
+
+                > SELECT name FROM mz_materialized_views WHERE name LIKE 'mv_replacement_%'
+                mv_replacement_target
+
+                # Verify we can still create a new replacement.
+                > CREATE REPLACEMENT MATERIALIZED VIEW mv_replacement_replacement FOR mv_replacement_target AS SELECT a * 2 AS a, b FROM mv_replacement_table
+
+                > SELECT * FROM mv_replacement_replacement
+                2  2
+                6  4
+                10 6
+                20 20
+
+                # Drop the replacement instead of applying it, to ensure
+                # `validate` remains idempotent.
+                > DROP MATERIALIZED VIEW mv_replacement_replacement
+            """
             )
         )
 
