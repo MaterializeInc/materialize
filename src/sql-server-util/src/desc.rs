@@ -1235,6 +1235,13 @@ impl SqlServerRowDecoder {
         }
         Ok(())
     }
+
+    pub fn included_column_names(&self) -> Vec<Arc<str>> {
+        self.decoders
+            .iter()
+            .map(|decoder| Arc::clone(&decoder.0))
+            .collect()
+    }
 }
 
 #[cfg(test)]

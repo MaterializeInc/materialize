@@ -622,7 +622,7 @@ impl DDLEvent {
     ///  2. ALTER TABLE .. DROP COLUMN
     ///
     /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
-    pub fn is_compatible(&self) -> bool {
+    pub fn is_compatible(&self, included_columns: &[Arc<str>]) -> bool {
         // TODO (maz): This is currently a basic check that doesn't take into account type changes.
         // At some point, we will need to move this to SqlServerTableDesc and expand it.
         let mut words = self.ddl_command.split_ascii_whitespace();
@@ -635,9 +635,54 @@ impl DDLEvent {
                 let mut compatible = true;
                 while compatible && let Some(token) = peekable.next() {
                     compatible = match token.to_ascii_lowercase().as_str() {
-                        "alter" | "drop" => peekable
-                            .peek()
-                            .is_some_and(|next_tok| !next_tok.eq_ignore_ascii_case("column")),
+                        "alter" | "drop" => {
+                            let target = peekable.next();
+                            match target {
+                                // Targeting a column
+                                Some(t) if t.eq_ignore_ascii_case("column") => {
+                                    let mut all_excluded = true;
+                                    while let Some(tok) = peekable.next() {
+                                        // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
+                                        match tok.to_ascii_lowercase().as_str() {
+                                            "if" | "exists" | "," | "column" => continue,
+                                            col_str => {
+                                                // If any column is in the included list, then it is not okay to alter/drop it
+                                                // The col_str token may be a comma-separated list of columns as whitespace is not required
+                                                // between column names in SQL Server DDL.
+                                                if !col_str.trim_matches(',').split(',').all(
+                                                    |col_name| {
+                                                        !included_columns.iter().any(|included| {
+                                                            included.eq_ignore_ascii_case(
+                                                                col_name.trim_matches(
+                                                                    ['[', ']', '"'].as_ref(),
+                                                                ),
+                                                            )
+                                                        })
+                                                    },
+                                                ) {
+                                                    all_excluded = false;
+                                                    break;
+                                                }
+                                                // If this is the only/last column, then we can break out of the while loop.
+                                                // Check if this string has no trailing comma, and if not, peek to see if the next token
+                                                // contains a leading comma.
+                                                if !col_str.ends_with(",") {
+                                                    match peekable.peek() {
+                                                        Some(x) if x.starts_with(",") => continue,
+                                                        _ => break,
+                                                    }
+                                                }
+                                            }
+                                        };
+                                    }
+                                    all_excluded
+                                }
+                                // No target token after "alter" or "drop"
+                                None => false,
+                                // Other targets are considered compatible
+                                _ => true,
+                            }
+                        }
                         _ => true,
                     }
                 }
@@ -972,4 +1017,119 @@ pub async fn validate_source_privileges<'a>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DDLEvent;
+    use std::sync::Arc;
+
+    #[mz_ore::test]
+    fn test_ddl_event_is_compatible() {
+        fn test_case(ddl_command: &str, included_columns: &[Arc<str>], expected: bool) {
+            let ddl_event = DDLEvent {
+                lsn: Default::default(),
+                ddl_command: ddl_command.into(),
+            };
+            let result = ddl_event.is_compatible(included_columns);
+            assert_eq!(
+                result, expected,
+                "DDL command '{}' with included_columns {:?} expected to be {}, got {}",
+                ddl_command, included_columns, expected, result
+            );
+        }
+
+        let included_columns = vec![Arc::from("col3"), Arc::from("col4"), Arc::from("col4")];
+
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col1 INT",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ALTER COLUMN col3 INT",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col4 INT",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "CREATE INDEX idx_my_index ON my_table(col1)",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "DROP INDEX idx_my_index ON my_table",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table ADD COLUMN col5 INT",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1, col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col2",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col3, col4",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP CONSTRAINT constraint_name",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col3",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1,col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 ,col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col2",
+            &included_columns,
+            true,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , col3",
+            &included_columns,
+            false,
+        );
+        test_case(
+            "ALTER TABLE my_table DROP COLUMN col1 , COLUMN col3",
+            &included_columns,
+            false,
+        );
+    }
 }

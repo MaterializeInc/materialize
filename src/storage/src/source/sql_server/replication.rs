@@ -20,6 +20,7 @@ use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashMap;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::SqlServerCdcMetrics;
@@ -108,11 +109,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Export statistics for a given capture instance
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
+            // Maps the included columns for each output index so we can check whether schema updates are valid on a per-output basis
+            let mut included_columns: HashMap<u64, Vec<Arc<str>>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
+                // Collect the included columns from decoder for schema change validation
+                // The decoder serves as an effective source of truth for which columns are "included", as we only care about the columns that are being decoded and replicated
+                let included_cols = output.decoder.included_column_names();
+                included_columns.insert(output.partition_index, included_cols);
+
                 capture_instances
                     .entry(Arc::clone(&output.capture_instance))
                     .or_default()
@@ -359,7 +367,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                 .into_stream();
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 
-            let mut errored_instances = BTreeSet::new();
+            let mut errored_partitions = BTreeSet::new();
 
             // TODO(sql_server2): We should emit `ProgressStatisticsUpdate::SteadyState` messages
             // here, when we receive progress events. What stops us from doing this now is our
@@ -424,12 +432,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         lsn,
                         changes,
                     } => {
-                        if errored_instances.contains(&capture_instance) {
-                            // outputs for this captured instance are in an errored state, so they are not
-                            // emitted
-                            metrics.ignored.inc_by(u64::cast_from(changes.len()));
-                        }
-
                         let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
                             let definite_error = DefiniteError::ProgrammingError(format!(
                                 "capture instance didn't exist: '{capture_instance}'"
@@ -446,10 +448,17 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             return Ok(());
                         };
 
+                        let (valid_partitions, err_partitions) = partition_indexes.iter().partition::<Vec<u64>, _>(|&partition_idx| {
+                            !errored_partitions.contains(partition_idx)
+                        });
+
+                        if err_partitions.len() > 0 {
+                            metrics.ignored.inc_by(u64::cast_from(changes.len()));
+                        }
 
                         handle_data_event(
                             changes,
-                            partition_indexes,
+                            &valid_partitions,
                             &decoder_map,
                             lsn,
                             &rewinds,
@@ -460,36 +469,35 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         ).await?
                     },
                     CdcEvent::SchemaUpdate { capture_instance, table, ddl_event } => {
-                        if !errored_instances.contains(&capture_instance)
-                            && !ddl_event.is_compatible() {
-                            let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
-                                let definite_error = DefiniteError::ProgrammingError(format!(
-                                    "capture instance didn't exist: '{capture_instance}'"
-                                ));
-                                return_definite_error(
-                                    definite_error,
-                                    capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
-                                    data_output,
-                                    data_cap_set,
-                                    definite_error_handle,
-                                    definite_error_cap_set,
-                                )
-                                .await;
-                                return Ok(());
-                            };
-                            let error = DefiniteError::IncompatibleSchemaChange(
-                                capture_instance.to_string(),
-                                table.to_string()
-                            );
-                            for partition_idx in partition_indexes {
+                        let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
+                            let definite_error = DefiniteError::ProgrammingError(format!(
+                                "capture instance didn't exist: '{capture_instance}'"
+                            ));
+                            return_definite_error(
+                                definite_error,
+                                capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
+                                data_output,
+                                data_cap_set,
+                                definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await;
+                            return Ok(());
+                        };
+                        let error = DefiniteError::IncompatibleSchemaChange(
+                            capture_instance.to_string(),
+                            table.to_string()
+                        );
+                        for partition_idx in partition_indexes {
+                            if !errored_partitions.contains(partition_idx) && !ddl_event.is_compatible(included_columns.get(partition_idx).unwrap_or_else(|| panic!("Partition index didn't exist: '{partition_idx}'"))) {
                                 data_output
                                     .give_fueled(
                                         &data_cap_set[0],
                                         ((*partition_idx, Err(error.clone().into())), ddl_event.lsn, Diff::ONE),
                                     )
                                     .await;
+                                errored_partitions.insert(*partition_idx);
                             }
-                            errored_instances.insert(capture_instance);
                         }
                     }
                 };
