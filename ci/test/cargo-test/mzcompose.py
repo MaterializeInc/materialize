@@ -68,6 +68,22 @@ def flatten(xss):
     return [x for xs in xss for x in xs]
 
 
+def pull_image(image: str) -> None:
+    # Check if image exists locally before pulling
+    image_exists = subprocess.run(
+        ["docker", "images", "-q", image],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not image_exists:
+        subprocess.run(
+            ["docker", "pull", image],
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-full", action="store_true")
     parser.add_argument("--miri-fast", action="store_true")
@@ -116,6 +132,39 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     if os.path.exists(junit_path):
         os.remove(junit_path)
+
+    metadata = json.loads(
+        subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version=1"]
+        )
+    )
+
+    # Common args for all nextest runs
+    nextest_common_args = [
+        "--all-features",
+        "--cargo-profile=ci",
+        "--profile=ci",
+    ]
+
+    pkgs = [
+        f"--package={p['name']}"
+        for p in metadata["packages"]
+        if p["name"] not in ("mz-environmentd", "mz-balancerd")
+    ]
+
+    # Build `nextest_test_args` based on args and Buildkite parallelism
+    if args.args:
+        nextest_test_args = args.args
+    elif buildkite.get_parallelism_count() == 2:
+        if buildkite.get_parallelism_index() == 1:
+            nextest_test_args = pkgs
+        else:
+            nextest_test_args = [
+                "--package=mz-environmentd",
+                "--package=mz-balancerd",
+            ]
+    else:
+        nextest_test_args = ["--workspace"]
 
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
@@ -244,14 +293,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     def worker() -> None:
                         clusterd = c.compose["services"]["clusterd"]
                         try:
-                            subprocess.run(
-                                ["docker", "pull", clusterd["image"]],
-                                check=True,
-                                capture_output=True,
-                                stdin=subprocess.DEVNULL,
-                            )
+                            image = clusterd["image"]
+                            pull_image(image)
                             container_id = subprocess.check_output(
-                                ["docker", "create", clusterd["image"]], text=True
+                                ["docker", "create", image], text=True
                             ).strip()
                             target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
                             os.makedirs(target_dir, exist_ok=True)
@@ -292,24 +337,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                             "nextest",
                             "run",
                             "--no-run",
-                            "--all-features",
-                            "--cargo-profile=ci",
-                            "--profile=ci",
-                            *(
-                                ["--package=mz-environmentd", "--package=mz-balancerd"]
-                                if buildkite.get_parallelism_count() == 2
-                                else ["--workspace"]
-                            ),
+                            *nextest_common_args,
+                            *nextest_test_args,
                         ],
                         env=env,
                     )
                     clusterd_thread.join()
 
-            metadata = json.loads(
-                subprocess.check_output(
-                    ["cargo", "metadata", "--no-deps", "--format-version=1"]
-                )
-            )
             if sanitizer != Sanitizer.none:
                 # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
                 for pkg in metadata["packages"]:
@@ -346,12 +380,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         print(f"Test against package {pkg['name']} failed, continuing")
 
             else:
-                pkgs = [
-                    f"--package={p['name']}"
-                    for p in metadata["packages"]
-                    if p["name"] not in ("mz-environmentd", "mz-balancerd")
-                ]
-
                 spawn.runv(
                     [
                         "cargo",
@@ -359,27 +387,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "run",
                         # We want all tests to run
                         "--no-fail-fast",
-                        "--all-features",
-                        "--profile=ci",
-                        "--cargo-profile=ci",
+                        *nextest_common_args,
                         # Be careful about raising this since it will cause
                         # contention in cargo test when running against CRDB
                         # for tagged builds. Also increases test flakiness in
                         # general.
                         f"--test-threads={multiprocessing.cpu_count()}",
-                        *(
-                            (
-                                pkgs
-                                if buildkite.get_parallelism_index() == 1
-                                else [
-                                    "--package=mz-environmentd",
-                                    "--package=mz-balancerd",
-                                ]
-                            )
-                            if buildkite.get_parallelism_count() == 2
-                            else ["--workspace"]
-                        ),
-                        *args.args,
+                        *nextest_test_args,
                     ],
                     env=env,
                 )
