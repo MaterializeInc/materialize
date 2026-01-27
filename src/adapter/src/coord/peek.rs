@@ -1222,10 +1222,7 @@ impl crate::coord::Coordinator {
         if let Some(ws) = watch_set {
             self.install_peek_watch_sets(conn_id.clone(), ws)
                 .map_err(|e| {
-                    AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
-                        e,
-                        compute_instance,
-                    )
+                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)
                 })?;
         }
 
@@ -1289,10 +1286,7 @@ impl crate::coord::Coordinator {
         // for the error case (no ExecuteContextExtra is created here).
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let err = AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
-                    e,
-                    compute_instance,
-                );
+                let err = AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e);
                 send_err(tx, err);
                 return;
             }

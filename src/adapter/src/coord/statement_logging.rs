@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_compute_client::controller::error::CollectionLookupError;
+use mz_compute_client::controller::error::{CollectionFrontiersError, CollectionMissing};
+use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
@@ -25,6 +26,7 @@ use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
@@ -775,7 +777,7 @@ impl Coordinator {
         &mut self,
         conn_id: ConnectionId,
         watch_set: WatchSetCreation,
-    ) -> Result<(), CollectionLookupError> {
+    ) -> Result<(), WatchSetInstallError> {
         let WatchSetCreation {
             logging_id,
             timestamp,
@@ -802,5 +804,31 @@ impl Coordinator {
             ),
         )?;
         Ok(())
+    }
+}
+
+/// Errors arising during peek watch set installation.
+#[derive(Error, Debug)]
+pub enum WatchSetInstallError {
+    /// The specified compute instance does not exist.
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    /// The collection does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+}
+
+impl From<CollectionFrontiersError> for WatchSetInstallError {
+    fn from(error: CollectionFrontiersError) -> Self {
+        match error {
+            CollectionFrontiersError::InstanceMissing(id) => Self::InstanceMissing(id),
+            CollectionFrontiersError::CollectionMissing(id) => Self::CollectionMissing(id),
+        }
+    }
+}
+
+impl From<CollectionMissing> for WatchSetInstallError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
     }
 }
