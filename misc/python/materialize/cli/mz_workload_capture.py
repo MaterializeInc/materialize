@@ -218,7 +218,7 @@ def main() -> int:
         help="How long of a query/data ingestion history to capture, in seconds",
         default=360,
     )
-    # Currently too slow to always enable
+    # Currently too slow to always enable, not used yet.
     parser.add_argument("--avg-column-size", action=argparse.BooleanOptionalAction)
     parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
 

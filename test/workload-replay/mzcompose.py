@@ -3451,6 +3451,22 @@ def test(
     return stats
 
 
+def get_paths(globs: list[str]) -> list[pathlib.Path]:
+    paths = []
+    for glob in globs:
+        new_paths = list(LOCATION.rglob(glob))
+        if not new_paths:
+            known = "\n  ".join(
+                [posixpath.relpath(file, LOCATION) for file in LOCATION.rglob("*.yml")]
+            )
+            raise ValueError(
+                f'No workload files found matching "{glob}", known:\n  {known}'
+            )
+        paths.extend(new_paths)
+    paths.sort()
+    return paths
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--factor-initial-data",
@@ -3522,11 +3538,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     random.seed(args.seed)
     update_captured_workloads_repo()
 
-    files_unsharded: list[pathlib.Path] = []
-    for file in args.files:
-        files_unsharded.extend(LOCATION.rglob(file))
     files: list[pathlib.Path] = buildkite.shard_list(
-        sorted(files_unsharded),
+        get_paths(args.files),
         lambda file: str(file),
     )
 
@@ -3618,11 +3631,8 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"-- Random seed is {args.seed}")
     update_captured_workloads_repo()
 
-    files_unsharded: list[pathlib.Path] = []
-    for file in args.files:
-        files_unsharded.extend(LOCATION.rglob(file))
     files: list[pathlib.Path] = buildkite.shard_list(
-        sorted(files_unsharded),
+        get_paths(args.files),
         lambda file: str(file),
     )
     c.test_parts(
@@ -3653,13 +3663,7 @@ def workflow_stats(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
         args = parser.parse_args()
         update_captured_workloads_repo()
-
-        files: list[pathlib.Path] = []
-        for file in args.files:
-            files.extend(LOCATION.rglob(file))
-        files.sort()
-
-        for file in files:
+        for file in get_paths(args.files):
             with open(file) as f:
                 workload = yaml.load(f, Loader=yaml.CSafeLoader)
             print()

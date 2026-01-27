@@ -225,7 +225,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     files_unsharded: list[pathlib.Path] = []
     for file in args.files:
-        files_unsharded.extend(LOCATION.rglob(file))
+        new_files = list(LOCATION.rglob(file))
+        if not new_files:
+            known = "\n  ".join(
+                [posixpath.relpath(file, LOCATION) for file in LOCATION.rglob("*.yml")]
+            )
+            raise ValueError(f'No files found matching "{file}", known:\n  {known}')
+        files_unsharded.extend(new_files)
     files: list[pathlib.Path] = buildkite.shard_list(
         sorted(files_unsharded),
         lambda file: str(file),
