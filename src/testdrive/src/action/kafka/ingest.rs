@@ -29,11 +29,139 @@ use crate::parser::BuiltinCommand;
 
 const INGEST_BATCH_SIZE: isize = 10000;
 
+/// Extracts ALL type names defined in an Avro schema (including nested types).
+/// Returns a set of fully qualified type names.
+#[allow(clippy::disallowed_types)]
+fn extract_all_defined_types(
+    schema_json: &str,
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    let value: serde_json::Value = serde_json::from_str(schema_json)
+        .context("parsing schema JSON to extract defined types")?;
+
+    let mut types = std::collections::HashSet::new();
+    collect_defined_types(&value, None, &mut types);
+    Ok(types)
+}
+
+/// Recursively collects all named type definitions from an Avro schema.
+#[allow(clippy::disallowed_types)]
+fn collect_defined_types(
+    value: &serde_json::Value,
+    parent_namespace: Option<&str>,
+    types: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            // Get this schema's namespace (falls back to parent's namespace)
+            let namespace = map
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .or(parent_namespace);
+
+            // Check if this is a named type definition (record, enum, or fixed)
+            if let Some(type_val) = map.get("type")
+                && type_val
+                    .as_str()
+                    .is_some_and(|typ| ["record", "enum", "fixed"].contains(&typ))
+            {
+                if let Some(name) = map.get("name").and_then(|v| v.as_str()) {
+                    // Construct fully qualified name
+                    let fullname = if name.contains('.') {
+                        name.to_string()
+                    } else if let Some(ns) = namespace {
+                        format!("{}.{}", ns, name)
+                    } else {
+                        name.to_string()
+                    };
+                    types.insert(fullname);
+                }
+            }
+
+            // The following types may have references:
+            // type field, items (array types), values (map types), and fields (e.g. unions)
+            for entity_type in &["type", "items", "values", "fields"] {
+                if let Some(val) = map.get(*entity_type) {
+                    collect_defined_types(val, namespace, types);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_defined_types(item, parent_namespace, types);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Extracts all type references from an Avro schema JSON string.
+/// This finds all fully qualified type names that are referenced but not defined in the schema.
+#[allow(clippy::disallowed_types)]
+fn extract_type_references(schema_json: &str) -> anyhow::Result<std::collections::HashSet<String>> {
+    let value: serde_json::Value = serde_json::from_str(schema_json)
+        .context("parsing schema JSON to extract type references")?;
+
+    let mut references = std::collections::HashSet::new();
+    collect_type_references(&value, &mut references);
+    Ok(references)
+}
+
+/// Recursively collects type references from an Avro schema JSON value.
+#[allow(clippy::disallowed_types)]
+fn collect_type_references(
+    value: &serde_json::Value,
+    references: &mut std::collections::HashSet<String>,
+) {
+    match value {
+        serde_json::Value::String(s) => {
+            // A string type that contains a dot is likely a fully qualified type reference
+            if s.contains('.')
+                && ![
+                    "null", "boolean", "int", "long", "float", "double", "bytes", "string",
+                ]
+                .contains(&s.as_str())
+            {
+                references.insert(s.clone());
+            }
+        }
+        serde_json::Value::Object(map) => {
+            // For named types, we want to recurse into the fields, but the named type doesn't
+            // get added to references.
+            if let Some(type_val) = map.get("type")
+                && type_val
+                    .as_str()
+                    .is_some_and(|typ| ["record", "enum", "fixed"].contains(&typ))
+            {
+                if let Some(fields) = map.get("fields") {
+                    collect_type_references(fields, references);
+                }
+                return;
+            }
+
+            // The following types may have references:
+            // type field, items (array types), values (map types), and fields (e.g. unions)
+            for entity_type in &["type", "items", "values", "fields"] {
+                if let Some(val) = map.get(*entity_type) {
+                    collect_type_references(val, references);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_type_references(item, references);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[derive(Clone)]
 enum Format {
     Avro {
         schema: String,
         confluent_wire_format: bool,
+        /// Schema references (subject names) for Confluent Schema Registry
+        references: Vec<String>,
     },
     Protobuf {
         descriptor_file: String,
@@ -178,6 +306,12 @@ pub async fn run_ingest(
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
+            // TODO (maz): update README!
+            references: cmd
+                .args
+                .opt_string("references")
+                .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
         },
         "protobuf" => {
             let descriptor_file = cmd.args.string("descriptor-file")?;
@@ -202,6 +336,11 @@ pub async fn run_ingest(
                 anyhow!("key-schema parameter required when key-format is present")
             })?,
             confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
+            references: cmd
+                .args
+                .opt_string("key-references")
+                .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
         }),
         Some("protobuf") => {
             let descriptor_file = cmd.args.string("key-descriptor-file")?;
@@ -411,18 +550,95 @@ async fn make_transcoder(
         Format::Avro {
             schema,
             confluent_wire_format,
+            references,
         } => {
             if confluent_wire_format {
+                // Build references list by fetching each subject from the registry
+                // We need ALL references for local parsing, but only DIRECT references for the registry
+                let mut reference_subjects = vec![];
+                for reference in &references {
+                    let subject = state
+                        .ccsr_client
+                        .get_subject_latest(reference)
+                        .await
+                        .with_context(|| format!("fetching reference {}", reference))?;
+                    // Extract ALL type names defined in this schema (including nested types)
+                    let defined_types = extract_all_defined_types(&subject.schema.raw)
+                        .with_context(|| {
+                            format!("extracting type names from reference schema {}", reference)
+                        })?;
+                    reference_subjects.push((
+                        reference.to_string(),
+                        subject.version,
+                        subject.schema.raw,
+                        defined_types,
+                    ));
+                }
+
+                // Extract types directly referenced by the primary schema
+                let direct_refs = extract_type_references(&schema)
+                    .context("extracting type references from schema")?;
+
+                // For the registry, create a reference for each type in direct_refs
+                // that is defined in one of the reference subjects
+                let mut schema_references = vec![];
+                for type_name in &direct_refs {
+                    for (subject_name, version, _, defined_types) in &reference_subjects {
+                        if defined_types.contains(type_name) {
+                            schema_references.push(mz_ccsr::SchemaReference {
+                                name: type_name.clone(),
+                                subject: subject_name.clone(),
+                                version: *version,
+                            });
+                            break;
+                        }
+                    }
+                }
+
+                // For local parsing, we need all reference schemas
+                let reference_raw_schemas: Vec<_> = reference_subjects
+                    .into_iter()
+                    .map(|(_, _, raw, _)| raw)
+                    .collect();
+
                 let schema_id = state
                     .ccsr_client
-                    .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
+                    .publish_schema(
+                        &ccsr_subject,
+                        &schema,
+                        mz_ccsr::SchemaType::Avro,
+                        &schema_references,
+                    )
                     .await
                     .context("publishing to schema registry")?;
-                let schema = avro::parse_schema(&schema)
-                    .with_context(|| format!("parsing avro schema: {}", schema))?;
+
+                // Parse schema, handling references if any
+                let schema = if reference_raw_schemas.is_empty() {
+                    avro::parse_schema(&schema, &[])
+                        .with_context(|| format!("parsing avro schema: {}", schema))?
+                } else {
+                    // Parse reference schemas incrementally (each may depend on previous ones).
+                    // References must be specified in dependency order (dependencies first).
+                    let mut parsed_refs: Vec<Schema> = vec![];
+                    for raw in &reference_raw_schemas {
+                        let schema_value: serde_json::Value = serde_json::from_str(raw)
+                            .with_context(|| format!("parsing reference schema JSON: {}", raw))?;
+                        let parsed = Schema::parse_with_references(&schema_value, &parsed_refs)
+                            .with_context(|| format!("parsing reference avro schema: {}", raw))?;
+                        parsed_refs.push(parsed);
+                    }
+
+                    // Parse primary schema with all reference types available
+                    let schema_value: serde_json::Value = serde_json::from_str(&schema)
+                        .with_context(|| format!("parsing schema JSON: {}", schema))?;
+                    Schema::parse_with_references(&schema_value, &parsed_refs).with_context(
+                        || format!("parsing avro schema with references: {}", schema),
+                    )?
+                };
+
                 Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
             } else {
-                let schema = avro::parse_schema(&schema)
+                let schema = avro::parse_schema(&schema, &[])
                     .with_context(|| format!("parsing avro schema: {}", schema))?;
                 Ok(Transcoder::PlainAvro { schema })
             }

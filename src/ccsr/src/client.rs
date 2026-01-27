@@ -145,6 +145,7 @@ impl Client {
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
             let res: GetBySubjectResponse = send_request(req).await?;
+            println!("subject response: {res:#?}");
             subjects.push(Subject {
                 schema: Schema {
                     id: res.id,

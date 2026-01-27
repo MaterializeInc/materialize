@@ -38,12 +38,13 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
 use mz_avro::error::Error as AvroError;
-use mz_avro::schema::{Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed, resolve_schemas};
+use mz_avro::schema::{
+    ParseSchemaError, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed, resolve_schemas,
+};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::future::OreFutureExt;
@@ -55,9 +56,17 @@ use tracing::warn;
 
 use crate::avro::is_null;
 
-pub fn parse_schema(schema: &str) -> anyhow::Result<Schema> {
-    let schema = serde_json::from_str(schema)?;
-    Ok(Schema::parse(&schema)?)
+pub fn parse_schema(schema: &str, references: &[String]) -> anyhow::Result<Schema> {
+    let schema: serde_json::Value = serde_json::from_str(schema)?;
+    // Parse reference schemas incrementally: each reference may depend on previous ones.
+    // References must be provided in dependency order (dependencies first).
+    let mut parsed_refs: Vec<Schema> = Vec::with_capacity(references.len());
+    for reference in references {
+        let ref_json: serde_json::Value = serde_json::from_str(reference)?;
+        let parsed = Schema::parse_with_references(&ref_json, &parsed_refs)?;
+        parsed_refs.push(parsed);
+    }
+    Ok(Schema::parse_with_references(&schema, &parsed_refs)?)
 }
 
 /// Converts an Apache Avro schema into a list of column names and types.
@@ -304,10 +313,12 @@ pub struct ConfluentAvroResolver {
 impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
+        reader_reference_schemas: &[String],
         ccsr_client: Option<mz_ccsr::Client>,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
-        let reader_schema = parse_schema(reader_schema)?;
+        // parse_schema handles incremental parsing of references (dependencies first)
+        let reader_schema = parse_schema(reader_schema, reader_reference_schemas)?;
         let writer_schemas = ccsr_client.map(SchemaCache::new).transpose()?;
         Ok(Self {
             reader_schema,
@@ -400,6 +411,10 @@ impl SchemaCache {
     /// that this schema cache was initialized with, returns the schema directly.
     /// If not, performs schema resolution on the reader and writer and
     /// returns the result.
+    ///
+    /// This method also handles schema references: if the schema references types
+    /// defined in other schemas, those schemas are fetched and their types are made
+    /// available during parsing.
     async fn get(
         &mut self,
         id: i32,
@@ -412,14 +427,16 @@ impl SchemaCache {
                 // immediately, and not cached, since it might get better on the
                 // next retry.
                 let ccsr_client = Arc::clone(&self.ccsr_client);
-                let response = Retry::default()
+
+                // Fetch schema with its references (if any)
+                let (primary_subject, reference_subjects) = Retry::default()
                     // Twice the timeout of the ccsr client so we can attempt 2 requests.
                     .max_duration(ccsr_client.timeout() * 2)
                     // Canceling because ultimately it's just non-mutating HTTP requests.
                     .retry_async_canceling(move |state| {
                         let ccsr_client = Arc::clone(&ccsr_client);
                         async move {
-                            let res = ccsr_client.get_schema_by_id(id).await;
+                            let res = ccsr_client.get_subject_and_references_by_id(id).await;
                             match res {
                                 Err(e) => {
                                     if let Some(timeout) = state.next_backoff {
@@ -437,21 +454,49 @@ impl SchemaCache {
                     })
                     .run_in_task(|| format!("fetch_avro_schema:{}", id))
                     .await?;
+
                 // Now, we've gotten some json back, so we want to cache it (regardless of whether it's a valid
                 // avro schema, it won't change).
                 //
                 // However, we can't just cache it directly, since resolving schemas takes significant CPU work,
-                // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
+                // which we don't want to repeat for every record. So, parse and resolve it, and cache the
                 // result (whether schema or error).
-                let result = Schema::from_str(&response.raw).and_then(|schema| {
-                    // Schema fingerprints don't actually capture whether two schemas are meaningfully
-                    // different, because they strip out logical types. Thus, resolve in all cases.
-                    let resolved = resolve_schemas(&schema, reader_schema)?;
-                    Ok(resolved)
-                });
+                let result = Self::parse_with_references(
+                    &primary_subject,
+                    &reference_subjects,
+                    reader_schema,
+                );
                 v.insert(result)
             }
         };
         Ok(entry.as_ref().map_err(|e| anyhow::Error::new(e.clone())))
+    }
+
+    /// Parse a schema along with its references and resolve against the reader schema.
+    fn parse_with_references(
+        primary_subject: &mz_ccsr::Subject,
+        reference_subjects: &[mz_ccsr::Subject],
+        reader_schema: &Schema,
+    ) -> Result<Schema, AvroError> {
+        // Parse referenced schemas incrementally: each reference may depend on previous ones.
+        // References are returned in dependency order (dependencies first).
+        let mut reference_schemas: Vec<Schema> = Vec::with_capacity(reference_subjects.len());
+        for subject in reference_subjects {
+            let ref_json: serde_json::Value = serde_json::from_str(&subject.schema.raw)
+                .map_err(|e| ParseSchemaError::new(format!("Error parsing JSON: {}", e)))?;
+            let parsed = Schema::parse_with_references(&ref_json, &reference_schemas)?;
+            reference_schemas.push(parsed);
+        }
+
+        // Parse primary schema, using references if present
+
+        let primary_value: serde_json::Value = serde_json::from_str(&primary_subject.schema.raw)
+            .map_err(|e| ParseSchemaError::new(format!("Error parsing JSON: {}", e)))?;
+        let schema = Schema::parse_with_references(&primary_value, &reference_schemas)?;
+
+        // Schema fingerprints don't actually capture whether two schemas are meaningfully
+        // different, because they strip out logical types. Thus, resolve in all cases.
+        let resolved = resolve_schemas(&schema, reader_schema)?;
+        Ok(resolved)
     }
 }

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_S3_TABLES_REGION_CHECK;
-use mz_ccsr::{Client, GetByIdError, GetBySubjectError, Schema as CcsrSchema};
+use mz_ccsr::{Client, GetBySubjectError};
 use mz_cloud_provider::CloudProvider;
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
@@ -2456,6 +2456,8 @@ async fn purify_csr_connection_avro(
         let Schema {
             key_schema,
             value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
         } = get_remote_csr_schema(
             &ccsr_client,
             key_strategy.clone().unwrap_or_default(),
@@ -2470,6 +2472,8 @@ async fn purify_csr_connection_avro(
         *seed = Some(CsrSeedAvro {
             key_schema,
             value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
         })
     }
 
@@ -2480,17 +2484,33 @@ async fn purify_csr_connection_avro(
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// Reference schemas for the key schema, in dependency order.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    pub value_reference_schemas: Vec<String>,
+}
+
+/// Result of fetching a schema, including any referenced schemas.
+struct SchemaWithReferences {
+    /// The primary schema.
+    schema: String,
+    /// Reference schemas in dependency order.
+    references: Vec<String>,
 }
 
 async fn get_schema_with_strategy(
     client: &Client,
     strategy: ReaderSchemaSelectionStrategy,
     subject: &str,
-) -> Result<Option<String>, PlanError> {
+) -> Result<Option<SchemaWithReferences>, PlanError> {
     match strategy {
         ReaderSchemaSelectionStrategy::Latest => {
-            match client.get_schema_by_subject(subject).await {
-                Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
+            // Use get_subject_and_references to also fetch referenced schemas
+            match client.get_subject_and_references(subject).await {
+                Ok((primary, dependencies)) => Ok(Some(SchemaWithReferences {
+                    schema: primary.schema.raw,
+                    references: dependencies.into_iter().map(|s| s.schema.raw).collect(),
+                })),
                 Err(GetBySubjectError::SubjectNotFound)
                 | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
                 Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
@@ -2499,15 +2519,26 @@ async fn get_schema_with_strategy(
                 }),
             }
         }
-        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(raw)),
-        ReaderSchemaSelectionStrategy::ById(id) => match client.get_schema_by_id(id).await {
-            Ok(CcsrSchema { raw, .. }) => Ok(Some(raw)),
-            Err(GetByIdError::SchemaNotFound) => Ok(None),
-            Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
-                schema_lookup: format!("ID {}", id),
-                cause: Arc::new(e),
-            }),
-        },
+        // TODO (maz): inline strategy can still have reached out to registry and collected
+        // references, so not clear that we should have empty references here.
+        ReaderSchemaSelectionStrategy::Inline(raw) => Ok(Some(SchemaWithReferences {
+            schema: raw,
+            references: vec![],
+        })),
+        ReaderSchemaSelectionStrategy::ById(id) => {
+            match client.get_subject_and_references_by_id(id).await {
+                Ok((primary, dependencies)) => Ok(Some(SchemaWithReferences {
+                    schema: primary.schema.raw,
+                    references: dependencies.into_iter().map(|s| s.schema.raw).collect(),
+                })),
+                Err(GetBySubjectError::SubjectNotFound)
+                | Err(GetBySubjectError::VersionNotFound(_)) => Ok(None),
+                Err(e) => Err(PlanError::FetchingCsrSchemaFailed {
+                    schema_lookup: format!("subject {}", subject.quoted()),
+                    cause: Arc::new(e),
+                }),
+            }
+        }
     }
 }
 
@@ -2518,14 +2549,18 @@ async fn get_remote_csr_schema(
     topic: &str,
 ) -> Result<Schema, PlanError> {
     let value_schema_name = format!("{}-value", topic);
-    let value_schema =
+    let value_result =
         get_schema_with_strategy(ccsr_client, value_strategy, &value_schema_name).await?;
-    let value_schema = value_schema.ok_or_else(|| anyhow!("No value schema found"))?;
-    let subject = format!("{}-key", topic);
-    let key_schema = get_schema_with_strategy(ccsr_client, key_strategy, &subject).await?;
+    let value_result = value_result.ok_or_else(|| anyhow!("No value schema found"))?;
+
+    let key_subject = format!("{}-key", topic);
+    let key_result = get_schema_with_strategy(ccsr_client, key_strategy, &key_subject).await?;
+
     Ok(Schema {
-        key_schema,
-        value_schema,
+        key_schema: key_result.as_ref().map(|r| r.schema.clone()),
+        value_schema: value_result.schema,
+        key_reference_schemas: key_result.map(|r| r.references).unwrap_or_default(),
+        value_reference_schemas: value_result.references,
     })
 }
 

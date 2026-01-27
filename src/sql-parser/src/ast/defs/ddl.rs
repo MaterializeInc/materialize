@@ -386,6 +386,12 @@ impl_display_t!(CsrConnectionProtobuf);
 pub struct CsrSeedAvro {
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// Reference schemas for the key schema, in dependency order.
+    /// Populated during purification by fetching from the schema registry.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    /// Populated during purification by fetching from the schema registry.
+    pub value_reference_schemas: Vec<String>,
 }
 
 impl AstDisplay for CsrSeedAvro {
@@ -395,10 +401,34 @@ impl AstDisplay for CsrSeedAvro {
             f.write_str(" KEY SCHEMA '");
             f.write_node(&display::escape_single_quote_string(key_schema));
             f.write_str("'");
+            if !self.key_reference_schemas.is_empty() {
+                f.write_str(" KEY REFERENCES (");
+                for (i, schema) in self.key_reference_schemas.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ");
+                    }
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(schema));
+                    f.write_str("'");
+                }
+                f.write_str(")");
+            }
         }
         f.write_str(" VALUE SCHEMA '");
         f.write_node(&display::escape_single_quote_string(&self.value_schema));
         f.write_str("'");
+        if !self.value_reference_schemas.is_empty() {
+            f.write_str(" VALUE REFERENCES (");
+            for (i, schema) in self.value_reference_schemas.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ");
+                }
+                f.write_str("'");
+                f.write_node(&display::escape_single_quote_string(schema));
+                f.write_str("'");
+            }
+            f.write_str(")");
+        }
     }
 }
 impl_display!(CsrSeedAvro);

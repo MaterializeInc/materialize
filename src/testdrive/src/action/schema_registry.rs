@@ -13,10 +13,34 @@ use anyhow::{Context, bail};
 use mz_ccsr::{SchemaReference, SchemaType};
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
+use serde_json::Value as JsonValue;
 
 use crate::action::{ControlFlow, State};
 use crate::format::avro;
 use crate::parser::BuiltinCommand;
+
+/// Extracts the fully qualified name from an Avro schema JSON string.
+/// For record types, this combines namespace and name (e.g., "com.example.User").
+fn extract_avro_fullname(schema_json: &str) -> anyhow::Result<String> {
+    let value: JsonValue =
+        serde_json::from_str(schema_json).context("parsing schema JSON to extract fullname")?;
+
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("schema missing 'name' field"))?;
+
+    let namespace = value.get("namespace").and_then(|v| v.as_str());
+
+    // If name contains dots, it's already fully qualified
+    if name.contains('.') {
+        Ok(name.to_string())
+    } else if let Some(ns) = namespace {
+        Ok(format!("{}.{}", ns, name))
+    } else {
+        Ok(name.to_string())
+    }
+}
 
 pub async fn run_publish(
     mut cmd: BuiltinCommand,
@@ -49,8 +73,13 @@ pub async fn run_publish(
             .get_subject_latest(&reference)
             .await
             .with_context(|| format!("fetching reference {}", reference))?;
+        // Extract the fully qualified Avro type name from the schema.
+        // The Schema Registry reference `name` field should be the type name
+        // (e.g., "com.example.Address"), not the subject name.
+        let type_name = extract_avro_fullname(&subject.schema.raw)
+            .with_context(|| format!("extracting type name from reference schema {}", reference))?;
         references.push(SchemaReference {
-            name: subject.name,
+            name: type_name,
             subject: reference.to_string(),
             version: subject.version,
         })
@@ -77,7 +106,7 @@ pub async fn run_verify(
     cmd.args.done()?;
     let expected_schema = match &cmd.input[..] {
         [expected_schema] => {
-            avro::parse_schema(expected_schema).context("parsing expected avro schema")?
+            avro::parse_schema(expected_schema, &[]).context("parsing expected avro schema")?
         }
         _ => bail!("unable to read expected schema input"),
     };
@@ -105,7 +134,8 @@ pub async fn run_verify(
         .await
         .context("fetching schema")?;
 
-    let actual_schema = avro::parse_schema(&actual_schema).context("parsing actual avro schema")?;
+    let actual_schema =
+        avro::parse_schema(&actual_schema, &[]).context("parsing actual avro schema")?;
     if expected_schema != actual_schema {
         bail!(
             "schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",

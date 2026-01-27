@@ -248,7 +248,9 @@ pub async fn run_verify_data(
             .get_schema_by_subject(&format!("{}-key", topic))
             .await
             .ok()
-            .map(|key_schema| avro::parse_schema(&key_schema.raw).context("parsing avro schema"))
+            .map(|key_schema| {
+                avro::parse_schema(&key_schema.raw, &[]).context("parsing avro schema")
+            })
             .transpose()?;
         // for avro, we can determine if a key is required based on the presence of the key schema
         // rather than requiring the user to specify the key=true flag
@@ -266,7 +268,7 @@ pub async fn run_verify_data(
             .await
             .context("fetching schema")?
             .raw;
-        Some(avro::parse_schema(&val_schema).context("parsing avro schema")?)
+        Some(avro::parse_schema(&val_schema, &[]).context("parsing avro schema")?)
     } else {
         None
     };
