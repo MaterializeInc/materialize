@@ -54,7 +54,7 @@ use uuid::Uuid;
 use crate::catalog::Catalog;
 use crate::command::{
     CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
-    SASLVerifyProofResponse,
+    SASLVerifyProofResponse, SuperuserAttribute,
 };
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
@@ -296,10 +296,8 @@ impl Client {
 
         // Apply the superuser attribute to the session's user if
         // it exists.
-        if let Some(superuser_attribute) = superuser_attribute {
-            session.apply_internal_user_metadata(InternalUserMetadata {
-                superuser: superuser_attribute,
-            });
+        if let SuperuserAttribute(Some(superuser)) = superuser_attribute {
+            session.apply_internal_user_metadata(InternalUserMetadata { superuser });
         }
 
         session.initialize_role_metadata(role_id);

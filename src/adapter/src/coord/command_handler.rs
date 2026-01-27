@@ -64,7 +64,7 @@ use uuid::Uuid;
 
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse, SASLVerifyProofResponse,
-    StartupResponse,
+    StartupResponse, SuperuserAttribute,
 };
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::peek::PendingPeek;
@@ -762,7 +762,7 @@ impl Coordinator {
         user: &User,
         _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
-    ) -> Result<(RoleId, Option<bool>, BTreeMap<String, OwnedVarInput>), AdapterError> {
+    ) -> Result<(RoleId, SuperuserAttribute, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
             // This includes preventing any user, except a pre-defined set of system users, from
@@ -868,7 +868,11 @@ impl Coordinator {
         // rather than eagerly on connection startup. This avoids expensive catalog_mut() calls
         // for the common case where connections never create temporary objects.
 
-        Ok((role_id, superuser_attribute, session_defaults))
+        Ok((
+            role_id,
+            SuperuserAttribute(superuser_attribute),
+            session_defaults,
+        ))
     }
 
     /// Handles an execute command.
