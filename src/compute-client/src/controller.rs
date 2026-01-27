@@ -79,12 +79,14 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
+mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
 
 pub mod error;
-pub mod instance;
+pub mod instance_client;
+pub use instance_client::InstanceClient;
 
 pub(crate) type StorageCollections<T> = Arc<
     dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
@@ -337,11 +339,11 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
     }
 
-    /// Return an `instance::Client` for the indicated compute instance.
+    /// Return an `InstanceClient` for the indicated compute instance.
     pub fn instance_client(
         &self,
         id: ComputeInstanceId,
-    ) -> Result<instance::Client<T>, InstanceMissing> {
+    ) -> Result<InstanceClient<T>, InstanceMissing> {
         self.instance(id).map(|instance| instance.client.clone())
     }
 
@@ -527,7 +529,7 @@ where
             logs.push((log, id, shared));
         }
 
-        let client = instance::Client::spawn(
+        let client = InstanceClient::spawn(
             id,
             self.build_info,
             Arc::clone(&self.storage_collections),
@@ -1067,13 +1069,13 @@ where
 
 #[derive(Debug)]
 struct InstanceState<T: ComputeControllerTimestamp> {
-    client: instance::Client<T>,
+    client: InstanceClient<T>,
     replicas: BTreeSet<ReplicaId>,
     collections: BTreeMap<GlobalId, Collection<T>>,
 }
 
 impl<T: ComputeControllerTimestamp> InstanceState<T> {
-    fn new(client: instance::Client<T>, collections: BTreeMap<GlobalId, Collection<T>>) -> Self {
+    fn new(client: InstanceClient<T>, collections: BTreeMap<GlobalId, Collection<T>>) -> Self {
         Self {
             client,
             replicas: Default::default(),

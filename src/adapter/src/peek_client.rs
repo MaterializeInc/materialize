@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
+use mz_compute_client::controller::InstanceClient;
 use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
@@ -54,8 +55,7 @@ pub struct PeekClient {
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
     /// in a hot loop. Hopefully this won't occur any time soon.
-    compute_instances:
-        BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
+    compute_instances: BTreeMap<ComputeInstanceId, InstanceClient<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
     /// A generator for transient `GlobalId`s, shared with Coordinator.
@@ -93,7 +93,7 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing> {
+    ) -> Result<InstanceClient<Timestamp>, InstanceMissing> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {

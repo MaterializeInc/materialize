@@ -176,7 +176,7 @@ pub enum Command {
         instance_id: ComputeInstanceId,
         tx: oneshot::Sender<
             Result<
-                mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
+                mz_compute_client::controller::instance_client::InstanceClient<mz_repr::Timestamp>,
                 mz_compute_client::controller::error::InstanceMissing,
             >,
         >,

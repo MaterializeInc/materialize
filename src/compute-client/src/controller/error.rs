@@ -22,7 +22,7 @@ use thiserror::Error;
 
 pub use mz_storage_types::errors::CollectionMissing;
 
-use crate::controller::instance::InstanceShutDown;
+use crate::controller::instance_client::InstanceShutDown;
 use crate::controller::{ComputeInstanceId, ReplicaId};
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
