@@ -90,7 +90,6 @@ use crate::{
     CatalogConfig, FronteggAuthenticator, HttpListenerConfig, ListenersConfig, SqlListenerConfig,
     WebSocketAuth, WebSocketResponse,
 };
-use mz_authenticator::GenericOidcAuthenticator;
 
 pub static KAFKA_ADDRS: LazyLock<String> =
     LazyLock::new(|| env::var("KAFKA_ADDRS").unwrap_or_else(|_| "localhost:9092".into()));
@@ -101,7 +100,6 @@ pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
     frontegg: Option<FronteggAuthenticator>,
-    oidc: Option<GenericOidcAuthenticator>,
     external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
     unsafe_mode: bool,
@@ -139,7 +137,6 @@ impl Default for TestHarness {
             data_directory: None,
             tls: None,
             frontegg: None,
-            oidc: None,
             external_login_password_mz_system: None,
             listeners_config: ListenersConfig {
                 sql: btreemap![
@@ -365,8 +362,7 @@ impl TestHarness {
         self
     }
 
-    pub fn with_oidc_auth(mut self, oidc: &GenericOidcAuthenticator) -> Self {
-        self.oidc = Some(oidc.clone());
+    pub fn with_oidc_auth(mut self, issuer: String, audience: Option<String>) -> Self {
         let enable_tls = self.tls.is_some();
         self.listeners_config = ListenersConfig {
             sql: btreemap! {
@@ -416,6 +412,15 @@ impl TestHarness {
                 },
             },
         };
+
+        self.system_parameter_defaults
+            .insert("oidc_issuer".to_string(), issuer);
+
+        if let Some(audience) = audience {
+            self.system_parameter_defaults
+                .insert("oidc_audience".to_string(), audience);
+        }
+
         self
     }
 
@@ -807,7 +812,6 @@ impl Listeners {
                     connection_context,
                     replica_http_locator: Default::default(),
                 },
-                oidc: config.oidc,
                 secrets_controller,
                 cloud_resource_controller: None,
                 tls: config.tls,

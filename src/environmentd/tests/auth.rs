@@ -38,7 +38,6 @@ use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_auth::password::Password;
-use mz_authenticator::{GenericOidcAuthenticator, OidcConfig};
 use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -1318,12 +1317,6 @@ async fn test_auth_base_require_tls_oidc() {
     .await
     .unwrap();
 
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: None,
-    })
-    .unwrap();
-
     let oidc_user = "user@example.com";
     let jwt_token = oidc_server.generate_jwt(
         oidc_user,
@@ -1358,7 +1351,7 @@ async fn test_auth_base_require_tls_oidc() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(oidc_server.issuer, None)
         .start()
         .await;
 
@@ -1522,11 +1515,6 @@ async fn test_auth_oidc_audience_validation() {
     .unwrap();
 
     let expected_audience = "my-app-client-id";
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: Some(expected_audience.to_string()),
-    })
-    .unwrap();
 
     let oidc_user = "user@example.com";
     // Token with correct audience
@@ -1563,7 +1551,7 @@ async fn test_auth_oidc_audience_validation() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(oidc_server.issuer, Some(expected_audience.to_string()))
         .start()
         .await;
 
@@ -1644,12 +1632,6 @@ async fn test_auth_oidc_audience_optional() {
     .await
     .unwrap();
 
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: None,
-    })
-    .unwrap();
-
     let oidc_user = "user@example.com";
     // Token with no audience
     let no_aud_token = oidc_server.generate_jwt(
@@ -1670,7 +1652,7 @@ async fn test_auth_oidc_audience_optional() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(oidc_server.issuer, None)
         .start()
         .await;
 
@@ -1723,17 +1705,11 @@ async fn test_auth_oidc_password_fallback() {
     .await
     .unwrap();
 
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: None,
-    })
-    .unwrap();
-
     let oidc_user = "user@example.com";
     let user_password = "secure_password";
 
     let server = test_util::TestHarness::default()
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(oidc_server.issuer, None)
         .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .start()

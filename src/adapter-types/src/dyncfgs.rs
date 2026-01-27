@@ -119,6 +119,16 @@ pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
     "Enable password authentication.",
 );
 
+/// OIDC issuer URL.
+pub const OIDC_ISSUER: Config<&'static str> = Config::new("oidc_issuer", "", "OIDC issuer URL.");
+
+/// OIDC audience (client ID). When empty, audience validation is skipped.
+pub const OIDC_AUDIENCE: Config<&'static str> = Config::new(
+    "oidc_audience",
+    "",
+    "OIDC audience (client ID). When empty, audience validation is skipped.",
+);
+
 pub const CONSTRAINT_BASED_TIMESTAMP_SELECTION: Config<&'static str> = Config::new(
     "constraint_based_timestamp_selection",
     ConstraintBasedTimestampSelection::const_default().as_str(),
@@ -157,6 +167,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
         .add(&ENABLE_PASSWORD_AUTH)
+        .add(&OIDC_ISSUER)
+        .add(&OIDC_AUDIENCE)
         .add(&CONSTRAINT_BASED_TIMESTAMP_SELECTION)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)

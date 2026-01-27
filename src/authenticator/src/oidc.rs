@@ -17,23 +17,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jsonwebtoken::{DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
+use mz_adapter::Client as AdapterClient;
+use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_ISSUER};
 use mz_auth::Authenticated;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use tracing::warn;
 use url::Url;
-
-/// Command line arguments for OIDC authentication.
-#[derive(Debug, Clone)]
-pub struct OidcConfig {
-    /// OIDC issuer URL (e.g., `https://accounts.google.com`).
-    /// This is validated against the `iss` claim in the JWT.
-    pub oidc_issuer: String,
-    /// Optional OIDC audience (client ID).
-    /// If set, validates that the JWT's `aud` claim contains this value.
-    pub oidc_audience: Option<String>,
-}
 
 /// Errors that can occur during OIDC authentication.
 #[derive(Debug)]
@@ -148,31 +139,32 @@ struct OpenIdConfiguration {
 
 #[derive(Debug)]
 pub struct GenericOidcAuthenticatorInner {
-    issuer: String,
-    audience: Option<String>,
+    adapter_client: AdapterClient,
     decoding_keys: Mutex<BTreeMap<String, OidcDecodingKey>>,
     http_client: HttpClient,
 }
 
 impl GenericOidcAuthenticator {
-    /// Create a new [`GenericOidcAuthenticator`] from [`OidcConfig`].
-    pub fn new(config: OidcConfig) -> Result<Self, OidcError> {
+    /// Create a new [`GenericOidcAuthenticator`] with an [`AdapterClient`].
+    ///
+    /// The OIDC issuer and audience are fetched from system variables on each
+    /// authentication attempt.
+    pub fn new(adapter_client: AdapterClient) -> Self {
         let http_client = HttpClient::new();
 
-        Ok(Self {
+        Self {
             inner: Arc::new(GenericOidcAuthenticatorInner {
-                issuer: config.oidc_issuer,
-                audience: config.oidc_audience,
+                adapter_client,
                 decoding_keys: Mutex::new(BTreeMap::new()),
                 http_client,
             }),
-        })
+        }
     }
 }
 
 impl GenericOidcAuthenticatorInner {
-    async fn fetch_jwks_uri(&self) -> Result<String, OidcError> {
-        let openid_config_url = Url::parse(&self.issuer)
+    async fn fetch_jwks_uri(&self, issuer: &str) -> Result<String, OidcError> {
+        let openid_config_url = Url::parse(issuer)
             .and_then(|url| url.join(".well-known/openid-configuration"))
             .map_err(OidcError::InvalidIssuerUrl)?;
 
@@ -199,9 +191,13 @@ impl GenericOidcAuthenticatorInner {
 
         Ok(openid_config.jwks_uri)
     }
+
     /// Fetch JWKS from the provider and parse into a map of key IDs to decoding keys.
-    async fn fetch_jwks(&self) -> Result<BTreeMap<String, OidcDecodingKey>, OidcError> {
-        let jwks_uri = self.fetch_jwks_uri().await?;
+    async fn fetch_jwks(
+        &self,
+        issuer: &str,
+    ) -> Result<BTreeMap<String, OidcDecodingKey>, OidcError> {
+        let jwks_uri = self.fetch_jwks_uri(issuer).await?;
         let response = self
             .http_client
             .get(&jwks_uri)
@@ -247,16 +243,16 @@ impl GenericOidcAuthenticatorInner {
 
     /// Find a decoding key matching the given key ID.
     /// If the key is not found, fetch the JWKS and cache the keys.
-    async fn find_key(&self, kid: &String) -> Result<OidcDecodingKey, OidcError> {
+    async fn find_key(&self, kid: &str, issuer: &str) -> Result<OidcDecodingKey, OidcError> {
         {
-            let mut decoding_keys = self.decoding_keys.lock().expect("lock poisoned");
+            let decoding_keys = self.decoding_keys.lock().expect("lock poisoned");
 
-            if let Some(key) = decoding_keys.get_mut(kid) {
+            if let Some(key) = decoding_keys.get(kid) {
                 return Ok(key.clone());
             }
         }
 
-        let new_decoding_keys = self.fetch_jwks().await?;
+        let new_decoding_keys = self.fetch_jwks(issuer).await?;
 
         let decoding_key = new_decoding_keys.get(kid).cloned();
 
@@ -277,18 +273,26 @@ impl GenericOidcAuthenticatorInner {
         token: &str,
         expected_user: Option<&str>,
     ) -> Result<OidcClaims, OidcError> {
+        // Fetch current OIDC configuration from system variables
+        let system_vars = self.adapter_client.get_system_vars().await;
+        let issuer = OIDC_ISSUER.get(system_vars.dyncfgs());
+        let audience = {
+            let aud = OIDC_AUDIENCE.get(system_vars.dyncfgs());
+            if aud.is_empty() { None } else { Some(aud) }
+        };
+
         // Decode header to get key ID (kid) and algorithm
         let header = decode_header(token).map_err(OidcError::Jwt)?;
 
         let kid = header.kid.ok_or(OidcError::MissingKid)?;
         // Find matching key from cached keys
-        let decoding_key = self.find_key(&kid).await?;
+        let decoding_key = self.find_key(&kid, &issuer).await?;
 
         // Set up validation
         // TODO (SangJunBak): Make JWT expiration configurable.
         let mut validation = Validation::new(header.alg);
-        validation.set_issuer(&[&self.issuer]);
-        if let Some(ref audience) = self.audience {
+        validation.set_issuer(&[&issuer]);
+        if let Some(ref audience) = audience {
             validation.set_audience(&[audience]);
         } else {
             validation.validate_aud = false;

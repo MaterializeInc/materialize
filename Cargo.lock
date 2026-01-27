@@ -5595,6 +5595,7 @@ version = "0.1.0"
 dependencies = [
  "jsonwebtoken",
  "mz-adapter",
+ "mz-adapter-types",
  "mz-auth",
  "mz-frontegg-auth",
  "mz-ore",

@@ -36,7 +36,6 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
     SYSTEM_CLUSTER_DEFAULT_REPLICATION_FACTOR,
 };
 use mz_auth::password::Password;
-use mz_authenticator::{GenericOidcAuthenticator, OidcConfig};
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
@@ -172,14 +171,6 @@ pub struct Args {
     /// Frontegg arguments.
     #[clap(flatten)]
     frontegg: FronteggCliArgs,
-    // === OIDC options. ===
-    /// OIDC issuer URL (e.g., `https://accounts.google.com`).
-    #[clap(long, env = "MZ_OIDC_ISSUER")]
-    oidc_issuer: Option<String>,
-    /// OIDC audience (client ID). If set, validates that the JWT's `aud` claim
-    /// contains this value.
-    #[clap(long, env = "MZ_OIDC_AUDIENCE")]
-    oidc_audience: Option<String>,
     // === Orchestrator options. ===
     /// The service orchestrator implementation to use.
     #[structopt(long, value_enum, env = "ORCHESTRATOR")]
@@ -752,14 +743,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     // Configure connections.
     let tls = args.tls.into_config()?;
     let frontegg = FronteggAuthenticator::from_args(args.frontegg, &metrics_registry)?;
-    let oidc = if let Some(oidc_issuer) = args.oidc_issuer {
-        Some(GenericOidcAuthenticator::new(OidcConfig {
-            oidc_issuer,
-            oidc_audience: args.oidc_audience,
-        })?)
-    } else {
-        None
-    };
     let listeners_config: ListenersConfig = {
         let f = File::open(args.listeners_config_path)?;
         serde_json::from_reader(f)?
@@ -1100,7 +1083,6 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
-                oidc,
                 cors_allowed_origin,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,

@@ -9,10 +9,10 @@
 
 pub mod oidc;
 
-use mz_adapter::Client as AdapterClient;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 
-pub use oidc::{GenericOidcAuthenticator, OidcClaims, OidcConfig, OidcError};
+pub use mz_adapter::Client as AdapterClient;
+pub use oidc::{GenericOidcAuthenticator, OidcClaims, OidcError};
 
 #[derive(Debug, Clone)]
 pub enum Authenticator {
