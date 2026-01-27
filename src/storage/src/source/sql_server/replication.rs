@@ -110,7 +110,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // Export statistics for a given capture instance
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
             // Maps the included columns for each output index so we can check whether schema updates are valid on a per-output basis
-            let mut included_columns: HashMap<u64, Vec<String>> = HashMap::new();
+            let mut included_columns: HashMap<u64, Vec<Arc<str>>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
                 if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {

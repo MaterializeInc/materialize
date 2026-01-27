@@ -1236,10 +1236,10 @@ impl SqlServerRowDecoder {
         Ok(())
     }
 
-    pub fn included_column_names(&self) -> Vec<String> {
+    pub fn included_column_names(&self) -> Vec<Arc<str>> {
         self.decoders
             .iter()
-            .map(|decoder| decoder.0.to_string())
+            .map(|decoder| Arc::clone(&decoder.0))
             .collect()
     }
 }

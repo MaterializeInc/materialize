@@ -622,7 +622,7 @@ impl DDLEvent {
     ///  2. ALTER TABLE .. DROP COLUMN
     ///
     /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
-    pub fn is_compatible(&self, included_columns: &Vec<String>) -> bool {
+    pub fn is_compatible(&self, included_columns: &[Arc<str>]) -> bool {
         // TODO (maz): This is currently a basic check that doesn't take into account type changes.
         // At some point, we will need to move this to SqlServerTableDesc and expand it.
         let mut words = self.ddl_command.split_ascii_whitespace();
@@ -1022,10 +1022,11 @@ pub async fn validate_source_privileges<'a>(
 #[cfg(test)]
 mod tests {
     use super::DDLEvent;
+    use std::sync::Arc;
 
     #[mz_ore::test]
     fn test_ddl_event_is_compatible() {
-        fn test_case(ddl_command: &str, included_columns: &Vec<String>, expected: bool) {
+        fn test_case(ddl_command: &str, included_columns: &[Arc<str>], expected: bool) {
             let ddl_event = DDLEvent {
                 lsn: Default::default(),
                 ddl_command: ddl_command.into(),
@@ -1038,7 +1039,7 @@ mod tests {
             );
         }
 
-        let included_columns = vec!["col3".to_string(), "col4".to_string(), "col4".to_string()];
+        let included_columns = vec![Arc::from("col3"), Arc::from("col4"), Arc::from("col4")];
 
         test_case(
             "ALTER TABLE my_table ALTER COLUMN col1 INT",
