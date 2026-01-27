@@ -1,7 +1,4 @@
 # Install on GCP (Legacy Terraform)
-
-
-
 Self-managed Materialize requires: a Kubernetes (v1.31+) cluster; PostgreSQL as
 a metadata database; blob storage; and a license key.
 
@@ -25,19 +22,11 @@ module](https://github.com/MaterializeInc/terraform-google-materialize) to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 > For simplicity, this tutorial stores various secrets in a file as well as prints
 > them to the terminal. In practice, refer to your organization's official
 > security and Terraform/infrastructure practices.
->
->
->
 
 
 ## Prerequisites
@@ -71,8 +60,6 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 > **Tip:** Using `gcloud` to install `kubectl` will also install the needed plugins.
 > Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 > `kubectl`.
->
->
 
 
 - If you do not have `kubectl`, install `kubectl`.  To install, see [Install
@@ -110,7 +97,6 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    > **Tip:** You do not need to configure a default Compute Region and Zone as you will
 >    specify the region.
->
 
 
 1. Enable the following services for your GCP project, if not already enabled:
@@ -188,7 +174,6 @@ If you want to use `jq` and do not have `jq` installed, install.
    ```
 
    > **Tip:** If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
->
 
 
 ## B. Set up GCP Kubernetes environment and install Materialize
@@ -199,13 +184,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 
@@ -235,13 +215,10 @@ components:
 > requires minimal user input. For details on the  `examples/simple/`
 > infrastructure configuration (such as the node instance type, etc.), see the
 > [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
->
 > For more configuration options, you can use the `main.tf` file at the [root of
 > the repository](https://github.com/MaterializeInc/terraform-google-materialize/)
 > instead. When running with the root `main.tf`, see [GCP required
 > configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-gcp/).
->
->
 
 
 **Releases:**
@@ -293,13 +270,10 @@ components:
 >    requires minimal user input. For details on the  `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-google-materialize/)
 >    instead. When running with the root `main.tf`, see [GCP required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-gcp/).
->
->
 
 
 1. Create a `terraform.tfvars` file (you can copy from the
@@ -321,14 +295,10 @@ components:
 >    requires minimal user input. For details on the  `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-google-materialize/)
 >    instead. When running with the root `main.tf`, see [GCP required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-gcp/).
->
->
->
 
 
 1. Initialize the terraform directory.
@@ -506,10 +476,7 @@ components:
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated
 >    Terraform modules to your existing deployments.
->
->
 >    See [Materialize on GCP releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-gcp-terraform-module) for notable changes.
->
 
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -690,9 +657,6 @@ components:
 >    Refer to the [Troubleshooting Console
 >    Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >    guide.
->
->
->
 
 
 ## Next steps

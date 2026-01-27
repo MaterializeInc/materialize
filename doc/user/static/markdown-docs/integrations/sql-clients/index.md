@@ -1,9 +1,5 @@
 # SQL clients
-
 How to connect to Materialize using common SQL clients
-
-
-
 Materialize is **wire-compatible** with PostgreSQL, which means it integrates
 with many SQL clients that support PostgreSQL. In this guide, we’ll cover how to
 connect to your Materialize region using some common SQL clients.
@@ -32,7 +28,6 @@ user. This password is auto-generated, and prefixed with `mzp_`.
 > session**, but do not affect other sessions. To permanently change the default
 > value of a configuration parameter for a specific user (i.e. role), use the
 > [`ALTER ROLE...SET`](/sql/alter-role) command.
->
 
 
 You can pass runtime connection parameters (like `cluster`, `isolation_level`,
@@ -67,15 +62,12 @@ psql \
 > -- may not work as expected with Materialize because they rely on
 > PostgreSQL-specific queries that use unsupported system functions (e.g.,
 > `age()`) and system columns (e.g., `xmin`).
->
 > As an alternative, you can [use the JDBC metadata
 > introspector](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
 > To use the JDBC metadata instrospector, from your data source properties, in the
 > **Advanced** tab, select **Introspect using JDBC Metadata** from the **Expert
 > options** list. For more information, see the [DataGrip
 > documentation](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
->
->
 
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
@@ -145,7 +137,6 @@ To show system objects in the database explorer:
 
 > **Note:** As we work on extending the coverage of `pg_catalog` in Materialize,
 > some TablePlus features might not work as expected.
->
 
 
 To connect to Materialize using [TablePlus](https://tableplus.com/),
@@ -158,7 +149,6 @@ Materialize console.
 ### `psql`
 
 > **Warning:** Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands.
->
 
 
 

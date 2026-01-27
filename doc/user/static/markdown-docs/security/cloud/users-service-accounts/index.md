@@ -13,27 +13,21 @@ resources.
 During creation of a user/service account in Materialize, the account is
 assigned an organization role:
 
-
 | Organization role | Description |
 | --- | --- |
 | <strong>Organization Admin</strong> | <ul> <li> <p><strong>Console access</strong>: Has access to all Materialize console features, including administrative features (e.g., invite users, create service accounts, manage billing, and organization settings).</p> </li> <li> <p><strong>Database access</strong>: Has <red><strong>superuser</strong></red> privileges in the database.</p> </li> </ul>  |
 | <strong>Organization Member</strong> | <ul> <li> <p><strong>Console access</strong>: Has no access to Materialize console administrative features.</p> </li> <li> <p><strong>Database access</strong>: Inherits role-level privileges defined by the <code>PUBLIC</code> role; may also have additional privileges via grants or default privileges. See <a href="/security/cloud/access-control/#roles-and-privileges" >Access control control</a>.</p> </li> </ul>  |
 
+
 > **Note:** - The first user for an organization is automatically assigned the
 >   **Organization Admin** role.
->
-> - An <a href="/security/cloud/users-service-accounts/#organization-roles" >Organization
-> Admin</a> has
-> <red><strong>superuser</strong></red> privileges in the database. Following the principle of
-> least privilege, only assign <strong>Organization Admin</strong> role to those users who
+> - An [Organization
+> Admin](/security/cloud/users-service-accounts/#organization-roles) has
+> <red>**superuser**</red> privileges in the database. Following the principle of
+> least privilege, only assign **Organization Admin** role to those users who
 > require superuser privileges.
->
 > - Users/service accounts can be granted additional database roles and privileges
 >   as needed.
->
->
-
-
 
 ## User accounts
 
@@ -43,15 +37,10 @@ Materialize will email the user with an invitation link.
 
 > **Note:** - Until the user accepts the invitation and logs in, the user is listed as
 > **Pending Approval**.
->
 > - When the user accepts the invitation, the user can set the user password and
 > log in to activate their account. The first time the user logs in, a database
 > role with the same name as their e-mail address is created, and the account
 > creation is complete.
->
->
-
-
 
 For instructions on inviting users to your Materialize organization, see [Invite
 users](./invite-users/).
@@ -60,8 +49,6 @@ users](./invite-users/).
 
 > **Tip:** As a best practice, we recommend you use service accounts to connect external
 > applications and services to Materialize.
->
->
 
 
 As an **Organization admin**, you can create a new service account via
@@ -70,11 +57,8 @@ the [Materialize Console](/console/) or via
 
 > **Note:** - The new account creation is not finished until the first time you connect with
 > the account.
->
 > - The first time the account connects, a database role with the same name as the
-> specified service account <strong>User</strong> is created, and the service account creation is complete.
->
->
+> specified service account **User** is created, and the service account creation is complete.
 
 
 For instructions on creating a new service account in your Materialize
@@ -117,7 +101,6 @@ all systems in your organization.
 > **Note:** Single sign-on in Materialize only supports authentication into the Materialize
 > console. Permissions within the database are handled separately using
 > [role-based access control](/security/cloud/access-control/).
->
 
 
 ## Before you begin
@@ -154,35 +137,29 @@ To make Materialize metadata available to Datadog, you must configure and run th
 
 * Select the organization role for the user:
 
-
   | Organization role | Description |
   | --- | --- |
   | <strong>Organization Admin</strong> | <ul> <li> <p><strong>Console access</strong>: Has access to all Materialize console features, including administrative features (e.g., invite users, create service accounts, manage billing, and organization settings).</p> </li> <li> <p><strong>Database access</strong>: Has <red><strong>superuser</strong></red> privileges in the database.</p> </li> </ul>  |
   | <strong>Organization Member</strong> | <ul> <li> <p><strong>Console access</strong>: Has no access to Materialize console administrative features.</p> </li> <li> <p><strong>Database access</strong>: Inherits role-level privileges defined by the <code>PUBLIC</code> role; may also have additional privileges via grants or default privileges. See <a href="/security/cloud/access-control/#roles-and-privileges" >Access control control</a>.</p> </li> </ul>  |
 
+
   > **Note:** - The first user for an organization is automatically assigned the
   >   **Organization Admin** role.
-  >
-  > - An <a href="/security/cloud/users-service-accounts/#organization-roles" >Organization
-  > Admin</a> has
-  > <red><strong>superuser</strong></red> privileges in the database. Following the principle of
-  > least privilege, only assign <strong>Organization Admin</strong> role to those users who
+  > - An [Organization
+  > Admin](/security/cloud/users-service-accounts/#organization-roles) has
+  > <red>**superuser**</red> privileges in the database. Following the principle of
+  > least privilege, only assign **Organization Admin** role to those users who
   > require superuser privileges.
-  >
   > - Users/service accounts can be granted additional database roles and privileges
   >   as needed.
-  >
-  >
-
-
 
 
 ## Next steps
 
 The organization role for a user/service account determines the default level of
-database access. Once the account creation is complete, you can use <a href="/security/cloud/access-control/#role-based-access-control-rbac" >role-based
+database access. Once the account creation is complete, you can use [role-based
 access control
-(RBAC)</a> to
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
 control access for that account.
 
 
@@ -202,11 +179,8 @@ More granular permissions for the service account can then be configured using
 
 > **Note:** - The new account creation is not finished until the first time you connect with
 > the account.
->
 > - The first time the account connects, a database role with the same name as the
-> specified service account <strong>User</strong> is created, and the service account creation is complete.
->
->
+> specified service account **User** is created, and the service account creation is complete.
 
 
 ## Materialize Console
@@ -223,7 +197,7 @@ More granular permissions for the service account can then be configured using
    | <strong>Type</strong> | Select <strong>Service</strong> |
    | <strong>Name</strong> | Specify a descriptive name. |
    | <strong>User</strong> | Specify a service account user name. If the specified account user does not exist, it will be automatically created the <strong>first time</strong> the application connects with the user name and password. |
-   | <strong>Roles</strong> | <p>Select the organization role:</p>  \| Organization role \| Description \| \| --- \| --- \| \| <strong>Organization Admin</strong> \| <ul> <li> <p><strong>Console access</strong>: Has access to all Materialize console features, including administrative features (e.g., invite users, create service accounts, manage billing, and organization settings).</p> </li> <li> <p><strong>Database access</strong>: Has <red><strong>superuser</strong></red> privileges in the database.</p> </li> </ul>  \| \| <strong>Organization Member</strong> \| <ul> <li> <p><strong>Console access</strong>: Has no access to Materialize console administrative features.</p> </li> <li> <p><strong>Database access</strong>: Inherits role-level privileges defined by the <code>PUBLIC</code> role; may also have additional privileges via grants or default privileges. See <a href="/security/cloud/access-control/#roles-and-privileges" >Access control control</a>.</p> </li> </ul>  \|  > **Note:** - The first user for an organization is automatically assigned the >   **Organization Admin** role. >  > - An <a href="/security/cloud/users-service-accounts/#organization-roles" >Organization > Admin</a> has > <red><strong>superuser</strong></red> privileges in the database. Following the principle of > least privilege, only assign <strong>Organization Admin</strong> role to those users who > require superuser privileges. >  > - Users/service accounts can be granted additional database roles and privileges >   as needed. >  >     |
+   | <strong>Roles</strong> | <p>Select the organization role:</p> <table>   <thead>       <tr>           <th>Organization role</th>           <th>Description</th>       </tr>   </thead>   <tbody>       <tr>           <td><strong>Organization Admin</strong></td>           <td><ul> <li> <p><strong>Console access</strong>: Has access to all Materialize console features, including administrative features (e.g., invite users, create service accounts, manage billing, and organization settings).</p> </li> <li> <p><strong>Database access</strong>: Has <red><strong>superuser</strong></red> privileges in the database.</p> </li> </ul></td>       </tr>       <tr>           <td><strong>Organization Member</strong></td>           <td><ul> <li> <p><strong>Console access</strong>: Has no access to Materialize console administrative features.</p> </li> <li> <p><strong>Database access</strong>: Inherits role-level privileges defined by the <code>PUBLIC</code> role; may also have additional privileges via grants or default privileges. See <a href="/security/cloud/access-control/#roles-and-privileges" >Access control control</a>.</p> </li> </ul></td>       </tr>   </tbody> </table> <blockquote> <p><strong>Note:</strong> - The first user for an organization is automatically assigned the <strong>Organization Admin</strong> role.</p> <ul> <li>An <a href="/security/cloud/users-service-accounts/#organization-roles" >Organization Admin</a> has <red><strong>superuser</strong></red> privileges in the database. Following the principle of least privilege, only assign <strong>Organization Admin</strong> role to those users who require superuser privileges.</li> <li>Users/service accounts can be granted additional database roles and privileges as needed.</li> </ul> </blockquote>  |
 
 
 1. Click **Create Password** to generate a new password for your service
@@ -233,8 +207,6 @@ More granular permissions for the service account can then be configured using
 
    > **Note:** Do not reload or navigate away from the screen before storing the
 >    password. This information is not displayed again.
->
->
 
 
 1. Connect with the new service account to finish creating the new
@@ -242,11 +214,8 @@ More granular permissions for the service account can then be configured using
 
    > **Note:** - The new account creation is not finished until the first time you connect with
 >   the account.
->
 > - The first time the account connects, a database role with the same name as the
-> specified service account <strong>User</strong> is created, and the service account creation is complete.
->
->
+> specified service account **User** is created, and the service account creation is complete.
 
 
    1. Find your new service account in the **App Passwords** table.
@@ -263,7 +232,7 @@ If you have `psql` installed:
 1. When prompted for the password, enter the app's password.
 
 The first time the account connects, a database role with the same name as the
-specified service account <strong>User</strong> is created, and the service account creation is complete.
+specified service account **User** is created, and the service account creation is complete.
 
 
       **Other clients:**
@@ -274,7 +243,7 @@ To use a different client to connect,
 1. Update the client to use these details and connect.
 
 The first time the account connects, a database role with the same name as the
-specified service account <strong>User</strong> is created, and the service account creation is complete.
+specified service account **User** is created, and the service account creation is complete.
 
 
 
@@ -335,9 +304,9 @@ resources in your region, see the [reference documentation](/manage/terraform/).
 ## Next steps
 
 The organization role for a user/service account determines the default level of
-database access. Once the account creation is complete, you can use <a href="/security/cloud/access-control/#role-based-access-control-rbac" >role-based
+database access. Once the account creation is complete, you can use [role-based
 access control
-(RBAC)</a> to
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
 control access for that account.
 
 
@@ -348,15 +317,10 @@ control access for that account.
 
 > **Note:** - Until the user accepts the invitation and logs in, the user is listed as
 > **Pending Approval**.
->
 > - When the user accepts the invitation, the user can set the user password and
 > log in to activate their account. The first time the user logs in, a database
 > role with the same name as their e-mail address is created, and the account
 > creation is complete.
->
->
-
-
 
 As an **Organization administrator**, you can invite new users via the
 Materialize Console.
@@ -369,27 +333,21 @@ Materialize Console.
 
 1. In the **Select Role**, select the organization role for the user:
 
-
    | Organization role | Description |
    | --- | --- |
    | <strong>Organization Admin</strong> | <ul> <li> <p><strong>Console access</strong>: Has access to all Materialize console features, including administrative features (e.g., invite users, create service accounts, manage billing, and organization settings).</p> </li> <li> <p><strong>Database access</strong>: Has <red><strong>superuser</strong></red> privileges in the database.</p> </li> </ul>  |
-   | <strong>Organization Member</strong> | <ul> <li> <p><strong>Console access</strong>: Has no access to Materialize console administrative features.</p> </li> <li> <p><strong>Database access</strong>: Inherits role-level privileges defined by the <code>PUBLIC</code> role; may also have additional privileges via grants or default privileges. See <a href="/security/cloud/access-control/#roles-and-privileges">Access control control</a>.</p> </li> </ul>  |
+   | <strong>Organization Member</strong> | <ul> <li> <p><strong>Console access</strong>: Has no access to Materialize console administrative features.</p> </li> <li> <p><strong>Database access</strong>: Inherits role-level privileges defined by the <code>PUBLIC</code> role; may also have additional privileges via grants or default privileges. See <a href="/security/cloud/access-control/#roles-and-privileges" >Access control control</a>.</p> </li> </ul>  |
+
 
    > **Note:** - The first user for an organization is automatically assigned the
    >   **Organization Admin** role.
-   >
-   > - An <a href="/security/cloud/users-service-accounts/#organization-roles">Organization
-   > Admin</a> has
-   > <red><strong>superuser</strong></red> privileges in the database. Following the principle of
-   > least privilege, only assign <strong>Organization Admin</strong> role to those users who
+   > - An [Organization
+   > Admin](/security/cloud/users-service-accounts/#organization-roles) has
+   > <red>**superuser**</red> privileges in the database. Following the principle of
+   > least privilege, only assign **Organization Admin** role to those users who
    > require superuser privileges.
-   >
    > - Users/service accounts can be granted additional database roles and privileges
    >   as needed.
-   >
-   >
-
-
 
 1. Click the **Invite** button at the bottom right section of the screen.
 
@@ -397,20 +355,15 @@ Materialize Console.
 
    > **Note:** - Until the user accepts the invitation and logs in, the user is listed as
    > **Pending Approval**.
-   >
    > - When the user accepts the invitation, the user can set the user password and
    > log in to activate their account. The first time the user logs in, a database
    > role with the same name as their e-mail address is created, and the account
    > creation is complete.
-   >
-   >
-
-
 
 ## Next steps
 
 The organization role for a user/service account determines the default level of
-database access. Once the account creation is complete, you can use <a href="/security/cloud/access-control/#role-based-access-control-rbac">role-based
+database access. Once the account creation is complete, you can use [role-based
 access control
-(RBAC)</a> to
+(RBAC)](/security/cloud/access-control/#role-based-access-control-rbac) to
 control access for that account.

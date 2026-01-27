@@ -1,9 +1,5 @@
 # Ruby cheatsheet
-
 Use Ruby to connect, insert, manage, query and stream from Materialize.
-
-
-
 Materialize is **wire-compatible** with PostgreSQL, which means that Ruby applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the  [`pg` gem](https://rubygems.org/gems/pg/) to connect to Materialize and issue SQL commands.
 
 ## Connect

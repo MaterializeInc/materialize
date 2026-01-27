@@ -1,9 +1,5 @@
 # Cluster sizes
-
 Reference page on self-managed cluster sizes
-
-
-
 ## Default Cluster Sizes
 
 For Self-Managed Materialize, the cluster sizes are configured with the
@@ -130,8 +126,6 @@ as well as user clusters.
 
 > **Tip:** In general, you should not have to override the defaults. At minimum, we
 > recommend that you keep the 25-200cc cluster sizes.
->
->
 
 
 ```yaml
@@ -166,5 +160,3 @@ operator:
 > **Note:** If you have modified the default cluster size configurations, you can query the
 > [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 > system catalog table for the specific resource allocations.
->
->

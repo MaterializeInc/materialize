@@ -1,9 +1,5 @@
 # DROP SECRET
-
 `DROP SECRET` removes a secret from Materialize's secret management system.
-
-
-
 `DROP SECRET` removes a secret from Materialize's secret management system. If
 there are connections depending on the secret, you must explicitly drop them
 first, or use the `CASCADE` option.
@@ -60,11 +56,8 @@ DROP SECRET kafka_sasl_password CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped secret.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped secret.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

@@ -1,9 +1,5 @@
 # mz sql
-
 The `mz sql` command executes SQL statements in a region.
-
-
-
 The `mz sql` command executes SQL statements in a region.
 
 ```shell

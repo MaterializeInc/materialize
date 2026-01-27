@@ -1,9 +1,5 @@
 # TIMEZONE and AT TIME ZONE functions
-
 Converts timestamp to a different time zone.
-
-
-
 `TIMEZONE` and `AT TIME ZONE` convert a [`timestamp`](../../types/timestamp/#timestamp-info) or a [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-info) to a different time zone.
 
 **Known limitation:** You must explicitly cast the type for the time zone.

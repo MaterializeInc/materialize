@@ -1,9 +1,5 @@
 # ALTER SECRET
-
 `ALTER SECRET` changes the contents of a secret.
-
-
-
 Use `ALTER SECRET` to:
 
 - Change the value of the secret.
@@ -118,17 +114,11 @@ ALTER SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the secret being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the secret is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the secret being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the secret is namespaced
+  by a schema.
 
 ## Related pages
 

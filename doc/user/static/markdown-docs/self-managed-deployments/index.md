@@ -176,7 +176,6 @@ operator will roll out the changes.
 
 > **Note:** If you do not specify  a new `requestRollout` UUID, the operator
 > watches for updates but does not roll out the changes.
->
 
 
 For a full list of fields available for the Materialize CR, see [Materialize CRD
@@ -303,12 +302,8 @@ To help you get started, Materialize provides Terraform modules.
 > not be directly relied upon for production deployments: **future releases of the
 > modules will contain breaking changes.** Instead, to use as a starting point for
 > your own production deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
 
 
 
@@ -452,76 +447,74 @@ locally or on a cloud provider. Self-Managed Materialize requires:</p>
 
 <h3 id="install-using-helm-commands">Install using Helm Commands</h3>
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-local-kind/" >Install locally on Kind</a></td>
-<td>Uses standard Helm commands to deploy Materialize to a Kind cluster in Docker.</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-local-kind/" >Install locally on Kind</a></td>
+          <td>Uses standard Helm commands to deploy Materialize to a Kind cluster in Docker.</td>
+      </tr>
+  </tbody>
 </table>
 
 
 <h3 id="install-using-terraform-modules">Install using Terraform Modules</h3>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > installing Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-aws/" >Install on AWS</a></td>
-<td>Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-azure/" >Install on Azure</a></td>
-<td>Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-gcp/" >Install on GCP</a></td>
-<td>Uses Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-aws/" >Install on AWS</a></td>
+          <td>Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-azure/" >Install on Azure</a></td>
+          <td>Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-gcp/" >Install on GCP</a></td>
+          <td>Uses Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
 <h3 id="install-using-legacy-terraform-modules">Install using Legacy Terraform Modules</h3>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > installing Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -882,21 +875,17 @@ generation has caught up, consult the <code>UpToDate</code> condition in the
 status of the Materialize Resource. If the condition&rsquo;s reason is
 <code>ReadyToPromote</code> the new generation is ready to promote.</p>
 > **Warning:** Do not leave new generations unpromoted indefinitely.
->
 >   The new generation keeps open read holds which prevent compaction. Once promoted or
 >   cancelled, those read holds are released. If left unpromoted for an extended time, this
 >   data can build up, and can cause extreme deletion load on the metadata backend database
 >   when finally promoted or cancelled.
->
 
 </li>
 <li>
 <p><code>ImmediatelyPromoteCausingDowntime</code>:<br>  > **Warning:** THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
->
 >   This strategy should ONLY be used by customers with physical hardware who do not have
 >   enough hardware for the `WaitUntilReady` strategy. If you think you want this, please
 >   consult with Materialize engineering to discuss your situation.
->
 </p>
 <p>Tear down the old generation of pods and promote the new generation of pods immediately,
 without waiting for the new generation of pods to be ready.</p>
@@ -3224,7 +3213,6 @@ CSI driver to use, eg &ldquo;local.csi.openebs.io&rdquo;
 | v26.0.0 | v26.0.0 | v26.0.0 | 2025-11-18 | See <a href="/releases/#self-managed-v2600" >v26.0.0 release notes</a> |
 
 
-
 ---
 
 ## Troubleshooting
@@ -3372,8 +3360,6 @@ upgrading the Materialize instances.
 > **Note:** For major version upgrades, you can <strong>only</strong> upgrade <strong>one</strong> major version
 > at a time. For example, upgrades from <strong>v26</strong>.1.0 to <strong>v27</strong>.3.0 is
 > permitted but <strong>v26</strong>.1.0 to <strong>v28</strong>.0.0 is not.
->
->
 
 
 
@@ -3383,76 +3369,74 @@ The following upgrade guides are available as examples:
 
 <h4 id="upgrade-using-helm-commands">Upgrade using Helm Commands</h4>
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/upgrade-on-kind/" >Upgrade on Kind</a></td>
-<td>Uses standard Helm commands to upgrade Materialize on a Kind cluster in Docker.</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/upgrade-on-kind/" >Upgrade on Kind</a></td>
+          <td>Uses standard Helm commands to upgrade Materialize on a Kind cluster in Docker.</td>
+      </tr>
+  </tbody>
 </table>
 
 
 <h4 id="upgrade-using-the-new-terraform-modules">Upgrade using the new Terraform Modules</h4>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > upgrading Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/upgrade-on-aws/" >Upgrade on AWS (Terraform)</a></td>
-<td>Uses the new Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/upgrade-on-azure/" >Upgrade on Azure (Terraform)</a></td>
-<td>Uses the new Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/upgrade-on-gcp/" >Upgrade on GCP (Terraform)</a></td>
-<td>Uses the new Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/upgrade-on-aws/" >Upgrade on AWS (Terraform)</a></td>
+          <td>Uses the new Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/upgrade-on-azure/" >Upgrade on Azure (Terraform)</a></td>
+          <td>Uses the new Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/upgrade-on-gcp/" >Upgrade on GCP (Terraform)</a></td>
+          <td>Uses the new Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
 <h4 id="upgrade-using-legacy-terraform-modules">Upgrade using Legacy Terraform Modules</h4>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > upgrading Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/" >Upgrade on AWS (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/" >Upgrade on Azure (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/" >Upgrade on GCP (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/" >Upgrade on AWS (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/" >Upgrade on Azure (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/" >Upgrade on GCP (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -3460,8 +3444,6 @@ The following upgrade guides are available as examples:
 
 > **Important:** When upgrading Materialize, always upgrade the Helm Chart and Materialize
 > Operator first.
->
->
 
 
 ### Update the Helm Chart repository
@@ -3569,7 +3551,6 @@ kubectl patch materialize <instance-name> \
 
 > **Note:** Until you specify a new `requestRollout`, the Operator watches for updates but
 > does not roll out the changes.
->
 
 
 
@@ -3633,8 +3614,6 @@ the Materialize instance.
 > **Note:** `requestRollout` without the `forcedRollout` field only rolls out if changes
 > exist to the Materialize instance. To roll out even if there are no changes to
 > the instance, use with `forcedRollouts`.
->
->
 
 
 ```shell

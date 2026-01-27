@@ -209,7 +209,6 @@ Next, you must attach the policy you just created to a Materialize-specific
    > **Warning:** Failing to constrain the external ID in your role trust policy
 >    will allow other Materialize customers to assume your role and use AWS
 >    privileges you have granted the role!
->
 
 
 1. Back in Materialize, validate the AWS connection you created using the
@@ -371,8 +370,6 @@ For details on the connector, including syntax, supported formats and examples,
 refer to [`CREATE SINK`](/sql/create-sink/kafka).
 
 > **Tip:** Redpanda uses the same syntax as Kafka [`CREATE SINK`](/sql/create-sink/kafka).
->
->
 
 
 ## Features
@@ -419,8 +416,6 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Segment bytes.      | Defaults to 128 MiB. We recommend going no higher than 256 MiB to avoid
 slow startups when creating new sinks, as they must process the entire progress topic on startup.
 > **Warning:** Dropping a Kafka sink doesn't drop the corresponding topic. For more information, see the [Kafka documentation](https://kafka.apache.org/documentation/).
->
->
 
 
 ### Exactly-once processing
@@ -551,7 +546,6 @@ Cloud Storage, or Cloudflare R2.
     ```
 
 > **Warning:** `VALIDATE CONNECTION` only works for AWS S3 connections. Using `VALIDATE CONNECTION` to test a connection to S3 compatible object storage service will result in an error. However, you can still use the connection to copy data.
->
 
 
 ## Step 2. Run a bulk export
@@ -731,7 +725,6 @@ Next, you must attach the policy you just created to a Snowflake-specific
 > **Note:** Only users with either the [`ACCOUNTADMIN` role](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#using-the-accountadmin-role),
 > or a role with the [global `CREATE INTEGRATION` privilege](https://docs.snowflake.com/en/user-guide/security-access-control-privileges#global-privileges-account-level-privileges)
 > can execute this step.
->
 
 
 1. In [Snowsight](https://app.snowflake.com/), or your preferred SQL client
@@ -781,7 +774,6 @@ CREATE STAGE s3_stage
 > role with the [`CREATE STAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/create-stage)
 > for the active schema, as well as the [`USAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#syntax)
 > on the relevant storage integration.
->
 
 
 ## Step 4. Import data into Snowflake

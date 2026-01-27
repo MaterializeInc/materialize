@@ -1,9 +1,5 @@
 # Percentile calculation
-
 How to use histograms to efficiently calculate percentiles in Materialize.
-
-
-
 Percentiles are a useful statistic to understand and interpret data distribution. This pattern covers how to use histograms to efficiently calculate percentiles in Materialize.
 
 One way to compute percentiles is to order all values and pick the value at the
@@ -49,8 +45,6 @@ To use histograms to compute exact percentiles:
   > **Note:** The use of the cross join produces a number of outputs that is quadratic in
 >   the input. And, while the results will only be linear in size, it may take a
 >   disproportionate amount of time to produce and maintain.
->
->
 
 
 ### Example
@@ -101,8 +95,6 @@ To use histograms to compute exact percentiles:
    > **Note:** The use of the cross join produces a number of outputs that is quadratic in
 >    the input. And, while the results will only be linear in size, it may take a
 >    disproportionate amount of time to produce and maintain.
->
->
 
 
 1. You can then query `distribution` by the `cumulative_density` field to
@@ -150,8 +142,6 @@ same for HDR histograms.
 > `input` table from the [Using histograms to compute exact percentiles
 > example](#example). If you have created and populated the table, skip the
 > corresponding steps.
->
->
 
 
 1. Create a table `input`:

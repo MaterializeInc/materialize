@@ -1,9 +1,5 @@
 # SHOW CREATE TABLE
-
 `SHOW CREATE TABLE` returns the SQL used to create the table.
-
-
-
 `SHOW CREATE TABLE` returns the SQL used to create the table.
 
 ## Syntax
@@ -39,10 +35,7 @@ SHOW CREATE TABLE t;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the table.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the table.
 
 ## Related pages
 

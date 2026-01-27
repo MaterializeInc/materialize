@@ -1,9 +1,5 @@
 # mz app-password
-
 The `mz app-password` command manages app passwords for your user account.
-
-
-
 The `mz app-password` command manages app passwords for your user account.
 
 ## `create`

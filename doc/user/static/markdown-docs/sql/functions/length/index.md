@@ -1,9 +1,5 @@
 # LENGTH function
-
 Returns the number of characters in a string.
-
-
-
 `LENGTH` returns the [code points](https://en.wikipedia.org/wiki/Code_point) in
 an encoded string.
 

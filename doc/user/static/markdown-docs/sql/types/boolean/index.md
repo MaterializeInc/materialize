@@ -1,9 +1,5 @@
 # boolean type
-
 Expresses TRUE or FALSE
-
-
-
 `boolean` data expresses a binary value of either `TRUE` or `FALSE`.
 
 Detail | Info

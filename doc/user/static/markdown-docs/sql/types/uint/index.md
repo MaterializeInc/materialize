@@ -1,9 +1,5 @@
 # Unsigned Integer types
-
 Express unsigned integers
-
-
-
 ## `uint2` info
 
 Detail | Info

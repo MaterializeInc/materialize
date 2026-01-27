@@ -1,9 +1,5 @@
 # CLOSE
-
 `CLOSE` closes a cursor.
-
-
-
 Use `CLOSE` to close a cursor previously opened with [`DECLARE`](/sql/declare).
 
 ## Syntax

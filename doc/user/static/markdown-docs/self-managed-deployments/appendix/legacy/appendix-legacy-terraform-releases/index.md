@@ -1,8 +1,5 @@
 # Legacy Terraform Releases
 
-
-
-
 ## Legacy Terraform Modules
 
 

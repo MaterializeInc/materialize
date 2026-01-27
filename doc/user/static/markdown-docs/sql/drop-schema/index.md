@@ -1,9 +1,5 @@
 # DROP SCHEMA
-
 `DROP SCHEMA` removes a schema from Materialize.
-
-
-
 `DROP SCHEMA` removes a schema from Materialize.
 
 ## Syntax
@@ -69,11 +65,8 @@ DROP SCHEMA IF EXISTS my_schema;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped schema.</li>
-<li><code>USAGE</code> privileges on the containing database.</li>
-</ul>
-
+- Ownership of the dropped schema.
+- `USAGE` privileges on the containing database.
 
 ## Related pages
 

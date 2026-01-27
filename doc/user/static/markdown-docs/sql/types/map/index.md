@@ -1,9 +1,5 @@
 # map type
-
 Expresses a map
-
-
-
 `map` data expresses an unordered map with [`text`](../text) keys and an
 arbitrary uniform value type.
 
@@ -51,7 +47,7 @@ Return the number of elements in <code>m</code>.#### `map_build(kvs: list record
 Builds a map from a list of records whose fields are two elements, the
 first of which is <code>text</code>. In the face of duplicate keys, <code>map_build</code> retains
 value from the record in the latest positition. This function is
-purpose-built to process <a href="/sql/create-source/kafka/#headers">Kafka headers</a>.#### `map_agg(keys: text, values: T) -> map[text=>T]`
+purpose-built to process <a href="/sql/create-source/kafka/#headers" >Kafka headers</a>.#### `map_agg(keys: text, values: T) -> map[text=>T]`
 
 Aggregate keys and values (including nulls) as a map [(docs)](/sql/functions/map_agg)
 

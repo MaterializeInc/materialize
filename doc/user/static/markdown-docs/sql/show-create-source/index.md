@@ -1,9 +1,5 @@
 # SHOW CREATE SOURCE
-
 `SHOW CREATE SOURCE` returns the statement used to create the source.
-
-
-
 `SHOW CREATE SOURCE` returns the DDL statement used to create the source.
 
 ## Syntax
@@ -36,10 +32,7 @@ SHOW CREATE SOURCE market_orders_raw;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the source.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the source.
 
 ## Related pages
 

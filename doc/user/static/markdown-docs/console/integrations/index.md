@@ -1,9 +1,5 @@
 # Integrations
-
 Displays the various technologies supported by Materialize.
-
-
-
 The Materialize Console provides an
 **Integrations** page that lists the supported 3rd party integrations,
 specifying:

@@ -1,9 +1,5 @@
 # Authentication
-
 Authentication
-
-
-
 ## Configuring Authentication Type
 
 To configure the authentication type used by Self-Managed Materialize, use the
@@ -17,12 +13,11 @@ used:
 | authenticatorKind Value | Description |
 | --- | --- |
 | <strong>None</strong> | Disables authentication. All users are trusted based on their claimed identity <strong>without</strong> any verification. <strong>Default</strong> |
-| <strong>Password</strong> | <p>Enables <a href="#configuring-password-authentication" >password authentication</a> for users. When enabled, users must authenticate with their password.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring password > authentication](#configuring-password-authentication) for details. > |
-| <strong>Sasl</strong> | <p>Enables <a href="#configuring-saslscram-authentication" >SASL/SCRAM-SHA-256 authentication</a> for <strong>PostgreSQL wire protocol connections</strong>. This is a challenge-response authentication mechanism that provides enhanced security compared to simple password authentication.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring SASL/SCRAM > authentication](#configuring-saslscram-authentication) for details. > |
+| <strong>Password</strong> | <p>Enables <a href="#configuring-password-authentication" >password authentication</a> for users. When enabled, users must authenticate with their password.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring password > authentication](#configuring-password-authentication) for details. |
+| <strong>Sasl</strong> | <p>Enables <a href="#configuring-saslscram-authentication" >SASL/SCRAM-SHA-256 authentication</a> for <strong>PostgreSQL wire protocol connections</strong>. This is a challenge-response authentication mechanism that provides enhanced security compared to simple password authentication.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring SASL/SCRAM > authentication](#configuring-saslscram-authentication) for details. |
 
 
 > **Warning:** Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
->
 
 
 
@@ -94,7 +89,6 @@ and maintenance tasks.
 ## Configuring SASL/SCRAM authentication
 
 > **Note:** SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
->
 
 
 SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechanism
@@ -170,7 +164,6 @@ spec:
 For more information on rollout configuration, view our [upgrade overview](/self-managed-deployments/upgrading/#rollout-configuration).
 
 > **Warning:** Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
->
 
 
 

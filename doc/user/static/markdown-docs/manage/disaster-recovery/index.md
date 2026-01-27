@@ -27,7 +27,6 @@ cluster's rehydration time**.
 
 > **Note:** The hybrid strategy is available if your deployment uses a [three-tier or a
 > two-tier architecture](/manage/operational-guidelines/).
->
 
 
 Materialize supports multi-replica clusters, allowing for distribution across
@@ -69,8 +68,6 @@ If you require resilience beyond a single region, consider the Level 3 strategy.
 > **Note:** The duplicate environment strategy assumes the use of Infrastructure-as-Code
 > (IaC) practice for managing the environment. This ensures that catalog data,
 > including your RBAC setup, is identical in the second environment.
->
->
 
 
 For region-level fault tolerance, you can choose to have a second Materialize
@@ -96,11 +93,9 @@ variation](#hybrid-variation).
 
 > **Note:** - The hybrid strategy is available if your deployment uses a [three-tier or a
 > two-tier architecture](/manage/operational-guidelines/).
->
 > - The duplicate environment strategy assumes the use of Infrastructure-as-Code
 > (IaC) practice for managing the environment. This ensures that catalog data,
 > including your RBAC setup, is identical in the second environment.
->
 
 
 For a more cost-effective variation to the duplicate Materialize environment in

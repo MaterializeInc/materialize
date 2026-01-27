@@ -1,9 +1,5 @@
 # datediff function
-
 Returns the difference between two date, time or timestamp expressions based on the specified date or time part.
-
-
-
 The `datediff(datepart, start, end)` function returns the difference between two date, time or timestamp expressions based on the specified date or time part.
 
 ## Signatures

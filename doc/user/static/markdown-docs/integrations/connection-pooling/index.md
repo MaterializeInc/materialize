@@ -1,9 +1,5 @@
 # Connection Pooling
-
 How to use connection pooling with Materialize
-
-
-
 Because Materialize is wire-compatible with PostgreSQL, you can use any
 PostgreSQL connection pooler with Materialize. In this guide, we’ll cover how to
 use connection pooling with Materialize, alongside the common tool PgBouncer.
@@ -47,7 +43,6 @@ SELECT rolname, rolpassword FROM pg_authid WHERE rolname = 'your_role_name';
 ```
 
 > **Note:** You must be a superuser to access the `pg_authid` table.
->
 
 
 Once you have the SCRAM secret, add it to the userlist file in the following format:

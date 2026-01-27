@@ -1,9 +1,5 @@
 # interval type
-
 Expresses a duration of time
-
-
-
 `interval` data expresses a duration of time.
 
 `interval` data keeps months, days, and microseconds completely separate and will not try to convert between any of

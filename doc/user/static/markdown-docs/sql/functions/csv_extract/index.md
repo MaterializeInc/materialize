@@ -1,9 +1,5 @@
 # csv_extract function
-
 Returns separated values from a column containing a CSV file formatted as a string.
-
-
-
 `csv_extract` returns individual component columns from a column containing a CSV file formatted as a string.
 
 ## Signatures

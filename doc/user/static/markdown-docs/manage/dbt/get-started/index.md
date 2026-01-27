@@ -1,9 +1,5 @@
 # Get started with dbt and Materialize
-
 How to use dbt and Materialize to transform streaming data in real time.
-
-
-
 [dbt](https://docs.getdbt.com/docs/introduction) has become the standard for
 data transformation ("the T in ELT"). It combines the accessibility of SQL with
 software engineering best practices, allowing you to not only build reliable
@@ -24,7 +20,6 @@ need to:
    > **Note:** The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
 >     adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
 >     require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
->
 
 
     ```bash
@@ -68,8 +63,6 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 > **Note:** As a best practice, we strongly recommend using [service
 > accounts](/security/cloud/users-service-accounts/create-service-accounts) to
 > connect external applications, like dbt, to Materialize.
->
->
 
 
 dbt manages all your connection configurations (or, profiles) in a file called
@@ -175,7 +168,6 @@ or [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) fu
 > **Note:** To create a source, you first need to [create a connection](/sql/create-connection)
 > that specifies access and authentication parameters. Connections are **not
 > exposed** in dbt, and need to exist before you run any `source` models.
->
 
 
 
@@ -392,7 +384,6 @@ function.
 
 > **Tip:** For guidance and best practices on how to use indexes in Materialize, see
 > [Indexes on views](/concepts/indexes/#indexes-on-views).
->
 
 
 To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
@@ -458,7 +449,6 @@ function.
 
 > **Tip:** For guidance and best practices on how to use indexes in Materialize, see
 > [Indexes on materialized views](/concepts/views/#indexes-on-materialized-views).
->
 
 
 With a materialized view, your models are kept **up-to-date** in Materialize as
@@ -501,7 +491,6 @@ against materialized views faster.
 
 > **Tip:** For guidance and best practices on how to use refresh strategies in Materialize,
 > see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
->
 
 
 
@@ -549,7 +538,6 @@ maintained** and must recompute their results from scratch on every refresh.
 
 > **Tip:** For guidance and best practices on how to use retain history in Materialize,
 > see [Retain history](/transform-data/patterns/durable-subscriptions/#set-history-retention-period).
->
 
 
 To configure how long historical data is retained in a materialized view, use the
@@ -987,7 +975,6 @@ configuration.
 
 > **Note:** Documentation persistence is tightly coupled with `dbt run` command invocations.
 > For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.com/dbt-labs/dbt-core/issues/4226). 👻
->
 
 
 1. To enable docs persistence, add a `models` property to `dbt_project.yml` with

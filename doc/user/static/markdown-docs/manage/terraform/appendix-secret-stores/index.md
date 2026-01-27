@@ -1,7 +1,4 @@
 # Appendix: External secret stores
-
-
-
 Materialize does not directly integrate with external secret stores, but it's possible to manage this integration via Terraform.
 
 The [secret stores demo](https://github.com/MaterializeInc/demos/tree/main/integrations/terraform/secret-stores) shows how to handle [secrets](/sql/create-secret) and sensitive data with some popular secret stores. By utilizing Terraform's infrastructure-as-code model, you can automate and simplify both the initial setup and ongoing management of secret stores with Materialize.

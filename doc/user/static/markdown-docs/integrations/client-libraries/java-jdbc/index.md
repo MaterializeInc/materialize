@@ -1,9 +1,5 @@
 # Java cheatsheet
-
 Use the PostgreSQL JDBC Driver to connect, insert, manage, query and stream from Materialize.
-
-
-
 Materialize is **wire-compatible** with PostgreSQL, which means that Java
 applications can use common PostgreSQL clients to interact with Materialize.
 This guide uses the [PostgreSQL JDBC Driver](https://jdbc.postgresql.org/) to

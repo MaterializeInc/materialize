@@ -1,9 +1,5 @@
 # Pushdown functions
-
 Functions for use with the filter pushdown feature
-
-
-
 `try_parse_monotonic_iso8601_timestamp` parses a subset of [ISO 8601]
 timestamps that matches the 24 character length output
 of the javascript [Date.toISOString()] function.

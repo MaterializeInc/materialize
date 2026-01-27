@@ -16,8 +16,6 @@ A [source](/concepts/sources/) describes an external system you want Materialize
 **PostgreSQL (New):**
 
 To create a source from an external PostgreSQL:
-
-
 ```mzsql
 CREATE SOURCE [IF NOT EXISTS] <source_name>
 [IN CLUSTER <cluster_name>]
@@ -31,9 +29,7 @@ For details, see [CREATE SOURCE: PostgreSQL (New Syntax)](/sql/create-source/pos
 
 **PostgreSQL (Legacy):**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM POSTGRES CONNECTION <connection_name> (
@@ -51,9 +47,7 @@ For details, see [CREATE SOURCE: PostgreSQL (Legacy)](/sql/create-source/postgre
 
 **MySQL:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM MYSQL CONNECTION <connection_name> [
@@ -73,9 +67,7 @@ For details, see [CREATE SOURCE: MySQL](/sql/create-source/mysql/).
 
 **SQL Server:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM SQL SERVER CONNECTION <connection_name>
@@ -95,9 +87,7 @@ For details, see [CREATE SOURCE: SQL Server](/sql/create-source/sql-server/).
 
 **Format Avro:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -132,9 +122,7 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
 
 **Format JSON:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -162,9 +150,7 @@ FORMAT JSON
 
 **Format TEXT/BYTES:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -192,9 +178,7 @@ FORMAT TEXT | BYTES
 
 **Format CSV:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name> ( <col_name> [, ...] )
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -221,9 +205,7 @@ FORMAT CSV WITH <n> COLUMNS | WITH HEADER [ ( <col_name> [, ...] ) ]
 
 **Format Protobuf:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -255,9 +237,7 @@ FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
 
 **KEY FORMAT VALUE FORMAT:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -303,9 +283,7 @@ For details, see [CREATE SOURCE: Kafka/Redpanda](/sql/create-source/kafka/).
 
 **Webhook:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM WEBHOOK
@@ -330,15 +308,12 @@ For details, see [CREATE SOURCE: Webhook](/sql/create-source/webhook/).
 
 The privileges required to execute `CREATE SOURCE` are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster if the source is created in an existing cluster.</li>
-<li><code>CREATECLUSTER</code> privileges on the system if the source is not created in an existing cluster.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the source definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
 
 ## Available guides
 
@@ -350,11 +325,11 @@ The following guides step you through setting up sources:
     Databases (CDC)
   </div>
   <ul>
-<li><a href="/ingest-data/postgres/">PostgreSQL</a></li>
-<li><a href="/ingest-data/mysql/">MySQL</a></li>
-<li><a href="/ingest-data/sql-server/">SQL Server</a></li>
-<li><a href="/ingest-data/cdc-cockroachdb/">CockroachDB</a></li>
-<li><a href="/ingest-data/mongodb/">MongoDB</a></li>
+<li><a href="/ingest-data/postgres/" >PostgreSQL</a></li>
+<li><a href="/ingest-data/mysql/" >MySQL</a></li>
+<li><a href="/ingest-data/sql-server/" >SQL Server</a></li>
+<li><a href="/ingest-data/cdc-cockroachdb/" >CockroachDB</a></li>
+<li><a href="/ingest-data/mongodb/" >MongoDB</a></li>
 </ul>
 
 </div>
@@ -364,8 +339,8 @@ The following guides step you through setting up sources:
     Message Brokers
   </div>
   <ul>
-<li><a href="/ingest-data/kafka/">Kafka</a></li>
-<li><a href="/sql/create-source/kafka">Redpanda</a></li>
+<li><a href="/ingest-data/kafka/" >Kafka</a></li>
+<li><a href="/sql/create-source/kafka" >Redpanda</a></li>
 </ul>
 
 </div>
@@ -375,9 +350,9 @@ The following guides step you through setting up sources:
     Webhooks
   </div>
   <ul>
-<li><a href="/ingest-data/webhooks/amazon-eventbridge/">Amazon EventBridge</a></li>
-<li><a href="/ingest-data/webhooks/segment/">Segment</a></li>
-<li><a href="/sql/create-source/webhook">Other webhooks</a></li>
+<li><a href="/ingest-data/webhooks/amazon-eventbridge/" >Amazon EventBridge</a></li>
+<li><a href="/ingest-data/webhooks/segment/" >Segment</a></li>
+<li><a href="/sql/create-source/webhook" >Other webhooks</a></li>
 </ul>
 
 </div>
@@ -874,7 +849,6 @@ across multiple `CREATE SOURCE` and `CREATE SINK` statements.
 
 > **Note:** The same syntax, supported formats and features can be used to connect to a
 > [Redpanda](/integrations/redpanda/) broker.
->
 
 
 ## Syntax
@@ -1335,13 +1309,10 @@ The upsert envelope treats all records as having a **key** and a **value**, and 
 - If the key matches a preexisting record and the value is _null_, Materialize deletes the record.
 
 > **Note:** - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
->
 > - This envelope can lead to high memory and disk utilization in the cluster
 >   maintaining the source. We recommend using a standard-sized cluster, rather
 >   than a legacy-sized cluster, to automatically spill the workload to disk. See
 >   [spilling to disk](#spilling-to-disk) for details.
->
->
 
 
 #### Null keys
@@ -1434,13 +1405,10 @@ This envelope treats all records as [change events](https://debezium.io/document
 > **Note:** - This envelope can lead to high memory utilization in the cluster maintaining
 >   the source. Materialize can automatically offload processing to
 >   disk as needed. See [spilling to disk](#spilling-to-disk) for details.
->
 > - Materialize expects a specific message structure that includes the row data
 >   before and after the change event, which is **not guaranteed** for every
 >   Debezium connector. For more details, check the [Debezium integration
 >   guide](/integrations/debezium/).
->
->
 
 
 #### Truncation
@@ -1704,11 +1672,9 @@ more up-to-date information.
 
 > **Note:** Some Kafka monitoring tools may indicate that Materialize's consumer groups have
 > no active members. This is **not a cause for concern**.
->
 > Materialize does not participate in the consumer group protocol nor does it
 > recover on restart by reading the committed offsets. The committed offsets are
 > provided solely for the benefit of Kafka monitoring tools.
->
 
 
 Committed offsets are associated with a consumer group specific to the source.
@@ -1745,15 +1711,12 @@ Read           | Group            | All group IDs starting with the specified [`
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster if the source is created in an existing cluster.</li>
-<li><code>CREATECLUSTER</code> privileges on the system if the source is not created in an existing cluster.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the source definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
 
 ## Examples
 
@@ -1803,7 +1766,6 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host:
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -1892,7 +1854,6 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host:
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -2068,7 +2029,6 @@ access and authentication parameters.
 
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -2077,7 +2037,6 @@ access and authentication parameters.
 > **Note:** Although `schema` and `database` are [synonyms in MySQL](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema),
 > the MySQL source documentation and syntax **standardize on `schema`** as the
 > preferred keyword.
->
 
 
 
@@ -2128,7 +2087,6 @@ Field             | Value                           | Description
 > [Azure DB](/ingest-data/mysql/azure-db/),
 > [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 > [Self-hosted](/ingest-data/mysql/self-hosted/).
->
 
 
 The source uses MySQL's binlog replication protocol to **continually ingest
@@ -2521,7 +2479,6 @@ binlog replication for your MySQL service, see the integration guides.
 > **Warning:** If Materialize tries to resume replication and finds GTID gaps due to missing
 > binlog files, the source enters an errored state and you have to drop and
 > recreate it.
->
 
 
 By default, MySQL retains binlog files for **30 days** (i.e., 2592000 seconds)
@@ -2623,23 +2580,11 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-
-  {{__hugo_ctx pid=36}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -2648,9 +2593,9 @@ Materialize supports schema changes in the upstream database as follows:
 <ul>
 <li>
 <p>Adding columns to tables. Materialize will <strong>not ingest</strong> new columns
-added upstream unless you use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to
+added upstream unless you use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to
 first drop the affected subsource, and then add the table back to the source
-using <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
+using <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
 </li>
 <li>
 <p>Dropping columns that were added after the source was created. These
@@ -2668,8 +2613,8 @@ when the source was created.</p>
 <p>All other schema changes to upstream tables will set the corresponding
 subsource into an error state, which prevents you from reading from the
 subsource.</p>
-<p>To handle incompatible <a href="#schema-changes">schema changes</a>, use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to first drop the affected subsource,
-and then <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
+<p>To handle incompatible <a href="#schema-changes" >schema changes</a>, use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to first drop the affected subsource,
+and then <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
 subsource back to the source. When you add the subsource, it will have the
 updated schema from the corresponding upstream table.</p>
 
@@ -2709,11 +2654,11 @@ updated schema from the corresponding upstream table.</p>
 <li><code>varchar</code></li>
 </ul>
 
-<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/">data
+<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/" >data
 types</a></strong>, you can:</p>
 <ul>
 <li>
-<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types"><code>TEXT COLUMNS</code>
+<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types" ><code>TEXT COLUMNS</code>
 option</a> for the
 following unsupported  MySQL types:</p>
 <ul>
@@ -2724,7 +2669,7 @@ following unsupported  MySQL types:</p>
 expected MySQL type features.</p>
 </li>
 <li>
-<p>Use the <a href="/sql/create-source/mysql/#excluding-columns"><code>EXCLUDE COLUMNS</code></a>
+<p>Use the <a href="/sql/create-source/mysql/#excluding-columns" ><code>EXCLUDE COLUMNS</code></a>
 option to exclude any columns that contain unsupported data types.</p>
 </li>
 </ul>
@@ -2743,24 +2688,12 @@ the upstream table:</p>
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 
@@ -2771,7 +2704,6 @@ once the process finishes, resize the cluster for steady-state.
 > [Azure DB](/ingest-data/mysql/azure-db/),
 > [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 > [Self-hosted](/ingest-data/mysql/self-hosted/).
->
 
 
 ### Creating a connection
@@ -2802,7 +2734,6 @@ PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -2906,19 +2837,9 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
@@ -2976,11 +2897,9 @@ statements.
 > [Azure DB](/ingest-data/postgres-azure-db/),
 > [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 > [Self-hosted](/ingest-data/postgres-self-hosted/).
->
 
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -3112,9 +3031,6 @@ same source across multiple materializations.
 > unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>DROP SOURCE</code></a> or manually delete the replication slot.</p>
 > </li>
 > </ul>
->
->
->
 
 
 ##### PostgreSQL schemas
@@ -3169,8 +3085,6 @@ Materialize supports schema changes in the upstream database as follows:
 > additions and drops, see [`CREATE SOURCE (New
 > Syntax)`](/sql/create-source/postgres-v2/) and [`CREATE TABLE FROM
 > SOURCE`](/sql/create-table).
->
->
 
 <ul>
 <li>
@@ -3312,7 +3226,6 @@ create a new view (materialized or non-) that unions the new table.
 > [Azure DB](/ingest-data/postgres-azure-db/),
 > [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 > [Self-hosted](/ingest-data/postgres-self-hosted/).
->
 
 
 ### Creating a connection
@@ -3345,7 +3258,6 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 **AWS PrivateLink:**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -3443,19 +3355,9 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
@@ -3706,9 +3608,6 @@ SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
 > unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>DROP SOURCE</code></a> or manually delete the replication slot.</p>
 > </li>
 > </ul>
->
->
->
 
 
 ## Examples
@@ -3880,23 +3779,11 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-
-  {{__hugo_ctx pid=38}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -3960,7 +3847,7 @@ table.
 <li><code>uniqueidentifier</code></li>
 </ul>
 
-<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/">data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types"><code>EXCLUDE COLUMNS</code> option</a> for the
+<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/" >data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types" ><code>EXCLUDE COLUMNS</code> option</a> for the
 following types:</p>
 <ul style="column-count: 3">
 <li><code>text</code></li>
@@ -3968,7 +3855,7 @@ following types:</p>
 <li><code>image</code></li>
 <li><code>varbinary(max)</code></li>
 </ul>
-<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types">SQL Server does not provide
+<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types" >SQL Server does not provide
 the &ldquo;before&rdquo;</a>
 value when said column is updated.</p>
 
@@ -4020,30 +3907,17 @@ If two capture instances for a table share the same timestamp (unlikely given th
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 
 > **Important:** Before creating a SQL Server source, you must enable Change Data Capture and
 > `SNAPSHOT` transaction isolation in the upstream database.
->
 
 
 ### Creating a connection
@@ -4137,19 +4011,9 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
@@ -4258,7 +4122,6 @@ A breakdown of each component is as follows:
 > **Note:** This is a public URL that is open to the internet and has no security. To
 > validate that requests are legitimate, see [Validating requests](#validating-requests).
 > For limits imposed on this endpoint, see [Request limits](#request-limits).
->
 
 
 ## Features
@@ -4315,7 +4178,6 @@ the `headers` map column.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 It's common for applications using webhooks to provide a method for validating a
@@ -4384,7 +4246,6 @@ LIMIT 10;
 
 > **Note:** It's not possible to use secrets in a `SELECT` statement, so you'll need to
 > provide these values as raw text for debugging.
->
 
 
 ### Handling duplicated and partial events
@@ -4430,7 +4291,6 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged AS (
 
 > **Note:** When casting from `text` to `timestamp` you should prefer to use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/)
 > function, which enables [temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
->
 
 
 ### Handling batch events

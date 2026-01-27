@@ -1,9 +1,5 @@
 # DROP SOURCE
-
 `DROP SOURCE` removes a source from Materialize.
-
-
-
 `DROP SOURCE` removes a source from Materialize. If there are objects depending
 on the source, you must explicitly drop them first, or use the `CASCADE`
 option.
@@ -70,11 +66,8 @@ DROP SOURCE IF EXISTS my_source;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped source.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped source.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

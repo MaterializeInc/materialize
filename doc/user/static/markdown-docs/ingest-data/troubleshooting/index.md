@@ -1,9 +1,5 @@
 # Troubleshooting
-
 How to troubleshoot common data ingestion scenarios where Materialize is not working as expected.
-
-
-
 As you wire up data ingestion in Materialize, you might run into some snags or
 unexpected scenarios. This guide collects common questions around data ingestion
 to help you troubleshoot your sources. See also [Monitoring data
@@ -15,8 +11,6 @@ troubleshooting](/transform-data/troubleshooting) guide instead.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Why isn't my source ingesting data?
@@ -61,26 +55,26 @@ breaks out of the query).
 the upstream database, the number of tables (more tables can be parallelized in Postgres), and the <a href="/sql/create-cluster/#size" >size of your ingestion cluster</a>.</p>
 <p>We&rsquo;ve observed the following approximate snapshot rates from PostgreSQL:</p>
 <table>
-<thead>
-<tr>
-<th>Cluster Size</th>
-<th>Snapshot Rate</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>25 cc</td>
-<td>~20 MB/s</td>
-</tr>
-<tr>
-<td>100 cc</td>
-<td>~50 MB/s</td>
-</tr>
-<tr>
-<td>800 cc</td>
-<td>~200 MB/s</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Cluster Size</th>
+          <th>Snapshot Rate</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>25 cc</td>
+          <td>~20 MB/s</td>
+      </tr>
+      <tr>
+          <td>100 cc</td>
+          <td>~50 MB/s</td>
+      </tr>
+      <tr>
+          <td>800 cc</td>
+          <td>~200 MB/s</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -108,26 +102,26 @@ monitor its progress. See [Monitoring data ingestion](/ingest-data/monitoring-da
 the upstream database, the number of tables (more tables can be parallelized in Postgres), and the <a href="/sql/create-cluster/#size" >size of your ingestion cluster</a>.</p>
 <p>We&rsquo;ve observed the following approximate snapshot rates from PostgreSQL:</p>
 <table>
-<thead>
-<tr>
-<th>Cluster Size</th>
-<th>Snapshot Rate</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>25 cc</td>
-<td>~20 MB/s</td>
-</tr>
-<tr>
-<td>100 cc</td>
-<td>~50 MB/s</td>
-</tr>
-<tr>
-<td>800 cc</td>
-<td>~200 MB/s</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Cluster Size</th>
+          <th>Snapshot Rate</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>25 cc</td>
+          <td>~20 MB/s</td>
+      </tr>
+      <tr>
+          <td>100 cc</td>
+          <td>~50 MB/s</td>
+      </tr>
+      <tr>
+          <td>800 cc</td>
+          <td>~200 MB/s</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -139,8 +133,8 @@ back down once the snapshot completes.
 </span></span></span></code></pre></div><blockquote>
 <p><strong>Note:</strong> Resizing a cluster with sources requires the cluster to restart. This operation
 incurs downtime for the duration it takes for all objects in the cluster to
-<a href="/ingest-data/#hydration" >hydrate</a>.</p>
-<p>You might want to let the new-sized replica hydrate before shutting down the
+<a href="/ingest-data/#hydration" >hydrate</a>.
+You might want to let the new-sized replica hydrate before shutting down the
 current replica. See <a href="/sql/alter-cluster/#zero-downtime-cluster-resizing" >zero-downtime cluster
 resizing</a> about automating
 this process.</p>

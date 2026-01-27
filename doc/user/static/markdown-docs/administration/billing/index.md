@@ -1,9 +1,5 @@
 # Usage & billing (Cloud)
-
 Understand the billing model of Materialize Cloud, and learn best practices for cost control.
-
-
-
 Materialize determines billing based on your compute and storage usage.
 Materialize bills per second based on the [cluster(s)](/concepts/clusters/) you
 provision for your workloads. Each cluster is a pool of resources (CPU, memory,
@@ -22,8 +18,6 @@ measured at a one second granularity.
 > clusters](/sql/system-clusters/) are pre-installed to improve the user
 > experience as well as support system administration tasks. Except for the
 > default `quickstart` cluster, you are <red>not billed</red> for these system clusters.
->
->
 
 
 You must provision at least one cluster to power your workloads. You can then
@@ -44,8 +38,6 @@ can process data faster and handle larger data volumes.
 
 > **Note:** You can resize a cluster to respond to changes in your workload. See [Sizing
 > your clusters](/sql/alter-cluster/#resizing).
->
->
 
 
 Clusters are always "on", and you can adjust the [replication factor](/sql/create-cluster/#replication-factor)
@@ -83,7 +75,6 @@ to OLTP databases than cloud data warehouses.
 
 > **Note:** Accessing usage and billing information in Materialize
 > requires **administrator** privileges.
->
 
 
 From the [Materialize console](/console/) (`Admin` >

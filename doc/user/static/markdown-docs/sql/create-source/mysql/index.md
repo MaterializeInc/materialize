@@ -1,9 +1,5 @@
 # CREATE SOURCE: MySQL
-
 Connecting Materialize to a MySQL database for Change Data Capture (CDC).
-
-
-
 [`CREATE SOURCE`](/sql/create-source/) connects Materialize to an external system you want to read data from, and provides details about how to decode and interpret that data.
 
 
@@ -16,7 +12,6 @@ access and authentication parameters.
 
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -25,7 +20,6 @@ access and authentication parameters.
 > **Note:** Although `schema` and `database` are [synonyms in MySQL](https://dev.mysql.com/doc/refman/8.0/en/glossary.html#glos_schema),
 > the MySQL source documentation and syntax **standardize on `schema`** as the
 > preferred keyword.
->
 
 
 
@@ -76,7 +70,6 @@ Field             | Value                           | Description
 > [Azure DB](/ingest-data/mysql/azure-db/),
 > [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 > [Self-hosted](/ingest-data/mysql/self-hosted/).
->
 
 
 The source uses MySQL's binlog replication protocol to **continually ingest
@@ -469,7 +462,6 @@ binlog replication for your MySQL service, see the integration guides.
 > **Warning:** If Materialize tries to resume replication and finds GTID gaps due to missing
 > binlog files, the source enters an errored state and you have to drop and
 > recreate it.
->
 
 
 By default, MySQL retains binlog files for **30 days** (i.e., 2592000 seconds)
@@ -571,23 +563,11 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-
-  {{__hugo_ctx pid=36}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -596,9 +576,9 @@ Materialize supports schema changes in the upstream database as follows:
 <ul>
 <li>
 <p>Adding columns to tables. Materialize will <strong>not ingest</strong> new columns
-added upstream unless you use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to
+added upstream unless you use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to
 first drop the affected subsource, and then add the table back to the source
-using <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
+using <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
 </li>
 <li>
 <p>Dropping columns that were added after the source was created. These
@@ -616,8 +596,8 @@ when the source was created.</p>
 <p>All other schema changes to upstream tables will set the corresponding
 subsource into an error state, which prevents you from reading from the
 subsource.</p>
-<p>To handle incompatible <a href="#schema-changes">schema changes</a>, use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to first drop the affected subsource,
-and then <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
+<p>To handle incompatible <a href="#schema-changes" >schema changes</a>, use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to first drop the affected subsource,
+and then <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
 subsource back to the source. When you add the subsource, it will have the
 updated schema from the corresponding upstream table.</p>
 
@@ -657,11 +637,11 @@ updated schema from the corresponding upstream table.</p>
 <li><code>varchar</code></li>
 </ul>
 
-<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/">data
+<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/" >data
 types</a></strong>, you can:</p>
 <ul>
 <li>
-<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types"><code>TEXT COLUMNS</code>
+<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types" ><code>TEXT COLUMNS</code>
 option</a> for the
 following unsupported  MySQL types:</p>
 <ul>
@@ -672,7 +652,7 @@ following unsupported  MySQL types:</p>
 expected MySQL type features.</p>
 </li>
 <li>
-<p>Use the <a href="/sql/create-source/mysql/#excluding-columns"><code>EXCLUDE COLUMNS</code></a>
+<p>Use the <a href="/sql/create-source/mysql/#excluding-columns" ><code>EXCLUDE COLUMNS</code></a>
 option to exclude any columns that contain unsupported data types.</p>
 </li>
 </ul>
@@ -691,24 +671,12 @@ the upstream table:</p>
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 
@@ -719,7 +687,6 @@ once the process finishes, resize the cluster for steady-state.
 > [Azure DB](/ingest-data/mysql/azure-db/),
 > [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 > [Self-hosted](/ingest-data/mysql/self-hosted/).
->
 
 
 ### Creating a connection
@@ -750,7 +717,6 @@ PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -854,19 +820,9 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected

@@ -1,9 +1,5 @@
 # TABLE
-
 `TABLE` retrieves all rows from a single table.
-
-
-
 The `TABLE` expression retrieves all rows from a single table.
 
 ## Syntax

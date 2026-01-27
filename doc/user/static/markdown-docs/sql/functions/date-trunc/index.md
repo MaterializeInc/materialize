@@ -1,9 +1,5 @@
 # date_trunc function
-
 Truncates a timestamp at the specified time component
-
-
-
 `date_trunc` computes _ts_val_'s "floor value" of the specified time component,
 i.e. the largest time component less than or equal to the provided value.
 

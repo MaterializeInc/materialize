@@ -1,15 +1,10 @@
 # Excel
-
 Serve data from Materialize into Excel using ODBC
-
-
-
 Because Materialize is PostgreSQL wire-compatible, you can use a standard
 PostgreSQL ODBC driver to serve data from Materialize into Excel spreadsheets.
 
 > **Note:** The following procedure has only been tested on Windows machines using
 > Materialize Cloud.
->
 
 
 ## Prerequisites
@@ -75,11 +70,8 @@ registry settings. For example, you can save the following sample content as a
 
 > **Note:** - Passwords stored in `.reg` files are saved in plain text. Restrict access to
 > the file.
->
 > - This example creates a User DSN. To create a System DSN, use
 > HKEY_LOCAL_MACHINE instead.
->
->
 
 
 ```reg {hl_lines="4 19-25"}
@@ -192,8 +184,6 @@ to refresh more frequently for your use case, you can use a custom VBA script:
 > **Note:** When configuring your refresh interval, note that Excel will throw an error
 > if a refresh does not complete before the next one begins. Depending on your
 > machine, this is typically between 5 and 15 seconds.
->
->
 
 
 1. Press `Alt-F11` to open the VBA editor. On the left side, navigate to the
@@ -212,8 +202,6 @@ to refresh more frequently for your use case, you can use a custom VBA script:
    > **Note:** When configuring your refresh interval, note that Excel will throw an error
 >    if a refresh does not complete before the next one begins. Depending on your
 >    machine, this is typically between 5 and 15 seconds.
->
->
 
 
     ```text {hl_lines="7 13"}

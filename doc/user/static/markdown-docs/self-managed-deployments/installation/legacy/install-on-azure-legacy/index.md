@@ -1,9 +1,5 @@
 # Install on Azure (Legacy Terraform)
-
 Install Materialize on Azure Kubernetes Service (AKS) using Terraform
-
-
-
 
 Self-managed Materialize requires: a Kubernetes (v1.31+) cluster; PostgreSQL as
 a metadata database; blob storage; specifically **block** blob storage on Azure; and a license key.
@@ -26,19 +22,11 @@ modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 > For simplicity, this tutorial stores various secrets in a file as well as prints
 > them to the terminal. In practice, refer to your organization's official
 > security and Terraform/infrastructure practices.
->
->
->
 
 
 ## Prerequisites
@@ -124,13 +112,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 
@@ -160,15 +143,11 @@ deploys a sample infrastructure on Azure with the following components:
 > which requires minimal user input. For details on the `examples/simple/`
 > infrastructure configuration (such as the node instance type, etc.), see the
 > [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
->
 > For more configuration options, you can run the `main.tf` file at the [root of
 > the
 > repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
 > instead. When running with the root `main.tf`, see [Azure required
 > configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-azure/).
->
->
->
 
 
 
@@ -226,15 +205,11 @@ deploys a sample infrastructure on Azure with the following components:
 >    which requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can run the `main.tf` file at the [root of
 >    the
 >    repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
 >    instead. When running with the root `main.tf`, see [Azure required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-azure/).
->
->
->
 
 
 
@@ -274,15 +249,11 @@ deploys a sample infrastructure on Azure with the following components:
 >    which requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can run the `main.tf` file at the [root of
 >    the
 >    repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
 >    instead. When running with the root `main.tf`, see [Azure required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-azure/).
->
->
->
 
 
 1. Initialize the terraform directory.
@@ -453,10 +424,7 @@ deploys a sample infrastructure on Azure with the following components:
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated
 >    Terraform modules to your existing deployments.
->
->
 >    See [Materialize on Azure releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-azure-terraform-module) for notable changes.
->
 
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -631,9 +599,6 @@ deploys a sample infrastructure on Azure with the following components:
 >    Refer to the [Troubleshooting Console
 >    Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >    guide.
->
->
->
 
 
 ## Next steps
@@ -662,8 +627,6 @@ When prompted to proceed, type `yes` to confirm the deletion.
 
   > **Tip:** If the `terraform destroy` command is unable to delete the subnet because it
 >   is in use, you can rerun the `terraform destroy` command.
->
->
 
 
 ## See also

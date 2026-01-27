@@ -1,7 +1,4 @@
 # Troubleshooting sinks
-
-
-
 <!-- Copied over from the old manage/troubleshooting guide -->
 ## Why isn't my sink exporting data?
 First, look for errors in [`mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses):

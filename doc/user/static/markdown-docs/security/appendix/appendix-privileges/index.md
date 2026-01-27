@@ -1,24 +1,12 @@
 # Appendix: Privileges
-
 List of available  privileges in Materialize.
-
-
-
-> **Note:** <p>Various SQL operations require additional privileges on related objects, such
-> as:</p>
-> <ul>
-> <li>
-> <p>For objects that use compute resources (e.g., indexes, materialized views,
-> replicas, sources, sinks), access is also required for the associated cluster.</p>
-> </li>
-> <li>
-> <p>For objects in a schema, access is also required for the schema.</p>
-> </li>
-> </ul>
-> <p>For details on SQL operations and needed privileges, see <a href="/security/appendix/appendix-command-privileges/" >Appendix: Privileges
-> by command</a>.</p>
->
->
+> **Note:** Various SQL operations require additional privileges on related objects, such
+> as:
+> - For objects that use compute resources (e.g., indexes, materialized views,
+>   replicas, sources, sinks), access is also required for the associated cluster.
+> - For objects in a schema, access is also required for the schema.
+> For details on SQL operations and needed privileges, see [Appendix: Privileges
+> by command](/security/appendix/appendix-command-privileges/).
 
 
 The following privileges are available in Materialize:
@@ -34,7 +22,7 @@ The following privileges are available in Materialize:
 | <strong>DELETE</strong> | <p>Permission to delete rows from an object.</p> <p>Deleting rows may also require <strong>SELECT</strong> if a read is needed to determine which rows to delete.</p>  | <code>d</code> | <ul> <li><code>TABLE</code></li> </ul>  |
 | <strong>CREATE</strong> | Permission to create a new objects within the specified object. | <code>C</code> | <ul> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>CLUSTER</code></li> </ul>  |
 | <strong>USAGE</strong> | <a name="privilege-usage"></a> Permission to use or reference an object (e.g., schema/type lookup). | <code>U</code> | <ul> <li><code>CLUSTER</code></li> <li><code>CONNECTION</code></li> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>SECRET</code></li> <li><code>TYPE</code></li> </ul>  |
-| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the <code>CREATEROLE</code> privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > <code>CREATEROLE</code> unnecessarily. > | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
+| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the `CREATEROLE` privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > `CREATEROLE` unnecessarily. | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATEDB</strong> | Permission to create new databases. | <code>B</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATECLUSTER</strong> | Permission to create new clusters. | <code>N</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATENETWORKPOLICY</strong> | Permission to create network policies to control access at the network layer. | <code>P</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |

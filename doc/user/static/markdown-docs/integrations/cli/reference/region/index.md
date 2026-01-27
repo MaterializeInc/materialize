@@ -1,9 +1,5 @@
 # mz region
-
 The `mz region` command manages regions in your organization.
-
-
-
 The `mz region` command manages regions in your organization.
 
 ## `enable`
@@ -15,7 +11,6 @@ mz region enable [options...]
 ```
 
 > **Warning:** You cannot disable a region with `mz`. To disable a region, contact support.
->
 
 
 ### Arguments

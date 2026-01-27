@@ -1,14 +1,9 @@
 # PostgreSQL CDC using Kafka and Debezium
-
 How to propagate Change Data Capture (CDC) data from a PostgreSQL database to Materialize using Kafka and Debezium
-
-
-
 > **Warning:** You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
 > (CDC) data to Materialize from a PostgreSQL database, but we **strongly
 > recommend** using the native [PostgreSQL](/sql/create-source/postgres/) source
 > instead.
->
 
 
 For help getting started with your own data, you can schedule a [free guided
@@ -85,7 +80,6 @@ As a _superuser_ (`rds_superuser`):
 > **Note:** Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations)
 > logical replication, so it's not possible to use this service with
 > Materialize.
->
 
 
 We recommend following the [AWS Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure)
@@ -187,8 +181,6 @@ by adding it to Kafka Connect.
 
 > **Warning:** If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html),
 > you **must** override the default value of `After-state only` to `false`.
->
->
 
 
 

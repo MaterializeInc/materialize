@@ -1,14 +1,8 @@
 # Guide: Handle upstream schema changes with zero downtime
-
 How to add a column, or drop a column, from your source PostgreSQL database, without any downtime in Materialize
 
-
-
-
 > **Note:** - Changing column types is currently unsupported.
->
 > -
->
 
 
 Materialize allows you to handle certain types of upstream
@@ -85,7 +79,6 @@ source](#create-a-table-from-the-source).
 
 > **Note:** The [legacy syntax](/sql/create-source/postgres/) is still supported. However,
 > the legacy syntax doesn't support upstream schema changes.
->
 
 
 ## Create a table from the source
@@ -106,8 +99,6 @@ snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 > the source is temporarily blocked. As before, you can monitor progress for the
 > snapshot operation on the overview page for the source in the Materialize
 > console.
->
->
 
 
 ## Create a view on top of the table.
@@ -157,8 +148,6 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
 > the source is temporarily blocked. As before, you can monitor progress for the
 > snapshot operation on the overview page for the source in the Materialize
 > console.
->
->
 
 
 
@@ -191,8 +180,6 @@ CREATE TABLE v3.T
 > the source is temporarily blocked. As before, you can monitor progress for the
 > snapshot operation on the overview page for the source in the Materialize
 > console.
->
->
 
 
 ### B. Drop a column in your upstream PostgreSQL database

@@ -54,7 +54,6 @@ libraries to interact with Materialize and **create relations**, **execute
 queries** and **stream out results**.
 
 > **Note:** Client libraries tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if PostgreSQL is supported, it's **not guaranteed** that the same integration will work out-of-the-box.
->
 
 
 | Language | Tested drivers                                                  | Notes                                                 |
@@ -789,7 +788,6 @@ SELECT rolname, rolpassword FROM pg_authid WHERE rolname = 'your_role_name';
 ```
 
 > **Note:** You must be a superuser to access the `pg_authid` table.
->
 
 
 Once you have the SCRAM secret, add it to the userlist file in the following format:
@@ -855,84 +853,88 @@ requiring changes to application logic or tooling.
 
 ## Prerequisite
 
-<ol>
-<li>
-<p>In Materialize, create a dedicated service account <code>fdw_svc_account</code> as an
-<strong>Organization Member</strong>. For details on setting up a service account, see
-<a href="https://materialize.com/docs/manage/users-service-accounts/create-service-accounts/" >Create a service
-account</a></p>
-> **Tip:** Per the linked instructions, be sure you connect at least once with the new
+1. In Materialize, create a dedicated service account `fdw_svc_account` as an
+   **Organization Member**. For details on setting up a service account, see
+   [Create a service
+   account](https://materialize.com/docs/manage/users-service-accounts/create-service-accounts/)
+
+   > **Tip:** Per the linked instructions, be sure you connect at least once with the new
 >    service account to finish creating the new account. You will also need the
 >    connection details (host, port, password) when setting up the foreign server
 >    and user mappings in PostgreSQL.
->
->
 
-</li>
-<li>
-<p>After you have connected at least once with the new service account to finish
-the new account creation, modify the <code>fdw_svc_account</code> role:</p>
-<ol>
-<li>
-<p>Set the default cluster to the name of your serving cluster:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">ALTER</span> <span class="k">ROLE</span> <span class="n">fdw_svc_account</span> <span class="k">SET</span> <span class="k">CLUSTER</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">serving_cluster</span><span class="o">&gt;</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-<li>
-<p><a href="/sql/grant-privilege/" >Grant <code>USAGE</code> privileges</a> on the serving cluster,
-and the database and schema of your views and materialized views.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">GRANT</span> <span class="k">USAGE</span> <span class="k">ON</span> <span class="k">CLUSTER</span> <span class="o">&lt;</span><span class="n">serving_cluster</span><span class="o">&gt;</span> <span class="k">TO</span> <span class="n">fdw_svc_account</span><span class="p">;</span>
-</span></span><span class="line"><span class="cl"><span class="k">GRANT</span> <span class="k">USAGE</span> <span class="k">ON</span> <span class="k">DATABASE</span> <span class="o">&lt;</span><span class="n">db_name</span><span class="o">&gt;</span> <span class="k">TO</span> <span class="n">fdw_svc_account</span><span class="p">;</span>
-</span></span><span class="line"><span class="cl"><span class="k">GRANT</span> <span class="k">USAGE</span> <span class="k">ON</span> <span class="k">SCHEMA</span> <span class="o">&lt;</span><span class="n">db_name</span><span class="mf">.</span><span class="n">schema_name</span><span class="o">&gt;</span> <span class="k">TO</span> <span class="n">fdw_svc_account</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-<li>
-<p><a href="/sql/grant-privilege/" >Grant <code>SELECT</code> privileges</a> to the various
-view(s)/materialized view(s):</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">GRANT</span> <span class="k">SELECT</span> <span class="k">ON</span> <span class="o">&lt;</span><span class="n">db_name</span><span class="mf">.</span><span class="n">schema_name</span><span class="mf">.</span><span class="n">view_name</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">&lt;</span><span class="mf">...</span><span class="o">&gt;</span> <span class="k">TO</span> <span class="n">fdw_svc_account</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-</ol>
-</li>
-</ol>
 
+1. After you have connected at least once with the new service account to finish
+   the new account creation, modify the `fdw_svc_account` role:
+
+   1. Set the default cluster to the name of your serving cluster:
+
+      ```mzsql
+      ALTER ROLE fdw_svc_account SET CLUSTER = <serving_cluster>;
+      ```
+
+   1. [Grant `USAGE` privileges](/sql/grant-privilege/) on the serving cluster,
+      and the database and schema of your views and materialized views.
+
+      ```mzsql
+      GRANT USAGE ON CLUSTER <serving_cluster> TO fdw_svc_account;
+      GRANT USAGE ON DATABASE <db_name> TO fdw_svc_account;
+      GRANT USAGE ON SCHEMA <db_name.schema_name> TO fdw_svc_account;
+      ```
+
+   1. [Grant `SELECT` privileges](/sql/grant-privilege/) to the various
+      view(s)/materialized view(s):
+
+      ```mzsql
+      GRANT SELECT ON <db_name.schema_name.view_name>, <...> TO fdw_svc_account;
+      ```
 
 ## Setup FDW in PostgreSQL
 
-<p><strong>In your PostgreSQL instance</strong>:</p>
-<ol>
-<li>
-<p>If not installed, create a <code>postgres_fdw</code> extension in your database:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="n">EXTENSION</span> <span class="n">postgres_fdw</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-<li>
-<p>Create a foreign server to your Materialize, substitute your <a href="/console/connect/" >Materialize
-connection details</a>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="n">SERVER</span> <span class="n">remote_mz_server</span>
-</span></span><span class="line"><span class="cl">   <span class="k">FOREIGN</span> <span class="n">DATA</span> <span class="n">WRAPPER</span> <span class="n">postgres_fdw</span>
-</span></span><span class="line"><span class="cl">   <span class="k">OPTIONS</span> <span class="p">(</span><span class="k">host</span> <span class="s1">&#39;&lt;host&gt;&#39;</span><span class="p">,</span> <span class="n">dbname</span> <span class="s1">&#39;&lt;db_name&gt;&#39;</span><span class="p">,</span> <span class="k">port</span> <span class="s1">&#39;6875&#39;</span><span class="p">);</span>
-</span></span></code></pre></div></li>
-<li>
-<p>Create a user mapping between your PostgreSQL user and the Materialize
-<code>fdw_svc_account</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">USER</span> <span class="n">MAPPING</span> <span class="k">FOR</span> <span class="o">&lt;</span><span class="n">postgres_user</span><span class="o">&gt;</span>
-</span></span><span class="line"><span class="cl">   <span class="n">SERVER</span> <span class="n">remote_mz_server</span>
-</span></span><span class="line"><span class="cl">   <span class="k">OPTIONS</span> <span class="p">(</span><span class="k">user</span> <span class="s1">&#39;fdw_svc_account&#39;</span><span class="p">,</span> <span class="k">password</span> <span class="s1">&#39;&lt;service_account_password&gt;&#39;</span><span class="p">);</span>
-</span></span></code></pre></div></li>
-<li>
-<p>For each view/materialized view you want to access, create the foreign table
-mapping (you can use the <a href="/console/data/" >data explorer</a> to get the column
-detials)</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">FOREIGN</span> <span class="k">TABLE</span> <span class="o">&lt;</span><span class="n">local_view_name_in_postgres</span><span class="o">&gt;</span> <span class="p">(</span>
-</span></span><span class="line"><span class="cl">         <span class="o">&lt;</span><span class="k">column</span><span class="o">&gt;</span> <span class="o">&lt;</span><span class="k">type</span><span class="o">&gt;</span><span class="p">,</span>
-</span></span><span class="line"><span class="cl">         <span class="mf">...</span>
-</span></span><span class="line"><span class="cl">     <span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="n">SERVER</span> <span class="n">remote_mz_server</span>
-</span></span><span class="line"><span class="cl"><span class="k">OPTIONS</span> <span class="p">(</span><span class="n">schema_name</span> <span class="s1">&#39;&lt;schema&gt;&#39;</span><span class="p">,</span> <span class="n">table_name</span> <span class="s1">&#39;&lt;view_name_in_Materialize&gt;&#39;</span><span class="p">);</span>
-</span></span></code></pre></div></li>
-<li>
-<p>Once created, you can select from within PostgreSQL:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">from</span> <span class="o">&lt;</span><span class="n">local_view_name_in_postgres</span><span class="o">&gt;</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-</ol>
+**In your PostgreSQL instance**:
 
+1. If not installed, create a `postgres_fdw` extension in your database:
+
+   ```mzsql
+   CREATE EXTENSION postgres_fdw;
+   ```
+
+1. Create a foreign server to your Materialize, substitute your [Materialize
+   connection details](/console/connect/).
+
+   ```mzsql
+   CREATE SERVER remote_mz_server
+      FOREIGN DATA WRAPPER postgres_fdw
+      OPTIONS (host '<host>', dbname '<db_name>', port '6875');
+   ```
+
+1. Create a user mapping between your PostgreSQL user and the Materialize
+   `fdw_svc_account`:
+
+   ```mzsql
+   CREATE USER MAPPING FOR <postgres_user>
+      SERVER remote_mz_server
+      OPTIONS (user 'fdw_svc_account', password '<service_account_password>');
+   ```
+
+1. For each view/materialized view you want to access, create the foreign table
+   mapping (you can use the [data explorer](/console/data/) to get the column
+   detials)
+
+   ```mzsql
+   CREATE FOREIGN TABLE <local_view_name_in_postgres> (
+            <column> <type>,
+            ...
+        )
+   SERVER remote_mz_server
+   OPTIONS (schema_name '<schema>', table_name '<view_name_in_Materialize>');
+   ```
+
+1. Once created, you can select from within PostgreSQL:
+
+   ```mzsql
+   SELECT * from <local_view_name_in_postgres>;
+   ```
 
 
 ---
@@ -1236,7 +1238,6 @@ user. This password is auto-generated, and prefixed with `mzp_`.
 > session**, but do not affect other sessions. To permanently change the default
 > value of a configuration parameter for a specific user (i.e. role), use the
 > [`ALTER ROLE...SET`](/sql/alter-role) command.
->
 
 
 You can pass runtime connection parameters (like `cluster`, `isolation_level`,
@@ -1271,15 +1272,12 @@ psql \
 > -- may not work as expected with Materialize because they rely on
 > PostgreSQL-specific queries that use unsupported system functions (e.g.,
 > `age()`) and system columns (e.g., `xmin`).
->
 > As an alternative, you can [use the JDBC metadata
 > introspector](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
 > To use the JDBC metadata instrospector, from your data source properties, in the
 > **Advanced** tab, select **Introspect using JDBC Metadata** from the **Expert
 > options** list. For more information, see the [DataGrip
 > documentation](https://www.jetbrains.com/help/datagrip/cannot-find-a-database-object-in-the-database-tree-view.html#temporarily-enable-introspection-with-jdbc-metadata).
->
->
 
 
 To connect to Materialize using [DataGrip](https://www.jetbrains.com/help/datagrip/connecting-to-a-database.html),
@@ -1349,7 +1347,6 @@ To show system objects in the database explorer:
 
 > **Note:** As we work on extending the coverage of `pg_catalog` in Materialize,
 > some TablePlus features might not work as expected.
->
 
 
 To connect to Materialize using [TablePlus](https://tableplus.com/),
@@ -1362,7 +1359,6 @@ Materialize console.
 ### `psql`
 
 > **Warning:** Not all features of `psql` are supported by Materialize yet, including some backslash meta-commands.
->
 
 
 

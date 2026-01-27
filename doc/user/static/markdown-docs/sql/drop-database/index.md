@@ -1,9 +1,5 @@
 # DROP DATABASE
-
 `DROP DATABASE` removes a database from Materialize.
-
-
-
 `DROP DATABASE` removes a database from Materialize.
 
 > **Warning:** `DROP DATABASE` immediately removes all objects within the
@@ -49,10 +45,7 @@ DROP DATABASE IF EXISTS my_db;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped database.</li>
-</ul>
-
+- Ownership of the dropped database.
 
 ## Related pages
 

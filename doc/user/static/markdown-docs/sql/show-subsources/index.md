@@ -1,9 +1,5 @@
 # SHOW SUBSOURCES
-
 `SHOW SUBSOURCES` returns the subsources in the current schema.
-
-
-
 `SHOW SUBSOURCES` returns the subsources in the current schema.
 
 ## Syntax

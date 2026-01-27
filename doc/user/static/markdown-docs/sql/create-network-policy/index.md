@@ -1,9 +1,5 @@
 # CREATE NETWORK POLICY (Cloud)
-
 `CREATE NETWORK POLICY` creates a network policy that restricts access to a Materialize Cloud region using IP-based rules.
-
-
-
 *Available for Materialize Cloud only*
 
 `CREATE NETWORK POLICY` creates a network policy that restricts access to a
@@ -45,17 +41,13 @@ will be pre-installed. This policy has a wide open ingress rule `allow
 > Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 > Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 > change the default value.
->
 
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATENETWORKPOLICY</code> privileges on the system.</li>
-</ul>
-
+- `CREATENETWORKPOLICY` privileges on the system.
 
 ## Examples
 

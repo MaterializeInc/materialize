@@ -1,15 +1,10 @@
 # EXPLAIN SCHEMA
-
 `EXPLAIN KEY SCHEMA` or `EXPLAIN VALUE SCHEMA` is used to see the generated schemas for a `CREATE SINK` statement
-
-
-
 `EXPLAIN KEY SCHEMA` or `EXPLAIN VALUE SCHEMA` shows the generated schemas for a `CREATE SINK` statement without creating the sink.
 
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -114,7 +109,5 @@ EXPLAIN VALUE SCHEMA FOR
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all items in the query are contained
-in.</li>
-</ul>
+- `USAGE` privileges on the schemas that all items in the query are contained
+  in.

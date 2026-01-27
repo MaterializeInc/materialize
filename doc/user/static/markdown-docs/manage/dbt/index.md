@@ -15,7 +15,6 @@ other database that requires a non-native adapter.
 > **Note:** The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
 > adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
 > require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
->
 
 
 
@@ -76,7 +75,6 @@ Terraform provider](/manage/terraform/) as a complementary deployment tool.
 > start managing multiple users and deployment environments, we recommend
 > checking the code in to **version control** and setting up an **automated
 > workflow** to control the deployment of changes.
->
 
 
 The `dbt-materialize` adapter ships with helper macros to automate blue/green
@@ -104,7 +102,6 @@ These permissions are required because the blue/green deployment process needs t
 > Unlike other objects, sinks must not be recreated in the process of a blue/green
 > deployment, and must instead cut over to the new definition of their upstream
 > dependencies after the environment swap.
->
 
 
 In a blue/green deployment, you first deploy your code changes to a deployment
@@ -158,14 +155,11 @@ These environments are later swapped transparently.
     > If you encounter an error like `String 'deploy:' is not valid YAML`, you
 >   might need to use an alternative syntax depending on your terminal environment.
 >   Different terminals handle quotes differently, so try:
->
 >   ```bash
 >   dbt run --vars "{\"deploy\": true}"
 >   ```
->
 >   This alternative syntax is compatible with Windows terminals, PowerShell, or
 >   PyCharm Terminal.
->
 
 
 
@@ -208,7 +202,6 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 > **Warning:** To avoid breakages in your production environment, we recommend **carefully
 > [validating](#validation)** the results of the deployed changes in the deployment
 > environment before cutting over.
->
 
 
 1. Once `deploy_await` returns successfully and you have [validated the results](#validation)
@@ -265,7 +258,6 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
    > **Note:** Any **active `SUBSCRIBE` commands** attached to the swapped
 >    cluster(s) **will break**. On retry, the client will automatically connect
 >    to the newly deployed cluster
->
 
 
 
@@ -293,7 +285,6 @@ types from each run using [node selection](https://docs.getdbt.com/reference/nod
 
 > **Note:** As you move towards productionizing your data model, we recommend managing
 > sources and sinks [using Terraform](/manage/terraform/) instead.
->
 
 
 You can manually exclude specific materialization types using the
@@ -359,7 +350,6 @@ For a full rundown of selection logic options, check the [dbt documentation](htt
 > **Note:** The `dbt show` command uses a `LIMIT` clause under the hood, which has
 > [known performance limitations](/transform-data/troubleshooting/#result-filtering)
 > in Materialize.
->
 
 
 To debug and preview the results of your models **without** materializing the
@@ -398,7 +388,6 @@ database relation (see [`dbt-core` #7391](https://github.com/dbt-labs/dbt-core/i
 > **Note:** Complex types like [`map`](/sql/types/map/) and [`list`](/sql/types/list/) are
 > not supported in unit tests yet (see [`dbt-adapters` #113](https://github.com/dbt-labs/dbt-adapters/issues/113)).
 > For an overview of other known limitations, check the [dbt documentation](https://docs.getdbt.com/docs/build/unit-tests#before-you-begin).
->
 
 
 To validate your SQL logic without fully materializing a model, as well as
@@ -556,7 +545,6 @@ need to:
    > **Note:** The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
 >     adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
 >     require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
->
 
 
     ```bash
@@ -600,8 +588,6 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 > **Note:** As a best practice, we strongly recommend using [service
 > accounts](/security/cloud/users-service-accounts/create-service-accounts) to
 > connect external applications, like dbt, to Materialize.
->
->
 
 
 dbt manages all your connection configurations (or, profiles) in a file called
@@ -707,7 +693,6 @@ or [`source()`](https://docs.getdbt.com/reference/dbt-jinja-functions/source) fu
 > **Note:** To create a source, you first need to [create a connection](/sql/create-connection)
 > that specifies access and authentication parameters. Connections are **not
 > exposed** in dbt, and need to exist before you run any `source` models.
->
 
 
 
@@ -924,7 +909,6 @@ function.
 
 > **Tip:** For guidance and best practices on how to use indexes in Materialize, see
 > [Indexes on views](/concepts/indexes/#indexes-on-views).
->
 
 
 To keep results **up-to-date** in Materialize, you can create [indexes](/concepts/indexes/)
@@ -990,7 +974,6 @@ function.
 
 > **Tip:** For guidance and best practices on how to use indexes in Materialize, see
 > [Indexes on materialized views](/concepts/views/#indexes-on-materialized-views).
->
 
 
 With a materialized view, your models are kept **up-to-date** in Materialize as
@@ -1033,7 +1016,6 @@ against materialized views faster.
 
 > **Tip:** For guidance and best practices on how to use refresh strategies in Materialize,
 > see [Refresh strategies](/sql/create-materialized-view/#refresh-strategies).
->
 
 
 
@@ -1081,7 +1063,6 @@ maintained** and must recompute their results from scratch on every refresh.
 
 > **Tip:** For guidance and best practices on how to use retain history in Materialize,
 > see [Retain history](/transform-data/patterns/durable-subscriptions/#set-history-retention-period).
->
 
 
 To configure how long historical data is retained in a materialized view, use the
@@ -1519,7 +1500,6 @@ configuration.
 
 > **Note:** Documentation persistence is tightly coupled with `dbt run` command invocations.
 > For "use-at-your-own-risk" workarounds, see [`dbt-core` #4226](https://github.com/dbt-labs/dbt-core/issues/4226). 👻
->
 
 
 1. To enable docs persistence, add a `models` property to `dbt_project.yml` with
@@ -1569,7 +1549,6 @@ configuration.
 > start managing multiple users and deployment environments, we recommend
 > checking the code in to **version control** and setting up an **automated
 > workflow** to control the deployment of changes.
->
 
 
 [//]: # "TODO(morsapaes) Consider moving demos to template repo."
@@ -1587,7 +1566,6 @@ production deployments, you should prefer the [blue/green deployment pattern](/m
 
 > **Note:** Check [this demo](https://github.com/morsapaes/dbt-ci-templates) for a sample
 > end-to-end workflow using GitHub and GitHub Actions.
->
 
 
 1. Fetch the production `manifest.json` file into the CI environment:

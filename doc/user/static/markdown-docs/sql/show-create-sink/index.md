@@ -1,9 +1,5 @@
 # SHOW CREATE SINK
-
 `SHOW CREATE SINK` returns the statement used to create the sink.
-
-
-
 `SHOW CREATE SINK` returns the DDL statement used to create the sink.
 
 ## Syntax
@@ -46,10 +42,7 @@ SHOW CREATE SINK my_view_sink;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the sink.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the sink.
 
 ## Related pages
 

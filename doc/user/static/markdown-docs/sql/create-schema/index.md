@@ -1,9 +1,5 @@
 # CREATE SCHEMA
-
 `CREATE SCHEMA` creates a new schema.
-
-
-
 `CREATE SCHEMA` creates a new schema.
 
 ## Syntax
@@ -44,10 +40,7 @@ my_schema
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing database.</li>
-</ul>
-
+- `CREATE` privileges on the containing database.
 
 ## Related pages
 

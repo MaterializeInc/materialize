@@ -1,9 +1,5 @@
 # Optimization
-
 Recommendations for query optimization in Materialize.
-
-
-
 ## Indexes
 
 Indexes in Materialize maintain the complete up-to-date query results in memory
@@ -282,7 +278,6 @@ In many relational databases, indexes don't replicate the entire collection of d
     CREATE INDEX sections_narrow_courses_1 ON sections_narrow_courses (course_id);
     ```
     > **Note:** In this case, because both foreign keys are in `sections`, we could have gotten away with one narrow collection `sections_narrow_teachers_and_courses` with indexes on `id`, `teacher_id`, and `course_id`. In general, we won't be so lucky to have all the foreign keys in the same collection, so we've shown the more general pattern of creating a narrow view and two indexes for each foreign key.
->
 
 
 3. Rewrite your query to use your narrow collections in the join conditions. Example:
@@ -372,13 +367,12 @@ of key length and value).
 
 As such, indexes in Materialize currently do not provide optimizations for:
 
-- Range queries; that is queries using <code>&gt;</code>, <code>&gt;=</code>,
-  <code>&lt;</code>, <code>&lt;=</code>, `BETWEEN` clauses (e.g., `WHERE
-  quantity > 10`,  <code>price >= 10 AND price &lt;= 50</code>, and `WHERE quantity
+- Range queries; that is queries using `>`, `>=`,
+  `<`, `<=`, `BETWEEN` clauses (e.g., `WHERE
+  quantity > 10`,  `price >= 10 AND price <= 50`, and `WHERE quantity
   BETWEEN 10 AND 20`).
 
 - `GROUP BY`, `ORDER BY` and `LIMIT` clauses.
-
 
 ## Query hints
 

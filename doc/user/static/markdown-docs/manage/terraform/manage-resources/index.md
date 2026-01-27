@@ -1,7 +1,4 @@
 # Manage Materialize resources with the Materialize provider
-
-
-
 The Materialize provider allows you to create several resource types in your
 region. Resources correspond to Materialize objects and are configured
 with the `resource` block in your Terraform configuration file.

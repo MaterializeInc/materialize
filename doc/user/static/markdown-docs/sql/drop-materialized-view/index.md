@@ -1,9 +1,5 @@
 # DROP MATERIALIZED VIEW
-
 `DROP MATERIALIZED VIEW` removes a materialized view from Materialize.
-
-
-
 `DROP MATERIALIZED VIEW` removes a materialized view from Materialize. If there
 are other views depending on the materialized view, you must explicitly drop
 them first, or use the `CASCADE` option.
@@ -47,11 +43,8 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped materialized view.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped materialized view.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

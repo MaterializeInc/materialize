@@ -1,9 +1,5 @@
 # Ingest data from Self-hosted Kafka
-
 How to connect a self-hosted Kafka cluster as a source to Materialize.
-
-
-
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
 with the Postgres ones. We should include spill to disk in the guidance then."
 
@@ -12,8 +8,6 @@ self-hosted Kafka cluster.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -52,8 +46,6 @@ Select the option that works best for you.
 > which can be used to create the target groups for each Kafka broker (step 1),
 > the network load balancer (step 2), the TCP listeners (step 3) and the VPC
 > endpoint service (step 5).
->
->
 
 
 This section covers how to create AWS PrivateLink connections

@@ -210,8 +210,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -234,8 +233,6 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 - **Outbox Pattern (shadow tables)**
 
   > **Note:** With the Outbox pattern, you will need to implement dual writes so that all changes apply to both the original and shadow tables.
->
->
 
 
   With the Outbox pattern, you create duplicate "shadow" tables for the ones you
@@ -246,8 +243,6 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
   > **Note:** With the Sidecar pattern, you will need to keep the sidecar in sync with the
 >   source database (e.g., via logical replication or ETL processes).
->
->
 
 
   With the Sidecar pattern, you create a separate PostgreSQL instance as an
@@ -285,9 +280,7 @@ See also: [PostgreSQL considerations](/ingest-data/postgres/#considerations).
 
 
 > **Note:** - Changing column types is currently unsupported.
->
 > -
->
 
 
 Materialize allows you to handle certain types of upstream
@@ -364,7 +357,6 @@ source](#create-a-table-from-the-source).
 
 > **Note:** The [legacy syntax](/sql/create-source/postgres/) is still supported. However,
 > the legacy syntax doesn't support upstream schema changes.
->
 
 
 ## Create a table from the source
@@ -385,8 +377,6 @@ snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 > the source is temporarily blocked. As before, you can monitor progress for the
 > snapshot operation on the overview page for the source in the Materialize
 > console.
->
->
 
 
 ## Create a view on top of the table.
@@ -436,8 +426,6 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
 > the source is temporarily blocked. As before, you can monitor progress for the
 > snapshot operation on the overview page for the source in the Materialize
 > console.
->
->
 
 
 
@@ -470,8 +458,6 @@ CREATE TABLE v3.T
 > the source is temporarily blocked. As before, you can monitor progress for the
 > snapshot operation on the overview page for the source in the Materialize
 > console.
->
->
 
 
 ### B. Drop a column in your upstream PostgreSQL database
@@ -508,8 +494,6 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -600,7 +584,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your AlloyDB instance is publicly accessible, **you
 > can skip this step**. For production scenarios, we recommend configuring one of
 > the network security options below.
->
 
 
 
@@ -756,7 +739,6 @@ network to allow traffic from the bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -799,9 +781,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -809,8 +789,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -837,9 +815,7 @@ use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -856,8 +832,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT * FROM mz_ssh_tunnel_connections;
 
@@ -865,8 +839,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -876,8 +848,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -887,8 +857,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -896,8 +864,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -1255,8 +1221,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -1270,8 +1235,6 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -1289,11 +1252,8 @@ or your preferred SQL client.</p>
 
 > **Warning:** There is a known issue with Aurora PostgreSQL 16.1 that can cause logical replication to fail with the following error:
 > - `postgres: sql client error: db error: ERROR: could not map filenumber "base/16402/3147867235" to relation OID`
->
 > This is due to a bug in Aurora's implementation of logical replication in PostgreSQL 16.1, where the system fails to correctly fetch relation metadata from the catalogs. If you encounter these errors, you should upgrade your Aurora PostgreSQL instance to a newer minor version (16.2 or later).
->
 > For more information, see [this AWS discussion](https://repost.aws/questions/QU4RXUrLNQS_2oSwV34pmwww/error-could-not-map-filenumber-after-aurora-upgrade-to-16-1).
->
 
 
 ## A. Configure Amazon Aurora
@@ -1309,7 +1269,6 @@ To enable logical replication in Aurora, see the
 > **Note:** Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations)
 > logical replication, so it's not possible to use this service with
 > Materialize.
->
 
 
 ### 2. Create a publication and a replication user
@@ -1377,7 +1336,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your Aurora instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend configuring one of the
 > network security options below.
->
 
 
 
@@ -1432,7 +1390,6 @@ Aurora via the network load balancer.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
->
 
 
 1. Get the IP address of your Aurora instance.
@@ -1527,7 +1484,6 @@ network to allow traffic from the bastion host.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of resources for an SSH tunnel. For more details, see the
 > [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
->
 
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
@@ -1620,7 +1576,6 @@ network to allow traffic from the bastion host.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of resources for an SSH tunnel. For more details, see the
 > [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
->
 
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
@@ -1661,7 +1616,6 @@ network to allow traffic from the bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 
@@ -1705,9 +1659,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -1715,8 +1667,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -1750,9 +1700,7 @@ use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
-AWS PrivateLink connection:
-
-   ```mzsql
+AWS PrivateLink connection:   ```mzsql
    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
@@ -1773,8 +1721,6 @@ AWS PrivateLink connection:
 
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
-
-
    ```mzsql
    SELECT principal
    FROM mz_aws_privatelink_connections plc
@@ -1803,8 +1749,6 @@ not move on to the next step until you've approved the connection.
 
 1. Validate the AWS PrivateLink connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION privatelink_svc;
 
@@ -1814,8 +1758,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -1823,8 +1765,6 @@ password for the `materialize` PostgreSQL user you created
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
 another connection object, this time with database access and authentication
 details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -1850,9 +1790,7 @@ details for Materialize to use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -1869,8 +1807,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT
        mz_connections.name,
@@ -1886,8 +1822,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -1897,8 +1831,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -1908,8 +1840,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -1917,8 +1847,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -2279,8 +2207,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -2294,8 +2221,6 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -2446,7 +2371,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your RDS instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend configuring one of the
 > network security options below.
->
 
 
 
@@ -2501,7 +2425,6 @@ RDS via the network load balancer.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
->
 
 
 1. Get the IP address of your RDS instance. You'll need this address to register
@@ -2595,7 +2518,6 @@ network to allow traffic from the bastion host.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of resources for an SSH tunnel. For more details, see the
 > [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
->
 
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
@@ -2688,7 +2610,6 @@ network to allow traffic from the bastion host.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of resources for an SSH tunnel. For more details, see the
 > [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
->
 
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
@@ -2729,7 +2650,6 @@ network to allow traffic from the bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -2771,9 +2691,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -2781,8 +2699,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -2814,9 +2730,7 @@ CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
    ↕️ **In-region connections**
 
    To connect to an AWS PrivateLink endpoint service in the **same region** as
-   your Materialize environment:
-
-      ```mzsql
+   your Materialize environment:   ```mzsql
       CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK ( SERVICE
             NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
             AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4') );
@@ -2839,9 +2753,7 @@ CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
    ↔️ **Cross-region connections**
 
    To connect to an AWS PrivateLink endpoint service in a **different region**
-   to the one where your Materialize environment is deployed:
-
-      ```mzsql
+   to the one where your Materialize environment is deployed:   ```mzsql
       CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK ( SERVICE
       NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>', -- For
       now, the AVAILABILITY ZONES clause **is** required, but will be -- made
@@ -2857,8 +2769,6 @@ CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
    optimally auto-assigned when none are provided.
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
-
-
    ```mzsql
    SELECT principal
    FROM mz_aws_privatelink_connections plc
@@ -2887,8 +2797,6 @@ not move on to the next step until you've approved the connection.
 
 1. Validate the AWS PrivateLink connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION privatelink_svc;
 
@@ -2898,8 +2806,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -2907,8 +2813,6 @@ password for the `materialize` PostgreSQL user you created
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
 another connection object, this time with database access and authentication
 details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -2934,9 +2838,7 @@ details for Materialize to use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -2953,8 +2855,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT
        mz_connections.name,
@@ -2970,8 +2870,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -2981,8 +2879,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -2992,8 +2888,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -3001,8 +2895,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -3363,8 +3255,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -3378,8 +3269,6 @@ to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -3466,7 +3355,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your AzureDB instance is publicly accessible, **you
 > can skip this step**. For production scenarios, we recommend configuring one of
 > the network security options below.
->
 
 
 
@@ -3611,7 +3499,6 @@ to serve as your SSH bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -3654,9 +3541,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -3664,8 +3549,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -3692,9 +3575,7 @@ use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -3711,8 +3592,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT * FROM mz_ssh_tunnel_connections;
 
@@ -3720,8 +3599,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -3731,8 +3608,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -3742,8 +3617,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -3751,8 +3624,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -4110,8 +3981,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -4125,8 +3995,6 @@ to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 
@@ -4214,7 +4082,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your Google Cloud SQL instance is publicly
 > accessible, **you can skip this step**. For production scenarios, we recommend
 > configuring one of the network security options below.
->
 
 
 
@@ -4359,7 +4226,6 @@ bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -4401,9 +4267,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -4411,8 +4275,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -4438,9 +4300,7 @@ use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -4457,8 +4317,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT * FROM mz_ssh_tunnel_connections;
 
@@ -4466,8 +4324,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -4477,8 +4333,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -4488,8 +4342,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -4497,8 +4349,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -4857,8 +4707,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -4869,8 +4718,6 @@ once the process finishes, resize the cluster for steady-state.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 [Neon](https://neon.tech) is a fully managed serverless PostgreSQL provider. It
@@ -4898,7 +4745,6 @@ Console.
 > **Warning:** Enabling logical replication applies **globally** to all databases in your Neon
 > project, and **cannot be reverted**. It also **restarts all computes**, which
 > means that any active connections are dropped and have to reconnect.
->
 
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
@@ -5049,7 +4895,6 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
 > **Note:** If you are prototyping and your Neon instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 > to limit the IP addresses that can connect to your Neon instance.
->
 
 
 
@@ -5083,7 +4928,6 @@ will need to allow inbound traffic from Materialize IP addresses.
 > **Note:** If you are prototyping and your Neon instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 > to limit the IP addresses that can connect to your Neon instance.
->
 
 
 If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
@@ -5112,7 +4956,6 @@ preferred SQL client connected to Materialize.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -5524,8 +5367,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -5539,8 +5381,6 @@ Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -5651,7 +5491,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your PostgreSQL instance is publicly
 > accessible, **you can skip this step**. For production scenarios, we recommend
 > configuring one of the network security options below.
->
 
 
 
@@ -5900,7 +5739,6 @@ traffic from the bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -5943,9 +5781,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -5953,8 +5789,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -5981,8 +5815,6 @@ use:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -5991,8 +5823,6 @@ password for the `materialize` PostgreSQL user you created
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
 another connection object, this time with database access and authentication
 details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -6017,9 +5847,7 @@ details for Materialize to use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -6036,8 +5864,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT
        mz_connections.name,
@@ -6053,8 +5879,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -6064,8 +5888,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -6075,8 +5897,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -6084,8 +5904,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -6443,8 +6261,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -6457,7 +6274,6 @@ once the process finishes, resize the cluster for steady-state.
 > (CDC) data to Materialize from a PostgreSQL database, but we **strongly
 > recommend** using the native [PostgreSQL](/sql/create-source/postgres/) source
 > instead.
->
 
 
 For help getting started with your own data, you can schedule a [free guided
@@ -6534,7 +6350,6 @@ As a _superuser_ (`rds_superuser`):
 > **Note:** Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations)
 > logical replication, so it's not possible to use this service with
 > Materialize.
->
 
 
 We recommend following the [AWS Aurora](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/AuroraPostgreSQL.Replication.Logical.html#AuroraPostgreSQL.Replication.Logical.Configure)
@@ -6636,8 +6451,6 @@ by adding it to Kafka Connect.
 
 > **Warning:** If you deploy the PostgreSQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html),
 > you **must** override the default value of `After-state only` to `false`.
->
->
 
 
 
@@ -6886,7 +6699,6 @@ replicate data from PostgreSQL was closed, interrupting the replication process.
 > **Note:** This error is known to occur during Materialize maintenance windows and can be
 > safely ignored if that is the case. Sources will automatically reconnect after
 > maintenance is complete.
->
 
 
 ## Common causes
@@ -7023,7 +6835,6 @@ max_connections = 200
 
 > **Note:** Increasing max_connections may require more shared memory. You may also need to
 > adjust `shared_buffers` and other memory settings.
->
 
 
 **4. Review and update SSL certificates**
@@ -7190,7 +7001,6 @@ ORDER BY age DESC;
 
 > **Warning:** This will cause Materialize to take a new snapshot, which may take
 > time and temporarily increase load on your PostgreSQL database.
->
 
 
 Once a slot has been overcompacted, the data is permanently lost from the WAL.

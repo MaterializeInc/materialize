@@ -1,9 +1,5 @@
 # jsonb_object_agg function
-
 Aggregate keys and values (including nulls) into a jsonb object
-
-
-
 The `jsonb_object_agg(keys, values)` aggregate function zips together `keys`
 and `values` into a [`jsonb`](/sql/types/jsonb) object.
 The input values to the aggregate can be [filtered](../filters).

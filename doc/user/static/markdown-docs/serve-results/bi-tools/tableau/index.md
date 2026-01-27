@@ -1,9 +1,5 @@
 # Tableau
-
 How to create real-time dashboards with Tableau
-
-
-
 You can use [Tableau Cloud](https://www.tableau.com/products/cloud-bi) and
 [Tableau Desktop](https://www.tableau.com/products/desktop) to create real-time
 dashboards based on the data maintained in Materialize.

@@ -1,9 +1,5 @@
 # CREATE DATABASE
-
 `CREATE DATABASE` creates a new database.
-
-
-
 Use `CREATE DATABASE` to create a new database.
 
 ## Syntax
@@ -44,10 +40,7 @@ my_db
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEDB</code> privileges on the system.</li>
-</ul>
-
+- `CREATEDB` privileges on the system.
 
 ## Related pages
 

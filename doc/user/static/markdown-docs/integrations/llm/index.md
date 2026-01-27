@@ -1,9 +1,5 @@
 # MCP Server
-
 Learn how to integrate Materialize with Large Language Models (LLMs) using MCP
-
-
-
 The [Model Context Protocol (MCP) Server for Materialize](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/) lets large language models (LLMs) call your indexed views as real-time tools.
 The MCP Server automatically turns any indexed view with a comment into a callable, typed interface that LLMs can use to fetch structured, up-to-date answers—directly from the database.
 

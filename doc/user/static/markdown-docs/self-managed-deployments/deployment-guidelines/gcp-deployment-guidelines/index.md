@@ -1,9 +1,5 @@
 # GCP deployment guidelines
-
 General guidelines when deploying Self-Managed Materialize on GCP.
-
-
-
 ## Recommended instance types
 
 As a general guideline, we recommend:
@@ -35,8 +31,6 @@ machine type for optimal Materialize performance.
 > **Note:** Your machine type may only supports predefined number of local SSDs. For instance, `n2d-highmem-32` allows only the following number of local
 > SSDs: `4`,`8`,`16`, or `24`. To determine the valid number of Local SSDs to attach for your machine type, see the [GCP
 > documentation](https://cloud.google.com/compute/docs/disks/local-ssd#lssd_disk_options).
->
->
 
 
 For example, the following table provides a minimum local SSD count to ensure
@@ -87,7 +81,6 @@ With this change, the Terraform:
 See [Upgrade Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061).
 
 > **Note:** If deploying `v25.2`, Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26`, this will be handled automatically.
->
 
 
 

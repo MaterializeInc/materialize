@@ -1,9 +1,5 @@
 # SHOW SINKS
-
 `SHOW SINKS` returns a list of all sinks available in Materialize.
-
-
-
 `SHOW SINKS` returns a list of all sinks available in Materialize.
 
 ## Syntax

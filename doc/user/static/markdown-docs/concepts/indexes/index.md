@@ -1,9 +1,5 @@
 # Indexes
-
 Learn about indexes in Materialize.
-
-
-
 ## Overview
 
 In Materialize, indexes represent query results stored in memory **within a
@@ -15,7 +11,6 @@ views](/concepts/views/#materialized-views).
 
 > **Note:** In practice, you may find that you rarely need to index a source
 > without performing some transformation using a view, etc.
->
 
 
 In Materialize, you can create indexes on a [source](/concepts/sources/) to
@@ -68,8 +63,6 @@ materialized views require no additional computation to keep results up-to-date.
 > free. However, querying an indexed materialized view within the cluster where
 > the index is created is faster since the results are served from memory rather
 > than from storage.
->
->
 
 
 For best practices on using indexes, and understanding when to use indexed views
@@ -101,7 +94,6 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 ### Index usage
 
 > **Important:** Indexes are local to a cluster. Queries in one cluster cannot use the indexes in another, different cluster.
->
 
 
 Unlike some other databases, Materialize can use an index to serve query results
@@ -190,105 +182,18 @@ The following table shows various queries and whether Materialize performs a
 point lookup or an index scan.
 
 
-
-
-<table>
-<thead>
-<tr>
-<th>Query</th>
-<th>Index usage</th>
-
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="k">IN</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">20</span><span class="p">);</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup. Query uses <code>OR</code> to combine conditions on the <strong>same</strong> field.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup on <code>quantity</code>, then filter on <code>price</code>.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="p">(</span><span class="n">quantity</span><span class="p">,</span> <span class="n">price</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">5.00</span><span class="p">);</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup on <code>quantity</code>, then filter on <code>price</code>.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">&lt;=</span> <span class="mf">10</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">round</span><span class="p">(</span><span class="n">quantity</span><span class="p">)</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="c1">-- Assume quantity is an integer
-</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span>
-</span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span><span class="o">::</span><span class="nb">TEXT</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan, assuming <code>quantity</code> field in <code>orders_view</code> is an integer.
-In the first query, the quantity is implicitly cast to text.
-In the second query, the quantity is explicitly cast to text.
-</td>
-</tr>
-
-</tbody>
-</table>
-
+| Query | Index Usage |
+| --- | --- |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="k">IN</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">20</span><span class="p">);</span> </span></span></code></pre></div> | Point lookup. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup. Query uses <code>OR</code> to combine conditions on the <strong>same</strong> field. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup on <code>quantity</code>, then filter on <code>price</code>. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="p">(</span><span class="n">quantity</span><span class="p">,</span> <span class="n">price</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">5.00</span><span class="p">);</span> </span></span></code></pre></div> | Point lookup on <code>quantity</code>, then filter on <code>price</code>. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">&lt;=</span> <span class="mf">10</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">round</span><span class="p">(</span><span class="n">quantity</span><span class="p">)</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="c1">-- Assume quantity is an integer </span></span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span><span class="o">::</span><span class="nb">TEXT</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span> </span></span></code></pre></div> | Index scan, assuming <code>quantity</code> field in <code>orders_view</code> is an integer. In the first query, the quantity is implicitly cast to text. In the second query, the quantity is explicitly cast to text. |
 
 
 Consider that the view has an index on the `quantity` and `price` fields
@@ -300,82 +205,15 @@ CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 ```
 
 
-
-
-<table>
-<thead>
-<tr>
-<th>Query</th>
-<th>Index usage</th>
-
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query does not include equality conditions on <strong>all</strong> indexed
-fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span>
-</span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="p">(</span><span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">3.00</span><span class="p">);</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup. Query uses <code>OR</code> to combine conditions on <strong>same</strong> field and <code>AND</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span>
-</span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">AND</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup on the index keys <code>quantity</code> and <code>price</code>, then filter on
-<code>item</code>.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span>
-</span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-</tbody>
-</table>
-
+| Query | Index Usage |
+| --- | --- |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query does not include equality conditions on <strong>all</strong> indexed fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="p">(</span><span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">3.00</span><span class="p">);</span> </span></span></code></pre></div> | Point lookup. Query uses <code>OR</code> to combine conditions on <strong>same</strong> field and <code>AND</code> to combine conditions on <strong>different</strong> fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">AND</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup on the index keys <code>quantity</code> and <code>price</code>, then filter on <code>item</code>. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields. |
 
 
 #### Limitations
@@ -386,13 +224,12 @@ of key length and value).
 
 As such, indexes in Materialize currently do not provide optimizations for:
 
-- Range queries; that is queries using <code>&gt;</code>, <code>&gt;=</code>,
-  <code>&lt;</code>, <code>&lt;=</code>, `BETWEEN` clauses (e.g., `WHERE
-  quantity > 10`,  <code>price >= 10 AND price &lt;= 50</code>, and `WHERE quantity
+- Range queries; that is queries using `>`, `>=`,
+  `<`, `<=`, `BETWEEN` clauses (e.g., `WHERE
+  quantity > 10`,  `price >= 10 AND price <= 50`, and `WHERE quantity
   BETWEEN 10 AND 20`).
 
 - `GROUP BY`, `ORDER BY` and `LIMIT` clauses.
-
 
 ### Indexes on views vs. materialized views
 
@@ -403,34 +240,34 @@ the view results in durable storage and can be accessed across clusters, indexes
 on views compute and store view results in memory within a <strong>single</strong> cluster.
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 <p>For example:</p>
 
@@ -477,7 +314,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 
 
@@ -501,7 +337,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 ### Indexes and query optimizations
 

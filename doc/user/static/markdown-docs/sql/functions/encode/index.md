@@ -1,9 +1,5 @@
 # encode and decode functions
-
 Converts binary data to and from textual representations
-
-
-
 The `encode` function encodes binary data into one of several textual
 representations. The `decode` function does the reverse.
 

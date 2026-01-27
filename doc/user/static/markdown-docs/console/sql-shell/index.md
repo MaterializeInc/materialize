@@ -1,9 +1,5 @@
 # SQL Shell
-
 SQL Shell in the Materialize console
-
-
-
 The Materialize Console provides a **SQL
 Shell**, where you can issue your queries. Materialize follows the SQL standard
 (SQL-92) implementation, and strives for compatibility with the PostgreSQL

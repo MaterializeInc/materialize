@@ -26,7 +26,6 @@ See also
 
 > **Note:** Initially, only the `mz_system` user (which has superuser/administrator
 > privileges) is available to manage roles.
->
 
 
 <a name="role-based-access-control-rbac" ></a>
@@ -40,149 +39,123 @@ roles](/security/self-managed/access-control/manage-roles/).
 ## Enabling RBAC
 
 > **Warning:** If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
->
-
-<p>By default, role-based access control (RBAC) checks are not enabled (i.e.,
-enforced) when using <a href="/security/self-managed/authentication/#configuring-authentication-type" >authentication</a>. To
-enable RBAC, set the system parameter <code>enable_rbac_checks</code> to <code>'on'</code> or <code>True</code>.
-You can enable the parameter in one of the following ways:</p>
-<ul>
-<li>
-<p>For <a href="/self-managed-deployments/installation/#installation-guides" >local installations using
-Kind/Minikube</a>, set <code>spec.enableRbac: true</code> option when instantiating the Materialize object.</p>
-</li>
-<li>
-<p>For <a href="/self-managed-deployments/installation/#installation-guides" >Cloud deployments using Materialize&rsquo;s
-Terraforms</a>, set
-<code>enable_rbac_checks</code> in the environment CR via the <code>environmentdExtraArgs</code>
-flag option.</p>
-</li>
-<li>
-<p>After the Materialize instance is running, run the following command as
-<code>mz_system</code> user:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">ALTER</span> <span class="k">SYSTEM</span> <span class="k">SET</span> <span class="n">enable_rbac_checks</span> <span class="o">=</span> <span class="s1">&#39;on&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-</ul>
-<p>If more than one method is used, the <code>ALTER SYSTEM</code> command will take precedence
-over the Kubernetes configuration.</p>
-<p>To view the current value for <code>enable_rbac_checks</code>, run the following <code>SHOW</code>
-command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SHOW</span> <span class="n">enable_rbac_checks</span><span class="p">;</span>
-</span></span></code></pre></div>> **Important:** If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
->
 
 
+By default, role-based access control (RBAC) checks are not enabled (i.e.,
+enforced) when using [authentication](/security/self-managed/authentication/#configuring-authentication-type). To
+enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
+You can enable the parameter in one of the following ways:
+
+- For [local installations using
+  Kind/Minikube](/self-managed-deployments/installation/#installation-guides), set `spec.enableRbac:
+  true` option when instantiating the Materialize object.
+
+- For [Cloud deployments using Materialize's
+  Terraforms](/self-managed-deployments/installation/#installation-guides), set
+  `enable_rbac_checks` in the environment CR via the `environmentdExtraArgs`
+  flag option.
+
+- After the Materialize instance is running, run the following command as
+  `mz_system` user:
+
+  ```mzsql
+  ALTER SYSTEM SET enable_rbac_checks = 'on';
+  ```
+
+If more than one method is used, the `ALTER SYSTEM` command will take precedence
+over the Kubernetes configuration.
+
+To view the current value for `enable_rbac_checks`, run the following `SHOW`
+command:
+
+```mzsql
+SHOW enable_rbac_checks;
+```
+
+> **Important:** If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
 
 ## Roles and privileges
 
-<p>In Materialize, you can create both:</p>
-<ul>
-<li>Individual user or service account roles; i.e., roles associated with a
-specific user or service account.</li>
-<li>Functional roles, not associated with any single user or service
-account, but typically used to define a set of shared
-privileges that can be granted to other user/service/functional roles.</li>
-</ul>
-<p>Initially, only the <code>mz_system</code> user is available.</p>
+In Materialize, you can create both:
+- Individual user or service account roles; i.e., roles associated with a
+  specific user or service account.
+- Functional roles, not associated with any single user or service
+  account, but typically used to define a set of shared
+  privileges that can be granted to other user/service/functional roles.
 
+Initially, only the `mz_system` user is available.
 
-- <p>To create additional users or service accounts, login as the <code>mz_system</code> user,
-using the <code>external_login_password_mz_system</code> password, and use <a href="/sql/create-role" ><code>CREATE ROLE ... WITH LOGIN PASSWORD ...</code></a>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">ROLE</span> <span class="o">&lt;</span><span class="k">user</span><span class="o">&gt;</span> <span class="k">WITH</span> <span class="k">LOGIN</span> <span class="k">PASSWORD</span> <span class="s1">&#39;&lt;password&gt;&#39;</span><span class="p">;</span>
-</span></span></code></pre></div>
+- To create additional users or service accounts, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE
+... WITH LOGIN PASSWORD ...`](/sql/create-role):
 
-- <p>To create functional roles, login as the <code>mz_system</code> user,
-using the <code>external_login_password_mz_system</code> password, and use <a href="/sql/create-role" ><code>CREATE ROLE</code></a>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">ROLE</span> <span class="o">&lt;</span><span class="k">role</span><span class="o">&gt;</span><span class="p">;</span>
-</span></span></code></pre></div>
+```mzsql
+CREATE ROLE <user> WITH LOGIN PASSWORD '<password>';
+```
+
+- To create functional roles, login as the `mz_system` user,
+using the `external_login_password_mz_system` password, and use [`CREATE ROLE`](/sql/create-role):
+
+```mzsql
+CREATE ROLE <role>;
+```
 
 ### Managing privileges
 
-<p>Once a role is created, you can:</p>
-<ul>
-<li><a href="/security/self-managed/access-control/manage-roles/#manage-current-privileges-for-a-role" >Manage its current
-privileges</a>
-(i.e., privileges on existing objects):
-<ul>
-<li>By granting privileges for a role or revoking privileges from a role.</li>
-<li>By granting other roles to the role or revoking roles from the role.
-<em>Recommended for user account/service account roles.</em></li>
-</ul>
-</li>
-<li><a href="/security/self-managed/access-control/manage-roles/#manage-future-privileges-for-a-role" >Manage its future
-privileges</a>
-(i.e., privileges on objects created in the future):
-<ul>
-<li>By defining default privileges for objects. With default privileges in
-place, a role is automatically granted/revoked privileges as new objects are
-created by <strong>others</strong> (When an object is created, the creator is granted all
-<a href="/security/appendix/appendix-privileges/" >applicable privileges</a> for that
-object automatically).</li>
-</ul>
-</li>
-</ul>
+Once a role is created, you can:
 
-> **Disambiguation:** <ul> <li> <p>Use <code>GRANT|REVOKE ...</code> to modify privileges on <strong>existing</strong> objects.</p> </li> <li> <p>Use <code>ALTER DEFAULT PRIVILEGES</code> to ensure that privileges are automatically granted or revoked when <strong>new objects</strong> of a certain type are created by others. Then, as needed, you can use <code>GRANT|REVOKE &lt;privilege&gt;</code> to adjust those privileges.</p> </li> </ul>
+- [Manage its current
+  privileges](/security/self-managed/access-control/manage-roles/#manage-current-privileges-for-a-role)
+  (i.e., privileges on existing objects):
+  - By granting privileges for a role or revoking privileges from a role.
+  - By granting other roles to the role or revoking roles from the role.
+    *Recommended for user account/service account roles.*
+- [Manage its future
+  privileges](/security/self-managed/access-control/manage-roles/#manage-future-privileges-for-a-role)
+  (i.e., privileges on objects created in the future):
+  - By defining default privileges for objects. With default privileges in
+   place, a role is automatically granted/revoked privileges as new objects are
+   created by **others** (When an object is created, the creator is granted all
+   [applicable privileges](/security/appendix/appendix-privileges/) for that
+   object automatically).
+
+> **Disambiguation:** - Use `GRANT|REVOKE ...` to modify privileges on **existing** objects. - Use `ALTER DEFAULT PRIVILEGES` to ensure that privileges are automatically granted or revoked when **new objects** of a certain type are created by others. Then, as needed, you can use `GRANT|REVOKE <privilege>` to adjust those privileges.
 
 
 ### Initial privileges
 
-<p>All roles in Materialize are automatically members of
-<a href="/security/appendix/appendix-built-in-roles/#public-role" ><code>PUBLIC</code></a>. As
-such, every role includes inherited privileges from <code>PUBLIC</code>.</p>
-<p>By default, the <code>PUBLIC</code> role has the following privileges:</p>
-<p><strong>Baseline privileges via PUBLIC role:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Privilege</th>
-<th>Description</th>
-<th>On database object(s)</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>USAGE</code></td>
-<td>Permission to use or reference an object.</td>
-<td><ul> <li>All <code>*.public</code> schemas (e.g., <code>materialize.public</code>);</li> <li><code>materialize</code> database; and</li> <li><code>quickstart</code> cluster.</li> </ul></td>
-</tr>
-</tbody>
-</table>
-<p><strong>Default privileges on future objects set up for PUBLIC:</strong></p>
-<table>
-<thead>
-<tr>
-<th>Object(s)</th>
-<th>Object owner</th>
-<th>Default Privilege</th>
-<th>Granted to</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/sql/types/" ><code>TYPE</code></a></td>
-<td><code>PUBLIC</code></td>
-<td><code>USAGE</code></td>
-<td><code>PUBLIC</code></td>
-<td>When a <a href="/sql/types/" >data type</a> is created (regardless of the owner), all roles are granted the <code>USAGE</code> privilege. However, to use a data type, the role must also have <code>USAGE</code> privilege on the schema containing the type.</td>
-</tr>
-</tbody>
-</table>
-<p>Default privileges apply only to objects created after these privileges are
-defined. They do not affect objects that were created before the default
-privileges were set.</p>
-<p>In addition, all roles have:</p>
-<ul>
-<li><code>USAGE</code> on all built-in types and <a href="/sql/system-catalog/" >all system catalog
-schemas</a>.</li>
-<li><code>SELECT</code> on <a href="/sql/system-catalog/" >system catalog objects</a>.</li>
-<li>All <a href="/security/appendix/appendix-privileges/" >applicable privileges</a> for
-an object they create; for example, the creator of a schema gets <code>CREATE</code> and
-<code>USAGE</code>; the creator of a table gets <code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code>, and
-<code>DELETE</code>.</li>
-</ul>
+All roles in Materialize are automatically members of
+[`PUBLIC`](/security/appendix/appendix-built-in-roles/#public-role). As
+such, every role includes inherited privileges from `PUBLIC`.
 
+By default, the `PUBLIC` role has the following privileges:
+
+
+**Baseline privileges via PUBLIC role:**
+
+| Privilege | Description | On database object(s) |
+| --- | --- | --- |
+| <code>USAGE</code> | Permission to use or reference an object. | <ul> <li>All <code>*.public</code> schemas (e.g., <code>materialize.public</code>);</li> <li><code>materialize</code> database; and</li> <li><code>quickstart</code> cluster.</li> </ul>  |
+
+
+**Default privileges on future objects set up for PUBLIC:**
+
+| Object(s) | Object owner | Default Privilege | Granted to | Description |
+| --- | --- | --- | --- | --- |
+| <a href="/sql/types/" ><code>TYPE</code></a> | <code>PUBLIC</code> | <code>USAGE</code> | <code>PUBLIC</code> | When a <a href="/sql/types/" >data type</a> is created (regardless of the owner), all roles are granted the <code>USAGE</code> privilege. However, to use a data type, the role must also have <code>USAGE</code> privilege on the schema containing the type. |
+
+Default privileges apply only to objects created after these privileges are
+defined. They do not affect objects that were created before the default
+privileges were set.
+
+In addition, all roles have:
+- `USAGE` on all built-in types and [all system catalog
+schemas](/sql/system-catalog/).
+- `SELECT` on [system catalog objects](/sql/system-catalog/).
+- All [applicable privileges](/security/appendix/appendix-privileges/) for
+  an object they create; for example, the creator of a schema gets `CREATE` and
+  `USAGE`; the creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and
+  `DELETE`.
 
 You can modify the privileges of your organization's `PUBLIC` role as well as
 the modify default privileges for `PUBLIC`.
@@ -205,7 +178,7 @@ combining existing roles, enabling modular access control. However:
   are not inherited.
 - When you revoke a role from another role (user role/service account
 role/independent role), the target role is no longer a member of the revoked
-role nor inherits the revoked role&rsquo;s privileges. <strong>However</strong>, privileges are
+role nor inherits the revoked role's privileges. **However**, privileges are
 cumulative: if the target role inherits the same privilege(s) from another role,
 the target role still has the privilege(s) through the other role.
 
@@ -224,14 +197,14 @@ service accounts to perform their duties.
 ### Restrict the granting of `CREATEROLE` privilege
 
 
-{{< include-md file="shared-content/rbac-sm/createrole-consideration.md" >}}
+{{% include-headless "/headless/rbac-sm/createrole-consideration" %}}
 
 
 
 ### Use Reusable Roles for Privilege Assignment
 
 
-{{< include-md file="shared-content/rbac-sm/use-resusable-roles.md" >}}
+{{% include-headless "/headless/rbac-sm/use-resusable-roles" %}}
 
 See also [Manage database roles](/security/self-managed/access-control/manage-roles/).
 
@@ -240,7 +213,7 @@ See also [Manage database roles](/security/self-managed/access-control/manage-ro
 ### Audit for unused roles and privileges.
 
 
-{{< include-md file="shared-content/rbac-sm/audit-remove-roles.md" >}}
+{{% include-headless "/headless/rbac-sm/audit-remove-roles" %}}
 
 See also [Show roles in
 system](/security/self-managed/access-control/manage-roles/#show-roles-in-system)
@@ -269,12 +242,11 @@ used:
 | authenticatorKind Value | Description |
 | --- | --- |
 | <strong>None</strong> | Disables authentication. All users are trusted based on their claimed identity <strong>without</strong> any verification. <strong>Default</strong> |
-| <strong>Password</strong> | <p>Enables <a href="#configuring-password-authentication" >password authentication</a> for users. When enabled, users must authenticate with their password.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring password > authentication](#configuring-password-authentication) for details. > |
-| <strong>Sasl</strong> | <p>Enables <a href="#configuring-saslscram-authentication" >SASL/SCRAM-SHA-256 authentication</a> for <strong>PostgreSQL wire protocol connections</strong>. This is a challenge-response authentication mechanism that provides enhanced security compared to simple password authentication.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring SASL/SCRAM > authentication](#configuring-saslscram-authentication) for details. > |
+| <strong>Password</strong> | <p>Enables <a href="#configuring-password-authentication" >password authentication</a> for users. When enabled, users must authenticate with their password.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring password > authentication](#configuring-password-authentication) for details. |
+| <strong>Sasl</strong> | <p>Enables <a href="#configuring-saslscram-authentication" >SASL/SCRAM-SHA-256 authentication</a> for <strong>PostgreSQL wire protocol connections</strong>. This is a challenge-response authentication mechanism that provides enhanced security compared to simple password authentication.</p> > **Tip:** When enabled, you must also set the `mz_system` user password in > `external_login_password_mz_system`. See [Configuring SASL/SCRAM > authentication](#configuring-saslscram-authentication) for details. |
 
 
 > **Warning:** Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
->
 
 
 
@@ -346,7 +318,6 @@ and maintenance tasks.
 ## Configuring SASL/SCRAM authentication
 
 > **Note:** SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
->
 
 
 SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechanism
@@ -422,7 +393,6 @@ spec:
 For more information on rollout configuration, view our [upgrade overview](/self-managed-deployments/upgrading/#rollout-configuration).
 
 > **Warning:** Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
->
 
 
 

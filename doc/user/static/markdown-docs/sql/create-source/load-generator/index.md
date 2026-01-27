@@ -1,9 +1,5 @@
 # Appendix: Load generator
-
 Using Materialize's built-in load generators
-
-
-
 [`CREATE SOURCE`](/sql/create-source/) connects Materialize to an external system you want to read data from, and provides details about how to decode and interpret that data.
 
 

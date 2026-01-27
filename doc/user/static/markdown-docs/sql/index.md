@@ -165,129 +165,123 @@ Commands related with session state and configurations:
 ## Namespaces
 
 
-<p>Namespaces are a way to organize Materialize objects logically. In organizations
+Namespaces are a way to organize Materialize objects logically. In organizations
 with multiple objects, namespaces help avoid naming conflicts and make it easier
-to manage objects.</p>
-<h2 id="namespace-hierarchy">Namespace hierarchy</h2>
-<p>Materialize follows SQL standard&rsquo;s namespace hierarchy for most objects (for the
-exceptions, see <a href="#other-objects" >Other objects</a>).</p>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>1st/Highest level:</td>
-<td><strong>Database</strong></td>
-</tr>
-<tr>
-<td>2nd level:</td>
-<td><strong>Schema</strong></td>
-</tr>
-<tr>
-<td>3rd level:</td>
-<td><table><tbody><tr><td><ul><li><strong>Table</strong></li><li><strong>View</strong></li><li><strong>Materialized view</strong></li><li><strong>Connection</strong></li></ul></td><td><ul><li><strong>Source</strong></li><li><strong>Sink</strong></li><li><strong>Index</strong></li></ul></td><td><ul><li><strong>Type</strong></li><li><strong>Function</strong></li><li><strong>Secret</strong></li></ul></td></tr></tbody></table></td>
-</tr>
-<tr>
-<td>4th/Lowest level:</td>
-<td><strong>Column</strong></td>
-</tr>
-</tbody>
-</table>
-<p>Each layer in the hierarchy can contain elements from the level immediately
-beneath it. That is,</p>
-<ul>
-<li>Databases can contain: schemas;</li>
-<li>Schemas can contain: tables, views, materialized views, connections, sources,
-sinks, indexes, types, functions, and secrets;</li>
-<li>Tables, views, and materialized views can contain: columns.</li>
-</ul>
-<h3 id="qualifying-names">Qualifying names</h3>
-<p>Namespaces enable disambiguation and access to objects across different
+to manage objects.
+
+## Namespace hierarchy
+
+Materialize follows SQL standard's namespace hierarchy for most objects (for the
+exceptions, see [Other objects](#other-objects)).
+
+|                           |             |
+|---------------------------| ------------|
+| 1st/Highest level:        |  **Database** |
+| 2nd level:                |  **Schema**   |
+| 3rd level:                | <table><tbody><tr><td><ul><li>**Table**</li><li>**View**</li><li>**Materialized view**</li><li>**Connection**</li></ul></td><td><ul><li>**Source**</li><li>**Sink**</li><li>**Index**</li></ul></td><td><ul><li>**Type**</li><li>**Function**</li><li>**Secret**</li></ul></td></tr></tbody></table>|
+| 4th/Lowest level:             | **Column**     |
+
+Each layer in the hierarchy can contain elements from the level immediately
+beneath it. That is,
+
+- Databases can contain: schemas;
+- Schemas can contain: tables, views, materialized views, connections, sources,
+sinks, indexes, types, functions, and secrets;
+- Tables, views, and materialized views can contain: columns.
+
+
+### Qualifying names
+
+Namespaces enable disambiguation and access to objects across different
 databases and schemas. Namespaces use the dot notation format
-(<code>&lt;database&gt;.&lt;schema&gt;....</code>) and allow you to refer to objects by:</p>
-<ul>
-<li>
-<p><strong>Fully qualified names</strong></p>
-<p>Used to reference objects in a different database (Materialize allows
-cross-database queries); e.g.,</p>
-<pre tabindex="0"><code>&lt;Database&gt;.&lt;Schema&gt;
-&lt;Database&gt;.&lt;Schema&gt;.&lt;Source&gt;
-&lt;Database&gt;.&lt;Schema&gt;.&lt;View&gt;
-&lt;Database&gt;.&lt;Schema&gt;.&lt;Table&gt;.&lt;Column&gt;
-</code></pre>> **Tip:** You can use fully qualified names to reference objects within the same
+(`<database>.<schema>....`) and allow you to refer to objects by:
+
+- **Fully qualified names**
+
+  Used to reference objects in a different database (Materialize allows
+  cross-database queries); e.g.,
+
+  ```
+  <Database>.<Schema>
+  <Database>.<Schema>.<Source>
+  <Database>.<Schema>.<View>
+  <Database>.<Schema>.<Table>.<Column>
+  ```
+
+  > **Tip:** You can use fully qualified names to reference objects within the same
 >   database (or within the same database and schema). However, for brevity and
 >   readability, you may prefer to use qualified names instead.
->
->
 
-</li>
-<li>
-<p><strong>Qualified names</strong></p>
-<ul>
-<li>
-<p>Used to reference objects within the same database but different schema, use
-the schema and object name; e.g.,</p>
-<pre tabindex="0"><code>&lt;Schema&gt;.&lt;Source&gt;
-&lt;Schema&gt;.&lt;View&gt;
-&lt;Schema&gt;.&lt;Table&gt;.&lt;Column&gt;
-</code></pre></li>
-<li>
-<p>Used to reference objects within the same database and schema, use the
-object name; e.g.,</p>
-<pre tabindex="0"><code>&lt;Source&gt;
-&lt;View&gt;
-&lt;Table&gt;.&lt;Column&gt;
-&lt;View&gt;.&lt;Column&gt;
-</code></pre></li>
-</ul>
-</li>
-</ul>
-<h2 id="namespace-constraints">Namespace constraints</h2>
-<p>All namespaces must adhere to <a href="/sql/identifiers" >identifier rules</a>.</p>
-<h2 id="other-objects">Other objects</h2>
-<p>The following Materialize objects  exist outside the standard SQL namespace
-hierarchy:</p>
-<ul>
-<li>
-<p><strong>Clusters</strong>: Referenced directly by its name.</p>
-<p>For example, to create a materialized view in the cluster <code>cluster1</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">mv</span> <span class="k">IN</span> <span class="k">CLUSTER</span> <span class="n">cluster1</span> <span class="k">AS</span> <span class="mf">...</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-<li>
-<p><strong>Cluster replicas</strong>: Referenced as <code>&lt;cluster-name&gt;.&lt;replica-name&gt;</code>.</p>
-<p>For example, to delete replica <code>r1</code> in cluster <code>cluster1</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">DROP</span> <span class="k">CLUSTER</span> <span class="k">REPLICA</span> <span class="n">cluster1</span><span class="mf">.</span><span class="n">r1</span>
-</span></span></code></pre></div></li>
-<li>
-<p><strong>Roles</strong>: Referenced by their name. For example, to alter the <code>manager</code> role, your SQL statement would be:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">ALTER</span> <span class="k">ROLE</span> <span class="n">manager</span> <span class="mf">...</span>
-</span></span></code></pre></div></li>
-</ul>
-<h3 id="other-object-namespace-constraints">Other object namespace constraints</h3>
-<ul>
-<li>
-<p>Two clusters or two roles cannot have the same name. However, a cluster and a
-role can have the same name.</p>
-</li>
-<li>
-<p>Replicas can have the same names as long as they belong to different clusters.
-Materialize automatically assigns names to replicas (e.g., <code>r1</code>, <code>r2</code>).</p>
-</li>
-</ul>
-<h2 id="database-details">Database details</h2>
-<ul>
-<li>By default, Materialize regions have a database named <code>materialize</code>.</li>
-<li>By default, each database has a schema called <code>public</code>.</li>
-<li>You can specify which database you connect to either when you connect (e.g.
-<code>psql -d my_db ...</code>) or within SQL using <a href="/sql/set/" ><code>SET DATABASE</code></a> (e.g.
-<code>SET DATABASE = my_db</code>).</li>
-<li>Materialize allows cross-database queries.</li>
-</ul>
 
+- **Qualified names**
+
+  - Used to reference objects within the same database but different schema, use
+    the schema and object name; e.g.,
+
+    ```
+    <Schema>.<Source>
+    <Schema>.<View>
+    <Schema>.<Table>.<Column>
+    ```
+
+  - Used to reference objects within the same database and schema, use the
+    object name; e.g.,
+
+    ```
+    <Source>
+    <View>
+    <Table>.<Column>
+    <View>.<Column>
+    ```
+
+## Namespace constraints
+
+All namespaces must adhere to [identifier rules](/sql/identifiers).
+
+
+## Other objects
+
+The following Materialize objects  exist outside the standard SQL namespace
+hierarchy:
+
+- **Clusters**: Referenced directly by its name.
+
+  For example, to create a materialized view in the cluster `cluster1`:
+
+  ```mzsql
+  CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ...;
+  ```
+
+- **Cluster replicas**: Referenced as `<cluster-name>.<replica-name>`.
+
+  For example, to delete replica `r1` in cluster `cluster1`:
+
+  ```mzsql
+  DROP CLUSTER REPLICA cluster1.r1
+  ```
+
+- **Roles**: Referenced by their name. For example, to alter the `manager` role, your SQL statement would be:
+
+  ```mzsql
+  ALTER ROLE manager ...
+  ```
+
+### Other object namespace constraints
+
+- Two clusters or two roles cannot have the same name. However, a cluster and a
+  role can have the same name.
+
+- Replicas can have the same names as long as they belong to different clusters.
+  Materialize automatically assigns names to replicas (e.g., `r1`, `r2`).
+
+## Database details
+
+- By default, Materialize regions have a database named `materialize`.
+- By default, each database has a schema called `public`.
+- You can specify which database you connect to either when you connect (e.g.
+  `psql -d my_db ...`) or within SQL using [`SET DATABASE`](/sql/set/) (e.g.
+  `SET DATABASE = my_db`).
+- Materialize allows cross-database queries.
 
 
 ---
@@ -389,7 +383,6 @@ ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
 
 
 > **Note:** You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
->
 
 
 
@@ -422,8 +415,6 @@ the `<new_owner_role>`. See also [Required privileges](#required-privileges).
 > **Important:** Information about the `SWAP WITH` operation is provided for completeness.  The
 > `SWAP WITH` operation is used for blue/green deployments. In general, you will
 > not need to manually perform this operation.
->
->
 
 
 To swap the name of this cluster with another cluster:
@@ -451,8 +442,6 @@ ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
 > **Tip:** For help sizing your clusters, navigate to **Materialize Console >**
 > [**Monitoring**](/console/monitoring/)>**Environment Overview**. This page
 > displays cluster resource utilization and sizing advice.
->
->
 
 
 #### Available sizes
@@ -464,7 +453,6 @@ ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
 > Materialize reserves the right to change the capacity at any time. As such, you
 > acknowledge and agree that those values in this table may change at any time,
 > and you should not rely on these values for any capacity planning.
->
 
 
 
@@ -496,9 +484,7 @@ ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
 
 
 Valid legacy cc cluster sizes are:
@@ -530,6 +516,8 @@ Clusters of larger sizes can process data faster and handle larger data volumes.
 
 See also:
 
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
+
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
 
@@ -544,7 +532,6 @@ system catalog table.
 
 > **Warning:** The values in the `mz_cluster_replica_sizes` table may change at any
 > time. You should not rely on them for any kind of capacity planning.
->
 
 
 #### Downtime
@@ -574,22 +561,11 @@ operation, any other reconfiguration command issued against this cluster will
 fail. Additionally, any connection interruption or statement cancelation will
 cause a rollback — no size change will take effect in that case.
 
-
-  {{__hugo_ctx pid=33}}
 > **Note:** Using `WAIT UNTIL READY` requires that the session remain open: you need to
 > make sure the Console tab remains open or that your `psql` connection remains
 > stable.
->
 > Any interruption will cause a cancellation, no cluster changes will take
 > effect.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 ### Replication factor
 
@@ -609,16 +585,12 @@ available, the cluster can continue to maintain dataflows and serve queries.
 > **Note:** - Each replica incurs cost, calculated as `cluster size *
 >   replication factor` per second. See [Usage &
 >   billing](/administration/billing/) for more details.
->
 > - Increasing the replication factor does **not** increase the cluster's work
 >   capacity. Replicas are exact copies of one another: each replica must do
 >   exactly the same work (i.e., maintain the same dataflows and process the same
 >   queries) as all the other replicas of the cluster.
->
 >   To increase the capacity of a cluster, you must increase its
 >   [size](#resizing).
->
->
 
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
@@ -641,19 +613,12 @@ When provisioning replicas,
 
 To execute the `ALTER CLUSTER` command, you need:
 
-<ul>
-<li>
-<p>Ownership of the cluster.</p>
-</li>
-<li>
-<p>To rename a cluster, you must also have membership in the <code>&lt;new_owner_role&gt;</code>.</p>
-</li>
-<li>
-<p>To swap names with another cluster, you must also have ownership of the other
-cluster.</p>
-</li>
-</ul>
+- Ownership of the cluster.
 
+- To rename a cluster, you must also have membership in the `<new_owner_role>`.
+
+- To swap names with another cluster, you must also have ownership of the other
+  cluster.
 
 See also:
 
@@ -692,22 +657,11 @@ ALTER CLUSTER c1
 SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
-
-  {{__hugo_ctx pid=33}}
 > **Note:** Using `WAIT UNTIL READY` requires that the session remain open: you need to
 > make sure the Console tab remains open or that your `psql` connection remains
 > stable.
->
 > Any interruption will cause a cancellation, no cluster changes will take
 > effect.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Alternatively, you can alter the cluster size immediately, without waiting, by
 running the `ALTER CLUSTER` command:
@@ -741,8 +695,6 @@ scheduled clusters.
 > **Note:** When getting started with Materialize, we recommend using managed clusters. You
 > can convert any unmanaged clusters to managed clusters by following the
 > instructions below.
->
->
 
 
 Alter the `managed` status of a cluster to managed:
@@ -801,7 +753,6 @@ ALTER CLUSTER REPLICA <name> RENAME TO <new_name>;
 
 
 > **Note:** You cannot rename replicas in system clusters.
->
 
 
 
@@ -834,16 +785,10 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the cluster replica.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing cluster.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the cluster replica.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing cluster.
 
 ## Example
 
@@ -1021,17 +966,11 @@ be unable to authenticate with the bastion server.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the connection.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the connection is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the connection.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the connection is namespaced
+  by a schema.
 
 ## Related pages
 
@@ -1104,15 +1043,9 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the database.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the database.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
 
 
 ---
@@ -1179,7 +1112,6 @@ ALTER DEFAULT PRIVILEGES
 > on objects. Those privileges must be revoked manually after the object is
 > created. Though owners can always re-grant themselves any privilege on an object
 > that they own.
->
 
 
 The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously
@@ -1233,7 +1165,7 @@ ALTER DEFAULT PRIVILEGES
 | <strong>DELETE</strong> | <p>Permission to delete rows from an object.</p> <p>Deleting rows may also require <strong>SELECT</strong> if a read is needed to determine which rows to delete.</p>  | <code>d</code> | <ul> <li><code>TABLE</code></li> </ul>  |
 | <strong>CREATE</strong> | Permission to create a new objects within the specified object. | <code>C</code> | <ul> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>CLUSTER</code></li> </ul>  |
 | <strong>USAGE</strong> | <a name="privilege-usage"></a> Permission to use or reference an object (e.g., schema/type lookup). | <code>U</code> | <ul> <li><code>CLUSTER</code></li> <li><code>CONNECTION</code></li> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>SECRET</code></li> <li><code>TYPE</code></li> </ul>  |
-| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the <code>CREATEROLE</code> privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > <code>CREATEROLE</code> unnecessarily. > | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
+| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the `CREATEROLE` privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > `CREATEROLE` unnecessarily. | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATEDB</strong> | Permission to create new databases. | <code>B</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATECLUSTER</strong> | Permission to create new clusters. | <code>N</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATENETWORKPOLICY</strong> | Permission to create network policies to control access at the network layer. | <code>P</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
@@ -1286,14 +1218,11 @@ ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT SELECT ON TABLES TO managers;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Role membership in <code>role_name</code>.</li>
-<li><code>USAGE</code> privileges on the containing database if <code>database_name</code> is specified.</li>
-<li><code>USAGE</code> privileges on the containing schema if <code>schema_name</code> is specified.</li>
-<li><em>superuser</em> status if the <em>target_role</em> is <code>PUBLIC</code> or <strong>ALL ROLES</strong> is
-specified.</li>
-</ul>
-
+- Role membership in `role_name`.
+- `USAGE` privileges on the containing database if `database_name` is specified.
+- `USAGE` privileges on the containing schema if `schema_name` is specified.
+- _superuser_ status if the _target_role_ is `PUBLIC` or **ALL ROLES** is
+  specified.
 
 ## Useful views
 
@@ -1353,10 +1282,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the index.</li>
-</ul>
-
+- Ownership of the index.
 
 ## Related pages
 
@@ -1481,25 +1407,11 @@ ALTER MATERIALIZED VIEW <name> RESET (RETAIN HISTORY);
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the materialized view.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the materialized view is
-namespaced by a schema.</li>
-</ul>
-</li>
-</ul>
-
-
-
-
-
-
-
-
-
+- Ownership of the materialized view.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the materialized view is
+  namespaced by a schema.
 
 ## Related pages
 
@@ -1556,7 +1468,6 @@ will be pre-installed. This policy has a wide open ingress rule `allow
 > Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 > Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 > change the default value.
->
 
 
 ### Lockout prevention
@@ -1569,10 +1480,7 @@ that could lock them out of the system.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the network policy.</li>
-</ul>
-
+- Ownership of the network policy.
 
 ## Examples
 
@@ -1774,7 +1682,6 @@ rj  f
 #### Removing a role's password (Self-Managed)
 
 > **Warning:** Setting a NULL password removes the password.
->
 
 
 ```mzsql
@@ -1790,10 +1697,7 @@ ALTER ROLE rj PASSWORD 'new_password';
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 
@@ -1912,25 +1816,13 @@ SELECT * FROM blue.tags;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the schema.</li>
-<li>In addition,
-<ul>
-<li>To swap with another schema:
-<ul>
-<li>Ownership of the other schema</li>
-</ul>
-</li>
-<li>To change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing database.</li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the schema.
+- In addition,
+  - To swap with another schema:
+    - Ownership of the other schema
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing database.
 
 ## See also
 
@@ -2061,17 +1953,11 @@ ALTER SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the secret being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the secret is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the secret being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the secret is namespaced
+  by a schema.
 
 ## Related pages
 
@@ -2200,7 +2086,6 @@ relation.
 > definition of the sink to emit results up until the oldest timestamp at which
 > the contents of the new upstream relation are known. Attempting to `ALTER` an
 > unhealthy sink that can't make progress will result in the command timing out.
->
 
 
 #### Cutover scenarios and workarounds
@@ -2268,30 +2153,18 @@ create a sink on the materialized view.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the sink being altered.</li>
-<li>In addition,
-<ul>
-<li>To change the sink from relation:
-<ul>
-<li><code>SELECT</code> privileges on the new relation being written out to an external system.</li>
-<li><code>CREATE</code> privileges on the cluster maintaining the sink.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the sink definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-</li>
-<li>To change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the sink is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the sink being altered.
+- In addition,
+  - To change the sink from relation:
+    - `SELECT` privileges on the new relation being written out to an external system.
+    - `CREATE` privileges on the cluster maintaining the sink.
+    - `USAGE` privileges on all connections and secrets used in the sink definition.
+    - `USAGE` privileges on the schemas that all connections and secrets in the
+      statement are contained in.
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing schema if the sink is namespaced
+  by a schema.
 
 ## Examples
 
@@ -2303,8 +2176,6 @@ The following example alters a sink originally created from `matview_old` to use
 That is, assume you have a Kafka sink `avro_sink` created from `matview_old`
 (See [`CREATE SINK`:Kafka/Redpanda](/sql/create-sink/kafka/) for more
 information):
-
-
 ```mzsql
 CREATE SINK avro_sink
   FROM matview_old
@@ -2327,8 +2198,6 @@ subsequent execution of the sink will result in errors and will not be able
 to make progress. See [Valid schema changes](#valid-schema-changes) for
 details.
 {{< /note >}}
-
-
 ```mzsql
 ALTER SINK avro_sink
   SET FROM matview_new
@@ -2376,9 +2245,7 @@ intermediary materialized view and table).
 At first, the `switch.value` is `false`, so the `transition` materialized view contains the `matview_old` content.
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    CREATE TABLE switch (value bool);
    INSERT INTO switch VALUES (false); -- controls whether we want the new or the old materialized view.
 
@@ -2393,9 +2260,7 @@ At first, the `switch.value` is `false`, so the `transition` materialized view c
 1. `ALTER SINK` to use `transition`, which currently contains `matview_old` content:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    ALTER SINK avro_sink SET FROM transition;
 
    ```
@@ -2403,9 +2268,7 @@ At first, the `switch.value` is `false`, so the `transition` materialized view c
 1. Update `switch.value` to `true`, which causes the `transition` materialized view to contain `matview_new` content:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    UPDATE switch SET value = true;
 
    ```
@@ -2416,9 +2279,7 @@ beyond the time of the switch update. Once advanced, alter sink to use
 `matview_new`:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    -- After sink upper has advanced beyond the time of the switch UPDATE.
    ALTER SINK avro_sink SET FROM matview_new;
 
@@ -2427,9 +2288,7 @@ beyond the time of the switch update. Once advanced, alter sink to use
 1. Drop the `transition` materialized view and the `switch` table:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    DROP MATERIALIZED VIEW transition;
    DROP TABLE switch;
 
@@ -2480,19 +2339,12 @@ ALTER SOURCE [IF EXISTS] <name>
 | **WITH (TEXT COLUMNS (`<col>` [, ...]))** | Optional. List of columns to decode as `text` for types that are unsupported in Materialize.  |
 
 
-> **Note:** {{__hugo_ctx pid=34}}
-> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> **Note:** When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 > SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 > process for the new subsource. During this snapshotting, the data ingestion for
 > the existing subsources for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
-> {{__hugo_ctx/}}
->
->
->
->
->
 
 
 
@@ -2584,19 +2436,12 @@ ALTER SOURCE [IF EXISTS] <name>  RESET (RETAIN HISTORY);
 Note that using a combination of dropping and adding subsources lets you change
 the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
 
-> **Important:** {{__hugo_ctx pid=34}}
-> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> **Important:** When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 > SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 > process for the new subsource. During this snapshotting, the data ingestion for
 > the existing subsources for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
-> {{__hugo_ctx/}}
->
->
->
->
->
 
 
 ### Dropping subsources from a PostgreSQL/MySQL/SQL Server source
@@ -2619,19 +2464,12 @@ You cannot drop the "progress subsource".
 ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
 ```
 
-> **Important:** {{__hugo_ctx pid=34}}
-> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> **Important:** When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 > SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 > process for the new subsource. During this snapshotting, the data ingestion for
 > the existing subsources for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
-> {{__hugo_ctx/}}
->
->
->
->
->
 
 
 ### Dropping subsources
@@ -2646,17 +2484,11 @@ DROP SOURCE tbl_a, b CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the source being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the source is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the source being altered.
+- In addition, to change owners:
+   - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the source is namespaced
+  by a schema.
 
 ## See also
 
@@ -2686,8 +2518,6 @@ Syntax element | Description
 ---------------|------------
 `<config>`     | The configuration parameter's name.
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -2750,20 +2580,12 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><a href="/security/cloud/users-service-accounts/#organization-roles"><em>Superuser</em> privileges</a></li>
-</ul>
-
+- [_Superuser_ privileges](/security/cloud/users-service-accounts/#organization-roles)
 
 ## Related pages
 
@@ -2792,8 +2614,6 @@ Syntax element | Description
 `<value>`               | The value to assign to the configuration parameter.
 **DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -2856,20 +2676,12 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><a href="/security/cloud/users-service-accounts/#organization-roles"><em>Superuser</em> privileges</a></li>
-</ul>
-
+- [_Superuser_ privileges](/security/cloud/users-service-accounts/#organization-roles)
 
 ## Related pages
 
@@ -2974,17 +2786,11 @@ ALTER TABLE <name> RESET (RETAIN HISTORY);
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the table being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the table is namespaced by
-a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the table being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the table is namespaced by
+  a schema.
 
 
 ---
@@ -3049,17 +2855,11 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the type being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the type is namespaced by a
-schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the type being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the type is namespaced by a
+    schema.
 
 
 ---
@@ -3124,17 +2924,11 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the view being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the view is namespaced by
-a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the view being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the view is namespaced by
+  a schema.
 
 
 ---
@@ -3210,11 +3004,8 @@ In Materialize, read-only transactions can be either:
 > **Note:** - During the first query, a timestamp is chosen that is valid for all of the
 >   objects referenced in the query. This timestamp will be used for all other
 >   queries in the transaction.
->
 > - The transaction will additionally hold back normal compaction of the objects,
 >   potentially increasing memory usage for very long running transactions.
->
->
 
 
 #### SELECT-only transactions
@@ -3318,7 +3109,7 @@ transaction are committed at the same timestamp.</p>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">-- Subsequent INSERTs must write to sales_items table only
 </span></span></span><span class="line"><span class="cl"><span class="c1">-- Otherwise, the COMMIT will error and roll back the transaction.
-</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">orders</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">11</span><span class="p">,</span><span class="n">current_timestamp</span><span class="p">,</span><span class="s1">&#39;chocolate cake&#39;</span><span class="p">,</span><span class="mf">1</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl"><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">orders</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">11</span><span class="p">,</span><span class="n">current_timestamp</span><span class="p">,</span><span class="s1">&#39;chocolate chip cookie&#39;</span><span class="p">,</span><span class="mf">20</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl"><span class="k">COMMIT</span><span class="p">;</span>
@@ -3400,11 +3191,8 @@ catalog table.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the object being commented on (unless the object is a role).</li>
-<li>To comment on a role, you must have the <code>CREATEROLE</code> privilege.</li>
-</ul>
-
+- Ownership of the object being commented on (unless the object is a role).
+- To comment on a role, you must have the `CREATEROLE` privilege.
 
 For more information on ownership and privileges, see [Role-based access
 control](/security/).
@@ -3495,7 +3283,7 @@ transaction are committed at the same timestamp.</p>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">-- Subsequent INSERTs must write to sales_items table only
 </span></span></span><span class="line"><span class="cl"><span class="c1">-- Otherwise, the COMMIT will error and roll back the transaction.
-</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">orders</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">11</span><span class="p">,</span><span class="n">current_timestamp</span><span class="p">,</span><span class="s1">&#39;chocolate cake&#39;</span><span class="p">,</span><span class="mf">1</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl"><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">orders</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">11</span><span class="p">,</span><span class="n">current_timestamp</span><span class="p">,</span><span class="s1">&#39;chocolate chip cookie&#39;</span><span class="p">,</span><span class="mf">20</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl"><span class="k">COMMIT</span><span class="p">;</span>
@@ -3534,7 +3322,6 @@ queries in the transaction.
 
 > **Note:** The transaction will additionally hold back normal compaction of the objects,
 > potentially increasing memory usage for very long running transactions.
->
 
 
 ## See also
@@ -3624,11 +3411,8 @@ COPY t FROM STDIN (DELIMITER '|');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the table.</li>
-<li><code>INSERT</code> privileges on the table.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the table.
+- `INSERT` privileges on the table.
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
 
@@ -3715,30 +3499,30 @@ WITH (
 <p>For <code>'csv'</code> format, Materialize writes CSV files using the following
 writer settings:</p>
 <table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>delimiter</td>
-<td><code>,</code></td>
-</tr>
-<tr>
-<td>quote</td>
-<td><code>&quot;</code></td>
-</tr>
-<tr>
-<td>escape</td>
-<td><code>&quot;</code></td>
-</tr>
-<tr>
-<td>header</td>
-<td><code>false</code></td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Setting</th>
+          <th>Value</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>delimiter</td>
+          <td><code>,</code></td>
+      </tr>
+      <tr>
+          <td>quote</td>
+          <td><code>&quot;</code></td>
+      </tr>
+      <tr>
+          <td>escape</td>
+          <td><code>&quot;</code></td>
+      </tr>
+      <tr>
+          <td>header</td>
+          <td><code>false</code></td>
+      </tr>
+  </tbody>
 </table>
 
 ### Copy to S3: Parquet {#copy-to-s3-parquet}
@@ -3749,38 +3533,38 @@ writer settings:</p>
 maximum compatibility with downstream systems. The following Parquet
 writer settings are used:</p>
 <table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Writer version</td>
-<td>1.0</td>
-</tr>
-<tr>
-<td>Compression</td>
-<td><code>snappy</code></td>
-</tr>
-<tr>
-<td>Default column encoding</td>
-<td>Dictionary</td>
-</tr>
-<tr>
-<td>Fallback column encoding</td>
-<td>Plain</td>
-</tr>
-<tr>
-<td>Dictionary page encoding</td>
-<td>Plain</td>
-</tr>
-<tr>
-<td>Dictionary data page encoding</td>
-<td><code>RLE_DICTIONARY</code></td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Setting</th>
+          <th>Value</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>Writer version</td>
+          <td>1.0</td>
+      </tr>
+      <tr>
+          <td>Compression</td>
+          <td><code>snappy</code></td>
+      </tr>
+      <tr>
+          <td>Default column encoding</td>
+          <td>Dictionary</td>
+      </tr>
+      <tr>
+          <td>Fallback column encoding</td>
+          <td>Plain</td>
+      </tr>
+      <tr>
+          <td>Dictionary page encoding</td>
+          <td>Plain</td>
+      </tr>
+      <tr>
+          <td>Dictionary data page encoding</td>
+          <td><code>RLE_DICTIONARY</code></td>
+      </tr>
+  </tbody>
 </table>
 <p>If you encounter issues trying to ingest Parquet files produced by
 Materialize into your downstream systems, please <a href="/support/" >contact our
@@ -3801,185 +3585,185 @@ in the 1.0 writer version.</p>
 The field metadata in the schema contains an <code>ARROW:extension:name</code> annotation
 to indicate the Materialize native type the field originated from.</p>
 <table>
-<thead>
-<tr>
-<th>Materialize type</th>
-<th>Arrow extension name</th>
-<th><a href="https://github.com/apache/arrow/blob/main/format/Schema.fbs" >Arrow type</a></th>
-<th><a href="https://parquet.apache.org/docs/file-format/types/" >Parquet primitive type</a></th>
-<th><a href="https://github.com/apache/parquet-format/blob/master/LogicalTypes.md" >Parquet logical type</a></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/sql/types/integer/#bigint-info" ><code>bigint</code></a></td>
-<td><code>materialize.v1.bigint</code></td>
-<td><code>int64</code></td>
-<td><code>INT64</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/boolean/" ><code>boolean</code></a></td>
-<td><code>materialize.v1.boolean</code></td>
-<td><code>bool</code></td>
-<td><code>BOOLEAN</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/bytea/" ><code>bytea</code></a></td>
-<td><code>materialize.v1.bytea</code></td>
-<td><code>large_binary</code></td>
-<td><code>BYTE_ARRAY</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/date/" ><code>date</code></a></td>
-<td><code>materialize.v1.date</code></td>
-<td><code>date32</code></td>
-<td><code>INT32</code></td>
-<td><code>DATE</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/float/#double-precision-info" ><code>double precision</code></a></td>
-<td><code>materialize.v1.double</code></td>
-<td><code>float64</code></td>
-<td><code>DOUBLE</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/integer/#integer-info" ><code>integer</code></a></td>
-<td><code>materialize.v1.integer</code></td>
-<td><code>int32</code></td>
-<td><code>INT32</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/jsonb/" ><code>jsonb</code></a></td>
-<td><code>materialize.v1.jsonb</code></td>
-<td><code>large_utf8</code></td>
-<td><code>BYTE_ARRAY</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/map/" ><code>map</code></a></td>
-<td><code>materialize.v1.map</code></td>
-<td><code>map</code> (<code>struct</code> with fields <code>keys</code> and <code>values</code>)</td>
-<td>Nested</td>
-<td><code>MAP</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/list/" ><code>list</code></a></td>
-<td><code>materialize.v1.list</code></td>
-<td><code>list</code></td>
-<td>Nested</td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/numeric/" ><code>numeric</code></a></td>
-<td><code>materialize.v1.numeric</code></td>
-<td><code>decimal128[38, 10 or max-scale]</code></td>
-<td><code>FIXED_LEN_BYTE_ARRAY</code></td>
-<td><code>DECIMAL</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/float/#real-info" ><code>real</code></a></td>
-<td><code>materialize.v1.real</code></td>
-<td><code>float32</code></td>
-<td><code>FLOAT</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/integer/#smallint-info" ><code>smallint</code></a></td>
-<td><code>materialize.v1.smallint</code></td>
-<td><code>int16</code></td>
-<td><code>INT32</code></td>
-<td><code>INT(16, true)</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/text/" ><code>text</code></a></td>
-<td><code>materialize.v1.text</code></td>
-<td><code>utf8</code> or <code>large_utf8</code></td>
-<td><code>BYTE_ARRAY</code></td>
-<td><code>STRING</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/time/" ><code>time</code></a></td>
-<td><code>materialize.v1.time</code></td>
-<td><code>time64[nanosecond]</code></td>
-<td><code>INT64</code></td>
-<td><code>TIME[isAdjustedToUTC = false, unit = NANOS]</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/uint/#uint2-info" ><code>uint2</code></a></td>
-<td><code>materialize.v1.uint2</code></td>
-<td><code>uint16</code></td>
-<td><code>INT32</code></td>
-<td><code>INT(16, false)</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/uint/#uint4-info" ><code>uint4</code></a></td>
-<td><code>materialize.v1.uint4</code></td>
-<td><code>uint32</code></td>
-<td><code>INT32</code></td>
-<td><code>INT(32, false)</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/uint/#uint8-info" ><code>uint8</code></a></td>
-<td><code>materialize.v1.uint8</code></td>
-<td><code>uint64</code></td>
-<td><code>INT64</code></td>
-<td><code>INT(64, false)</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/timestamp/#timestamp-info" ><code>timestamp</code></a></td>
-<td><code>materialize.v1.timestamp</code></td>
-<td><code>time64[microsecond]</code></td>
-<td><code>INT64</code></td>
-<td><code>TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/timestamp/#timestamp-with-time-zone-info" ><code>timestamp with time zone</code></a></td>
-<td><code>materialize.v1.timestampz</code></td>
-<td><code>time64[microsecond]</code></td>
-<td><code>INT64</code></td>
-<td><code>TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]</code></td>
-</tr>
-<tr>
-<td><a href="/sql/types/array/" >Arrays</a> (<code>[]</code>)</td>
-<td><code>materialize.v1.array</code></td>
-<td><code>struct</code> with <code>list</code> field <code>items</code> and <code>uint8</code> field <code>dimensions</code></td>
-<td>Nested</td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/uuid/" ><code>uuid</code></a></td>
-<td><code>materialize.v1.uuid</code></td>
-<td><code>fixed_size_binary(16)</code></td>
-<td><code>FIXED_LEN_BYTE_ARRAY</code></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/oid/" ><code>oid</code></a></td>
-<td>Unsupported</td>
-<td></td>
-<td></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/interval/" ><code>interval</code></a></td>
-<td>Unsupported</td>
-<td></td>
-<td></td>
-<td></td>
-</tr>
-<tr>
-<td><a href="/sql/types/record/" ><code>record</code></a></td>
-<td>Unsupported</td>
-<td></td>
-<td></td>
-<td></td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Materialize type</th>
+          <th>Arrow extension name</th>
+          <th><a href="https://github.com/apache/arrow/blob/main/format/Schema.fbs" >Arrow type</a></th>
+          <th><a href="https://parquet.apache.org/docs/file-format/types/" >Parquet primitive type</a></th>
+          <th><a href="https://github.com/apache/parquet-format/blob/master/LogicalTypes.md" >Parquet logical type</a></th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/sql/types/integer/#bigint-info" ><code>bigint</code></a></td>
+          <td><code>materialize.v1.bigint</code></td>
+          <td><code>int64</code></td>
+          <td><code>INT64</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/boolean/" ><code>boolean</code></a></td>
+          <td><code>materialize.v1.boolean</code></td>
+          <td><code>bool</code></td>
+          <td><code>BOOLEAN</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/bytea/" ><code>bytea</code></a></td>
+          <td><code>materialize.v1.bytea</code></td>
+          <td><code>large_binary</code></td>
+          <td><code>BYTE_ARRAY</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/date/" ><code>date</code></a></td>
+          <td><code>materialize.v1.date</code></td>
+          <td><code>date32</code></td>
+          <td><code>INT32</code></td>
+          <td><code>DATE</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/float/#double-precision-info" ><code>double precision</code></a></td>
+          <td><code>materialize.v1.double</code></td>
+          <td><code>float64</code></td>
+          <td><code>DOUBLE</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/integer/#integer-info" ><code>integer</code></a></td>
+          <td><code>materialize.v1.integer</code></td>
+          <td><code>int32</code></td>
+          <td><code>INT32</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/jsonb/" ><code>jsonb</code></a></td>
+          <td><code>materialize.v1.jsonb</code></td>
+          <td><code>large_utf8</code></td>
+          <td><code>BYTE_ARRAY</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/map/" ><code>map</code></a></td>
+          <td><code>materialize.v1.map</code></td>
+          <td><code>map</code> (<code>struct</code> with fields <code>keys</code> and <code>values</code>)</td>
+          <td>Nested</td>
+          <td><code>MAP</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/list/" ><code>list</code></a></td>
+          <td><code>materialize.v1.list</code></td>
+          <td><code>list</code></td>
+          <td>Nested</td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/numeric/" ><code>numeric</code></a></td>
+          <td><code>materialize.v1.numeric</code></td>
+          <td><code>decimal128[38, 10 or max-scale]</code></td>
+          <td><code>FIXED_LEN_BYTE_ARRAY</code></td>
+          <td><code>DECIMAL</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/float/#real-info" ><code>real</code></a></td>
+          <td><code>materialize.v1.real</code></td>
+          <td><code>float32</code></td>
+          <td><code>FLOAT</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/integer/#smallint-info" ><code>smallint</code></a></td>
+          <td><code>materialize.v1.smallint</code></td>
+          <td><code>int16</code></td>
+          <td><code>INT32</code></td>
+          <td><code>INT(16, true)</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/text/" ><code>text</code></a></td>
+          <td><code>materialize.v1.text</code></td>
+          <td><code>utf8</code> or <code>large_utf8</code></td>
+          <td><code>BYTE_ARRAY</code></td>
+          <td><code>STRING</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/time/" ><code>time</code></a></td>
+          <td><code>materialize.v1.time</code></td>
+          <td><code>time64[nanosecond]</code></td>
+          <td><code>INT64</code></td>
+          <td><code>TIME[isAdjustedToUTC = false, unit = NANOS]</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/uint/#uint2-info" ><code>uint2</code></a></td>
+          <td><code>materialize.v1.uint2</code></td>
+          <td><code>uint16</code></td>
+          <td><code>INT32</code></td>
+          <td><code>INT(16, false)</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/uint/#uint4-info" ><code>uint4</code></a></td>
+          <td><code>materialize.v1.uint4</code></td>
+          <td><code>uint32</code></td>
+          <td><code>INT32</code></td>
+          <td><code>INT(32, false)</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/uint/#uint8-info" ><code>uint8</code></a></td>
+          <td><code>materialize.v1.uint8</code></td>
+          <td><code>uint64</code></td>
+          <td><code>INT64</code></td>
+          <td><code>INT(64, false)</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/timestamp/#timestamp-info" ><code>timestamp</code></a></td>
+          <td><code>materialize.v1.timestamp</code></td>
+          <td><code>time64[microsecond]</code></td>
+          <td><code>INT64</code></td>
+          <td><code>TIMESTAMP[isAdjustedToUTC = false, unit = MICROS]</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/timestamp/#timestamp-with-time-zone-info" ><code>timestamp with time zone</code></a></td>
+          <td><code>materialize.v1.timestampz</code></td>
+          <td><code>time64[microsecond]</code></td>
+          <td><code>INT64</code></td>
+          <td><code>TIMESTAMP[isAdjustedToUTC = true, unit = MICROS]</code></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/array/" >Arrays</a> (<code>[]</code>)</td>
+          <td><code>materialize.v1.array</code></td>
+          <td><code>struct</code> with <code>list</code> field <code>items</code> and <code>uint8</code> field <code>dimensions</code></td>
+          <td>Nested</td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/uuid/" ><code>uuid</code></a></td>
+          <td><code>materialize.v1.uuid</code></td>
+          <td><code>fixed_size_binary(16)</code></td>
+          <td><code>FIXED_LEN_BYTE_ARRAY</code></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/oid/" ><code>oid</code></a></td>
+          <td>Unsupported</td>
+          <td></td>
+          <td></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/interval/" ><code>interval</code></a></td>
+          <td>Unsupported</td>
+          <td></td>
+          <td></td>
+          <td></td>
+      </tr>
+      <tr>
+          <td><a href="/sql/types/record/" ><code>record</code></a></td>
+          <td>Unsupported</td>
+          <td></td>
+          <td></td>
+          <td></td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -3987,19 +3771,13 @@ to indicate the Materialize native type the field originated from.</p>
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations and types in the query are contained in.</li>
-<li><code>SELECT</code> privileges on all relations in the query.
-<ul>
-<li>NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-execute the view definition. Even if the view owner is a <em>superuser</em>, they still must explicitly be
-granted the necessary privileges.</li>
-</ul>
-</li>
-<li><code>USAGE</code> privileges on all types used in the query.</li>
-<li><code>USAGE</code> privileges on the active cluster.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+    - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+      execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+      granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Examples
 
@@ -4025,38 +3803,38 @@ WITH (
 maximum compatibility with downstream systems. The following Parquet
 writer settings are used:</p>
 <table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Writer version</td>
-<td>1.0</td>
-</tr>
-<tr>
-<td>Compression</td>
-<td><code>snappy</code></td>
-</tr>
-<tr>
-<td>Default column encoding</td>
-<td>Dictionary</td>
-</tr>
-<tr>
-<td>Fallback column encoding</td>
-<td>Plain</td>
-</tr>
-<tr>
-<td>Dictionary page encoding</td>
-<td>Plain</td>
-</tr>
-<tr>
-<td>Dictionary data page encoding</td>
-<td><code>RLE_DICTIONARY</code></td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Setting</th>
+          <th>Value</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>Writer version</td>
+          <td>1.0</td>
+      </tr>
+      <tr>
+          <td>Compression</td>
+          <td><code>snappy</code></td>
+      </tr>
+      <tr>
+          <td>Default column encoding</td>
+          <td>Dictionary</td>
+      </tr>
+      <tr>
+          <td>Fallback column encoding</td>
+          <td>Plain</td>
+      </tr>
+      <tr>
+          <td>Dictionary page encoding</td>
+          <td>Plain</td>
+      </tr>
+      <tr>
+          <td>Dictionary data page encoding</td>
+          <td><code>RLE_DICTIONARY</code></td>
+      </tr>
+  </tbody>
 </table>
 <p>If you encounter issues trying to ingest Parquet files produced by
 Materialize into your downstream systems, please <a href="/support/" >contact our
@@ -4078,30 +3856,30 @@ WITH (
 <p>For <code>'csv'</code> format, Materialize writes CSV files using the following
 writer settings:</p>
 <table>
-<thead>
-<tr>
-<th>Setting</th>
-<th>Value</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>delimiter</td>
-<td><code>,</code></td>
-</tr>
-<tr>
-<td>quote</td>
-<td><code>&quot;</code></td>
-</tr>
-<tr>
-<td>escape</td>
-<td><code>&quot;</code></td>
-</tr>
-<tr>
-<td>header</td>
-<td><code>false</code></td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Setting</th>
+          <th>Value</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>delimiter</td>
+          <td><code>,</code></td>
+      </tr>
+      <tr>
+          <td>quote</td>
+          <td><code>&quot;</code></td>
+      </tr>
+      <tr>
+          <td>escape</td>
+          <td><code>&quot;</code></td>
+      </tr>
+      <tr>
+          <td>header</td>
+          <td><code>false</code></td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -4197,7 +3975,6 @@ cluster.
 > Materialize reserves the right to change the capacity at any time. As such, you
 > acknowledge and agree that those values in this table may change at any time,
 > and you should not rely on these values for any capacity planning.
->
 
 
 
@@ -4231,9 +4008,7 @@ Materialize offers the following legacy cc cluster sizes:
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
 
 
 * `25cc`
@@ -4260,7 +4035,6 @@ query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluste
 
 > **Warning:** The values in the `mz_cluster_replica_sizes` table may change at any
 > time. You should not rely on them for any kind of capacity planning.
->
 
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
@@ -4274,10 +4048,7 @@ Materialize also offers some legacy t-shirt cluster sizes for upsert sources.
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
->
 
 
 
@@ -4308,6 +4079,8 @@ When legacy sizes are enabled for a region, the following sizes are available:
 
 
 See also:
+
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -4361,10 +4134,8 @@ using [`ALTER CLUSTER`] to set a nonzero replication factor.
 > capacity for work. Replicas are exact copies of one another: each replica must
 > do exactly the same work (i.e., maintain the same dataflows and process the same
 > queries) as all the other replicas of the cluster.
->
 > To increase a cluster's capacity, you should instead increase the cluster's
 > [size](#size).
->
 
 
 ### Credit usage
@@ -4537,10 +4308,7 @@ You can later add replicas to this cluster with [`ALTER CLUSTER`].
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATECLUSTER</code> privileges on the system.</li>
-</ul>
-
+- `CREATECLUSTER` privileges on the system.
 
 ## See also
 
@@ -4566,7 +4334,6 @@ cluster](/sql/create-cluster/#unmanaged-clusters).
 
 > **Tip:** When getting started with Materialize, we recommend starting with managed
 > clusters.
->
 
 
 ## Syntax
@@ -4602,7 +4369,6 @@ to the new replica.
 > Materialize reserves the right to change the capacity at any time. As such, you
 > acknowledge and agree that those values in this table may change at any time,
 > and you should not rely on these values for any capacity planning.
->
 
 
 
@@ -4637,9 +4403,7 @@ Materialize offers the following legacy cc cluster sizes:
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
 
 
 * `25cc`
@@ -4666,7 +4430,6 @@ query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluste
 
 > **Warning:** The values in the `mz_cluster_replica_sizes` table may change at any
 > time. You should not rely on them for any kind of capacity planning.
->
 
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
@@ -4674,6 +4437,8 @@ Clusters of larger sizes can process data faster and handle larger data volumes.
 
 
 See also:
+
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -4707,10 +4472,7 @@ CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the cluster.</li>
-</ul>
-
+- Ownership of the cluster.
 
 ## See also
 
@@ -4739,7 +4501,6 @@ Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -4787,7 +4548,6 @@ CREATE CONNECTION <connection_name> TO AWS (
 > **Warning:** Failing to constrain the external ID in your role trust policy will allow
 > other Materialize customers to assume your role and use AWS privileges you
 > have granted the role!
->
 
 
 When using role assumption-based authentication, you must configure a [trust
@@ -4889,8 +4649,6 @@ CREATE CONNECTION aws_role_assumption TO AWS (
 **Credentials:**
 > **Warning:** Use of credentials-based authentication is deprecated.  AWS strongly encourages
 > the use of role assumption-based authentication instead.
->
->
 
 
 To create an AWS connection that uses static access key credentials:
@@ -4985,7 +4743,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 > **Warning:** It is insecure to use the `PLAINTEXT` security protocol unless
 > you are using a [network security connection](#network-security-connections)
 > to tunnel into a private network, as shown below.
->
 
 ```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -5018,7 +4775,6 @@ With only TLS encryption:
 > **Warning:** It is insecure to use TLS encryption with no authentication unless
 > you are using a [network security connection](#network-security-connections)
 > to tunnel into a private network as shown below.
->
 
 ```mzsql
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
@@ -5038,7 +4794,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 > **Warning:** It is insecure to use the `SASL_PLAINTEXT` security protocol unless
 > you are using a [network security connection](#network-security-connections)
 > to tunnel into a private network, as shown below.
->
 
 
 ```mzsql
@@ -5100,7 +4855,6 @@ SSH bastion host.
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -5113,7 +4867,6 @@ a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
 > **Warning:** If your Kafka cluster advertises brokers that are not specified
 > in the `BROKERS` clause, Materialize will attempt to connect to
 > those brokers without any tunneling.
->
 
 
 
@@ -5255,7 +5008,6 @@ check [this guide](/ops/network-security/privatelink/).
 > **Warning:** If you do not specify a default `SSH TUNNEL` and your Kafka
 > cluster advertises brokers that are not listed in the `BROKERS` clause,
 > Materialize will attempt to connect to those brokers without any tunneling.
->
 
 
 
@@ -5416,7 +5168,6 @@ you can tunnel the connection through an AWS PrivateLink service (Materialize Cl
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -5521,7 +5272,6 @@ SSH bastion host.
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -5657,7 +5407,6 @@ the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH b
 **AWS PrivateLink:**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -5768,7 +5517,6 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 ### AWS PrivateLink (Materialize Cloud) {#aws-privatelink}
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -5827,7 +5575,6 @@ see the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/p
 > **Warning:** Do **not** grant access to the root principal for the Materialize AWS account.
 > Doing so will allow any Materialize customer to create a connection to your
 > AWS PrivateLink service.
->
 
 
 #### Accepting connection requests {#aws-privatelink-requests}
@@ -5957,12 +5704,9 @@ completed.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the connection definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all connections and secrets used in the connection definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
 
 ## Related pages
 
@@ -6033,10 +5777,7 @@ my_db
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEDB</code> privileges on the system.</li>
-</ul>
-
+- `CREATEDB` privileges on the system.
 
 ## Related pages
 
@@ -6204,34 +5945,34 @@ the view results in durable storage and can be accessed across clusters, indexes
 on views compute and store view results in memory within a <strong>single</strong> cluster.
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 
 #### Indexes and query optimizations
@@ -6327,14 +6068,11 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the object on which to create the index.</li>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster.</li>
-<li><code>USAGE</code> privileges on all types used in the index definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all types in the statement are contained in.</li>
-</ul>
-
+- Ownership of the object on which to create the index.
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the index definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 
@@ -6404,34 +6142,34 @@ the view results in durable storage and can be accessed across clusters, indexes
 on views compute and store view results in memory within a <strong>single</strong> cluster.
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 
 ### Indexes
@@ -6477,8 +6215,6 @@ However, in some very specific scenarios like reporting over slow changing histo
 For these cases, Materialize supports refresh strategies, which allow you to configure a materialized view to recompute itself on a fixed schedule rather than maintaining them incrementally.
 
 > **Note:** The use of refresh strategies is discouraged unless you have a clear and measurable need to reduce maintenance costs on stale or archival data. For most use cases, the default incremental maintenance model provides a better experience.
->
->
 
 
 
@@ -6716,13 +6452,10 @@ non-indexed, and so on."
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster.</li>
-<li><code>USAGE</code> privileges on all types used in the materialized view definition.</li>
-<li><code>USAGE</code> privileges on the schemas for the types used in the statement.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the materialized view definition.
+- `USAGE` privileges on the schemas for the types used in the statement.
 
 ## Additional information
 
@@ -6783,17 +6516,13 @@ will be pre-installed. This policy has a wide open ingress rule `allow
 > Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 > Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 > change the default value.
->
 
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATENETWORKPOLICY</code> privileges on the system.</li>
-</ul>
-
+- `CREATENETWORKPOLICY` privileges on the system.
 
 ## Examples
 
@@ -6910,10 +6639,7 @@ Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Examples
 
@@ -7033,10 +6759,7 @@ my_schema
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing database.</li>
-</ul>
-
+- `CREATE` privileges on the containing database.
 
 ## Related pages
 
@@ -7077,10 +6800,7 @@ CREATE SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
 
 ## Related pages
 
@@ -7112,9 +6832,7 @@ that data. You can define a sink over a materialized view, source, or table.
 
 **Format Avro:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SINK [IF NOT EXISTS] <sink_name>
 [IN CLUSTER <cluster_name>]
 FROM <item_name>
@@ -7149,9 +6867,7 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name> [
 
 **Format JSON:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SINK [IF NOT EXISTS] <sink_name>
 [IN CLUSTER <cluster_name>]
 FROM <item_name>
@@ -7177,9 +6893,7 @@ FORMAT JSON
 
 **Format TEXT/BYTES:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SINK [IF NOT EXISTS] <sink_name>
 [IN CLUSTER <cluster_name>]
 FROM <item_name>
@@ -7205,9 +6919,7 @@ FORMAT TEXT | BYTES
 
 By default, the message key is encoded using the same format as the message value. However, you can set the key and value encodings explicitly using the `KEY FORMAT ... VALUE FORMAT`.
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SINK [IF NOT EXISTS] <sink_name>
 [IN CLUSTER <cluster_name>]
 FROM <item_name>
@@ -7286,21 +6998,15 @@ can give the impression that some offsets are being skipped.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>SELECT</code> privileges on the item being written out to an external system.
-<ul>
-<li>NOTE: if the item is a materialized view, then the view owner must also have the necessary privileges to
-execute the view definition.</li>
-</ul>
-</li>
-<li><code>CREATE</code> privileges on the containing cluster if the sink is created in an existing cluster.</li>
-<li><code>CREATECLUSTER</code> privileges on the system if the sink is not created in an existing cluster.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the sink definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `SELECT` privileges on the item being written out to an external system.
+  - NOTE: if the item is a materialized view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the sink definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
 
 ## Related pages
 
@@ -7327,8 +7033,6 @@ A [source](/concepts/sources/) describes an external system you want Materialize
 **PostgreSQL (New):**
 
 To create a source from an external PostgreSQL:
-
-
 ```mzsql
 CREATE SOURCE [IF NOT EXISTS] <source_name>
 [IN CLUSTER <cluster_name>]
@@ -7342,9 +7046,7 @@ For details, see [CREATE SOURCE: PostgreSQL (New Syntax)](/sql/create-source/pos
 
 **PostgreSQL (Legacy):**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM POSTGRES CONNECTION <connection_name> (
@@ -7362,9 +7064,7 @@ For details, see [CREATE SOURCE: PostgreSQL (Legacy)](/sql/create-source/postgre
 
 **MySQL:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM MYSQL CONNECTION <connection_name> [
@@ -7384,9 +7084,7 @@ For details, see [CREATE SOURCE: MySQL](/sql/create-source/mysql/).
 
 **SQL Server:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM SQL SERVER CONNECTION <connection_name>
@@ -7406,9 +7104,7 @@ For details, see [CREATE SOURCE: SQL Server](/sql/create-source/sql-server/).
 
 **Format Avro:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -7443,9 +7139,7 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
 
 **Format JSON:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -7473,9 +7167,7 @@ FORMAT JSON
 
 **Format TEXT/BYTES:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -7503,9 +7195,7 @@ FORMAT TEXT | BYTES
 
 **Format CSV:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name> ( <col_name> [, ...] )
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -7532,9 +7222,7 @@ FORMAT CSV WITH <n> COLUMNS | WITH HEADER [ ( <col_name> [, ...] ) ]
 
 **Format Protobuf:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -7566,9 +7254,7 @@ FORMAT PROTOBUF USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection_name>
 
 **KEY FORMAT VALUE FORMAT:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM KAFKA CONNECTION <connection_name> (
@@ -7614,9 +7300,7 @@ For details, see [CREATE SOURCE: Kafka/Redpanda](/sql/create-source/kafka/).
 
 **Webhook:**
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 CREATE SOURCE [IF NOT EXISTS] <src_name>
 [IN CLUSTER <cluster_name>]
 FROM WEBHOOK
@@ -7641,15 +7325,12 @@ For details, see [CREATE SOURCE: Webhook](/sql/create-source/webhook/).
 
 The privileges required to execute `CREATE SOURCE` are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster if the source is created in an existing cluster.</li>
-<li><code>CREATECLUSTER</code> privileges on the system if the source is not created in an existing cluster.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the source definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
 
 ## Available guides
 
@@ -7661,11 +7342,11 @@ The following guides step you through setting up sources:
     Databases (CDC)
   </div>
   <ul>
-<li><a href="/ingest-data/postgres/">PostgreSQL</a></li>
-<li><a href="/ingest-data/mysql/">MySQL</a></li>
-<li><a href="/ingest-data/sql-server/">SQL Server</a></li>
-<li><a href="/ingest-data/cdc-cockroachdb/">CockroachDB</a></li>
-<li><a href="/ingest-data/mongodb/">MongoDB</a></li>
+<li><a href="/ingest-data/postgres/" >PostgreSQL</a></li>
+<li><a href="/ingest-data/mysql/" >MySQL</a></li>
+<li><a href="/ingest-data/sql-server/" >SQL Server</a></li>
+<li><a href="/ingest-data/cdc-cockroachdb/" >CockroachDB</a></li>
+<li><a href="/ingest-data/mongodb/" >MongoDB</a></li>
 </ul>
 
 </div>
@@ -7675,8 +7356,8 @@ The following guides step you through setting up sources:
     Message Brokers
   </div>
   <ul>
-<li><a href="/ingest-data/kafka/">Kafka</a></li>
-<li><a href="/sql/create-source/kafka">Redpanda</a></li>
+<li><a href="/ingest-data/kafka/" >Kafka</a></li>
+<li><a href="/sql/create-source/kafka" >Redpanda</a></li>
 </ul>
 
 </div>
@@ -7686,9 +7367,9 @@ The following guides step you through setting up sources:
     Webhooks
   </div>
   <ul>
-<li><a href="/ingest-data/webhooks/amazon-eventbridge/">Amazon EventBridge</a></li>
-<li><a href="/ingest-data/webhooks/segment/">Segment</a></li>
-<li><a href="/sql/create-source/webhook">Other webhooks</a></li>
+<li><a href="/ingest-data/webhooks/amazon-eventbridge/" >Amazon EventBridge</a></li>
+<li><a href="/ingest-data/webhooks/segment/" >Segment</a></li>
+<li><a href="/sql/create-source/webhook" >Other webhooks</a></li>
 </ul>
 
 </div>
@@ -7825,8 +7506,6 @@ CREATE [TEMP|TEMPORARY] TABLE [IF NOT EXISTS] <table_name> (
 
 
 > **Note:** You must be on **v26+** to use the new syntax.
->
->
 
 
 To create a read-only table from a [source](/sql/create-source/) connected
@@ -7885,8 +7564,6 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 
 
 > **Note:** You must be on **v26+** to use the new syntax.
->
->
 
 
 ### Table names and column names
@@ -7913,8 +7590,6 @@ timestamp), you are not able to query the table until snapshotting is complete.<
 > the existing tables for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
->
->
 
 ### Supported data types
 
@@ -8020,13 +7695,10 @@ table.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all types used in the table definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all types in the statement are
-contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the table definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
 
 ## Examples
 
@@ -8035,8 +7707,6 @@ contained in.</li>
 The following example uses `CREATE TABLE` to create a new read-write table
 `mytable` with two columns `a` (of type `int`) and `b` (of type `text` and
 not nullable):
-
-
 ```mzsql
 CREATE TABLE mytable (a int, b text NOT NULL);
 
@@ -8046,8 +7716,6 @@ Once a user-populated table is created, you can perform CRUD
 (Create/Read/Update/Write) operations on it.
 
 The following example uses [`INSERT`](/sql/insert/) to write two rows to the table:
-
-
 ```mzsql
 INSERT INTO mytable VALUES
 (1, 'hello'),
@@ -8057,8 +7725,6 @@ INSERT INTO mytable VALUES
 ```
 
 The following example uses [`SELECT`](/sql/select/) to read all rows from the table:
-
-
 ```mzsql
 SELECT * FROM mytable;
 
@@ -8077,16 +7743,11 @@ SELECT * FROM mytable;
 
 
 > **Note:** You must be on **v26+** to use the new syntax.
->
->
 > The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
 > enabled logical replication, created the publication for the various tables and
 > replication user, and updated the network configuration).
->
 > For details about configuring your upstream system, see the [PostgreSQL
 > integration guides](/ingest-data/postgres/#supported-versions-and-services).
->
->
 
 
 
@@ -8105,8 +7766,6 @@ the referenced table names.
 types](/sql/create-table/#supported-data-types).
 
 {{< /note >}}
-
-
 ```mzsql
 /* This example assumes:
   - In the upstream PostgreSQL, you have defined:
@@ -8154,8 +7813,6 @@ these tables.
 
 
 Once the snapshotting process completes and the table is in the running state, you can query the table:
-
-
 ```mzsql
 SELECT * FROM items;
 
@@ -8332,13 +7989,10 @@ custom_nested_row_type
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all types used in the type definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all types in the statement are
-contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the type definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
 
 ## Related pages
 
@@ -8388,7 +8042,6 @@ defined in this statement:
 
 > **Note:** You cannot replace views that other views depend on,
 > nor can you replace a non-view object with a view.
->
 
 
 
@@ -8442,14 +8095,11 @@ AS
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all types used in the view definition.</li>
-<li><code>USAGE</code> privileges on the schemas for the types in the statement.</li>
-<li>Ownership of the existing view if replacing an existing
-view with the same name (i.e., <code>OR REPLACE</code> is specified in <code>CREATE VIEW</code> command).</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the view definition.
+- `USAGE` privileges on the schemas for the types in the statement.
+- Ownership of the existing view if replacing an existing
+  view with the same name (i.e., `OR REPLACE` is specified in `CREATE VIEW` command).
 
 ## Additional information
 
@@ -8599,20 +8249,14 @@ SELECT * FROM delete_me;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations and types in the query are contained in.</li>
-<li><code>DELETE</code> privileges on <code>table_name</code>.</li>
-<li><code>SELECT</code> privileges on all relations in the query.
-<ul>
-<li>NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-execute the view definition. Even if the view owner is a <em>superuser</em>, they still must explicitly be
-granted the necessary privileges.</li>
-</ul>
-</li>
-<li><code>USAGE</code> privileges on all types used in the query.</li>
-<li><code>USAGE</code> privileges on the active cluster.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `DELETE` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+    granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 
@@ -8700,10 +8344,7 @@ DROP CLUSTER auction_house CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped cluster.</li>
-</ul>
-
+- Ownership of the dropped cluster.
 
 ## Related pages
 
@@ -8722,7 +8363,6 @@ the cluster itself, use the [`DROP CLUSTER`](/sql/drop-cluster) command.
 
 > **Tip:** When getting started with Materialize, we recommend starting with managed
 > clusters.
->
 
 
 ## Syntax
@@ -8757,11 +8397,8 @@ DROP CLUSTER REPLICA auction_house.bigger;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped cluster replica.</li>
-<li><code>USAGE</code> privileges on the containing cluster.</li>
-</ul>
-
+- Ownership of the dropped cluster replica.
+- `USAGE` privileges on the containing cluster.
 
 
 ## Related pages
@@ -8832,11 +8469,8 @@ DROP CONNECTION kafka_connection CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped connection.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped connection.
+- `USAGE` privileges on the containing schema.
 
 
 ## Related pages
@@ -8895,10 +8529,7 @@ DROP DATABASE IF EXISTS my_db;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped database.</li>
-</ul>
-
+- Ownership of the dropped database.
 
 ## Related pages
 
@@ -8927,19 +8558,14 @@ Syntax element | Description
 
 > **Note:** Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX
 > RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
->
->
 
 
 ## Privileges
 
 To execute the `DROP INDEX` statement, you need:
 
-<ul>
-<li>Ownership of the dropped index.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped index.
+- `USAGE` privileges on the containing schema.
 
 ## Examples
 
@@ -8948,8 +8574,6 @@ To execute the `DROP INDEX` statement, you need:
 > **Tip:** In the **Materialize Console**, you can view existing indexes in the [**Database
 > object explorer**](/console/data/). Alternatively, you can use the
 > [`SHOW INDEXES`](/sql/show-indexes) command.
->
->
 
 
 Using the  `DROP INDEX` commands, the following example drops an index named `q01_geo_idx`.
@@ -9025,11 +8649,8 @@ upon by catalog item 'materialize.public.wb_custom_art'
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped materialized view.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped materialized view.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9067,10 +8688,7 @@ Syntax element | Description
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATENETWORKPOLICY</code> privileges on the system.</li>
-</ul>
-
+- `CREATENETWORKPOLICY` privileges on the system.
 
 ## Related pages
 
@@ -9089,7 +8707,6 @@ Any privileges granted to the given roles on objects will also be revoked.
 
 > **Note:** Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize drops
 > all objects across all databases, including the database itself.
->
 
 
 ## Syntax
@@ -9118,10 +8735,7 @@ DROP OWNED BY joe, george CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Role membership in <code>role_name</code>.</li>
-</ul>
-
+- Role membership in `role_name`.
 
 ## Related pages
 
@@ -9169,10 +8783,7 @@ You cannot drop the current role.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 
@@ -9256,11 +8867,8 @@ DROP SCHEMA IF EXISTS my_schema;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped schema.</li>
-<li><code>USAGE</code> privileges on the containing database.</li>
-</ul>
-
+- Ownership of the dropped schema.
+- `USAGE` privileges on the containing database.
 
 ## Related pages
 
@@ -9330,11 +8938,8 @@ DROP SECRET kafka_sasl_password CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped secret.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped secret.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9382,11 +8987,8 @@ DROP SINK
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped sink.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped sink.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9466,11 +9068,8 @@ DROP SOURCE IF EXISTS my_source;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped source.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped source.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9578,11 +9177,8 @@ DROP TABLE IF EXISTS t;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped table.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped table.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9695,11 +9291,8 @@ DROP TYPE IF EXISTS int4_list;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped type.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped type.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9731,10 +9324,7 @@ Syntax element | Description
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 
@@ -9796,11 +9386,8 @@ DROP VIEW
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped view.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped view.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 
@@ -9874,7 +9461,6 @@ explicitly deallocate the statement using [`DEALLOCATE`].
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -9896,7 +9482,6 @@ EXPLAIN ANALYZE CLUSTER
 ```
 > **Tip:** If you want to specify both `CPU` or `MEMORY`, they may be listed in any order;
 > however, each may appear only once.
->
 
 
 Parameter    | Description
@@ -9911,11 +9496,8 @@ Parameter    | Description
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the explainee are
-contained in.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.
 
 ## Examples
 
@@ -10033,8 +9615,6 @@ For the below example, assume there are 2 workers in the cluster.
 
 > **Tip:** To determine how many workers a given cluster size has, you can query
 > [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
->
->
 
 
 You can explain `MEMORY` and/or `CPU` with the `WITH SKEW` option. For example,
@@ -10342,11 +9922,8 @@ SELECT count(*) FROM bids WHERE bid_time + '1 hour' > mz_now();
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the explainee are
-contained in.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.
 
 
 ---
@@ -10363,7 +9940,6 @@ contained in.</li>
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -10491,8 +10067,8 @@ Plan Stage | Description
 **RAW PLAN** | Display the raw plan; this is closest to the original SQL.
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
-**OPTIMIZED PLAN** | Display the optimized plan.
-**PHYSICAL PLAN** | _(Default)_ Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+**OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
 
 ### Output modifiers
 
@@ -10641,7 +10217,7 @@ Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
-Each operator can also be annotated with additional metadata. Some details are shown in the default `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
+Each operator can also be annotated with additional metadata. Some details are shown in the `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
 name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
 PLAN`, details about the implementation in the `Join` operator can be requested
 with [the `join implementations` output modifier](#output-modifiers) (that is,
@@ -10707,1047 +10283,85 @@ actually run).
 
 
 
-**In fully optimized physical (LIR) plans:**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+**In fully optimized physical (LIR) plans (Default):**
 The following table lists the operators that are available in the LIR plan.
 
-<ul>
-<li>For those operators that require memory to maintain intermediate state,
-<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
-<li>For those operators that expand the data size (either rows or columns),
-<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
-</ul>
-
-<table>
-<thead>
-<tr>
-<th>Operator</th>
-<th>Description</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><strong>Constant</strong></td>
-<td>
-    Always produces the same collection of rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>→Constant (2 rows)</code></td>
-</tr>
-
-<tr>
-<td><strong>Stream, Arranged, Index Lookup, Read</strong></td>
-<td>
-    <p>Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
-CTE in the same plan.
-A parent <code>Fused Map/Filter/Project</code> operator can combine with this operator.</p>
-<p>There are four types of <code>Get</code>.</p>
-<ol>
-<li>
-<p><code>Stream</code> indicates that the results are not <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory
-and will be streamed directly.</p>
-</li>
-<li>
-<p><code>Arranged</code> indicates that the results are <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory.</p>
-</li>
-<li>
-<p><code>Index Lookup</code> indicates the results will be
-<em>looked up</em> in an existing [arrangement]((/get-started/arrangements/#arrangements).</p>
-</li>
-<li>
-<p><code>Read</code> indicates that the results are unarranged,
-and will be processed as they arrive.</p>
-</li>
-</ol>
-<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Arranged materialize.public.t</code></td>
-</tr>
-
-<tr>
-<td><strong>Map/Filter/Project</strong></td>
-<td>
-    <p>Computes new columns (maps), filters columns, and projects away columns. Works row-by-row.
-Maps and filters will be printed, but projects will not.</p>
-<p>These may be marked as <strong><code>Fused</code></strong> <code>Map/Filter/Project</code>, which means they will combine with the operator beneath them to run more efficiently.</p>
-<br/><br />
-    <strong>Can increase data size:</strong>  Each row may have more data, from the <code>Map</code>.
-Each row may also have less data, from the <code>Project</code>.
-There may be fewer rows, from the <code>Filter</code>.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">&lt;</span> <span class="mf">7</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Map</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">+</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">})</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Table Function</strong></td>
-<td>
-    <p>Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.</p>
-<p>A parent <code>Fused Table Function unnest_list</code> operator will fuse with its child <code>GroupAggregate</code> operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.</p>
-<p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>
-<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the <a href="/sql/functions/#table-functions" >table function</a> used.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Table</span> <span class="k">Function</span> <span class="n">generate_series</span><span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">},</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">},</span> <span class="mf">1</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Input</span> <span class="k">key</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">})</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Differential Join, Delta Join</strong></td>
-<td>
-    <p>Both join operators indicate the join ordering selected.</p>
-<p>Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.</p>
-<p>Joins will indicate the join order of their children, starting from 0.
-For example, <code>Differential Join %1 » %0</code> will join its second child into its first.</p>
-<p>The <a href="/transform-data/optimization/#join" >two joins differ in performance characteristics</a>.</p>
-<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the join order and facts about the joined collections.
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory for 3-way or more differential joins.
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Differential</span> <span class="k">Join</span> <span class="o">%</span><span class="mf">1</span> <span class="err">»</span> <span class="o">%</span><span class="mf">0</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Join</span> <span class="n">stage</span> <span class="o">%</span><span class="mf">0</span><span class="p">:</span> <span class="n">Lookup</span> <span class="k">key</span> <span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="k">in</span> <span class="o">%</span><span class="mf">0</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>GroupAggregate</strong></td>
-<td>
-    <p>Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.</p>
-<p>There are five types of <code>GroupAggregate</code>, ordered by increasing complexity:</p>
-<ol>
-<li>
-<p><code>Distinct GroupAggregate</code> corresponds to the SQL <code>DISTINCT</code> operator.</p>
-</li>
-<li>
-<p><code>Accumulable GroupAggregate</code> (e.g., <code>SUM</code>, <code>COUNT</code>) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.</p>
-</li>
-<li>
-<p><code>Hierarchical GroupAggregate</code> (e.g., <code>MIN</code>, <code>MAX</code>) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" >see <code>mz_introspection.mz_expected_group_size_advice</code></a>.
-These may either be bucketed or monotonic (more efficient).
-These may consolidate their output, which will increase memory usage.</p>
-</li>
-<li>
-<p><code>Collated Multi-GroupAggregate</code> corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.</p>
-</li>
-<li>
-<p><code>Non-incremental GroupAggregate</code> (e.g., window functions, <code>list_agg</code>) corresponds to a single non-incremental aggregation.
-These are the most computationally intensive reductions.</p>
-</li>
-</ol>
-<p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>
-<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>Distinct</code> and <code>Accumulable</code> aggregates use a moderate amount of memory (proportional to twice the output size).
-<code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-<code>Non-incremental</code> aggregates use memory proportional to the input + output size.
-<code>Collated</code> aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Accumulable</span> <span class="n">GroupAggregate</span>
-</span></span><span class="line"><span class="cl">  <span class="n">Simple</span> <span class="n">aggregates</span><span class="p">:</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="n">Post</span><span class="o">-</span><span class="n">process</span> <span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span>
-</span></span><span class="line"><span class="cl">    <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span> <span class="o">&gt;</span> <span class="mf">1</span><span class="p">)</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>TopK</strong></td>
-<td>
-    <p>Groups the input rows, sorts them according to some ordering, and returns at most <code>K</code> rows at some offset from the top of the list, where <code>K</code> is some (possibly computed) limit.</p>
-<p>There are three types of <code>TopK</code>. Two are special cased for monotonic inputs (i.e., inputs which never retract data).</p>
-<ol>
-<li><code>Monotonic Top1</code>.</li>
-<li><code>Monotonic TopK</code>, which may give an expression indicating the limit.</li>
-<li><code>Non-monotonic TopK</code>, a generic <code>TopK</code> plan.</li>
-</ol>
-<p>Each version of the <code>TopK</code> operator may include grouping, ordering, and limit directives.</p>
-<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>Monotonic Top1</code> and <code>Monotonic TopK</code> use a moderate amount of memory. <code>Non-monotonic TopK</code> uses significantly more memory as the operator can significantly overestimate
-the group sizes. Consult
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Consolidating</span> <span class="n">Monotonic</span> <span class="n">TopK</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Order</span> <span class="k">By</span> <span class="o">#</span><span class="mf">1</span> <span class="k">asc</span> <span class="n">nulls_last</span><span class="p">,</span> <span class="o">#</span><span class="mf">0</span> <span class="k">desc</span> <span class="n">nulls_first</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Limit</span> <span class="mf">5</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Negate Diffs</strong></td>
-<td>
-    Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>→Negate Diffs</code></td>
-</tr>
-
-<tr>
-<td><strong>Threshold Diffs</strong></td>
-<td>
-    Removes any rows with negative counts.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input and output size, twice.
-
-</td>
-<td><code>→Threshold Diffs</code></td>
-</tr>
-
-<tr>
-<td><strong>Union</strong></td>
-<td>
-    Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ A <code>Consolidating Union</code> will make moderate use of memory, particularly at hydration time. A <code>Union</code> that is not <code>Consolidating</code> will not consume memory.
-
-</td>
-<td><code>→Consolidating Union</code></td>
-</tr>
-
-<tr>
-<td><strong>Arrange</strong></td>
-<td>
-    Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine, i.e., it will consume memory to cache results.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input size. Note that in the LIR / physical plan, <code>Arrange</code>/<code>ArrangeBy</code> almost always means that an arrangement will actually be created. (This is in contrast to the &ldquo;optimized&rdquo; plan, where an <code>ArrangeBy</code> being present in the plan often does not mean that an arrangement will actually be created.)
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Arrange</span>
-</span></span><span class="line"><span class="cl">    <span class="k">Keys</span><span class="p">:</span> <span class="mf">1</span> <span class="k">arrangement</span> <span class="n">available</span><span class="p">,</span> <span class="n">plus</span> <span class="k">raw</span> <span class="n">stream</span>
-</span></span><span class="line"><span class="cl">      <span class="k">Arrangement</span> <span class="mf">0</span><span class="p">:</span> <span class="o">#</span><span class="mf">0</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Unarranged Raw Stream</strong></td>
-<td>
-    Indicates a point where data will be streamed (even if it is somehow already arranged).<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>→Unarranged Raw Stream</code></td>
-</tr>
-
-<tr>
-<td><strong>With ... Return ...</strong></td>
-<td>
-    Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><a href="#reading-plans" >See above</a></td>
-</tr>
-
-</tbody>
-</table>
-
-<span class="caption">
-<ul >
-<li><strong>Can increase data size:</strong> Specifies whether the operator can
-increase the data size (can be the number of rows or the number of columns).
-</li>
-<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
-maintain state for its inputs.</li>
-</ul>
-</span>
-
-
-
-
-**In decorrelated and optimized plans (default EXPLAIN):**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <code>→Constant (2 rows)</code> |
+| **Stream, Arranged, Index Lookup, Read** | <p>Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan. A parent <code>Fused Map/Filter/Project</code> operator can combine with this operator.</p> <p>There are four types of <code>Get</code>.</p> <ol> <li> <p><code>Stream</code> indicates that the results are not <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory and will be streamed directly.</p> </li> <li> <p><code>Arranged</code> indicates that the results are <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory.</p> </li> <li> <p><code>Index Lookup</code> indicates the results will be <em>looked up</em> in an existing [arrangement]((/get-started/arrangements/#arrangements).</p> </li> <li> <p><code>Read</code> indicates that the results are unarranged, and will be processed as they arrive.</p> </li> </ol>   **Can increase data size:** No **Uses memory:** No | <code>Arranged materialize.public.t</code> |
+| **Map/Filter/Project** | <p>Computes new columns (maps), filters columns, and projects away columns. Works row-by-row. Maps and filters will be printed, but projects will not.</p> <p>These may be marked as <strong><code>Fused</code></strong> <code>Map/Filter/Project</code>, which means they will combine with the operator beneath them to run more efficiently.</p>   **Can increase data size:** Each row may have more data, from the <code>Map</code>. Each row may also have less data, from the <code>Project</code>. There may be fewer rows, from the <code>Filter</code>. **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span> </span></span><span class="line"><span class="cl">  <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">&lt;</span> <span class="mf">7</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="k">Map</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">+</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">})</span> </span></span></code></pre></div> |
+| **Table Function** | <p>Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.</p> <p>A parent <code>Fused Table Function unnest_list</code> operator will fuse with its child <code>GroupAggregate</code> operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.</p> <p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>   **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Table</span> <span class="k">Function</span> <span class="n">generate_series</span><span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">},</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">},</span> <span class="mf">1</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="k">Input</span> <span class="k">key</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">})</span> </span></span></code></pre></div> |
+| **Differential Join, Delta Join** | <p>Both join operators indicate the join ordering selected.</p> <p>Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.</p> <p>Joins will indicate the join order of their children, starting from 0. For example, <code>Differential Join %1 » %0</code> will join its second child into its first.</p> <p>The <a href="/transform-data/optimization/#join" >two joins differ in performance characteristics</a>.</p>   **Can increase data size:** Depends on the join order and facts about the joined collections. **Uses memory:** ✅ Uses memory for 3-way or more differential joins. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Differential</span> <span class="k">Join</span> <span class="o">%</span><span class="mf">1</span> <span class="err">»</span> <span class="o">%</span><span class="mf">0</span> </span></span><span class="line"><span class="cl">  <span class="k">Join</span> <span class="n">stage</span> <span class="o">%</span><span class="mf">0</span><span class="p">:</span> <span class="n">Lookup</span> <span class="k">key</span> <span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="k">in</span> <span class="o">%</span><span class="mf">0</span> </span></span></code></pre></div> |
+| **GroupAggregate** | <p>Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.</p> <p>There are five types of <code>GroupAggregate</code>, ordered by increasing complexity:</p> <ol> <li> <p><code>Distinct GroupAggregate</code> corresponds to the SQL <code>DISTINCT</code> operator.</p> </li> <li> <p><code>Accumulable GroupAggregate</code> (e.g., <code>SUM</code>, <code>COUNT</code>) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.</p> </li> <li> <p><code>Hierarchical GroupAggregate</code> (e.g., <code>MIN</code>, <code>MAX</code>) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" >see <code>mz_introspection.mz_expected_group_size_advice</code></a>. These may either be bucketed or monotonic (more efficient). These may consolidate their output, which will increase memory usage.</p> </li> <li> <p><code>Collated Multi-GroupAggregate</code> corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.</p> </li> <li> <p><code>Non-incremental GroupAggregate</code> (e.g., window functions, <code>list_agg</code>) corresponds to a single non-incremental aggregation. These are the most computationally intensive reductions.</p> </li> </ol> <p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>   **Can increase data size:** No **Uses memory:** ✅ <code>Distinct</code> and <code>Accumulable</code> aggregates use a moderate amount of memory (proportional to twice the output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. <code>Non-incremental</code> aggregates use memory proportional to the input + output size. <code>Collated</code> aggregates use memory that is the sum of their constituents, plus some memory for the join at the end. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Accumulable</span> <span class="n">GroupAggregate</span> </span></span><span class="line"><span class="cl">  <span class="n">Simple</span> <span class="n">aggregates</span><span class="p">:</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="n">Post</span><span class="o">-</span><span class="n">process</span> <span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span> </span></span><span class="line"><span class="cl">    <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span> <span class="o">&gt;</span> <span class="mf">1</span><span class="p">)</span> </span></span></code></pre></div> |
+| **TopK** | <p>Groups the input rows, sorts them according to some ordering, and returns at most <code>K</code> rows at some offset from the top of the list, where <code>K</code> is some (possibly computed) limit.</p> <p>There are three types of <code>TopK</code>. Two are special cased for monotonic inputs (i.e., inputs which never retract data).</p> <ol> <li><code>Monotonic Top1</code>.</li> <li><code>Monotonic TopK</code>, which may give an expression indicating the limit.</li> <li><code>Non-monotonic TopK</code>, a generic <code>TopK</code> plan.</li> </ol> <p>Each version of the <code>TopK</code> operator may include grouping, ordering, and limit directives.</p>   **Can increase data size:** No **Uses memory:** ✅ <code>Monotonic Top1</code> and <code>Monotonic TopK</code> use a moderate amount of memory. <code>Non-monotonic TopK</code> uses significantly more memory as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Consolidating</span> <span class="n">Monotonic</span> <span class="n">TopK</span> </span></span><span class="line"><span class="cl">  <span class="k">Order</span> <span class="k">By</span> <span class="o">#</span><span class="mf">1</span> <span class="k">asc</span> <span class="n">nulls_last</span><span class="p">,</span> <span class="o">#</span><span class="mf">0</span> <span class="k">desc</span> <span class="n">nulls_first</span> </span></span><span class="line"><span class="cl">  <span class="k">Limit</span> <span class="mf">5</span> </span></span></code></pre></div> |
+| **Negate Diffs** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>→Negate Diffs</code> |
+| **Threshold Diffs** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>→Threshold Diffs</code> |
+| **Union** | Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ A <code>Consolidating Union</code> will make moderate use of memory, particularly at hydration time. A <code>Union</code> that is not <code>Consolidating</code> will not consume memory. | <code>→Consolidating Union</code> |
+| **Arrange** | Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine, i.e., it will consume memory to cache results.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input size. Note that in the LIR / physical plan, <code>Arrange</code>/<code>ArrangeBy</code> almost always means that an arrangement will actually be created. (This is in contrast to the &ldquo;optimized&rdquo; plan, where an <code>ArrangeBy</code> being present in the plan often does not mean that an arrangement will actually be created.) | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Arrange</span> </span></span><span class="line"><span class="cl">    <span class="k">Keys</span><span class="p">:</span> <span class="mf">1</span> <span class="k">arrangement</span> <span class="n">available</span><span class="p">,</span> <span class="n">plus</span> <span class="k">raw</span> <span class="n">stream</span> </span></span><span class="line"><span class="cl">      <span class="k">Arrangement</span> <span class="mf">0</span><span class="p">:</span> <span class="o">#</span><span class="mf">0</span> </span></span></code></pre></div> |
+| **Unarranged Raw Stream** | Indicates a point where data will be streamed (even if it is somehow already arranged).  **Can increase data size:** No **Uses memory:** No | <code>→Unarranged Raw Stream</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
+
+
+**In decorrelated and optimized plans:**
 The following table lists the operators that are available in the optimized plan.
 
-<ul>
-<li>For those operators that require memory to maintain intermediate state,
-<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
-<li>For those operators that expand the data size (either rows or columns),
-<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
-</ul>
-
-<table>
-<thead>
-<tr>
-<th>Operator</th>
-<th>Description</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><strong>Constant</strong></td>
-<td>
-    Always produces the same collection of rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Get</strong></td>
-<td>
-    Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
-CTE in the same plan.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Get materialize.public.ordered</code></td>
-</tr>
-
-<tr>
-<td><strong>Project</strong></td>
-<td>
-    Produces a subset of the <a href="#explain-plan-columns" >columns</a> in the input
-rows. See also <a href="#explain-plan-columns" >column numbering</a>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Project (#2, #3)</code></td>
-</tr>
-
-<tr>
-<td><strong>Map</strong></td>
-<td>
-    Appends the results of some scalar expressions to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Each row has more data (i.e., longer rows but same number of rows).
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code></td>
-</tr>
-
-<tr>
-<td><strong>FlatMap</strong></td>
-<td>
-    Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the <a href="/sql/functions/#table-functions" >table function</a> used.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>FlatMap jsonb_foreach(#3)</code></td>
-</tr>
-
-<tr>
-<td><strong>Filter</strong></td>
-<td>
-    Removes rows of the input for which some scalar predicates return <code>false</code>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Filter (#20 &lt; #21)</code></td>
-</tr>
-
-<tr>
-<td><strong>Join</strong></td>
-<td>
-    Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the join order and facts about the joined collections.
-    <br />
-    <strong>Uses memory:</strong>  ✅ The <code>Join</code> operator itself uses memory only for <code>type=differential</code> with more than 2 inputs.
-However, <code>Join</code> operators need <a href="/get-started/arrangements/#arrangements" >arrangements</a> on their inputs (shown by the <code>ArrangeBy</code> operator).
-These arrangements use memory proportional to the input sizes. If an input has an <a href="/transform-data/optimization/#join" >appropriate index</a>, then the arrangement of the index will be reused.
-
-</td>
-<td><code>Join on=(#1 = #2) type=delta</code></td>
-</tr>
-
-<tr>
-<td><strong>CrossJoin</strong></td>
-<td>
-    An alias for a <code>Join</code> with an empty predicate (emits all combinations). Note that not all cross joins are marked
-as <code>CrossJoin</code>: In a join with more than 2 inputs, it can happen that there is a cross join between some of the inputs.
-You can recognize this case by <code>ArrangeBy</code> operators having empty keys, i.e., <code>ArrangeBy keys=[[]]</code>.<br/><br />
-    <strong>Can increase data size:</strong>  Cartesian product of the inputs (|N| x |M|).
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory for 3-way or more differential joins.
-
-</td>
-<td><code>CrossJoin type=differential</code></td>
-</tr>
-
-<tr>
-<td><strong>Reduce</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
-<code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code></td>
-</tr>
-
-<tr>
-<td><strong>Distinct</strong></td>
-<td>
-    Alias for a <code>Reduce</code> with an empty aggregate list.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to twice the output size.
-
-</td>
-<td><code>Distinct</code></td>
-</tr>
-
-<tr>
-<td><strong>TopK</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Can use significant amount as the operator can significantly overestimate
-the group sizes. Consult
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code></td>
-</tr>
-
-<tr>
-<td><strong>Negate</strong></td>
-<td>
-    Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Negate</code></td>
-</tr>
-
-<tr>
-<td><strong>Threshold</strong></td>
-<td>
-    Removes any rows with negative counts.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input and output size, twice.
-
-</td>
-<td><code>Threshold</code></td>
-</tr>
-
-<tr>
-<td><strong>Union</strong></td>
-<td>
-    Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time.
-
-</td>
-<td><code>Union</code></td>
-</tr>
-
-<tr>
-<td><strong>ArrangeBy</strong></td>
-<td>
-    Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine (each <code>keys</code> element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Depends. If arrangements need to be created, they use memory proportional to the input size.
-
-</td>
-<td><code>ArrangeBy keys=[[#0]]</code></td>
-</tr>
-
-<tr>
-<td><strong>With ... Return ...</strong></td>
-<td>
-    Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><a href="#reading-plans" >See above</a></td>
-</tr>
-
-</tbody>
-</table>
-
-<span class="caption">
-<ul >
-<li><strong>Can increase data size:</strong> Specifies whether the operator can
-increase the data size (can be the number of rows or the number of columns).
-</li>
-<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
-maintain state for its inputs.</li>
-</ul>
-</span>
-
-
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span> </span></span></code></pre></div> |
+| **Get** | Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan.  **Can increase data size:** No **Uses memory:** No | <code>Get materialize.public.ordered</code> |
+| **Project** | Produces a subset of the <a href="/sql/explain-plan/#explain-plan-columns" >columns</a> in the input rows. See also <a href="/sql/explain-plan/#explain-plan-columns" >column numbering</a>.  **Can increase data size:** No **Uses memory:** No | <code>Project (#2, #3)</code> |
+| **Map** | Appends the results of some scalar expressions to each row in the input.  **Can increase data size:** Each row has more data (i.e., longer rows but same number of rows). **Uses memory:** No | <code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code> |
+| **FlatMap** | Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.  **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <code>FlatMap jsonb_foreach(#3)</code> |
+| **Filter** | Removes rows of the input for which some scalar predicates return <code>false</code>.  **Can increase data size:** No **Uses memory:** No | <code>Filter (#20 &lt; #21)</code> |
+| **Join** | Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.  **Can increase data size:** Depends on the join order and facts about the joined collections. **Uses memory:** ✅ The <code>Join</code> operator itself uses memory only for <code>type=differential</code> with more than 2 inputs. However, <code>Join</code> operators need <a href="/get-started/arrangements/#arrangements" >arrangements</a> on their inputs (shown by the <code>ArrangeBy</code> operator). These arrangements use memory proportional to the input sizes. If an input has an <a href="/transform-data/optimization/#join" >appropriate index</a>, then the arrangement of the index will be reused. | <code>Join on=(#1 = #2) type=delta</code> |
+| **CrossJoin** | An alias for a <code>Join</code> with an empty predicate (emits all combinations). Note that not all cross joins are marked as <code>CrossJoin</code>: In a join with more than 2 inputs, it can happen that there is a cross join between some of the inputs. You can recognize this case by <code>ArrangeBy</code> operators having empty keys, i.e., <code>ArrangeBy keys=[[]]</code>.  **Can increase data size:** Cartesian product of the inputs (\|N\| x \|M\|). **Uses memory:** ✅ Uses memory for 3-way or more differential joins. | <code>CrossJoin type=differential</code> |
+| **Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.  **Can increase data size:** No **Uses memory:** ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code> |
+| **Distinct** | Alias for a <code>Reduce</code> with an empty aggregate list.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to twice the output size. | <code>Distinct</code> |
+| **TopK** | Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.  **Can increase data size:** No **Uses memory:** ✅ Can use significant amount as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code> |
+| **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>Negate</code> |
+| **Threshold** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>Threshold</code> |
+| **Union** | Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time. | <code>Union</code> |
+| **ArrangeBy** | Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine (each <code>keys</code> element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.  **Can increase data size:** No **Uses memory:** ✅ Depends. If arrangements need to be created, they use memory proportional to the input size. | <code>ArrangeBy keys=[[#0]]</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
 
 
 **In raw plans:**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 The following table lists the operators that are available in the raw plan.
 
-<ul>
-<li>For those operators that require memory to maintain intermediate state,
-<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
-<li>For those operators that expand the data size (either rows or columns),
-<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
-</ul>
-
-<table>
-<thead>
-<tr>
-<th>Operator</th>
-<th>Description</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><strong>Constant</strong></td>
-<td>
-    Always produces the same collection of rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Get</strong></td>
-<td>
-    Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
-CTE in the same plan.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Get materialize.public.ordered</code></td>
-</tr>
-
-<tr>
-<td><strong>Project</strong></td>
-<td>
-    Produces a subset of the <a href="#explain-plan-columns" >columns</a> in the input
-rows. See also <a href="#explain-plan-columns" >column numbering</a>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Project (#2, #3)</code></td>
-</tr>
-
-<tr>
-<td><strong>Map</strong></td>
-<td>
-    Appends the results of some scalar expressions to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Each row has more data (i.e., longer rows but same number of rows).
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code></td>
-</tr>
-
-<tr>
-<td><strong>CallTable</strong></td>
-<td>
-    Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the <a href="/sql/functions/#table-functions" >table function</a> used.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>CallTable generate_series(1, 7, 1)</code></td>
-</tr>
-
-<tr>
-<td><strong>Filter</strong></td>
-<td>
-    Removes rows of the input for which some scalar predicates return <code>false</code>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Filter (#20 &lt; #21)</code></td>
-</tr>
-
-<tr>
-<td><strong>~Join</strong></td>
-<td>
-    Performs one of <code>INNER</code> / <code>LEFT</code> / <code>RIGHT</code> / <code>FULL OUTER</code> / <code>CROSS</code> join on the two inputs, using the given predicate.<br/><br />
-    <strong>Can increase data size:</strong>  For <code>CrossJoin</code>s, Cartesian product of the inputs (|N| x |M|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition.
-For other join types, depends on the join order and facts about the joined collections.
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input sizes, unless <a href="/transform-data/optimization/#join" >the inputs have appropriate indexes</a>. Certain joins with more than 2 inputs use additional memory, see details in the optimized plan.
-
-</td>
-<td><code>InnerJoin (#0 = #2)</code></td>
-</tr>
-
-<tr>
-<td><strong>Reduce</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, reduces each group using
-some aggregate functions, and produces rows containing the group key and
-aggregate outputs.  In the case where the group key is empty and the input
-is empty, returns a single row with the aggregate functions applied to the
-empty input collection.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
-<code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code></td>
-</tr>
-
-<tr>
-<td><strong>Distinct</strong></td>
-<td>
-    Removes duplicate copies of input rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to twice the output size.
-
-</td>
-<td><code>Distinct</code></td>
-</tr>
-
-<tr>
-<td><strong>TopK</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Can use significant amount as the operator can significantly overestimate
-the group sizes. Consult
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code></td>
-</tr>
-
-<tr>
-<td><strong>Negate</strong></td>
-<td>
-    Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Negate</code></td>
-</tr>
-
-<tr>
-<td><strong>Threshold</strong></td>
-<td>
-    Removes any rows with negative counts.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input and output size, twice.
-
-</td>
-<td><code>Threshold</code></td>
-</tr>
-
-<tr>
-<td><strong>Union</strong></td>
-<td>
-    Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time.
-
-</td>
-<td><code>Union</code></td>
-</tr>
-
-<tr>
-<td><strong>With ... Return ...</strong></td>
-<td>
-    Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><a href="#reading-plans" >See above</a></td>
-</tr>
-
-</tbody>
-</table>
-
-<span class="caption">
-<ul >
-<li><strong>Can increase data size:</strong> Specifies whether the operator can
-increase the data size (can be the number of rows or the number of columns).
-</li>
-<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
-maintain state for its inputs.</li>
-</ul>
-</span>
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span> </span></span></code></pre></div> |
+| **Get** | Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan.  **Can increase data size:** No **Uses memory:** No | <code>Get materialize.public.ordered</code> |
+| **Project** | Produces a subset of the <a href="/sql/explain-plan/#explain-plan-columns" >columns</a> in the input rows. See also <a href="/sql/explain-plan/#explain-plan-columns" >column numbering</a>.  **Can increase data size:** No **Uses memory:** No | <code>Project (#2, #3)</code> |
+| **Map** | Appends the results of some scalar expressions to each row in the input.  **Can increase data size:** Each row has more data (i.e., longer rows but same number of rows). **Uses memory:** No | <code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code> |
+| **CallTable** | Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.  **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <code>CallTable generate_series(1, 7, 1)</code> |
+| **Filter** | Removes rows of the input for which some scalar predicates return <code>false</code>.  **Can increase data size:** No **Uses memory:** No | <code>Filter (#20 &lt; #21)</code> |
+| **~Join** | Performs one of <code>INNER</code> / <code>LEFT</code> / <code>RIGHT</code> / <code>FULL OUTER</code> / <code>CROSS</code> join on the two inputs, using the given predicate.  **Can increase data size:** For <code>CrossJoin</code>s, Cartesian product of the inputs (\|N\| x \|M\|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition. For other join types, depends on the join order and facts about the joined collections. **Uses memory:** ✅ Uses memory proportional to the input sizes, unless <a href="/transform-data/optimization/#join" >the inputs have appropriate indexes</a>. Certain joins with more than 2 inputs use additional memory, see details in the optimized plan. | <code>InnerJoin (#0 = #2)</code> |
+| **Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.  In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to the empty input collection.  **Can increase data size:** No **Uses memory:** ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code> |
+| **Distinct** | Removes duplicate copies of input rows.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to twice the output size. | <code>Distinct</code> |
+| **TopK** | Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.  **Can increase data size:** No **Uses memory:** ✅ Can use significant amount as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code> |
+| **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>Negate</code> |
+| **Threshold** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>Threshold</code> |
+| **Union** | Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time. | <code>Union</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
 
 
 
 
-
-
-Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
+Operators are sometimes marked as `Fused ...`. This indicates that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
 
 ```
 →Fused X
@@ -11902,11 +10516,119 @@ The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memo
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the explainee are
-contained in.</li>
-</ul>
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.
 
+
+---
+
+## Explain plan operators
+
+
+Materialize offers several output formats for [`EXPLAIN
+PLAN`](/sql/explain-plan/) and debugging. LIR plans as rendered in
+[`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping)
+are deliberately succinct, while the plans in other formats give more detail.
+
+The decorrelated and optimized plans from `EXPLAIN DECORRELATED PLAN
+FOR ...`, `EXPLAIN LOCALLY OPTIMIZED PLAN FOR ...`, and `EXPLAIN
+OPTIMIZED PLAN FOR ...` are in a mid-level representation that is
+closer to LIR than SQL. The raw plans from `EXPLAIN RAW PLAN FOR ...`
+are closer to SQL (and therefore less indicative of how the query will
+actually run).
+
+
+
+**In fully optimized physical (LIR) plans (Default):**
+The following table lists the operators that are available in the LIR plan.
+
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <code>→Constant (2 rows)</code> |
+| **Stream, Arranged, Index Lookup, Read** | <p>Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan. A parent <code>Fused Map/Filter/Project</code> operator can combine with this operator.</p> <p>There are four types of <code>Get</code>.</p> <ol> <li> <p><code>Stream</code> indicates that the results are not <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory and will be streamed directly.</p> </li> <li> <p><code>Arranged</code> indicates that the results are <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory.</p> </li> <li> <p><code>Index Lookup</code> indicates the results will be <em>looked up</em> in an existing [arrangement]((/get-started/arrangements/#arrangements).</p> </li> <li> <p><code>Read</code> indicates that the results are unarranged, and will be processed as they arrive.</p> </li> </ol>   **Can increase data size:** No **Uses memory:** No | <code>Arranged materialize.public.t</code> |
+| **Map/Filter/Project** | <p>Computes new columns (maps), filters columns, and projects away columns. Works row-by-row. Maps and filters will be printed, but projects will not.</p> <p>These may be marked as <strong><code>Fused</code></strong> <code>Map/Filter/Project</code>, which means they will combine with the operator beneath them to run more efficiently.</p>   **Can increase data size:** Each row may have more data, from the <code>Map</code>. Each row may also have less data, from the <code>Project</code>. There may be fewer rows, from the <code>Filter</code>. **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span> </span></span><span class="line"><span class="cl">  <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">&lt;</span> <span class="mf">7</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="k">Map</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">+</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">})</span> </span></span></code></pre></div> |
+| **Table Function** | <p>Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.</p> <p>A parent <code>Fused Table Function unnest_list</code> operator will fuse with its child <code>GroupAggregate</code> operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.</p> <p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>   **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Table</span> <span class="k">Function</span> <span class="n">generate_series</span><span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">},</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">},</span> <span class="mf">1</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="k">Input</span> <span class="k">key</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">})</span> </span></span></code></pre></div> |
+| **Differential Join, Delta Join** | <p>Both join operators indicate the join ordering selected.</p> <p>Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.</p> <p>Joins will indicate the join order of their children, starting from 0. For example, <code>Differential Join %1 » %0</code> will join its second child into its first.</p> <p>The <a href="/transform-data/optimization/#join" >two joins differ in performance characteristics</a>.</p>   **Can increase data size:** Depends on the join order and facts about the joined collections. **Uses memory:** ✅ Uses memory for 3-way or more differential joins. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Differential</span> <span class="k">Join</span> <span class="o">%</span><span class="mf">1</span> <span class="err">»</span> <span class="o">%</span><span class="mf">0</span> </span></span><span class="line"><span class="cl">  <span class="k">Join</span> <span class="n">stage</span> <span class="o">%</span><span class="mf">0</span><span class="p">:</span> <span class="n">Lookup</span> <span class="k">key</span> <span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="k">in</span> <span class="o">%</span><span class="mf">0</span> </span></span></code></pre></div> |
+| **GroupAggregate** | <p>Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.</p> <p>There are five types of <code>GroupAggregate</code>, ordered by increasing complexity:</p> <ol> <li> <p><code>Distinct GroupAggregate</code> corresponds to the SQL <code>DISTINCT</code> operator.</p> </li> <li> <p><code>Accumulable GroupAggregate</code> (e.g., <code>SUM</code>, <code>COUNT</code>) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.</p> </li> <li> <p><code>Hierarchical GroupAggregate</code> (e.g., <code>MIN</code>, <code>MAX</code>) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" >see <code>mz_introspection.mz_expected_group_size_advice</code></a>. These may either be bucketed or monotonic (more efficient). These may consolidate their output, which will increase memory usage.</p> </li> <li> <p><code>Collated Multi-GroupAggregate</code> corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.</p> </li> <li> <p><code>Non-incremental GroupAggregate</code> (e.g., window functions, <code>list_agg</code>) corresponds to a single non-incremental aggregation. These are the most computationally intensive reductions.</p> </li> </ol> <p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>   **Can increase data size:** No **Uses memory:** ✅ <code>Distinct</code> and <code>Accumulable</code> aggregates use a moderate amount of memory (proportional to twice the output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. <code>Non-incremental</code> aggregates use memory proportional to the input + output size. <code>Collated</code> aggregates use memory that is the sum of their constituents, plus some memory for the join at the end. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Accumulable</span> <span class="n">GroupAggregate</span> </span></span><span class="line"><span class="cl">  <span class="n">Simple</span> <span class="n">aggregates</span><span class="p">:</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="n">Post</span><span class="o">-</span><span class="n">process</span> <span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span> </span></span><span class="line"><span class="cl">    <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span> <span class="o">&gt;</span> <span class="mf">1</span><span class="p">)</span> </span></span></code></pre></div> |
+| **TopK** | <p>Groups the input rows, sorts them according to some ordering, and returns at most <code>K</code> rows at some offset from the top of the list, where <code>K</code> is some (possibly computed) limit.</p> <p>There are three types of <code>TopK</code>. Two are special cased for monotonic inputs (i.e., inputs which never retract data).</p> <ol> <li><code>Monotonic Top1</code>.</li> <li><code>Monotonic TopK</code>, which may give an expression indicating the limit.</li> <li><code>Non-monotonic TopK</code>, a generic <code>TopK</code> plan.</li> </ol> <p>Each version of the <code>TopK</code> operator may include grouping, ordering, and limit directives.</p>   **Can increase data size:** No **Uses memory:** ✅ <code>Monotonic Top1</code> and <code>Monotonic TopK</code> use a moderate amount of memory. <code>Non-monotonic TopK</code> uses significantly more memory as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Consolidating</span> <span class="n">Monotonic</span> <span class="n">TopK</span> </span></span><span class="line"><span class="cl">  <span class="k">Order</span> <span class="k">By</span> <span class="o">#</span><span class="mf">1</span> <span class="k">asc</span> <span class="n">nulls_last</span><span class="p">,</span> <span class="o">#</span><span class="mf">0</span> <span class="k">desc</span> <span class="n">nulls_first</span> </span></span><span class="line"><span class="cl">  <span class="k">Limit</span> <span class="mf">5</span> </span></span></code></pre></div> |
+| **Negate Diffs** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>→Negate Diffs</code> |
+| **Threshold Diffs** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>→Threshold Diffs</code> |
+| **Union** | Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ A <code>Consolidating Union</code> will make moderate use of memory, particularly at hydration time. A <code>Union</code> that is not <code>Consolidating</code> will not consume memory. | <code>→Consolidating Union</code> |
+| **Arrange** | Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine, i.e., it will consume memory to cache results.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input size. Note that in the LIR / physical plan, <code>Arrange</code>/<code>ArrangeBy</code> almost always means that an arrangement will actually be created. (This is in contrast to the &ldquo;optimized&rdquo; plan, where an <code>ArrangeBy</code> being present in the plan often does not mean that an arrangement will actually be created.) | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Arrange</span> </span></span><span class="line"><span class="cl">    <span class="k">Keys</span><span class="p">:</span> <span class="mf">1</span> <span class="k">arrangement</span> <span class="n">available</span><span class="p">,</span> <span class="n">plus</span> <span class="k">raw</span> <span class="n">stream</span> </span></span><span class="line"><span class="cl">      <span class="k">Arrangement</span> <span class="mf">0</span><span class="p">:</span> <span class="o">#</span><span class="mf">0</span> </span></span></code></pre></div> |
+| **Unarranged Raw Stream** | Indicates a point where data will be streamed (even if it is somehow already arranged).  **Can increase data size:** No **Uses memory:** No | <code>→Unarranged Raw Stream</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
+
+
+**In decorrelated and optimized plans:**
+The following table lists the operators that are available in the optimized plan.
+
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span> </span></span></code></pre></div> |
+| **Get** | Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan.  **Can increase data size:** No **Uses memory:** No | <code>Get materialize.public.ordered</code> |
+| **Project** | Produces a subset of the <a href="/sql/explain-plan/#explain-plan-columns" >columns</a> in the input rows. See also <a href="/sql/explain-plan/#explain-plan-columns" >column numbering</a>.  **Can increase data size:** No **Uses memory:** No | <code>Project (#2, #3)</code> |
+| **Map** | Appends the results of some scalar expressions to each row in the input.  **Can increase data size:** Each row has more data (i.e., longer rows but same number of rows). **Uses memory:** No | <code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code> |
+| **FlatMap** | Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.  **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <code>FlatMap jsonb_foreach(#3)</code> |
+| **Filter** | Removes rows of the input for which some scalar predicates return <code>false</code>.  **Can increase data size:** No **Uses memory:** No | <code>Filter (#20 &lt; #21)</code> |
+| **Join** | Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.  **Can increase data size:** Depends on the join order and facts about the joined collections. **Uses memory:** ✅ The <code>Join</code> operator itself uses memory only for <code>type=differential</code> with more than 2 inputs. However, <code>Join</code> operators need <a href="/get-started/arrangements/#arrangements" >arrangements</a> on their inputs (shown by the <code>ArrangeBy</code> operator). These arrangements use memory proportional to the input sizes. If an input has an <a href="/transform-data/optimization/#join" >appropriate index</a>, then the arrangement of the index will be reused. | <code>Join on=(#1 = #2) type=delta</code> |
+| **CrossJoin** | An alias for a <code>Join</code> with an empty predicate (emits all combinations). Note that not all cross joins are marked as <code>CrossJoin</code>: In a join with more than 2 inputs, it can happen that there is a cross join between some of the inputs. You can recognize this case by <code>ArrangeBy</code> operators having empty keys, i.e., <code>ArrangeBy keys=[[]]</code>.  **Can increase data size:** Cartesian product of the inputs (\|N\| x \|M\|). **Uses memory:** ✅ Uses memory for 3-way or more differential joins. | <code>CrossJoin type=differential</code> |
+| **Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.  **Can increase data size:** No **Uses memory:** ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code> |
+| **Distinct** | Alias for a <code>Reduce</code> with an empty aggregate list.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to twice the output size. | <code>Distinct</code> |
+| **TopK** | Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.  **Can increase data size:** No **Uses memory:** ✅ Can use significant amount as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code> |
+| **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>Negate</code> |
+| **Threshold** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>Threshold</code> |
+| **Union** | Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time. | <code>Union</code> |
+| **ArrangeBy** | Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine (each <code>keys</code> element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.  **Can increase data size:** No **Uses memory:** ✅ Depends. If arrangements need to be created, they use memory proportional to the input size. | <code>ArrangeBy keys=[[#0]]</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
+
+
+**In raw plans:**
+The following table lists the operators that are available in the raw plan.
+
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span> </span></span></code></pre></div> |
+| **Get** | Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan.  **Can increase data size:** No **Uses memory:** No | <code>Get materialize.public.ordered</code> |
+| **Project** | Produces a subset of the <a href="/sql/explain-plan/#explain-plan-columns" >columns</a> in the input rows. See also <a href="/sql/explain-plan/#explain-plan-columns" >column numbering</a>.  **Can increase data size:** No **Uses memory:** No | <code>Project (#2, #3)</code> |
+| **Map** | Appends the results of some scalar expressions to each row in the input.  **Can increase data size:** Each row has more data (i.e., longer rows but same number of rows). **Uses memory:** No | <code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code> |
+| **CallTable** | Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.  **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <code>CallTable generate_series(1, 7, 1)</code> |
+| **Filter** | Removes rows of the input for which some scalar predicates return <code>false</code>.  **Can increase data size:** No **Uses memory:** No | <code>Filter (#20 &lt; #21)</code> |
+| **~Join** | Performs one of <code>INNER</code> / <code>LEFT</code> / <code>RIGHT</code> / <code>FULL OUTER</code> / <code>CROSS</code> join on the two inputs, using the given predicate.  **Can increase data size:** For <code>CrossJoin</code>s, Cartesian product of the inputs (\|N\| x \|M\|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition. For other join types, depends on the join order and facts about the joined collections. **Uses memory:** ✅ Uses memory proportional to the input sizes, unless <a href="/transform-data/optimization/#join" >the inputs have appropriate indexes</a>. Certain joins with more than 2 inputs use additional memory, see details in the optimized plan. | <code>InnerJoin (#0 = #2)</code> |
+| **Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.  In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to the empty input collection.  **Can increase data size:** No **Uses memory:** ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code> |
+| **Distinct** | Removes duplicate copies of input rows.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to twice the output size. | <code>Distinct</code> |
+| **TopK** | Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.  **Can increase data size:** No **Uses memory:** ✅ Can use significant amount as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code> |
+| **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>Negate</code> |
+| **Threshold** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>Threshold</code> |
+| **Union** | Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time. | <code>Union</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
+
+
+
+
+Operators are sometimes marked as `Fused ...`. This indicates that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
+
+```
+→Fused X
+  →Y
+```
+
+Then the `X` and `Y` operators will be combined into a single, more efficient operator.
+
+See also:
+
+- [`EXPLAIN PLAn`](/sql/explain-plan/)
 
 
 ---
@@ -11919,7 +10641,6 @@ contained in.</li>
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -12024,11 +10745,8 @@ EXPLAIN VALUE SCHEMA FOR
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all items in the query are contained
-in.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all items in the query are contained
+  in.
 
 
 ---
@@ -12041,7 +10759,6 @@ in.</li>
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -12209,11 +10926,8 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the query are
-contained in.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations in the query are
+  contained in.
 
 
 ---
@@ -12262,8 +10976,6 @@ role(s)](/sql/create-role/).
 > **Note:** The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 > [*applicable* privileges](/sql/grant-privilege/#available-privileges) for the
 > object type.
->
->
 
 
 
@@ -12338,10 +11050,9 @@ TO <role_name> [, ... ];
 
 **Materialized view/view/source:**
 
-> **Note:** To read from a views or a materialized views, you must have <code>SELECT</code> privileges
-> on the view/materialized views. That is, having <code>SELECT</code> privileges on the
+> **Note:** To read from a views or a materialized views, you must have `SELECT` privileges
+> on the view/materialized views. That is, having `SELECT` privileges on the
 > underlying objects defining the view/materialized view is insufficient.
->
 
 
 For specific materialized view(s)/view(s)/source(s):
@@ -12447,10 +11158,8 @@ TO <role_name> [, ... ];
 
 For all tables or all tables in a specific schema(s) or in a specific database(s):
 
-> **Note:** Granting privileges via <code>ALL TABLES [...]</code> also applies to sources, views, and
+> **Note:** Granting privileges via `ALL TABLES [...]` also applies to sources, views, and
 > materialized views (for the applicable privileges).
->
->
 
 
 ```mzsql
@@ -12479,7 +11188,7 @@ TO <role_name> [, ... ];
 | <strong>DELETE</strong> | <p>Permission to delete rows from an object.</p> <p>Deleting rows may also require <strong>SELECT</strong> if a read is needed to determine which rows to delete.</p>  | <code>d</code> | <ul> <li><code>TABLE</code></li> </ul>  |
 | <strong>CREATE</strong> | Permission to create a new objects within the specified object. | <code>C</code> | <ul> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>CLUSTER</code></li> </ul>  |
 | <strong>USAGE</strong> | <a name="privilege-usage"></a> Permission to use or reference an object (e.g., schema/type lookup). | <code>U</code> | <ul> <li><code>CLUSTER</code></li> <li><code>CONNECTION</code></li> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>SECRET</code></li> <li><code>TYPE</code></li> </ul>  |
-| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the <code>CREATEROLE</code> privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > <code>CREATEROLE</code> unnecessarily. > | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
+| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the `CREATEROLE` privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > `CREATEROLE` unnecessarily. | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATEDB</strong> | Permission to create new databases. | <code>B</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATECLUSTER</strong> | Permission to create new clusters. | <code>N</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATENETWORKPOLICY</strong> | Permission to create network policies to control access at the network layer. | <code>P</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
@@ -12508,13 +11217,10 @@ TO <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of affected objects.</li>
-<li><code>USAGE</code> privileges on the containing database if the affected object is a schema.</li>
-<li><code>USAGE</code> privileges on the containing schema if the affected object is namespaced by a schema.</li>
-<li><em>superuser</em> status if the privilege is a system privilege.</li>
-</ul>
-
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
 
 ## Examples
 
@@ -12600,10 +11306,7 @@ GRANT data_scientist TO joe, mike;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Useful views
 
@@ -12644,7 +11347,6 @@ To override these restrictions, you can enclose the identifier in double quotes;
 e.g., `"123_source"` or `"fun_source_@"`. Inside double quotes, characters are interpreted literally, except for the double-quote character itself. To include a double quote within a double-quoted identifier, escape it by writing two adjacent double quotes, as in "includes""quote".
 
 > **Note:** The identifiers `"."` and `".."` are not allowed.
->
 
 
 ## Case sensitivity
@@ -12846,26 +11548,77 @@ SELECT * FROM t;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations and types in the query are contained in.</li>
-<li><code>INSERT</code> privileges on <code>table_name</code>.</li>
-<li><code>SELECT</code> privileges on all relations in the query.
-<ul>
-<li>NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-execute the view definition. Even if the view owner is a <em>superuser</em>, they still must explicitly be
-granted the necessary privileges.</li>
-</ul>
-</li>
-<li><code>USAGE</code> privileges on all types used in the query.</li>
-<li><code>USAGE</code> privileges on the active cluster.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `INSERT` privileges on `table_name`.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+    execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+    granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 
 - [`CREATE TABLE`](../create-table)
 - [`DROP TABLE`](../drop-table)
 - [`SELECT`](../select)
+
+
+---
+
+## M.1 to cc size mapping
+
+
+The following table provides a general mapping of M.1 to cc cluster sizes:
+
+
+**M.1 to cc:**
+
+| M.1 Size | cc Size |
+| --- | --- |
+| <strong>M.1-nano</strong> | 25cc |
+| <strong>M.1-nano</strong> | 50cc |
+| <strong>M.1-micro</strong> | 100cc |
+| <strong>M.1-xsmall</strong> | 200cc |
+| <strong>M.1-small</strong> | 300cc or 400cc |
+| <strong>M.1-medium</strong> | 600cc or 800cc |
+| <strong>M.1-large</strong> | 800cc |
+| <strong>M.1-1.5xlarge</strong> | 1200cc or 1600cc |
+| <strong>M.1-2xlarge</strong> | 1600cc |
+| <strong>M.1-3xlarge</strong> | 3200cc |
+| <strong>M.1-4xlarge</strong> | 3200cc |
+| <strong>M.1-8xlarge</strong> | 3200cc |
+| <strong>M.1-16xlarge</strong> | 6400cc |
+| <strong>M.1-32xlarge</strong> | 128C |
+| <strong>M.1-64xlarge</strong> | 256C |
+| <strong>M.1-128xlarge</strong> | 512C |
+
+
+**cc to M.1:**
+
+| cc Size | M.1 Size |
+| --- | --- |
+| 25cc | <strong>M.1-nano</strong> |
+| 50cc | <strong>M.1-nano</strong> |
+| 100cc | <strong>M.1-micro</strong> |
+| 200cc | <strong>M.1-xsmall</strong> |
+| 300cc | <strong>M.1-small</strong> |
+| 400cc | <strong>M.1-small</strong> |
+| 600cc | <strong>M.1-medium</strong> |
+| 800cc | <strong>M.1-large</strong> or <strong>M.1-medium</strong> |
+| 1200cc | <strong>M.1-1.5xlarge</strong> |
+| 1600cc | <strong>M.1-2xlarge</strong> or <strong>M.1-1.5xlarge</strong> |
+| 3200cc | <strong>M.1-8xlarge</strong> or <strong>M.1-4xlarge</strong> or <strong>M.1-3xlarge</strong> |
+| 6400cc | <strong>M.1-16xlarge</strong> |
+| 128C | <strong>M.1-32xlarge</strong> |
+| 256C | <strong>M.1-64xlarge</strong> |
+| 512C | <strong>M.1-128xlarge</strong> |
+
+
+
+
+Some sizes have multiple mappings. When converting between M.1 and cc sizing, we
+recommend choosing the larger mapping size first.
 
 
 ---
@@ -12930,7 +11683,6 @@ DEALLOCATE a;
 
 > **Note:** Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize reassigns
 > all objects across all databases, including the databases themselves.
->
 
 
 ## Syntax
@@ -12958,10 +11710,7 @@ REASSIGN OWNED BY joe, george TO mike;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Role membership in <code>old_role</code> and <code>new_role</code>.</li>
-</ul>
-
+- Role membership in `old_role` and `new_role`.
 
 ## Related pages
 
@@ -12990,8 +11739,6 @@ Syntax element | Description
 ---------------|------------
 `<parameter_name>` | The configuration parameter's name.
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -13054,11 +11801,6 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 
@@ -13100,8 +11842,6 @@ be used to indicate that the privileges should be revoked from all roles
 > **Note:** The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 > [*applicable* privileges](#applicable-privileges-to-revoke) for the
 > object type.
->
->
 
 
 
@@ -13179,10 +11919,9 @@ FROM <role_name> [, ... ];
 
 **Materialized view/view/source:**
 
-> **Note:** To read from a views or a materialized views, you must have <code>SELECT</code> privileges
-> on the view/materialized views. That is, having <code>SELECT</code> privileges on the
+> **Note:** To read from a views or a materialized views, you must have `SELECT` privileges
+> on the view/materialized views. That is, having `SELECT` privileges on the
 > underlying objects defining the view/materialized view is insufficient.
->
 
 
 For specific materialized view(s)/view(s)/source(s):
@@ -13288,10 +12027,8 @@ FROM <role_name> [, ... ];
 
 For all tables or all tables in a specific schema(s) or in a specific database(s):
 
-> **Note:** Granting privileges via <code>ALL TABLES [...]</code> also applies to sources, views, and
+> **Note:** Granting privileges via `ALL TABLES [...]` also applies to sources, views, and
 > materialized views (for the applicable privileges).
->
->
 
 
 ```mzsql
@@ -13320,7 +12057,7 @@ FROM <role_name> [, ... ];
 | <strong>DELETE</strong> | <p>Permission to delete rows from an object.</p> <p>Deleting rows may also require <strong>SELECT</strong> if a read is needed to determine which rows to delete.</p>  | <code>d</code> | <ul> <li><code>TABLE</code></li> </ul>  |
 | <strong>CREATE</strong> | Permission to create a new objects within the specified object. | <code>C</code> | <ul> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>CLUSTER</code></li> </ul>  |
 | <strong>USAGE</strong> | <a name="privilege-usage"></a> Permission to use or reference an object (e.g., schema/type lookup). | <code>U</code> | <ul> <li><code>CLUSTER</code></li> <li><code>CONNECTION</code></li> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>SECRET</code></li> <li><code>TYPE</code></li> </ul>  |
-| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the <code>CREATEROLE</code> privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > <code>CREATEROLE</code> unnecessarily. > | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
+| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the `CREATEROLE` privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > `CREATEROLE` unnecessarily. | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATEDB</strong> | Permission to create new databases. | <code>B</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATECLUSTER</strong> | Permission to create new clusters. | <code>N</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATENETWORKPOLICY</strong> | Permission to create network policies to control access at the network layer. | <code>P</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
@@ -13350,13 +12087,10 @@ FROM <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of affected objects.</li>
-<li><code>USAGE</code> privileges on the containing database if the affected object is a schema.</li>
-<li><code>USAGE</code> privileges on the containing schema if the affected object is namespaced by a schema.</li>
-<li><em>superuser</em> status if the privilege is a system privilege.</li>
-</ul>
-
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
 
 
 ## Examples
@@ -13440,10 +12174,7 @@ REVOKE data_scientist FROM joe, mike;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the systems.</li>
-</ul>
-
+- `CREATEROLE` privileges on the systems.
 
 ## Useful views
 
@@ -13746,19 +12477,19 @@ above: Materialize tears down the created dataflow after returning the results.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>
-<p><code>SELECT</code> privileges on all <strong>directly</strong> referenced relations in the query. If
-the directly referenced relation is a view or materialized view: </p>
-</li>
-<li>
-<p><code>USAGE</code> privileges on the schemas that contain the relations in the query.</p>
-</li>
-<li>
-<p><code>USAGE</code> privileges on the active cluster.</p>
-</li>
-</ul>
+- `SELECT` privileges on all **directly** referenced relations in the query. If
+  the directly referenced relation is a view or materialized view: - `SELECT` privileges are required only on the directly referenced
+  view/materialized view. `SELECT` privileges are **not** required for the
+  underlying relations referenced in the view/materialized view definition
+  unless those relations themselves are directly referenced in the query.
 
+- However, the owner of the view/materialized view (including those with
+  **superuser** privileges) must have all required `SELECT` and `USAGE`
+  privileges to run the view definition regardless of who is selecting from the
+  view/materialized view.
+
+- `USAGE` privileges on the schemas that contain the relations in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 
@@ -13791,8 +12522,6 @@ Syntax element                | Description
 `<value>`                 | The value to assign to the parameter.
 **DEFAULT**               | Use the parameter's default value. Equivalent to [`RESET`](../reset).
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -13855,11 +12584,6 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ### Aliased configuration parameters
 
@@ -13934,8 +12658,6 @@ configuration parameters.
 - `schema`: an alias for showing the first resolvable schema in `search_path`
 - `time zone`: an alias for `timezone`
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -13998,11 +12720,6 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 
@@ -14122,7 +12839,6 @@ cluster at any time.
 > to choose a valid cluster in order to run `SELECT` queries. A _superuser_ (i.e. `Organization Admin`)
 > can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
 > default value.
->
 
 
 ### `mz_catalog_server` system cluster
@@ -14286,10 +13002,7 @@ SHOW COLUMNS FROM my_source;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing <code>item_ref</code>.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing `item_ref`.
 
 ## Related pages
 
@@ -14424,10 +13137,7 @@ SHOW CREATE CONNECTION kafka_connection;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the connection.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the connection.
 
 ## Related pages
 
@@ -14482,10 +13192,7 @@ SHOW CREATE INDEX my_view_idx;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the index.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the index.
 
 ## Related pages
 
@@ -14529,10 +13236,7 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the materialized view.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the materialized view.
 
 ## Related pages
 
@@ -14587,10 +13291,7 @@ SHOW CREATE SINK my_view_sink;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the sink.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the sink.
 
 ## Related pages
 
@@ -14635,10 +13336,7 @@ SHOW CREATE SOURCE market_orders_raw;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the source.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the source.
 
 ## Related pages
 
@@ -14686,10 +13384,7 @@ SHOW CREATE TABLE t;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the table.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the table.
 
 ## Related pages
 
@@ -14733,10 +13428,7 @@ SHOW CREATE TYPE point;
 
 ## Privileges
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the table.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the table.
 
 ## Related pages
 
@@ -14780,10 +13472,7 @@ SHOW CREATE VIEW my_view;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the view.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the view.
 
 ## Related pages
 
@@ -15042,7 +13731,6 @@ will be pre-installed. This policy has a wide open ingress rule `allow
 > Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 > Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 > change the default value.
->
 
 
 ## Examples
@@ -16323,7 +15011,6 @@ case-insensitively.#### `regexp_replace(source: str, pattern: str, replacement: 
 
 > **Warning:** This function has the potential to produce very large strings and
 > may cause queries to run out of memory or crash. Use with caution.
->
 
 <p>Replaces the first occurrence of <code>pattern</code> with <code>replacement</code> in <code>source</code>.
 No match will return <code>source</code> unchanged.</p>
@@ -16543,7 +15230,6 @@ Returns the subscript of <code>needle</code> in <code>haystack</code>, skipping 
 
 > **Warning:** This function has the potential to produce very large strings and
 > may cause queries to run out of memory or crash. Use with caution.
->
 
 <p>Concatenates the elements of <code>array</code> together separated by <code>sep</code>.
 Null elements are omitted unless <code>ifnull</code> is non-null, in which case
@@ -16588,8 +15274,6 @@ Computes the SHA-384 hash of the given bytea <code>data</code>.#### `sha512(data
 
 Computes the SHA-512 hash of the given bytea <code>data</code>.### Window functions> **Tip:** For some window function query patterns, rewriting your query to not use
 > window functions can yield better performance.  See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/) for details.
->
->
 
 <p>Window functions compute values across sets of rows related to the current row.
 For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
@@ -16615,23 +15299,17 @@ but supports only the following frame modes:</p>
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
 > See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
 > for examples of rewriting window functions.
->
->
 
 <p>In addition to the below window functions, you can use the <code>OVER</code> clause with any <a href="#aggregate-functions" >aggregation function</a>
 (e.g., <code>sum</code>, <code>avg</code>) as well. Using an aggregation with an <code>OVER</code> clause is called a <em>window aggregation</em>. A
@@ -16924,7 +15602,6 @@ after compiling it.
 
 > **Warning:** Materialize regular expressions are similar to, but not identical to, PostgreSQL
 > regular expressions.
->
 
 
 ### Time-like operators
@@ -17158,13 +15835,10 @@ tailing constant views (e.g. `CREATE VIEW v AS SELECT 1`).
 > **Warning:** Many PostgreSQL drivers wait for a query to complete before returning its
 > results. Since `SUBSCRIBE` can run forever, naively executing a `SUBSCRIBE` using your
 > driver's standard query API may never return.
->
 > Either use an API in your driver that does not buffer rows or use the
 > [`FETCH`](/sql/fetch) statement or `AS OF` and `UP TO` bounds
 > to fetch rows from `SUBSCRIBE` in batches.
 > See the [examples](#examples) for details.
->
->
 
 
 ### `SNAPSHOT`
@@ -17548,19 +16222,13 @@ subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations and types in the query are contained in.</li>
-<li><code>SELECT</code> privileges on all relations in the query.
-<ul>
-<li>NOTE: if any item is a view, then the view owner must also have the necessary privileges to
-execute the view definition. Even if the view owner is a <em>superuser</em>, they still must explicitly be
-granted the necessary privileges.</li>
-</ul>
-</li>
-<li><code>USAGE</code> privileges on all types used in the query.</li>
-<li><code>USAGE</code> privileges on the active cluster.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations and types in the query are contained in.
+- `SELECT` privileges on all relations in the query.
+  - NOTE: if any item is a view, then the view owner must also have the necessary privileges to
+  execute the view definition. Even if the view owner is a _superuser_, they still must explicitly be
+    granted the necessary privileges.
+- `USAGE` privileges on all types used in the query.
+- `USAGE` privileges on the active cluster.
 
 
 ---
@@ -17629,7 +16297,6 @@ cluster at any time.
 > to choose a valid cluster in order to run `SELECT` queries. A _superuser_ (i.e. `Organization Admin`)
 > can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
 > default value.
->
 
 
 ### `mz_catalog_server` system cluster
@@ -17904,11 +16571,8 @@ a validation error.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on the connection.</li>
-</ul>
-
+- `USAGE` privileges on the containing schema.
+- `USAGE` privileges on the connection.
 
 ## Related pages
 

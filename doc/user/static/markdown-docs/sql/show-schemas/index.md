@@ -1,9 +1,5 @@
 # SHOW SCHEMAS
-
 `SHOW SCHEMAS` returns a list of all schemas available in Materialize.
-
-
-
 `SHOW SCHEMAS` returns a list of all schemas available in Materialize.
 
 ## Syntax

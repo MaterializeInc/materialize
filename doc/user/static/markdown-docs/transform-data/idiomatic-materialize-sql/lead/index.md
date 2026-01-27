@@ -1,9 +1,5 @@
 # Lead over
-
 Use idiomatic Materialize SQL to access the next row's value (lead) when ordered by a field that advances in a regular pattern, such as in regular intervals.
-
-
-
 ## Overview
 
 The "lead over" query pattern accesses the field value of the next row as
@@ -15,27 +11,21 @@ interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -44,8 +34,6 @@ function.
 
 > **Important:** Do not use if the "lead over (order by)" ordering cannot be represented by an
 > equality match.
->
->
 
 
 ### Exclude the last row in results
@@ -77,8 +65,6 @@ does not have a next row.
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 <br>
@@ -155,8 +141,6 @@ last row, returning `null` as its lead value.
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 
@@ -205,8 +189,6 @@ FROM tableA;
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Find next row's value (exclude the last row in results)
@@ -243,8 +225,6 @@ ORDER BY order_date;
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 
@@ -310,8 +290,6 @@ ORDER BY order_date;
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 

@@ -1,9 +1,5 @@
 # SHOW CLUSTER REPLICAS
-
 `SHOW CLUSTER REPLICAS` lists the replicas for each cluster configured in Materialize.
-
-
-
 `SHOW CLUSTER REPLICAS` lists the [replicas](/sql/create-cluster#replication-factor) for each
 cluster configured in Materialize.
 

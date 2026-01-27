@@ -1,9 +1,5 @@
 # Node.js cheatsheet
-
 Use Node.js to connect, insert, manage, query and stream from Materialize.
-
-
-
 Materialize is **wire-compatible** with PostgreSQL, which means that Node.js applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the  [`node-postgres` library](https://node-postgres.com/) to connect to Materialize and issue SQL commands.
 
 ## Connect

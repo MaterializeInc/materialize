@@ -1,9 +1,5 @@
 # SHOW COLUMNS
-
 `SHOW COLUMNS` lists the columns available for an object.
-
-
-
 `SHOW COLUMNS` lists the columns available for an object. This can be a source,
 subsource, materialized view, view, or table.
 
@@ -67,10 +63,7 @@ SHOW COLUMNS FROM my_source;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing <code>item_ref</code>.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing `item_ref`.
 
 ## Related pages
 

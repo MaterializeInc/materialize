@@ -1,9 +1,5 @@
 # Required configuration (Legacy AWS Terraform)
-
 Required configuration for Materialize on AWS Terraform.
-
-
-
 ## Required variables
 
 The following variables are required when using the [Materialize on AWS

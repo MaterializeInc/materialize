@@ -1,9 +1,5 @@
 # CREATE SOURCE: Kafka/Redpanda
-
 Connecting Materialize to a Kafka or Redpanda broker
-
-
-
 [`CREATE SOURCE`](/sql/create-source/) connects Materialize to an external system you want to read data from, and provides details about how to decode and interpret that data.
 
 
@@ -16,7 +12,6 @@ across multiple `CREATE SOURCE` and `CREATE SINK` statements.
 
 > **Note:** The same syntax, supported formats and features can be used to connect to a
 > [Redpanda](/integrations/redpanda/) broker.
->
 
 
 ## Syntax
@@ -477,13 +472,10 @@ The upsert envelope treats all records as having a **key** and a **value**, and 
 - If the key matches a preexisting record and the value is _null_, Materialize deletes the record.
 
 > **Note:** - Using this envelope is required to consume [log compacted topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
->
 > - This envelope can lead to high memory and disk utilization in the cluster
 >   maintaining the source. We recommend using a standard-sized cluster, rather
 >   than a legacy-sized cluster, to automatically spill the workload to disk. See
 >   [spilling to disk](#spilling-to-disk) for details.
->
->
 
 
 #### Null keys
@@ -576,13 +568,10 @@ This envelope treats all records as [change events](https://debezium.io/document
 > **Note:** - This envelope can lead to high memory utilization in the cluster maintaining
 >   the source. Materialize can automatically offload processing to
 >   disk as needed. See [spilling to disk](#spilling-to-disk) for details.
->
 > - Materialize expects a specific message structure that includes the row data
 >   before and after the change event, which is **not guaranteed** for every
 >   Debezium connector. For more details, check the [Debezium integration
 >   guide](/integrations/debezium/).
->
->
 
 
 #### Truncation
@@ -846,11 +835,9 @@ more up-to-date information.
 
 > **Note:** Some Kafka monitoring tools may indicate that Materialize's consumer groups have
 > no active members. This is **not a cause for concern**.
->
 > Materialize does not participate in the consumer group protocol nor does it
 > recover on restart by reading the committed offsets. The committed offsets are
 > provided solely for the benefit of Kafka monitoring tools.
->
 
 
 Committed offsets are associated with a consumer group specific to the source.
@@ -887,15 +874,12 @@ Read           | Group            | All group IDs starting with the specified [`
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster if the source is created in an existing cluster.</li>
-<li><code>CREATECLUSTER</code> privileges on the system if the source is not created in an existing cluster.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the source definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster if the source is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the source is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the source definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
 
 ## Examples
 
@@ -945,7 +929,6 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host:
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -1034,7 +1017,6 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host:
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 

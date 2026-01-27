@@ -1,15 +1,10 @@
 # DROP OWNED
-
 `DROP OWNED` drops all the objects that are owned by one of the specified roles.
-
-
-
 `DROP OWNED` drops all the objects that are owned by one of the specified roles.
 Any privileges granted to the given roles on objects will also be revoked.
 
 > **Note:** Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize drops
 > all objects across all databases, including the database itself.
->
 
 
 ## Syntax
@@ -38,10 +33,7 @@ DROP OWNED BY joe, george CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Role membership in <code>role_name</code>.</li>
-</ul>
-
+- Role membership in `role_name`.
 
 ## Related pages
 

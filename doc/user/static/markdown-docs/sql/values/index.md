@@ -1,9 +1,5 @@
 # VALUES
-
 `VALUES` constructs a relation from value expressions.
-
-
-
 `VALUES` constructs a relation from a list of parenthesized value expressions.
 
 ## Syntax

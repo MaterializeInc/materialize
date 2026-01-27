@@ -1,9 +1,5 @@
 # PREPARE
-
 `PREPARE` creates a prepared statement.
-
-
-
 `PREPARE` creates a prepared statement by parsing the initial `SELECT`, `INSERT`, `UPDATE`, or `DELETE` statement. A subsequent [`EXECUTE`] statement then plans and executes the statement.
 
 ## Syntax

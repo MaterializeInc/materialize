@@ -1,9 +1,5 @@
 # `ANY()` equi-join condition
-
 Use idiomatic Materialize SQL for equi-join whose `ON` expression includes the `ANY()` operator.
-
-
-
 ## Overview
 
 The "`field = ANY(...)`" equality condition returns true if the equality
@@ -15,14 +11,11 @@ Materialize provides an idiomatic SQL as an alternative to the `ANY()`
 expression.
 
 > ### Materialize and equi-join `ON fieldX = ANY(<array|list|map>)`
->
 > When evaluating an equi-join whose `ON` expression includes the [`ANY` operator
 > expression](/sql/functions/#expression-bool_op-any)
 > (i.e., `ON fieldX = ANY(<array|list|map>)`), Materialize performs a cross join,
 > which can lead to a significant increase in memory usage. If possible, rewrite
 > the query to perform an equi-join on the unnested values.
->
->
 
 
 
@@ -125,8 +118,6 @@ WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Find orders with any sales items

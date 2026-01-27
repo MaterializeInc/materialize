@@ -121,7 +121,7 @@ SQL commands reference.
 - **ALTER MATERIALIZED VIEW**: `sql/alter-materialized-view/index.md`
 - **ALTER NETWORK POLICY (Cloud)**: `sql/alter-network-policy/index.md`
 - **ALTER ROLE**: `sql/alter-role/index.md`
-- _(and 110 more files in this section)_
+- _(and 112 more files in this section)_
 
 ### Tools and integrations
 Get details about third-party tools and integrations supported by Materialize

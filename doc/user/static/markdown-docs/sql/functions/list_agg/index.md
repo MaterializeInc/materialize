@@ -1,9 +1,5 @@
 # list_agg function
-
 Concatenates input values (including nulls) into a string.
-
-
-
 The `list_agg(value)` aggregate function concatenates
 input values (including nulls) into a [`list`](/sql/types/list).
 The input values to the aggregate can be [filtered](../filters).

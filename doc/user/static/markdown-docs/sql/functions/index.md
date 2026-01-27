@@ -285,7 +285,6 @@ case-insensitively.#### `regexp_replace(source: str, pattern: str, replacement: 
 
 > **Warning:** This function has the potential to produce very large strings and
 > may cause queries to run out of memory or crash. Use with caution.
->
 
 <p>Replaces the first occurrence of <code>pattern</code> with <code>replacement</code> in <code>source</code>.
 No match will return <code>source</code> unchanged.</p>
@@ -505,7 +504,6 @@ Returns the subscript of <code>needle</code> in <code>haystack</code>, skipping 
 
 > **Warning:** This function has the potential to produce very large strings and
 > may cause queries to run out of memory or crash. Use with caution.
->
 
 <p>Concatenates the elements of <code>array</code> together separated by <code>sep</code>.
 Null elements are omitted unless <code>ifnull</code> is non-null, in which case
@@ -550,8 +548,6 @@ Computes the SHA-384 hash of the given bytea <code>data</code>.#### `sha512(data
 
 Computes the SHA-512 hash of the given bytea <code>data</code>.### Window functions> **Tip:** For some window function query patterns, rewriting your query to not use
 > window functions can yield better performance.  See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/) for details.
->
->
 
 <p>Window functions compute values across sets of rows related to the current row.
 For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
@@ -577,23 +573,17 @@ but supports only the following frame modes:</p>
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
 > See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
 > for examples of rewriting window functions.
->
->
 
 <p>In addition to the below window functions, you can use the <code>OVER</code> clause with any <a href="#aggregate-functions" >aggregation function</a>
 (e.g., <code>sum</code>, <code>avg</code>) as well. Using an aggregation with an <code>OVER</code> clause is called a <em>window aggregation</em>. A
@@ -886,7 +876,6 @@ after compiling it.
 
 > **Warning:** Materialize regular expressions are similar to, but not identical to, PostgreSQL
 > regular expressions.
->
 
 
 ### Time-like operators
@@ -2501,9 +2490,7 @@ In this example:
 
 ## Signatures
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 normalize(str)
 normalize(str, form)
 
@@ -2536,8 +2523,6 @@ For more information, see:
 ## Examples
 
 Normalize a string using the default NFC form:
-
-
 ```mzsql
 SELECT normalize('é') AS normalized;
 
@@ -2551,8 +2536,6 @@ SELECT normalize('é') AS normalized;
 <hr/>
 
 NFC combines base character with combining marks:
-
-
 ```mzsql
 SELECT normalize('é', NFC) AS nfc;
 
@@ -2566,8 +2549,6 @@ SELECT normalize('é', NFC) AS nfc;
 <hr/>
 
 NFD decomposes into base character + combining accent:
-
-
 ```mzsql
 SELECT normalize('é', NFD) = E'e\u0301' AS is_decomposed;
 
@@ -2581,8 +2562,6 @@ SELECT normalize('é', NFD) = E'e\u0301' AS is_decomposed;
 <hr/>
 
 NFKC decomposes compatibility characters like ligatures:
-
-
 ```mzsql
 SELECT normalize('ﬁ', NFKC) AS decomposed;
 
@@ -2596,8 +2575,6 @@ SELECT normalize('ﬁ', NFKC) AS decomposed;
 <hr/>
 
 NFKC converts superscripts to regular characters:
-
-
 ```mzsql
 SELECT normalize('x²', NFKC) AS normalized;
 
@@ -3119,8 +3096,6 @@ The query returns 5 rows, one row for each list item:
 > **Tip:** For illustrative purposes, the original `scores` column is included in the
 > results (i.e., query projection). In practice, you generally would omit
 > including the original list to minimize the return data size.
->
->
 
 
 ## `WITH ORDINALITY`

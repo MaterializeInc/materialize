@@ -1,9 +1,5 @@
 # SHOW MATERIALIZED VIEWS
-
 `SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained in Materialize.
-
-
-
 `SHOW MATERIALIZED VIEWS` returns a list of materialized views being maintained
 in Materialize.
 

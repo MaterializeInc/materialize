@@ -139,7 +139,6 @@ provide:
 > Terraform state file**. Ensure that your initial configuration
 > matches your intended deployment type, and do not switch to a
 > different deployment type afterward.
->
 
 
 
@@ -314,7 +313,6 @@ objects. A few use cases are captured in the sections below.
 
 > **Note:** While Materialize offers support for its Terraform provider, Materialize does
 > not offer support for these cloud resources modules.
->
 
 
 ### AWS PrivateLink
@@ -547,7 +545,6 @@ In this scenario, you are a DevOps engineer responsible for managing your Materi
     ```
 
     > **Note:** All of the resources in this tutorial can be run with a single terraform apply but we will add and apply resources incrementally to better illustrate grants.
->
 
 
 3. Each role you create has default role attributes that determine how they can interact with Materialize objects. Let’s look at the role attributes of the role you created:
@@ -659,7 +656,6 @@ In this example, let's say your `dev_role` needs the following permissions:
     ```
 
     > **Note:** All of the grant resources are a 1:1 between a specific role, object and privilege. So adding three privileges to the `dev_role` will require three Terraform resources which can can be accomplished with the `for_each` meta-argument.
->
 
 
 2. We will run Terraform to grant these privileges on the `dev_table` table.

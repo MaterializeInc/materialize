@@ -1,9 +1,5 @@
 # Striim Cloud
-
 How to ingest Striim Change Data Capture (CDC) data into Materialize using the Kafka source
-
-
-
 [Striim](https://www.striim.com/) is a real-time data integration platform that
 offers a variety of connectors for databases, messaging systems, and other data
 sources. This guide walks through the steps to ingest Striim Change Data
@@ -81,7 +77,6 @@ cluster. Next, you'll configure Materialize to consume this data.
 > (e.g. `quickstart`), you don't need to create a new cluster. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 1. In the [SQL Shell](/console/), or your preferred SQL

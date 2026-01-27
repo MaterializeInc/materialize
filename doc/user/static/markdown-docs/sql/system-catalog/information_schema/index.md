@@ -1,9 +1,5 @@
 # information_schema
-
 information_schema is a system catalog that presents metadata in the format used by SQL standard.
-
-
-
 Materialize has compatibility shims for the following relations from the
 SQL standard [`information_schema`](https://www.postgresql.org/docs/current/infoschema-schema.html)
 schema, which is automatically available in all databases:

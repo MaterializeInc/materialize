@@ -28,76 +28,74 @@ locally or on a cloud provider. Self-Managed Materialize requires:</p>
 
 <h3 id="install-using-helm-commands">Install using Helm Commands</h3>
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-local-kind/" >Install locally on Kind</a></td>
-<td>Uses standard Helm commands to deploy Materialize to a Kind cluster in Docker.</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-local-kind/" >Install locally on Kind</a></td>
+          <td>Uses standard Helm commands to deploy Materialize to a Kind cluster in Docker.</td>
+      </tr>
+  </tbody>
 </table>
 
 
 <h3 id="install-using-terraform-modules">Install using Terraform Modules</h3>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > installing Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-aws/" >Install on AWS</a></td>
-<td>Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-azure/" >Install on Azure</a></td>
-<td>Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/install-on-gcp/" >Install on GCP</a></td>
-<td>Uses Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-aws/" >Install on AWS</a></td>
+          <td>Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-azure/" >Install on Azure</a></td>
+          <td>Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/install-on-gcp/" >Install on GCP</a></td>
+          <td>Uses Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
 <h3 id="install-using-legacy-terraform-modules">Install using Legacy Terraform Modules</h3>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > installing Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -112,29 +110,28 @@ locally or on a cloud provider. Self-Managed Materialize requires:</p>
 <h3 id="install-using-legacy-terraform-modules">Install using Legacy Terraform Modules</h3>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > installing Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -157,13 +154,10 @@ and deploys the following components:
 - Materialize as a containerized application into your local `kind` cluster.
 
 > **Important:** This tutorial is for local evaluation/testing purposes only.
->
 > - The tutorial uses sample configuration files that are for evaluation/testing
 >   purposes only.
 > - The tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
 >   refer to your organization's official security practices.
->
->
 
 
 ## Prerequisites
@@ -423,8 +417,6 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       > **Important:** This tutorial is for local evaluation/testing purposes only. For simplicity,
 >       the tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
 >       refer to your organization's official security practices.
->
->
 
 
       ```shell
@@ -541,9 +533,6 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 >       Refer to the [Troubleshooting Console
 >       Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >       guide.
->
->
->
 
 
 ## Next steps
@@ -596,13 +585,8 @@ setup from this repository.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 
@@ -693,10 +677,10 @@ An active AWS account with appropriate permissions to create:
 
 | License key type | Deployment type | Action |
 | --- | --- | --- |
-| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/"><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/">https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
-| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
-| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/">https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
-| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
+| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/" ><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/" >https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
+| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
+| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/" >https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
+| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
 
 
 ## Getting started: Simple example
@@ -707,13 +691,8 @@ An active AWS account with appropriate permissions to create:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 ### Step 1: Set Up the Environment
@@ -772,7 +751,6 @@ An active AWS account with appropriate permissions to create:
    <code>[&quot;0.0.0.0/0&quot;]</code> (<red><strong>all</strong></red> IPv4 addresses on the internet).</li>
    </ul>
    > **Note:** Refer to your organization's security practices to set these values accordingly.
-   >
 
 ### Step 3: Apply the Terraform
 
@@ -793,14 +771,10 @@ An active AWS account with appropriate permissions to create:
    proceed.
 
    > **Tip:** If you previously logged in to Amazon ECR Public, a cached auth token may cause 403 errors even when pulling public images. To remove the token, run:
->
 >    ```bash
 >    docker logout public.ecr.aws
 >    ```
->
 >    Then, re-apply the Terraform configuration.
->
->
 
 
 1. From the output, you will need the following fields to connect using the
@@ -814,7 +788,6 @@ An active AWS account with appropriate permissions to create:
 
    > **Tip:** Your shell may show an ending marker (such as `%`) because the
 >    output did not end with a newline. Do not include the marker when using the value.
->
 
 
 
@@ -850,7 +823,7 @@ An active AWS account with appropriate permissions to create:
 
 
    <p>If you run into an error during deployment, refer to the
-   <a href="/self-managed-deployments/troubleshooting/">Troubleshooting</a>.</p>
+   <a href="/self-managed-deployments/troubleshooting/" >Troubleshooting</a>.</p>
 
 ### Step 5: Connect to Materialize
 
@@ -872,9 +845,7 @@ PostgreSQL-compatible tools/drivers using the following ports:
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -891,8 +862,6 @@ PostgreSQL-compatible tools/drivers using the following ports:
 >    warning with regards to the certificate. In production, run with
 >    certificates from an official Certificate Authority (CA) rather than
 >    self-signed certificates.
->
->
 
 
 1. Log in as `mz_system`, using `external_login_password_mz_system` as the
@@ -917,9 +886,7 @@ PostgreSQL-compatible tools/drivers using the following ports:
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -954,7 +921,6 @@ PostgreSQL-compatible tools/drivers using the following ports:
 
 > **Tip:** To reduce cost in your demo environment, you can tweak subnet CIDRs
 > and instance types in `main.tf`.
->
 
 
 You can customize each Terraform module independently.
@@ -1021,13 +987,8 @@ setup from this repository.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 ## What Gets Created
@@ -1122,10 +1083,10 @@ An active Azure subscription with appropriate permissions to create:
 
 | License key type | Deployment type | Action |
 | --- | --- | --- |
-| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/"><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/">https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
-| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
-| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/">https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
-| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
+| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/" ><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/" >https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
+| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
+| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/" >https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
+| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
 
 
 ## Getting started: Simple example
@@ -1136,13 +1097,8 @@ An active Azure subscription with appropriate permissions to create:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 ### Step 1: Set Up the Environment
@@ -1222,7 +1178,6 @@ An active Azure subscription with appropriate permissions to create:
    <code>[&quot;0.0.0.0/0&quot;]</code> (<red><strong>all</strong></red> IPv4 addresses on the internet).</li>
    </ul>
    > **Note:** Refer to your organization's security practices to set these values accordingly.
-   >
 
 ### Step 3: Apply the Terraform
 
@@ -1254,7 +1209,6 @@ An active Azure subscription with appropriate permissions to create:
 
    > **Tip:** Your shell may show an ending marker (such as `%`) because the
 >    output did not end with a newline. Do not include the marker when using the value.
->
 
 
 1. Configure `kubectl` to connect to your cluster, replacing:
@@ -1288,7 +1242,7 @@ An active Azure subscription with appropriate permissions to create:
 
 
    <p>If you run into an error during deployment, refer to the
-   <a href="/self-managed-deployments/troubleshooting/">Troubleshooting</a>.</p>
+   <a href="/self-managed-deployments/troubleshooting/" >Troubleshooting</a>.</p>
 
 ### Step 5: Connect to Materialize
 
@@ -1308,9 +1262,7 @@ PostgreSQL-compatible tools/drivers using the following ports:
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -1332,8 +1284,6 @@ Console.
 >    warning with regards to the certificate. In production, run with
 >    certificates from an official Certificate Authority (CA) rather than
 >    self-signed certificates.
->
->
 
 
 1. Log in as `mz_system`, using `external_login_password_mz_system` as the
@@ -1358,9 +1308,7 @@ Console.
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -1398,7 +1346,6 @@ PostgreSQL-compatible clients/drivers, such as `psql`.
 ## Customizing Your Deployment
 
 > **Tip:** To reduce cost in your demo environment, you can tweak VM sizes and database tiers in `main.tf`.
->
 
 
 You can customize each Terraform module independently.
@@ -1413,7 +1360,6 @@ deployment
 guide](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/).
 
 > **Note:** Autoscaling: Uses Azure's native cluster autoscaler that integrates directly with Azure Virtual Machine Scale Sets for automated node scaling.
->
 
 
 See also:
@@ -1466,13 +1412,8 @@ setup from this repository.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 ## What Gets Created
@@ -1564,10 +1505,10 @@ A Google account with permission to:
 
 | License key type | Deployment type | Action |
 | --- | --- | --- |
-| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/"><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/">https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
-| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
-| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/">https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
-| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
+| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/" ><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/" >https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
+| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
+| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/" >https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
+| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
 
 
 ## Getting started: Simple example
@@ -1578,13 +1519,8 @@ A Google account with permission to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 ### Step 1: Set Up the Environment
@@ -1675,7 +1611,6 @@ A Google account with permission to:
    <code>[&quot;0.0.0.0/0&quot;]</code> (<red><strong>all</strong></red> IPv4 addresses on the internet).</li>
    </ul>
    > **Note:** Refer to your organization's security practices to set these values accordingly.
-   >
 
 ### Step 3: Apply the Terraform
 
@@ -1707,7 +1642,6 @@ A Google account with permission to:
 
    > **Tip:** Your shell may show an ending marker (such as `%`) because the
 >    output did not end with a newline. Do not include the marker when using the value.
->
 
 
 1. Configure `kubectl` to connect to your GKE cluster, replacing:
@@ -1746,7 +1680,7 @@ A Google account with permission to:
 
 
    <p>If you run into an error during deployment, refer to the
-   <a href="/self-managed-deployments/troubleshooting/">Troubleshooting</a>.</p>
+   <a href="/self-managed-deployments/troubleshooting/" >Troubleshooting</a>.</p>
 
 ### Step 5: Connect to Materialize
 
@@ -1766,9 +1700,7 @@ PostgreSQL-compatible tools/drivers using the following ports:
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -1790,8 +1722,6 @@ Console.
 >    warning with regards to the certificate. In production, run with
 >    certificates from an official Certificate Authority (CA) rather than
 >    self-signed certificates.
->
->
 
 
 1. Log in as `mz_system`, using `external_login_password_mz_system` as the
@@ -1816,9 +1746,7 @@ Console.
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -1855,7 +1783,6 @@ PostgreSQL-compatible clients/drivers, such as `psql`:
 ## Customizing Your Deployment
 
 > **Tip:** To reduce cost in your demo environment, you can tweak machine types and database tiers in `main.tf`.
->
 
 
 You can customize each module independently.
@@ -1871,7 +1798,6 @@ deployment
 guide](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines/).
 
 > **Note:** **GCP Storage Authentication Limitation:** Materialize currently only supports HMAC key authentication for GCS access (S3-compatible API). While the modules configure both HMAC keys and Workload Identity, Materialize uses HMAC keys for actual storage access.
->
 
 
 See also:

@@ -1,9 +1,5 @@
 # FAQ: PostgreSQL sources
-
 Frequently asked questions about PostgreSQL sources in Materialize
-
-
-
 This page addresses common questions and challenges when working with PostgreSQL
 sources in Materialize. For general ingestion questions/troubleshooting, see:
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/).
@@ -17,8 +13,6 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 - **Outbox Pattern (shadow tables)**
 
   > **Note:** With the Outbox pattern, you will need to implement dual writes so that all changes apply to both the original and shadow tables.
->
->
 
 
   With the Outbox pattern, you create duplicate "shadow" tables for the ones you
@@ -29,8 +23,6 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
   > **Note:** With the Sidecar pattern, you will need to keep the sidecar in sync with the
 >   source database (e.g., via logical replication or ETL processes).
->
->
 
 
   With the Sidecar pattern, you create a separate PostgreSQL instance as an

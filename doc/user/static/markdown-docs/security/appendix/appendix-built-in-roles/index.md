@@ -1,16 +1,13 @@
 # Appendix: Built-in roles
-
 List of predefined built-in roles in Materialize.
-
-
-
 ## `Public` role
 
 All roles in Materialize are automatically members of
-<a href="/security/appendix/appendix-built-in-roles/#public-role" ><code>PUBLIC</code></a>. As
-such, every role includes inherited privileges from <code>PUBLIC</code>.
+[`PUBLIC`](/security/appendix/appendix-built-in-roles/#public-role). As
+such, every role includes inherited privileges from `PUBLIC`.
 
-<p>By default, the <code>PUBLIC</code> role has the following privileges:</p>
+By default, the `PUBLIC` role has the following privileges:
+
 
 **Baseline privileges via PUBLIC role:**
 
@@ -42,4 +39,3 @@ belonging to a particular builtin role, which superusers may
 |-----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `mz_monitor`          | Grants access to objects that reveal actions taken by other users, in particular, SQL statements they have issued. Includes [`mz_recent_activity_log`](/sql/system-catalog/mz_internal#mz_recent_activity_log) and [`mz_notices`](/sql/system-catalog/mz_internal#mz_notices).                                                                                                                                    |
 | `mz_monitor_redacted` | Grants access to objects that reveal less sensitive information about actions taken by other users, for example, SQL statements they have issued with constant values redacted. Includes `mz_recent_activity_log_redacted`, [`mz_notices_redacted`](/sql/system-catalog/mz_internal#mz_notices_redacted), and [`mz_statement_lifecycle_history`](/sql/system-catalog/mz_internal#mz_statement_lifecycle_history). |
-|                       |

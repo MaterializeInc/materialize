@@ -1,9 +1,5 @@
 # Troubleshooting: Connection closed
-
 How to troubleshoot and resolve the connection closed error with PostgreSQL sources in Materialize
-
-
-
 This guide helps you troubleshoot and resolve the "connection closed" error that
 can occur with PostgreSQL sources in Materialize.
 
@@ -22,7 +18,6 @@ replicate data from PostgreSQL was closed, interrupting the replication process.
 > **Note:** This error is known to occur during Materialize maintenance windows and can be
 > safely ignored if that is the case. Sources will automatically reconnect after
 > maintenance is complete.
->
 
 
 ## Common causes
@@ -159,7 +154,6 @@ max_connections = 200
 
 > **Note:** Increasing max_connections may require more shared memory. You may also need to
 > adjust `shared_buffers` and other memory settings.
->
 
 
 **4. Review and update SSL certificates**

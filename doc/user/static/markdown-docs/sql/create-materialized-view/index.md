@@ -1,9 +1,5 @@
 # CREATE MATERIALIZED VIEW
-
 `CREATE MATERIALIZED VIEW` defines a view that is persisted in durable storage and incrementally updated as new data arrives.
-
-
-
 `CREATE MATERIALIZED VIEW` defines a view that maintains [fresh results](/concepts/reaction-time) by persisting them in durable storage and incrementally updating them as new data arrives.
 
 Materialized views are particularly useful when you need **cross-cluster access** to results or want to sink data to external systems like [Kafka](/sql/create-sink). When you create a materialized view, you specify a [cluster](/concepts/clusters/) responsible for maintaining it, but the results can be **queried from any cluster**. This allows you to separate the compute resources used for view maintenance from those used for serving queries.
@@ -61,34 +57,34 @@ the view results in durable storage and can be accessed across clusters, indexes
 on views compute and store view results in memory within a <strong>single</strong> cluster.
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 
 ### Indexes
@@ -134,8 +130,6 @@ However, in some very specific scenarios like reporting over slow changing histo
 For these cases, Materialize supports refresh strategies, which allow you to configure a materialized view to recompute itself on a fixed schedule rather than maintaining them incrementally.
 
 > **Note:** The use of refresh strategies is discouraged unless you have a clear and measurable need to reduce maintenance costs on stale or archival data. For most use cases, the default incremental maintenance model provides a better experience.
->
->
 
 
 
@@ -373,13 +367,10 @@ non-indexed, and so on."
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster.</li>
-<li><code>USAGE</code> privileges on all types used in the materialized view definition.</li>
-<li><code>USAGE</code> privileges on the schemas for the types used in the statement.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the materialized view definition.
+- `USAGE` privileges on the schemas for the types used in the statement.
 
 ## Additional information
 

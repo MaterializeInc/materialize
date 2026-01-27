@@ -1,9 +1,5 @@
 # SHOW NETWORK POLICIES (Cloud)
-
 `SHOW NETWORK POLICIES` returns a list of all network policies configured in Materialize.
-
-
-
 *Available for Materialize Cloud only*
 
 `SHOW NETWORK POLICIES` returns a list of all network policies configured in
@@ -30,7 +26,6 @@ will be pre-installed. This policy has a wide open ingress rule `allow
 > Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 > Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 > change the default value.
->
 
 
 ## Examples

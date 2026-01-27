@@ -1,9 +1,5 @@
 # Alerting
-
 Alerting thresholds to use for monitoring.
-
-
-
 After setting up a monitoring tool, it is important to configure alert rules. Alert rules send a notification when a metric surpasses a threshold. This will help you prevent operational incidents.
 
 This page describes which metrics and thresholds to build as a starting point. For more details on how to set up alert rules in Datadog or Grafana, refer to:
@@ -27,7 +23,6 @@ Cluster status | - | On Change | Cluster replica status change in the last *1 mi
 Freshness | > 5s | > 1m | Average [lag behind an input](/sql/system-catalog/mz_internal/#mz_materialization_lag) in the last *15 minutes*.
 
 > **Note:** Customers on legacy cluster sizes should still monitor their Memory usage. Please [contact support](/support/) for questions.
->
 
 
 ### Custom Thresholds

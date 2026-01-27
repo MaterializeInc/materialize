@@ -1,9 +1,5 @@
 # EXPLAIN PLAN
-
 Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views.
-
-
-
 `EXPLAIN PLAN` displays the plans used for:
 
 |                             |                       |
@@ -13,7 +9,6 @@ Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans o
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -141,8 +136,8 @@ Plan Stage | Description
 **RAW PLAN** | Display the raw plan; this is closest to the original SQL.
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
-**OPTIMIZED PLAN** | Display the optimized plan.
-**PHYSICAL PLAN** | _(Default)_ Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+**OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
 
 ### Output modifiers
 
@@ -291,7 +286,7 @@ Many operators need to refer to columns in their input. These are displayed like
 `#3` for column number 3. (Columns are numbered starting from column 0). To get a better sense of
 columns assigned to `Map` operators, it might be useful to request [the `arity` output modifier](#output-modifiers).
 
-Each operator can also be annotated with additional metadata. Some details are shown in the default `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
+Each operator can also be annotated with additional metadata. Some details are shown in the `EXPLAIN` output (`EXPLAIN PHYSICAL PLAN AS TEXT`), but are hidden elsewhere. <a
 name="explain-with-join-implementations"></a>In `EXPLAIN OPTIMIZED
 PLAN`, details about the implementation in the `Join` operator can be requested
 with [the `join implementations` output modifier](#output-modifiers) (that is,
@@ -357,1047 +352,85 @@ actually run).
 
 
 
-**In fully optimized physical (LIR) plans:**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+**In fully optimized physical (LIR) plans (Default):**
 The following table lists the operators that are available in the LIR plan.
 
-<ul>
-<li>For those operators that require memory to maintain intermediate state,
-<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
-<li>For those operators that expand the data size (either rows or columns),
-<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
-</ul>
-
-<table>
-<thead>
-<tr>
-<th>Operator</th>
-<th>Description</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><strong>Constant</strong></td>
-<td>
-    Always produces the same collection of rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>→Constant (2 rows)</code></td>
-</tr>
-
-<tr>
-<td><strong>Stream, Arranged, Index Lookup, Read</strong></td>
-<td>
-    <p>Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
-CTE in the same plan.
-A parent <code>Fused Map/Filter/Project</code> operator can combine with this operator.</p>
-<p>There are four types of <code>Get</code>.</p>
-<ol>
-<li>
-<p><code>Stream</code> indicates that the results are not <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory
-and will be streamed directly.</p>
-</li>
-<li>
-<p><code>Arranged</code> indicates that the results are <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory.</p>
-</li>
-<li>
-<p><code>Index Lookup</code> indicates the results will be
-<em>looked up</em> in an existing [arrangement]((/get-started/arrangements/#arrangements).</p>
-</li>
-<li>
-<p><code>Read</code> indicates that the results are unarranged,
-and will be processed as they arrive.</p>
-</li>
-</ol>
-<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Arranged materialize.public.t</code></td>
-</tr>
-
-<tr>
-<td><strong>Map/Filter/Project</strong></td>
-<td>
-    <p>Computes new columns (maps), filters columns, and projects away columns. Works row-by-row.
-Maps and filters will be printed, but projects will not.</p>
-<p>These may be marked as <strong><code>Fused</code></strong> <code>Map/Filter/Project</code>, which means they will combine with the operator beneath them to run more efficiently.</p>
-<br/><br />
-    <strong>Can increase data size:</strong>  Each row may have more data, from the <code>Map</code>.
-Each row may also have less data, from the <code>Project</code>.
-There may be fewer rows, from the <code>Filter</code>.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">&lt;</span> <span class="mf">7</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Map</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">+</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">})</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Table Function</strong></td>
-<td>
-    <p>Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.</p>
-<p>A parent <code>Fused Table Function unnest_list</code> operator will fuse with its child <code>GroupAggregate</code> operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.</p>
-<p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>
-<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the <a href="/sql/functions/#table-functions" >table function</a> used.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Table</span> <span class="k">Function</span> <span class="n">generate_series</span><span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">},</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">},</span> <span class="mf">1</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Input</span> <span class="k">key</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">})</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Differential Join, Delta Join</strong></td>
-<td>
-    <p>Both join operators indicate the join ordering selected.</p>
-<p>Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.</p>
-<p>Joins will indicate the join order of their children, starting from 0.
-For example, <code>Differential Join %1 » %0</code> will join its second child into its first.</p>
-<p>The <a href="/transform-data/optimization/#join" >two joins differ in performance characteristics</a>.</p>
-<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the join order and facts about the joined collections.
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory for 3-way or more differential joins.
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Differential</span> <span class="k">Join</span> <span class="o">%</span><span class="mf">1</span> <span class="err">»</span> <span class="o">%</span><span class="mf">0</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Join</span> <span class="n">stage</span> <span class="o">%</span><span class="mf">0</span><span class="p">:</span> <span class="n">Lookup</span> <span class="k">key</span> <span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="k">in</span> <span class="o">%</span><span class="mf">0</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>GroupAggregate</strong></td>
-<td>
-    <p>Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.</p>
-<p>There are five types of <code>GroupAggregate</code>, ordered by increasing complexity:</p>
-<ol>
-<li>
-<p><code>Distinct GroupAggregate</code> corresponds to the SQL <code>DISTINCT</code> operator.</p>
-</li>
-<li>
-<p><code>Accumulable GroupAggregate</code> (e.g., <code>SUM</code>, <code>COUNT</code>) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.</p>
-</li>
-<li>
-<p><code>Hierarchical GroupAggregate</code> (e.g., <code>MIN</code>, <code>MAX</code>) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" >see <code>mz_introspection.mz_expected_group_size_advice</code></a>.
-These may either be bucketed or monotonic (more efficient).
-These may consolidate their output, which will increase memory usage.</p>
-</li>
-<li>
-<p><code>Collated Multi-GroupAggregate</code> corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.</p>
-</li>
-<li>
-<p><code>Non-incremental GroupAggregate</code> (e.g., window functions, <code>list_agg</code>) corresponds to a single non-incremental aggregation.
-These are the most computationally intensive reductions.</p>
-</li>
-</ol>
-<p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>
-<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>Distinct</code> and <code>Accumulable</code> aggregates use a moderate amount of memory (proportional to twice the output size).
-<code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-<code>Non-incremental</code> aggregates use memory proportional to the input + output size.
-<code>Collated</code> aggregates use memory that is the sum of their constituents, plus some memory for the join at the end.
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Accumulable</span> <span class="n">GroupAggregate</span>
-</span></span><span class="line"><span class="cl">  <span class="n">Simple</span> <span class="n">aggregates</span><span class="p">:</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">  <span class="n">Post</span><span class="o">-</span><span class="n">process</span> <span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span>
-</span></span><span class="line"><span class="cl">    <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span> <span class="o">&gt;</span> <span class="mf">1</span><span class="p">)</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>TopK</strong></td>
-<td>
-    <p>Groups the input rows, sorts them according to some ordering, and returns at most <code>K</code> rows at some offset from the top of the list, where <code>K</code> is some (possibly computed) limit.</p>
-<p>There are three types of <code>TopK</code>. Two are special cased for monotonic inputs (i.e., inputs which never retract data).</p>
-<ol>
-<li><code>Monotonic Top1</code>.</li>
-<li><code>Monotonic TopK</code>, which may give an expression indicating the limit.</li>
-<li><code>Non-monotonic TopK</code>, a generic <code>TopK</code> plan.</li>
-</ol>
-<p>Each version of the <code>TopK</code> operator may include grouping, ordering, and limit directives.</p>
-<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>Monotonic Top1</code> and <code>Monotonic TopK</code> use a moderate amount of memory. <code>Non-monotonic TopK</code> uses significantly more memory as the operator can significantly overestimate
-the group sizes. Consult
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Consolidating</span> <span class="n">Monotonic</span> <span class="n">TopK</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Order</span> <span class="k">By</span> <span class="o">#</span><span class="mf">1</span> <span class="k">asc</span> <span class="n">nulls_last</span><span class="p">,</span> <span class="o">#</span><span class="mf">0</span> <span class="k">desc</span> <span class="n">nulls_first</span>
-</span></span><span class="line"><span class="cl">  <span class="k">Limit</span> <span class="mf">5</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Negate Diffs</strong></td>
-<td>
-    Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>→Negate Diffs</code></td>
-</tr>
-
-<tr>
-<td><strong>Threshold Diffs</strong></td>
-<td>
-    Removes any rows with negative counts.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input and output size, twice.
-
-</td>
-<td><code>→Threshold Diffs</code></td>
-</tr>
-
-<tr>
-<td><strong>Union</strong></td>
-<td>
-    Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ A <code>Consolidating Union</code> will make moderate use of memory, particularly at hydration time. A <code>Union</code> that is not <code>Consolidating</code> will not consume memory.
-
-</td>
-<td><code>→Consolidating Union</code></td>
-</tr>
-
-<tr>
-<td><strong>Arrange</strong></td>
-<td>
-    Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine, i.e., it will consume memory to cache results.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input size. Note that in the LIR / physical plan, <code>Arrange</code>/<code>ArrangeBy</code> almost always means that an arrangement will actually be created. (This is in contrast to the &ldquo;optimized&rdquo; plan, where an <code>ArrangeBy</code> being present in the plan often does not mean that an arrangement will actually be created.)
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Arrange</span>
-</span></span><span class="line"><span class="cl">    <span class="k">Keys</span><span class="p">:</span> <span class="mf">1</span> <span class="k">arrangement</span> <span class="n">available</span><span class="p">,</span> <span class="n">plus</span> <span class="k">raw</span> <span class="n">stream</span>
-</span></span><span class="line"><span class="cl">      <span class="k">Arrangement</span> <span class="mf">0</span><span class="p">:</span> <span class="o">#</span><span class="mf">0</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Unarranged Raw Stream</strong></td>
-<td>
-    Indicates a point where data will be streamed (even if it is somehow already arranged).<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>→Unarranged Raw Stream</code></td>
-</tr>
-
-<tr>
-<td><strong>With ... Return ...</strong></td>
-<td>
-    Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><a href="#reading-plans" >See above</a></td>
-</tr>
-
-</tbody>
-</table>
-
-<span class="caption">
-<ul >
-<li><strong>Can increase data size:</strong> Specifies whether the operator can
-increase the data size (can be the number of rows or the number of columns).
-</li>
-<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
-maintain state for its inputs.</li>
-</ul>
-</span>
-
-
-
-
-**In decorrelated and optimized plans (default EXPLAIN):**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <code>→Constant (2 rows)</code> |
+| **Stream, Arranged, Index Lookup, Read** | <p>Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan. A parent <code>Fused Map/Filter/Project</code> operator can combine with this operator.</p> <p>There are four types of <code>Get</code>.</p> <ol> <li> <p><code>Stream</code> indicates that the results are not <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory and will be streamed directly.</p> </li> <li> <p><code>Arranged</code> indicates that the results are <a href="/get-started/arrangements/#arrangements" >arranged</a> in memory.</p> </li> <li> <p><code>Index Lookup</code> indicates the results will be <em>looked up</em> in an existing [arrangement]((/get-started/arrangements/#arrangements).</p> </li> <li> <p><code>Read</code> indicates that the results are unarranged, and will be processed as they arrive.</p> </li> </ol>   **Can increase data size:** No **Uses memory:** No | <code>Arranged materialize.public.t</code> |
+| **Map/Filter/Project** | <p>Computes new columns (maps), filters columns, and projects away columns. Works row-by-row. Maps and filters will be printed, but projects will not.</p> <p>These may be marked as <strong><code>Fused</code></strong> <code>Map/Filter/Project</code>, which means they will combine with the operator beneath them to run more efficiently.</p>   **Can increase data size:** Each row may have more data, from the <code>Map</code>. Each row may also have less data, from the <code>Project</code>. There may be fewer rows, from the <code>Filter</code>. **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span> </span></span><span class="line"><span class="cl">  <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">&lt;</span> <span class="mf">7</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="k">Map</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="o">+</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">})</span> </span></span></code></pre></div> |
+| **Table Function** | <p>Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.</p> <p>A parent <code>Fused Table Function unnest_list</code> operator will fuse with its child <code>GroupAggregate</code> operator. Fusing these operator is part of how we efficiently compile window functions from SQL to dataflows.</p> <p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>   **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="k">Table</span> <span class="k">Function</span> <span class="n">generate_series</span><span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">},</span> <span class="o">#</span><span class="mf">1</span><span class="p">{</span><span class="n">b</span><span class="p">},</span> <span class="mf">1</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="k">Input</span> <span class="k">key</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">})</span> </span></span></code></pre></div> |
+| **Differential Join, Delta Join** | <p>Both join operators indicate the join ordering selected.</p> <p>Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.</p> <p>Joins will indicate the join order of their children, starting from 0. For example, <code>Differential Join %1 » %0</code> will join its second child into its first.</p> <p>The <a href="/transform-data/optimization/#join" >two joins differ in performance characteristics</a>.</p>   **Can increase data size:** Depends on the join order and facts about the joined collections. **Uses memory:** ✅ Uses memory for 3-way or more differential joins. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Differential</span> <span class="k">Join</span> <span class="o">%</span><span class="mf">1</span> <span class="err">»</span> <span class="o">%</span><span class="mf">0</span> </span></span><span class="line"><span class="cl">  <span class="k">Join</span> <span class="n">stage</span> <span class="o">%</span><span class="mf">0</span><span class="p">:</span> <span class="n">Lookup</span> <span class="k">key</span> <span class="o">#</span><span class="mf">0</span><span class="p">{</span><span class="n">a</span><span class="p">}</span> <span class="k">in</span> <span class="o">%</span><span class="mf">0</span> </span></span></code></pre></div> |
+| **GroupAggregate** | <p>Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.</p> <p>There are five types of <code>GroupAggregate</code>, ordered by increasing complexity:</p> <ol> <li> <p><code>Distinct GroupAggregate</code> corresponds to the SQL <code>DISTINCT</code> operator.</p> </li> <li> <p><code>Accumulable GroupAggregate</code> (e.g., <code>SUM</code>, <code>COUNT</code>) corresponds to several easy to implement aggregations that can be executed simultaneously and efficiently.</p> </li> <li> <p><code>Hierarchical GroupAggregate</code> (e.g., <code>MIN</code>, <code>MAX</code>) corresponds to an aggregation requiring a tower of arrangements. These can be either monotonic (more efficient) or bucketed. These may benefit from a hint; <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" >see <code>mz_introspection.mz_expected_group_size_advice</code></a>. These may either be bucketed or monotonic (more efficient). These may consolidate their output, which will increase memory usage.</p> </li> <li> <p><code>Collated Multi-GroupAggregate</code> corresponds to an arbitrary mix of reductions of different types, which will be performed separately and then joined together.</p> </li> <li> <p><code>Non-incremental GroupAggregate</code> (e.g., window functions, <code>list_agg</code>) corresponds to a single non-incremental aggregation. These are the most computationally intensive reductions.</p> </li> </ol> <p>A parent <code>Fused Map/Filter/Project</code> can combine with this operator.</p>   **Can increase data size:** No **Uses memory:** ✅ <code>Distinct</code> and <code>Accumulable</code> aggregates use a moderate amount of memory (proportional to twice the output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. <code>Non-incremental</code> aggregates use memory proportional to the input + output size. <code>Collated</code> aggregates use memory that is the sum of their constituents, plus some memory for the join at the end. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Accumulable</span> <span class="n">GroupAggregate</span> </span></span><span class="line"><span class="cl">  <span class="n">Simple</span> <span class="n">aggregates</span><span class="p">:</span> <span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span> </span></span><span class="line"><span class="cl">  <span class="n">Post</span><span class="o">-</span><span class="n">process</span> <span class="k">Map</span><span class="o">/</span><span class="k">Filter</span><span class="o">/</span><span class="n">Project</span> </span></span><span class="line"><span class="cl">    <span class="k">Filter</span><span class="p">:</span> <span class="p">(</span><span class="o">#</span><span class="mf">0</span> <span class="o">&gt;</span> <span class="mf">1</span><span class="p">)</span> </span></span></code></pre></div> |
+| **TopK** | <p>Groups the input rows, sorts them according to some ordering, and returns at most <code>K</code> rows at some offset from the top of the list, where <code>K</code> is some (possibly computed) limit.</p> <p>There are three types of <code>TopK</code>. Two are special cased for monotonic inputs (i.e., inputs which never retract data).</p> <ol> <li><code>Monotonic Top1</code>.</li> <li><code>Monotonic TopK</code>, which may give an expression indicating the limit.</li> <li><code>Non-monotonic TopK</code>, a generic <code>TopK</code> plan.</li> </ol> <p>Each version of the <code>TopK</code> operator may include grouping, ordering, and limit directives.</p>   **Can increase data size:** No **Uses memory:** ✅ <code>Monotonic Top1</code> and <code>Monotonic TopK</code> use a moderate amount of memory. <code>Non-monotonic TopK</code> uses significantly more memory as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Consolidating</span> <span class="n">Monotonic</span> <span class="n">TopK</span> </span></span><span class="line"><span class="cl">  <span class="k">Order</span> <span class="k">By</span> <span class="o">#</span><span class="mf">1</span> <span class="k">asc</span> <span class="n">nulls_last</span><span class="p">,</span> <span class="o">#</span><span class="mf">0</span> <span class="k">desc</span> <span class="n">nulls_first</span> </span></span><span class="line"><span class="cl">  <span class="k">Limit</span> <span class="mf">5</span> </span></span></code></pre></div> |
+| **Negate Diffs** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>→Negate Diffs</code> |
+| **Threshold Diffs** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>→Threshold Diffs</code> |
+| **Union** | Combines its inputs into a unified output, emitting one row for each row on any input. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ A <code>Consolidating Union</code> will make moderate use of memory, particularly at hydration time. A <code>Union</code> that is not <code>Consolidating</code> will not consume memory. | <code>→Consolidating Union</code> |
+| **Arrange** | Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine, i.e., it will consume memory to cache results.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input size. Note that in the LIR / physical plan, <code>Arrange</code>/<code>ArrangeBy</code> almost always means that an arrangement will actually be created. (This is in contrast to the &ldquo;optimized&rdquo; plan, where an <code>ArrangeBy</code> being present in the plan often does not mean that an arrangement will actually be created.) | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="err">→</span><span class="n">Arrange</span> </span></span><span class="line"><span class="cl">    <span class="k">Keys</span><span class="p">:</span> <span class="mf">1</span> <span class="k">arrangement</span> <span class="n">available</span><span class="p">,</span> <span class="n">plus</span> <span class="k">raw</span> <span class="n">stream</span> </span></span><span class="line"><span class="cl">      <span class="k">Arrangement</span> <span class="mf">0</span><span class="p">:</span> <span class="o">#</span><span class="mf">0</span> </span></span></code></pre></div> |
+| **Unarranged Raw Stream** | Indicates a point where data will be streamed (even if it is somehow already arranged).  **Can increase data size:** No **Uses memory:** No | <code>→Unarranged Raw Stream</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
+
+
+**In decorrelated and optimized plans:**
 The following table lists the operators that are available in the optimized plan.
 
-<ul>
-<li>For those operators that require memory to maintain intermediate state,
-<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
-<li>For those operators that expand the data size (either rows or columns),
-<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
-</ul>
-
-<table>
-<thead>
-<tr>
-<th>Operator</th>
-<th>Description</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><strong>Constant</strong></td>
-<td>
-    Always produces the same collection of rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Get</strong></td>
-<td>
-    Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
-CTE in the same plan.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Get materialize.public.ordered</code></td>
-</tr>
-
-<tr>
-<td><strong>Project</strong></td>
-<td>
-    Produces a subset of the <a href="#explain-plan-columns" >columns</a> in the input
-rows. See also <a href="#explain-plan-columns" >column numbering</a>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Project (#2, #3)</code></td>
-</tr>
-
-<tr>
-<td><strong>Map</strong></td>
-<td>
-    Appends the results of some scalar expressions to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Each row has more data (i.e., longer rows but same number of rows).
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code></td>
-</tr>
-
-<tr>
-<td><strong>FlatMap</strong></td>
-<td>
-    Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the <a href="/sql/functions/#table-functions" >table function</a> used.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>FlatMap jsonb_foreach(#3)</code></td>
-</tr>
-
-<tr>
-<td><strong>Filter</strong></td>
-<td>
-    Removes rows of the input for which some scalar predicates return <code>false</code>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Filter (#20 &lt; #21)</code></td>
-</tr>
-
-<tr>
-<td><strong>Join</strong></td>
-<td>
-    Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the join order and facts about the joined collections.
-    <br />
-    <strong>Uses memory:</strong>  ✅ The <code>Join</code> operator itself uses memory only for <code>type=differential</code> with more than 2 inputs.
-However, <code>Join</code> operators need <a href="/get-started/arrangements/#arrangements" >arrangements</a> on their inputs (shown by the <code>ArrangeBy</code> operator).
-These arrangements use memory proportional to the input sizes. If an input has an <a href="/transform-data/optimization/#join" >appropriate index</a>, then the arrangement of the index will be reused.
-
-</td>
-<td><code>Join on=(#1 = #2) type=delta</code></td>
-</tr>
-
-<tr>
-<td><strong>CrossJoin</strong></td>
-<td>
-    An alias for a <code>Join</code> with an empty predicate (emits all combinations). Note that not all cross joins are marked
-as <code>CrossJoin</code>: In a join with more than 2 inputs, it can happen that there is a cross join between some of the inputs.
-You can recognize this case by <code>ArrangeBy</code> operators having empty keys, i.e., <code>ArrangeBy keys=[[]]</code>.<br/><br />
-    <strong>Can increase data size:</strong>  Cartesian product of the inputs (|N| x |M|).
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory for 3-way or more differential joins.
-
-</td>
-<td><code>CrossJoin type=differential</code></td>
-</tr>
-
-<tr>
-<td><strong>Reduce</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
-<code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code></td>
-</tr>
-
-<tr>
-<td><strong>Distinct</strong></td>
-<td>
-    Alias for a <code>Reduce</code> with an empty aggregate list.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to twice the output size.
-
-</td>
-<td><code>Distinct</code></td>
-</tr>
-
-<tr>
-<td><strong>TopK</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Can use significant amount as the operator can significantly overestimate
-the group sizes. Consult
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code></td>
-</tr>
-
-<tr>
-<td><strong>Negate</strong></td>
-<td>
-    Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Negate</code></td>
-</tr>
-
-<tr>
-<td><strong>Threshold</strong></td>
-<td>
-    Removes any rows with negative counts.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input and output size, twice.
-
-</td>
-<td><code>Threshold</code></td>
-</tr>
-
-<tr>
-<td><strong>Union</strong></td>
-<td>
-    Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time.
-
-</td>
-<td><code>Union</code></td>
-</tr>
-
-<tr>
-<td><strong>ArrangeBy</strong></td>
-<td>
-    Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine (each <code>keys</code> element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Depends. If arrangements need to be created, they use memory proportional to the input size.
-
-</td>
-<td><code>ArrangeBy keys=[[#0]]</code></td>
-</tr>
-
-<tr>
-<td><strong>With ... Return ...</strong></td>
-<td>
-    Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><a href="#reading-plans" >See above</a></td>
-</tr>
-
-</tbody>
-</table>
-
-<span class="caption">
-<ul >
-<li><strong>Can increase data size:</strong> Specifies whether the operator can
-increase the data size (can be the number of rows or the number of columns).
-</li>
-<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
-maintain state for its inputs.</li>
-</ul>
-</span>
-
-
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span> </span></span></code></pre></div> |
+| **Get** | Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan.  **Can increase data size:** No **Uses memory:** No | <code>Get materialize.public.ordered</code> |
+| **Project** | Produces a subset of the <a href="/sql/explain-plan/#explain-plan-columns" >columns</a> in the input rows. See also <a href="/sql/explain-plan/#explain-plan-columns" >column numbering</a>.  **Can increase data size:** No **Uses memory:** No | <code>Project (#2, #3)</code> |
+| **Map** | Appends the results of some scalar expressions to each row in the input.  **Can increase data size:** Each row has more data (i.e., longer rows but same number of rows). **Uses memory:** No | <code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code> |
+| **FlatMap** | Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.  **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <code>FlatMap jsonb_foreach(#3)</code> |
+| **Filter** | Removes rows of the input for which some scalar predicates return <code>false</code>.  **Can increase data size:** No **Uses memory:** No | <code>Filter (#20 &lt; #21)</code> |
+| **Join** | Returns combinations of rows from each input whenever some equality predicates are <code>true</code>.  **Can increase data size:** Depends on the join order and facts about the joined collections. **Uses memory:** ✅ The <code>Join</code> operator itself uses memory only for <code>type=differential</code> with more than 2 inputs. However, <code>Join</code> operators need <a href="/get-started/arrangements/#arrangements" >arrangements</a> on their inputs (shown by the <code>ArrangeBy</code> operator). These arrangements use memory proportional to the input sizes. If an input has an <a href="/transform-data/optimization/#join" >appropriate index</a>, then the arrangement of the index will be reused. | <code>Join on=(#1 = #2) type=delta</code> |
+| **CrossJoin** | An alias for a <code>Join</code> with an empty predicate (emits all combinations). Note that not all cross joins are marked as <code>CrossJoin</code>: In a join with more than 2 inputs, it can happen that there is a cross join between some of the inputs. You can recognize this case by <code>ArrangeBy</code> operators having empty keys, i.e., <code>ArrangeBy keys=[[]]</code>.  **Can increase data size:** Cartesian product of the inputs (\|N\| x \|M\|). **Uses memory:** ✅ Uses memory for 3-way or more differential joins. | <code>CrossJoin type=differential</code> |
+| **Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.  **Can increase data size:** No **Uses memory:** ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code> |
+| **Distinct** | Alias for a <code>Reduce</code> with an empty aggregate list.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to twice the output size. | <code>Distinct</code> |
+| **TopK** | Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.  **Can increase data size:** No **Uses memory:** ✅ Can use significant amount as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code> |
+| **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>Negate</code> |
+| **Threshold** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>Threshold</code> |
+| **Union** | Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time. | <code>Union</code> |
+| **ArrangeBy** | Indicates a point that will become an <a href="/get-started/arrangements/#arrangements" >arrangement</a> in the dataflow engine (each <code>keys</code> element will be a different arrangement). Note that if an appropriate index already exists on the input or the output of the previous operator is already arranged with a key that is also requested here, then this operator will just pass on that existing arrangement instead of creating a new one.  **Can increase data size:** No **Uses memory:** ✅ Depends. If arrangements need to be created, they use memory proportional to the input size. | <code>ArrangeBy keys=[[#0]]</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
 
 
 **In raw plans:**
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 The following table lists the operators that are available in the raw plan.
 
-<ul>
-<li>For those operators that require memory to maintain intermediate state,
-<strong>Uses memory</strong> is marked with <strong>Yes</strong>. </li>
-<li>For those operators that expand the data size (either rows or columns),
-<strong>Can increase data size</strong> is marked with <strong>Yes</strong>. </li>
-</ul>
-
-<table>
-<thead>
-<tr>
-<th>Operator</th>
-<th>Description</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><strong>Constant</strong></td>
-<td>
-    Always produces the same collection of rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span>
-</span></span></code></pre></div></td>
-</tr>
-
-<tr>
-<td><strong>Get</strong></td>
-<td>
-    Produces rows from either an existing relation (source/view/materialized view/table) or from a previous
-CTE in the same plan.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Get materialize.public.ordered</code></td>
-</tr>
-
-<tr>
-<td><strong>Project</strong></td>
-<td>
-    Produces a subset of the <a href="#explain-plan-columns" >columns</a> in the input
-rows. See also <a href="#explain-plan-columns" >column numbering</a>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Project (#2, #3)</code></td>
-</tr>
-
-<tr>
-<td><strong>Map</strong></td>
-<td>
-    Appends the results of some scalar expressions to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Each row has more data (i.e., longer rows but same number of rows).
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code></td>
-</tr>
-
-<tr>
-<td><strong>CallTable</strong></td>
-<td>
-    Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.<br/><br />
-    <strong>Can increase data size:</strong>  Depends on the <a href="/sql/functions/#table-functions" >table function</a> used.
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>CallTable generate_series(1, 7, 1)</code></td>
-</tr>
-
-<tr>
-<td><strong>Filter</strong></td>
-<td>
-    Removes rows of the input for which some scalar predicates return <code>false</code>.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Filter (#20 &lt; #21)</code></td>
-</tr>
-
-<tr>
-<td><strong>~Join</strong></td>
-<td>
-    Performs one of <code>INNER</code> / <code>LEFT</code> / <code>RIGHT</code> / <code>FULL OUTER</code> / <code>CROSS</code> join on the two inputs, using the given predicate.<br/><br />
-    <strong>Can increase data size:</strong>  For <code>CrossJoin</code>s, Cartesian product of the inputs (|N| x |M|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition.
-For other join types, depends on the join order and facts about the joined collections.
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input sizes, unless <a href="/transform-data/optimization/#join" >the inputs have appropriate indexes</a>. Certain joins with more than 2 inputs use additional memory, see details in the optimized plan.
-
-</td>
-<td><code>InnerJoin (#0 = #2)</code></td>
-</tr>
-
-<tr>
-<td><strong>Reduce</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, reduces each group using
-some aggregate functions, and produces rows containing the group key and
-aggregate outputs.  In the case where the group key is empty and the input
-is empty, returns a single row with the aggregate functions applied to the
-empty input collection.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size).
-<code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code></td>
-</tr>
-
-<tr>
-<td><strong>Distinct</strong></td>
-<td>
-    Removes duplicate copies of input rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to twice the output size.
-
-</td>
-<td><code>Distinct</code></td>
-</tr>
-
-<tr>
-<td><strong>TopK</strong></td>
-<td>
-    Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Can use significant amount as the operator can significantly overestimate
-the group sizes. Consult
-<a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>.
-
-</td>
-<td><code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code></td>
-</tr>
-
-<tr>
-<td><strong>Negate</strong></td>
-<td>
-    Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><code>Negate</code></td>
-</tr>
-
-<tr>
-<td><strong>Threshold</strong></td>
-<td>
-    Removes any rows with negative counts.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Uses memory proportional to the input and output size, twice.
-
-</td>
-<td><code>Threshold</code></td>
-</tr>
-
-<tr>
-<td><strong>Union</strong></td>
-<td>
-    Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong>  ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time.
-
-</td>
-<td><code>Union</code></td>
-</tr>
-
-<tr>
-<td><strong>With ... Return ...</strong></td>
-<td>
-    Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.<br/><br />
-    <strong>Can increase data size:</strong> No
-    <br />
-    <strong>Uses memory:</strong> No
-
-</td>
-<td><a href="#reading-plans" >See above</a></td>
-</tr>
-
-</tbody>
-</table>
-
-<span class="caption">
-<ul >
-<li><strong>Can increase data size:</strong> Specifies whether the operator can
-increase the data size (can be the number of rows or the number of columns).
-</li>
-<li><strong>Uses memory:</strong> Specifies whether the operator use memory to
-maintain state for its inputs.</li>
-</ul>
-</span>
+- For those operators that require memory to maintain intermediate state, **Uses memory** is marked with **Yes**.
+- For those operators that expand the data size (either rows or columns), **Can increase data size** is marked with **Yes**.| Operator | Description | Example |
+| --- | --- | --- |
+| **Constant** | Always produces the same collection of rows.  **Can increase data size:** No **Uses memory:** No | <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="n">Constant</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">((</span><span class="mf">1</span><span class="p">,</span> <span class="mf">2</span><span class="p">)</span> <span class="n">x</span> <span class="mf">2</span><span class="p">)</span> </span></span><span class="line"><span class="cl"><span class="o">-</span> <span class="p">(</span><span class="mf">3</span><span class="p">,</span> <span class="mf">4</span><span class="p">)</span> </span></span></code></pre></div> |
+| **Get** | Produces rows from either an existing relation (source/view/materialized view/table) or from a previous CTE in the same plan.  **Can increase data size:** No **Uses memory:** No | <code>Get materialize.public.ordered</code> |
+| **Project** | Produces a subset of the <a href="/sql/explain-plan/#explain-plan-columns" >columns</a> in the input rows. See also <a href="/sql/explain-plan/#explain-plan-columns" >column numbering</a>.  **Can increase data size:** No **Uses memory:** No | <code>Project (#2, #3)</code> |
+| **Map** | Appends the results of some scalar expressions to each row in the input.  **Can increase data size:** Each row has more data (i.e., longer rows but same number of rows). **Uses memory:** No | <code>Map (((#1 * 10000000dec) / #2) * 1000dec)</code> |
+| **CallTable** | Appends the result of some (one-to-many) <a href="/sql/functions/#table-functions" >table function</a> to each row in the input.  **Can increase data size:** Depends on the <a href="/sql/functions/#table-functions" >table function</a> used. **Uses memory:** No | <code>CallTable generate_series(1, 7, 1)</code> |
+| **Filter** | Removes rows of the input for which some scalar predicates return <code>false</code>.  **Can increase data size:** No **Uses memory:** No | <code>Filter (#20 &lt; #21)</code> |
+| **~Join** | Performs one of <code>INNER</code> / <code>LEFT</code> / <code>RIGHT</code> / <code>FULL OUTER</code> / <code>CROSS</code> join on the two inputs, using the given predicate.  **Can increase data size:** For <code>CrossJoin</code>s, Cartesian product of the inputs (\|N\| x \|M\|). Note that, in many cases, a join that shows up as a cross join in the RAW PLAN will actually be turned into an inner join in the OPTIMIZED PLAN, by making use of an equality WHERE condition. For other join types, depends on the join order and facts about the joined collections. **Uses memory:** ✅ Uses memory proportional to the input sizes, unless <a href="/transform-data/optimization/#join" >the inputs have appropriate indexes</a>. Certain joins with more than 2 inputs use additional memory, see details in the optimized plan. | <code>InnerJoin (#0 = #2)</code> |
+| **Reduce** | Groups the input rows by some scalar expressions, reduces each group using some aggregate functions, and produces rows containing the group key and aggregate outputs.  In the case where the group key is empty and the input is empty, returns a single row with the aggregate functions applied to the empty input collection.  **Can increase data size:** No **Uses memory:** ✅ <code>SUM</code>, <code>COUNT</code>, and most other aggregations use a moderate amount of memory (proportional either to twice the output size or to input size + output size). <code>MIN</code> and <code>MAX</code> aggregates can use significantly more memory. This can be improved by including group size hints in the query, see <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>Reduce group_by=[#0] aggregates=[max((#0 * #1))]</code> |
+| **Distinct** | Removes duplicate copies of input rows.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to twice the output size. | <code>Distinct</code> |
+| **TopK** | Groups the input rows by some scalar expressions, sorts each group using the group key, removes the top <code>offset</code> rows in each group, and returns the next <code>limit</code> rows.  **Can increase data size:** No **Uses memory:** ✅ Can use significant amount as the operator can significantly overestimate the group sizes. Consult <a href="/sql/system-catalog/mz_introspection/#mz_expected_group_size_advice" ><code>mz_introspection.mz_expected_group_size_advice</code></a>. | <code>TopK order_by=[#1 asc nulls_last, #0 desc nulls_first] limit=5</code> |
+| **Negate** | Negates the row counts of the input. This is usually used in combination with union to remove rows from the other union input.  **Can increase data size:** No **Uses memory:** No | <code>Negate</code> |
+| **Threshold** | Removes any rows with negative counts.  **Can increase data size:** No **Uses memory:** ✅ Uses memory proportional to the input and output size, twice. | <code>Threshold</code> |
+| **Union** | Sums the counts of each row of all inputs. (Corresponds to <code>UNION ALL</code> rather than <code>UNION</code>/<code>UNION DISTINCT</code>.)  **Can increase data size:** No **Uses memory:** ✅ Moderate use of memory. Some union operators force consolidation, which results in a memory spike, largely at hydration time. | <code>Union</code> |
+| **With ... Return ...** | Introduces CTEs, i.e., makes it possible for sub-plans to be consumed multiple times by downstream operators.  **Can increase data size:** No **Uses memory:** No | <a href="/sql/explain-plan/#reading-plans" >See Reading plans</a> |
+**Notes:**
+- **Can increase data size:** Specifies whether the operator can increase the data size (can be the number of rows or the number of columns).
+- **Uses memory:** Specifies whether the operator use memory to maintain state for its inputs.
 
 
 
 
-
-
-Operators are sometimes marked as `Fused ...`. We write this to mean that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
+Operators are sometimes marked as `Fused ...`. This indicates that the operator is fused with its input, i.e., the operator below it. That is, if you see a `Fused X` operator above a `Y` operator:
 
 ```
 →Fused X
@@ -1552,7 +585,5 @@ The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement will let you debug memo
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the explainee are
-contained in.</li>
-</ul>
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.

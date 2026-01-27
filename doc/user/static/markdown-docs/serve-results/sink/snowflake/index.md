@@ -1,9 +1,5 @@
 # Snowflake
-
 How to export results from Materialize to Snowflake.
-
-
-
 [//]: # "TODO(morsapaes) For Kafka users, it's possible to sink data to
 Snowflake continuously using the Snowflake connector for Kafka. We should also
 document that approach."
@@ -131,7 +127,6 @@ Next, you must attach the policy you just created to a Snowflake-specific
 > **Note:** Only users with either the [`ACCOUNTADMIN` role](https://docs.snowflake.com/en/user-guide/security-access-control-considerations#using-the-accountadmin-role),
 > or a role with the [global `CREATE INTEGRATION` privilege](https://docs.snowflake.com/en/user-guide/security-access-control-privileges#global-privileges-account-level-privileges)
 > can execute this step.
->
 
 
 1. In [Snowsight](https://app.snowflake.com/), or your preferred SQL client
@@ -181,7 +176,6 @@ CREATE STAGE s3_stage
 > role with the [`CREATE STAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/create-stage)
 > for the active schema, as well as the [`USAGE` privilege](https://docs.snowflake.com/en/sql-reference/sql/grant-privilege#syntax)
 > on the relevant storage integration.
->
 
 
 ## Step 4. Import data into Snowflake

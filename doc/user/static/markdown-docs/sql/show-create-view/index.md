@@ -1,9 +1,5 @@
 # SHOW CREATE VIEW
-
 `SHOW CREATE VIEW` returns the `SELECT` statement used to create the view.
-
-
-
 `SHOW CREATE VIEW` returns the [`SELECT`](../select) statement used to create the view.
 
 ## Syntax
@@ -35,10 +31,7 @@ SHOW CREATE VIEW my_view;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the view.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the view.
 
 ## Related pages
 

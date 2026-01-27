@@ -1,9 +1,5 @@
 # Identifiers
-
 SQL identifiers are names of columns and database objects such as sources and views.
-
-
-
 In Materialize, identifiers are used to refer to columns and database objects
 like sources, views, and indexes.
 
@@ -20,7 +16,6 @@ To override these restrictions, you can enclose the identifier in double quotes;
 e.g., `"123_source"` or `"fun_source_@"`. Inside double quotes, characters are interpreted literally, except for the double-quote character itself. To include a double quote within a double-quoted identifier, escape it by writing two adjacent double quotes, as in "includes""quote".
 
 > **Note:** The identifiers `"."` and `".."` are not allowed.
->
 
 
 ## Case sensitivity

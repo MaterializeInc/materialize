@@ -1,9 +1,5 @@
 # CREATE SECRET
-
 `CREATE SECRET` securely stores credentials in Materialize's secret management system.
-
-
-
 A secret securely stores sensitive credentials (like passwords and SSL keys) in Materialize's secret management system. Optionally, a secret can also be used to store credentials that are generally not sensitive (like usernames and SSL certificates), so that all your credentials are managed uniformly.
 
 ## Syntax
@@ -32,10 +28,7 @@ CREATE SECRET kafka_ca_cert AS decode('c2VjcmV0Cg==', 'base64');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
 
 ## Related pages
 

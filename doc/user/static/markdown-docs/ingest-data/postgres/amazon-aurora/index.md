@@ -1,16 +1,10 @@
 # Ingest data from Amazon Aurora
-
 How to stream data from Amazon Aurora for PostgreSQL to Materialize
-
-
-
 This page shows you how to stream data from [Amazon Aurora for PostgreSQL](https://aws.amazon.com/rds/aurora/)
 to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -28,11 +22,8 @@ or your preferred SQL client.</p>
 
 > **Warning:** There is a known issue with Aurora PostgreSQL 16.1 that can cause logical replication to fail with the following error:
 > - `postgres: sql client error: db error: ERROR: could not map filenumber "base/16402/3147867235" to relation OID`
->
 > This is due to a bug in Aurora's implementation of logical replication in PostgreSQL 16.1, where the system fails to correctly fetch relation metadata from the catalogs. If you encounter these errors, you should upgrade your Aurora PostgreSQL instance to a newer minor version (16.2 or later).
->
 > For more information, see [this AWS discussion](https://repost.aws/questions/QU4RXUrLNQS_2oSwV34pmwww/error-could-not-map-filenumber-after-aurora-upgrade-to-16-1).
->
 
 
 ## A. Configure Amazon Aurora
@@ -48,7 +39,6 @@ To enable logical replication in Aurora, see the
 > **Note:** Aurora Serverless (v1) [does **not** support](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless.html#aurora-serverless.limitations)
 > logical replication, so it's not possible to use this service with
 > Materialize.
->
 
 
 ### 2. Create a publication and a replication user
@@ -116,7 +106,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your Aurora instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend configuring one of the
 > network security options below.
->
 
 
 
@@ -171,7 +160,6 @@ Aurora via the network load balancer.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
->
 
 
 1. Get the IP address of your Aurora instance.
@@ -266,7 +254,6 @@ network to allow traffic from the bastion host.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of resources for an SSH tunnel. For more details, see the
 > [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
->
 
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
@@ -359,7 +346,6 @@ network to allow traffic from the bastion host.
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of resources for an SSH tunnel. For more details, see the
 > [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-ec2-ssh-bastion).
->
 
 
 1. [Launch an EC2 instance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/LaunchingAndUsingInstances.html)
@@ -400,7 +386,6 @@ network to allow traffic from the bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 
@@ -444,9 +429,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -454,8 +437,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -489,9 +470,7 @@ use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
-AWS PrivateLink connection:
-
-   ```mzsql
+AWS PrivateLink connection:   ```mzsql
    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
@@ -512,8 +491,6 @@ AWS PrivateLink connection:
 
 
 1. Retrieve the AWS principal for the AWS PrivateLink connection you just created:
-
-
    ```mzsql
    SELECT principal
    FROM mz_aws_privatelink_connections plc
@@ -542,8 +519,6 @@ not move on to the next step until you've approved the connection.
 
 1. Validate the AWS PrivateLink connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION privatelink_svc;
 
@@ -553,8 +528,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -562,8 +535,6 @@ password for the `materialize` PostgreSQL user you created
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
 another connection object, this time with database access and authentication
 details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -589,9 +560,7 @@ details for Materialize to use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -608,8 +577,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT
        mz_connections.name,
@@ -625,8 +592,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -636,8 +601,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -647,8 +610,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -656,8 +617,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -1018,5 +977,4 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>

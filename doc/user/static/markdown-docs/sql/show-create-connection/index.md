@@ -1,9 +1,5 @@
 # SHOW CREATE CONNECTION
-
 `SHOW CREATE CONNECTION` returns the statement used to create the connection.
-
-
-
 `SHOW CREATE CONNECTION` returns the DDL statement used to create the connection.
 
 ## Syntax
@@ -36,10 +32,7 @@ SHOW CREATE CONNECTION kafka_connection;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the connection.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the connection.
 
 ## Related pages
 

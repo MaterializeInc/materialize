@@ -1,9 +1,5 @@
 # Materialize Operator Configuration
-
 Configuration reference for the Materialize Operator Helm chart
-
-
-
 ## Configure the Materialize operator
 
 To configure the Materialize operator, you can:

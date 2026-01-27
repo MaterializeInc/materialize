@@ -1,9 +1,5 @@
 # CREATE SOURCE: PostgreSQL (New Syntax)
-
 Creates a new source from PostgreSQL 11+.
-
-
-
 
 
 > **Disambiguation:** This page reflects the new syntax which allows Materialize to handle upstream DDL changes, specifically adding or dropping columns, without downtime. For the deprecated syntax, see the [old reference page](/sql/create-source/postgres/).
@@ -204,9 +200,6 @@ SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
 > unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>DROP SOURCE</code></a> or manually delete the replication slot.</p>
 > </li>
 > </ul>
->
->
->
 
 
 ## Examples

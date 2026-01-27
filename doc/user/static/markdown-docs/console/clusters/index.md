@@ -1,9 +1,5 @@
 # Clusters
-
 Manage the clusters from the Materialize console.
-
-
-
 The Materialize Console provides a
 **Clusters** section where you can manage your clusters.
 

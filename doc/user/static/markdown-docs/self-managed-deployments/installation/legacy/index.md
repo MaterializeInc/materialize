@@ -8,29 +8,28 @@ Install Self-Managed Materialize using legacy Terraform modules
 <h3 id="install-using-legacy-terraform-modules">Install using Legacy Terraform Modules</h3>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > installing Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-aws-legacy/" >Install on AWS (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-azure-legacy/" >Install on Azure (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/installation/legacy/install-on-gcp-legacy/" >Install on GCP (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -63,13 +62,8 @@ module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 When operating in AWS, we recommend the following instances:
@@ -124,19 +118,11 @@ documentation](https://helm.sh/docs/intro/install/).
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 > For simplicity, this tutorial stores various secrets in a file as well as prints
 > them to the terminal. In practice, refer to your organization's official
 > security and Terraform/infrastructure practices.
->
->
->
 
 
 
@@ -166,13 +152,10 @@ components:
 > requires minimal user input. For details on the `examples/simple/`
 > infrastructure configuration (such as the node instance type, etc.), see the
 > [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
->
 > For more configuration options, you can use the `main.tf` file at the [root of
 > the repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
 > instead. When running with the root `main.tf`, see [AWS required
 > configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-aws/).
->
->
 
 
 
@@ -232,13 +215,10 @@ components:
 >    requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
 >    instead. When running with the root `main.tf`, see [AWS required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-aws/).
->
->
 
 
 1. Create a `terraform.tfvars` file (you can copy from the
@@ -262,13 +242,10 @@ components:
 >    requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
 >    instead. When running with the root `main.tf`, see [AWS required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-aws/).
->
->
 
 
 1. Initialize the terraform directory.
@@ -444,10 +421,7 @@ components:
 
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated Terraform modules to your existing deployments.
->
->
 >    See [Materialize on AWS releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-aws-terraform-module) for notable changes.
->
 
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -628,9 +602,6 @@ components:
 >    Refer to the [Troubleshooting Console
 >    Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >    guide.
->
->
->
 
 
 ## Next steps
@@ -661,12 +632,9 @@ When prompted to proceed, type `yes` to confirm the deletion.
 >     `terraform destroy` command is unable to delete the S3 bucket and does not
 >     progress beyond "Still destroying...", empty the S3 bucket first and rerun
 >     the `terraform destroy` command.
->
 >   - Upon successful destroy, you may receive some informational messages with
 >     regards to CustomResourceDefinition(CRD). You may safely ignore these
 >     messages as your whole deployment has been destroyed, including the CRDs.
->
->
 
 
 ## See also
@@ -703,19 +671,11 @@ modules](https://github.com/MaterializeInc/terraform-azurerm-materialize) to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 > For simplicity, this tutorial stores various secrets in a file as well as prints
 > them to the terminal. In practice, refer to your organization's official
 > security and Terraform/infrastructure practices.
->
->
->
 
 
 ## Prerequisites
@@ -801,13 +761,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 
@@ -837,15 +792,11 @@ deploys a sample infrastructure on Azure with the following components:
 > which requires minimal user input. For details on the `examples/simple/`
 > infrastructure configuration (such as the node instance type, etc.), see the
 > [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
->
 > For more configuration options, you can run the `main.tf` file at the [root of
 > the
 > repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
 > instead. When running with the root `main.tf`, see [Azure required
 > configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-azure/).
->
->
->
 
 
 
@@ -903,15 +854,11 @@ deploys a sample infrastructure on Azure with the following components:
 >    which requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can run the `main.tf` file at the [root of
 >    the
 >    repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
 >    instead. When running with the root `main.tf`, see [Azure required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-azure/).
->
->
->
 
 
 
@@ -951,15 +898,11 @@ deploys a sample infrastructure on Azure with the following components:
 >    which requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-azurerm-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can run the `main.tf` file at the [root of
 >    the
 >    repository](https://github.com/MaterializeInc/terraform-azurerm-materialize/)
 >    instead. When running with the root `main.tf`, see [Azure required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-azure/).
->
->
->
 
 
 1. Initialize the terraform directory.
@@ -1130,10 +1073,7 @@ deploys a sample infrastructure on Azure with the following components:
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated
 >    Terraform modules to your existing deployments.
->
->
 >    See [Materialize on Azure releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-azure-terraform-module) for notable changes.
->
 
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -1308,9 +1248,6 @@ deploys a sample infrastructure on Azure with the following components:
 >    Refer to the [Troubleshooting Console
 >    Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >    guide.
->
->
->
 
 
 ## Next steps
@@ -1339,8 +1276,6 @@ When prompted to proceed, type `yes` to confirm the deletion.
 
   > **Tip:** If the `terraform destroy` command is unable to delete the subnet because it
 >   is in use, you can rerun the `terraform destroy` command.
->
->
 
 
 ## See also
@@ -1380,19 +1315,11 @@ module](https://github.com/MaterializeInc/terraform-google-materialize) to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 > For simplicity, this tutorial stores various secrets in a file as well as prints
 > them to the terminal. In practice, refer to your organization's official
 > security and Terraform/infrastructure practices.
->
->
->
 
 
 ## Prerequisites
@@ -1426,8 +1353,6 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 > **Tip:** Using `gcloud` to install `kubectl` will also install the needed plugins.
 > Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 > `kubectl`.
->
->
 
 
 - If you do not have `kubectl`, install `kubectl`.  To install, see [Install
@@ -1465,7 +1390,6 @@ If you want to use `jq` and do not have `jq` installed, install.
 
    > **Tip:** You do not need to configure a default Compute Region and Zone as you will
 >    specify the region.
->
 
 
 1. Enable the following services for your GCP project, if not already enabled:
@@ -1543,7 +1467,6 @@ If you want to use `jq` and do not have `jq` installed, install.
    ```
 
    > **Tip:** If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
->
 
 
 ## B. Set up GCP Kubernetes environment and install Materialize
@@ -1554,13 +1477,8 @@ If you want to use `jq` and do not have `jq` installed, install.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 
@@ -1590,13 +1508,10 @@ components:
 > requires minimal user input. For details on the  `examples/simple/`
 > infrastructure configuration (such as the node instance type, etc.), see the
 > [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
->
 > For more configuration options, you can use the `main.tf` file at the [root of
 > the repository](https://github.com/MaterializeInc/terraform-google-materialize/)
 > instead. When running with the root `main.tf`, see [GCP required
 > configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-gcp/).
->
->
 
 
 **Releases:**
@@ -1648,13 +1563,10 @@ components:
 >    requires minimal user input. For details on the  `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-google-materialize/)
 >    instead. When running with the root `main.tf`, see [GCP required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-gcp/).
->
->
 
 
 1. Create a `terraform.tfvars` file (you can copy from the
@@ -1676,14 +1588,10 @@ components:
 >    requires minimal user input. For details on the  `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-google-materialize/)
 >    instead. When running with the root `main.tf`, see [GCP required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-gcp/).
->
->
->
 
 
 1. Initialize the terraform directory.
@@ -1861,10 +1769,7 @@ components:
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated
 >    Terraform modules to your existing deployments.
->
->
 >    See [Materialize on GCP releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-gcp-terraform-module) for notable changes.
->
 
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -2045,9 +1950,6 @@ components:
 >    Refer to the [Troubleshooting Console
 >    Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >    guide.
->
->
->
 
 
 ## Next steps

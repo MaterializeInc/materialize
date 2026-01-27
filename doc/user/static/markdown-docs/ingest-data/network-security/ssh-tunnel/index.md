@@ -1,9 +1,5 @@
 # SSH tunnel connections
-
 How to connect Materialize to a Kafka broker, a MySQL database, or PostgreSQL database using an SSH tunnel connection to a SSH bastion server
-
-
-
 
 **Cloud:**
 Materialize can connect to a Kafka broker, a Confluent Schema Registry server, a

@@ -264,19 +264,19 @@ above: Materialize tears down the created dataflow after returning the results.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>
-<p><code>SELECT</code> privileges on all <strong>directly</strong> referenced relations in the query. If
-the directly referenced relation is a view or materialized view: </p>
-</li>
-<li>
-<p><code>USAGE</code> privileges on the schemas that contain the relations in the query.</p>
-</li>
-<li>
-<p><code>USAGE</code> privileges on the active cluster.</p>
-</li>
-</ul>
+- `SELECT` privileges on all **directly** referenced relations in the query. If
+  the directly referenced relation is a view or materialized view: - `SELECT` privileges are required only on the directly referenced
+  view/materialized view. `SELECT` privileges are **not** required for the
+  underlying relations referenced in the view/materialized view definition
+  unless those relations themselves are directly referenced in the query.
 
+- However, the owner of the view/materialized view (including those with
+  **superuser** privileges) must have all required `SELECT` and `USAGE`
+  privileges to run the view definition regardless of who is selecting from the
+  view/materialized view.
+
+- `USAGE` privileges on the schemas that contain the relations in the query.
+- `USAGE` privileges on the active cluster.
 
 ## Related pages
 
@@ -361,7 +361,6 @@ left-hand row according to the usual rules of the selected join type.
 > materialize a view containing a `LATERAL` subquery without first inspecting the
 > plan via the [`EXPLAIN PLAN`](/sql/explain-plan/) statement. In many common patterns
 > involving `LATERAL` joins, Materialize can optimize away the join entirely.
->
 
 
 As a simple example, the following query uses `LATERAL` to count from 1 to `x`
@@ -596,13 +595,11 @@ When the set of changes for all bindings becomes empty, the recursive computatio
 
 > **Warning:** In the absence of recursive CTEs, every `SELECT` query is guaranteed to compute its result or fail with an error within a finite amount of time.
 > However, introducing recursive CTEs complicates the situation as follows:
->
 > 1. The query might not converge (and may never terminate).
 >    Non-terminating queries never return a result and can consume a lot of your cluster resources. See [an example](#non-terminating-queries) below.
 > 2. A small update to a few (or even one) data points in your input might cascade in big updates in your recursive computation.
 >    This most likely will manifest in spikes of the cluster resources allocated to your recursive dataflows.
 >    See [an example](#queries-with-update-locality) below.
->
 
 
 ## Examples
@@ -681,7 +678,6 @@ You'll see results change as new data is inserted. When you’re done, cancel ou
 of the `SUBSCRIBE` using **Stop streaming**.
 
 > **Note:** Depending on your base data, the number of records in the `connected` result might get close to the square of the number of `users`.
->
 
 
 ### Strongly connected components
@@ -721,7 +717,6 @@ When you’re done, cancel out of the `SUBSCRIBE` using **Stop streaming**.
 
 > **Note:** The `strongly_connected_components` definition given above is not recursive, but relies on the recursive CTEs from the `connected` definition.
 > If you don't need to keep track of the `connected` contents for other reasons, you can use [this alternative SCC definition](https://twitter.com/frankmcsherry/status/1628519795971727366) which computes SCCs directly using repeated forward and backward label propagation.
->
 
 
 ### Aggregations over a hierarchy
@@ -876,7 +871,6 @@ Consequently, `connected` never stops growing and the recursive CTE computation 
 The examples presented so far have the following "update locality" property:
 
 > **Note:** A change in a source collection will usually cause a _bounded amount_ of changes to the contents of the recursive CTE bindings derived after each iteration.
->
 
 
 For example:

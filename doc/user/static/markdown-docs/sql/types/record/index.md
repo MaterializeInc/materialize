@@ -1,9 +1,5 @@
 # record type
-
 A tuple with arbitrary contents
-
-
-
 A `record` is a tuple that can contain an arbitrary number of elements of any
 type.
 

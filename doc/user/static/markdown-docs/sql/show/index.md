@@ -1,9 +1,5 @@
 # SHOW
-
 Display the value of a configuration parameter.
-
-
-
 `SHOW` displays the value of either a specified configuration parameter or all
 configuration parameters.
 
@@ -21,8 +17,6 @@ configuration parameters.
 - `schema`: an alias for showing the first resolvable schema in `search_path`
 - `time zone`: an alias for `timezone`
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -85,11 +79,6 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 

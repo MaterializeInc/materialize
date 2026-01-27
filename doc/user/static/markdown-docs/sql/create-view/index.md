@@ -1,9 +1,5 @@
 # CREATE VIEW
-
 `CREATE VIEW` defines view, which provides an alias for the embedded `SELECT` statement.
-
-
-
 Use `CREATE VIEW` to define a view, which simply provides an alias for the
 embedded `SELECT` statement. The results of a view can be incrementally
 maintained **in memory** within a [cluster](/concepts/clusters/) by creating an
@@ -41,7 +37,6 @@ defined in this statement:
 
 > **Note:** You cannot replace views that other views depend on,
 > nor can you replace a non-view object with a view.
->
 
 
 
@@ -95,14 +90,11 @@ AS
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all types used in the view definition.</li>
-<li><code>USAGE</code> privileges on the schemas for the types in the statement.</li>
-<li>Ownership of the existing view if replacing an existing
-view with the same name (i.e., <code>OR REPLACE</code> is specified in <code>CREATE VIEW</code> command).</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the view definition.
+- `USAGE` privileges on the schemas for the types in the statement.
+- Ownership of the existing view if replacing an existing
+  view with the same name (i.e., `OR REPLACE` is specified in `CREATE VIEW` command).
 
 ## Additional information
 

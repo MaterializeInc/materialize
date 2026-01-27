@@ -1,9 +1,5 @@
 # ALTER TYPE
-
 `ALTER TYPE` changes properties of a type.
-
-
-
 Use `ALTER TYPE` to:
 - Rename a type.
 - Change owner of a type.
@@ -61,13 +57,8 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the type being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the type is namespaced by a
-schema.</li>
-</ul>
-</li>
-</ul>
+- Ownership of the type being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the type is namespaced by a
+    schema.

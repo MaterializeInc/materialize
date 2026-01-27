@@ -1,9 +1,5 @@
 # date_bin function
-
 Bins a timestamp into a specified interval
-
-
-
 `date_bin` returns the largest value less than or equal to `source` that is a
 multiple of `stride` starting at `origin`––for shorthand, we call this
 "binning."

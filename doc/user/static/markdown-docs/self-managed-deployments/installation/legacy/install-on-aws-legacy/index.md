@@ -1,9 +1,5 @@
 # Install on AWS(Legacy Terraform)
-
 Install on AWS using the legacy Terraform module.
-
-
-
 
 Self-managed Materialize requires: a Kubernetes (v1.31+) cluster; PostgreSQL as
 a metadata database; blob storage; and a license key.
@@ -26,13 +22,8 @@ module](https://github.com/MaterializeInc/terraform-aws-materialize) to:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 When operating in AWS, we recommend the following instances:
@@ -87,19 +78,11 @@ documentation](https://helm.sh/docs/intro/install/).
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 > For simplicity, this tutorial stores various secrets in a file as well as prints
 > them to the terminal. In practice, refer to your organization's official
 > security and Terraform/infrastructure practices.
->
->
->
 
 
 
@@ -129,13 +112,10 @@ components:
 > requires minimal user input. For details on the `examples/simple/`
 > infrastructure configuration (such as the node instance type, etc.), see the
 > [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
->
 > For more configuration options, you can use the `main.tf` file at the [root of
 > the repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
 > instead. When running with the root `main.tf`, see [AWS required
 > configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-aws/).
->
->
 
 
 
@@ -195,13 +175,10 @@ components:
 >    requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
 >    instead. When running with the root `main.tf`, see [AWS required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-aws/).
->
->
 
 
 1. Create a `terraform.tfvars` file (you can copy from the
@@ -225,13 +202,10 @@ components:
 >    requires minimal user input. For details on the `examples/simple/`
 >    infrastructure configuration (such as the node instance type, etc.), see the
 >    [examples/simple/main.tf](https://github.com/MaterializeInc/terraform-aws-materialize/blob/main/examples/simple/main.tf).
->
 >    For more configuration options, you can use the `main.tf` file at the [root of
 >    the repository](https://github.com/MaterializeInc/terraform-aws-materialize/)
 >    instead. When running with the root `main.tf`, see [AWS required
 >    configuration](/self-managed-deployments/appendix/legacy/appendix-configuration-legacy-aws/).
->
->
 
 
 1. Initialize the terraform directory.
@@ -407,10 +381,7 @@ components:
 
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated Terraform modules to your existing deployments.
->
->
 >    See [Materialize on AWS releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-aws-terraform-module) for notable changes.
->
 
 
 1. Run `terraform plan` with both `.tfvars` files and review the changes to be
@@ -591,9 +562,6 @@ components:
 >    Refer to the [Troubleshooting Console
 >    Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >    guide.
->
->
->
 
 
 ## Next steps
@@ -624,12 +592,9 @@ When prompted to proceed, type `yes` to confirm the deletion.
 >     `terraform destroy` command is unable to delete the S3 bucket and does not
 >     progress beyond "Still destroying...", empty the S3 bucket first and rerun
 >     the `terraform destroy` command.
->
 >   - Upon successful destroy, you may receive some informational messages with
 >     regards to CustomResourceDefinition(CRD). You may safely ignore these
 >     messages as your whole deployment has been destroyed, including the CRDs.
->
->
 
 
 ## See also

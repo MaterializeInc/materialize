@@ -1,9 +1,5 @@
 # Sources
-
 Learn about sources in Materialize.
-
-
-
 ## Overview
 
 Sources describe external systems you want Materialize to read data from, and

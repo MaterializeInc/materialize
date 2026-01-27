@@ -1,9 +1,5 @@
 # Power BI
-
 How to create dashboards with Power BI
-
-
-
 You can use [Power BI](https://powerbi.microsoft.com/) to create dashboards
 based on the data maintained in Materialize.
 

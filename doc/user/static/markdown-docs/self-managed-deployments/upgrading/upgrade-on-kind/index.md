@@ -1,9 +1,5 @@
 # Upgrade on kind
-
 Upgrade Materialize running locally on a kind cluster.
-
-
-
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your Materialize deployment running locally on a [`kind`](https://kind.sigs.k8s.io/)
 cluster.
 
@@ -15,8 +11,6 @@ kind](/self-managed-deployments/installation/install-on-local-kind/).
 > at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
 > but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
 > not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216).
->
->
 
 
 
@@ -38,7 +32,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 ### License key
 
 Starting in v26.0, Materialize requires a license key. If your existing
-deployment does not have a license key configured, contact <a href="https://materialize.com/docs/support/">Materialize support</a>.
+deployment does not have a license key configured, contact <a href="https://materialize.com/docs/support/" >Materialize support</a>.
 
 ## Upgrade
 
@@ -46,8 +40,6 @@ deployment does not have a license key configured, contact <a href="https://mate
 > Materialize instances are running before the the old instance are removed.
 > When performing a rolling upgrade, ensure you have enough resources to support
 > having both the old and new Materialize instances running.
->
->
 
 
 

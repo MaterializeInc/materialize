@@ -1,9 +1,5 @@
 # SHOW ROLE MEMBERSHIP
-
 SHOW ROLE MEMBERSHIP lists the members of each role granted via role-based access control (RBAC).
-
-
-
 `SHOW ROLE MEMBERSHIP` lists the members of each role granted (directly or
 indirectly) via [role-based access
 control](/security/) (RBAC).

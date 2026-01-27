@@ -1,9 +1,5 @@
 # DISCARD
-
 Discard resets state associated with the current session.
-
-
-
 `DISCARD` resets state associated with the current session.
 
 ## Syntax

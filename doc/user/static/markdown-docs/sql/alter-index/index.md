@@ -1,9 +1,5 @@
 # ALTER INDEX
-
 `ALTER INDEX` changes the parameters of an index.
-
-
-
 Use `ALTER INDEX` to:
 - Rename an index.
 
@@ -39,10 +35,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the index.</li>
-</ul>
-
+- Ownership of the index.
 
 ## Related pages
 

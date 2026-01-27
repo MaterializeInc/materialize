@@ -1,9 +1,5 @@
 # EXTRACT function
-
 Returns a specified time component from a time-based value
-
-
-
 `EXTRACT` returns some time component from a time-based value, such as the year from a Timestamp.
 
 ## Signatures

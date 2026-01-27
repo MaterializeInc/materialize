@@ -36,23 +36,11 @@ Data Capture (CDC) support.
 
 ## Considerations
 
-
-  {{__hugo_ctx pid=38}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -116,7 +104,7 @@ table.
 <li><code>uniqueidentifier</code></li>
 </ul>
 
-<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/">data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types"><code>EXCLUDE COLUMNS</code> option</a> for the
+<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/" >data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types" ><code>EXCLUDE COLUMNS</code> option</a> for the
 following types:</p>
 <ul style="column-count: 3">
 <li><code>text</code></li>
@@ -124,7 +112,7 @@ following types:</p>
 <li><code>image</code></li>
 <li><code>varbinary(max)</code></li>
 </ul>
-<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types">SQL Server does not provide
+<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types" >SQL Server does not provide
 the &ldquo;before&rdquo;</a>
 value when said column is updated.</p>
 
@@ -176,24 +164,12 @@ If two capture instances for a table share the same timestamp (unlikely given th
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}
-
-
-
-
 
 
 
@@ -207,8 +183,6 @@ to Materialize using the [SQL Server Source](/sql/create-source/sql-server/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -238,8 +212,6 @@ which is not readily available on older versions of SQL Server.
 > **Note:** To configure SQL Server for data ingestion into Materialize, you must be a user
 > with privileges to enable CDC and create/manage login, users, roles, and
 > privileges.
->
->
 
 
 ### 1. Create a Materialize user in SQL Server.
@@ -359,7 +331,6 @@ GO -- The GO terminator may be unsupported or unnecessary for your client.
 > **Note:** If you are prototyping and your SQL Server instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend configuring one of the
 > network security options below.
->
 
 
 There are various ways to configure your database's network to allow Materialize
@@ -546,7 +517,6 @@ traffic from the bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 In Materialize, a [cluster](/concepts/clusters/) is an isolated
@@ -798,13 +768,10 @@ details for Materialize to use:
 > **Note:** For a new SQL Server source, if none of the replicating tables
 > are receiving write queries, snapshotting may take up to an additional 5 minutes
 > to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
->
 
 
 Use the [`CREATE SOURCE`](/sql/create-source/) command to connect
 Materialize to your SQL Server instance and start ingesting data:
-
-
 ```mzsql
 CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sqlserver_connection
@@ -880,23 +847,11 @@ new data arrives, and serving results efficiently.
 
 ## Considerations
 
-
-  {{__hugo_ctx pid=38}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -960,7 +915,7 @@ table.
 <li><code>uniqueidentifier</code></li>
 </ul>
 
-<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/">data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types"><code>EXCLUDE COLUMNS</code> option</a> for the
+<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/" >data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types" ><code>EXCLUDE COLUMNS</code> option</a> for the
 following types:</p>
 <ul style="column-count: 3">
 <li><code>text</code></li>
@@ -968,7 +923,7 @@ following types:</p>
 <li><code>image</code></li>
 <li><code>varbinary(max)</code></li>
 </ul>
-<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types">SQL Server does not provide
+<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types" >SQL Server does not provide
 the &ldquo;before&rdquo;</a>
 value when said column is updated.</p>
 
@@ -1020,17 +975,9 @@ If two capture instances for a table share the same timestamp (unlikely given th
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}

@@ -1,9 +1,5 @@
 # FETCH
-
 `FETCH` retrieves rows from a cursor.
-
-
-
 `FETCH` retrieves rows from a query using a cursor previously opened with [`DECLARE`](/sql/declare).
 
 ## Syntax

@@ -19,8 +19,6 @@ guarantees](/get-started/isolation-level/).
 > **Note:** In Materialize,various [system clusters](/sql/system-clusters/) are
 > pre-installed to improve the user experience as well as support system
 > administration tasks.
->
->
 
 
 You must provision at least one cluster to power your workloads. You can then
@@ -86,8 +84,6 @@ measured at a one second granularity.
 > clusters](/sql/system-clusters/) are pre-installed to improve the user
 > experience as well as support system administration tasks. Except for the
 > default `quickstart` cluster, you are <red>not billed</red> for these system clusters.
->
->
 
 
 You must provision at least one cluster to power your workloads. You can then
@@ -108,8 +104,6 @@ can process data faster and handle larger data volumes.
 
 > **Note:** You can resize a cluster to respond to changes in your workload. See [Sizing
 > your clusters](/sql/alter-cluster/#resizing).
->
->
 
 
 Clusters are always "on", and you can adjust the [replication factor](/sql/create-cluster/#replication-factor)
@@ -147,7 +141,6 @@ to OLTP databases than cloud data warehouses.
 
 > **Note:** Accessing usage and billing information in Materialize
 > requires **administrator** privileges.
->
 
 
 From the [Materialize console](/console/) (`Admin` >

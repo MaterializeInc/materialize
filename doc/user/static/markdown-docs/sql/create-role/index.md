@@ -1,9 +1,5 @@
 # CREATE ROLE
-
 `CREATE ROLE` creates a new role.
-
-
-
 `CREATE ROLE` creates a new role, which is a user account in Materialize.[^1]
 
 When you connect to Materialize, you must specify the name of a valid role in
@@ -92,10 +88,7 @@ Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Examples
 

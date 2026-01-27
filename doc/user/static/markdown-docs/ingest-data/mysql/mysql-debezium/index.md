@@ -1,14 +1,9 @@
 # MySQL CDC using Kafka and Debezium
-
 How to propagate Change Data Capture (CDC) data from a MySQL database to Materialize using Kafka and Debezium
-
-
-
 > **Warning:** You can use [Debezium](https://debezium.io/) to propagate Change
 > Data Capture(CDC) data to Materialize from a MySQL database, but
 > we **strongly recommend** using the native [MySQL](/sql/create-source/mysql/)
 > source instead.
->
 
 
 For help getting started with your own data, you can schedule a [free guided
@@ -70,7 +65,6 @@ connector by adding it to Kafka Connect.
 
 > **Warning:** If you deploy the MySQL Debezium connector in [Confluent Cloud](https://docs.confluent.io/cloud/current/connectors/cc-mysql-source-cdc-debezium.html),
 > you **must** override the default value of `After-state only` to `false`.
->
 
 
 

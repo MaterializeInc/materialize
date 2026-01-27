@@ -1,9 +1,5 @@
 # License
-
 Human-readable license for Materialize
-
-
-
 ## Materialize Cloud
 
 Materialize Cloud is licensed under the Business Source License agreement

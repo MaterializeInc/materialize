@@ -1,9 +1,5 @@
 # SHOW CLUSTERS
-
 `SHOW CLUSTERS` lists the clusters configured in Materialize.
-
-
-
 `SHOW CLUSTERS` lists the [clusters](/concepts/clusters/) configured in Materialize.
 
 ## Syntax
@@ -36,7 +32,6 @@ cluster at any time.
 > to choose a valid cluster in order to run `SELECT` queries. A _superuser_ (i.e. `Organization Admin`)
 > can also run [`ALTER SYSTEM SET cluster`](/sql/alter-system-set) to change the
 > default value.
->
 
 
 ### `mz_catalog_server` system cluster

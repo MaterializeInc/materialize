@@ -23,7 +23,6 @@ This guide walks you through the steps required to use the collaborative data no
 2. Go to the **Workspace integrations** page.
   > **Note:** If you are inside a workspace, in the <svg width="12px" height="12px" stroke="currentColor" fill="currentColor" stroke-width="0.5" viewBox="0 0 24 24" focusable="false" aria-hidden="true" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>
 >  **Menu**, click **Integrations**
->
 
 1. Click in the **+ Add Integration** button.
 2. Search and click the **Materialize** option.
@@ -99,7 +98,6 @@ PostgreSQL ODBC driver to serve data from Materialize into Excel spreadsheets.
 
 > **Note:** The following procedure has only been tested on Windows machines using
 > Materialize Cloud.
->
 
 
 ## Prerequisites
@@ -165,11 +163,8 @@ registry settings. For example, you can save the following sample content as a
 
 > **Note:** - Passwords stored in `.reg` files are saved in plain text. Restrict access to
 > the file.
->
 > - This example creates a User DSN. To create a System DSN, use
 > HKEY_LOCAL_MACHINE instead.
->
->
 
 
 ```reg {hl_lines="4 19-25"}
@@ -282,8 +277,6 @@ to refresh more frequently for your use case, you can use a custom VBA script:
 > **Note:** When configuring your refresh interval, note that Excel will throw an error
 > if a refresh does not complete before the next one begins. Depending on your
 > machine, this is typically between 5 and 15 seconds.
->
->
 
 
 1. Press `Alt-F11` to open the VBA editor. On the left side, navigate to the
@@ -302,8 +295,6 @@ to refresh more frequently for your use case, you can use a custom VBA script:
    > **Note:** When configuring your refresh interval, note that Excel will throw an error
 >    if a refresh does not complete before the next one begins. Depending on your
 >    machine, this is typically between 5 and 15 seconds.
->
->
 
 
     ```text {hl_lines="7 13"}

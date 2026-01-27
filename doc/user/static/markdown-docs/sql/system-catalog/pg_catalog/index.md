@@ -1,9 +1,5 @@
 # pg_catalog
-
 pg_catalog is a system catalog that presents metadata in the format used by PostgreSQL.
-
-
-
 Materialize has compatibility shims for the following relations from [PostgreSQL's
 system catalog](https://www.postgresql.org/docs/current/catalogs.html):
 

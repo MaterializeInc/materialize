@@ -1,9 +1,5 @@
 # ALTER SINK
-
 `ALTER SINK` allows cutting a sink over to a new upstream relation without causing disruption to downstream consumers.
-
-
-
 Use `ALTER SINK` to:
 - Change the relation you want to sink from. This is useful in the context of
 [blue/green deployments](/manage/dbt/blue-green-deployments/).
@@ -114,7 +110,6 @@ relation.
 > definition of the sink to emit results up until the oldest timestamp at which
 > the contents of the new upstream relation are known. Attempting to `ALTER` an
 > unhealthy sink that can't make progress will result in the command timing out.
->
 
 
 #### Cutover scenarios and workarounds
@@ -182,30 +177,18 @@ create a sink on the materialized view.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the sink being altered.</li>
-<li>In addition,
-<ul>
-<li>To change the sink from relation:
-<ul>
-<li><code>SELECT</code> privileges on the new relation being written out to an external system.</li>
-<li><code>CREATE</code> privileges on the cluster maintaining the sink.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the sink definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-</li>
-<li>To change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the sink is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the sink being altered.
+- In addition,
+  - To change the sink from relation:
+    - `SELECT` privileges on the new relation being written out to an external system.
+    - `CREATE` privileges on the cluster maintaining the sink.
+    - `USAGE` privileges on all connections and secrets used in the sink definition.
+    - `USAGE` privileges on the schemas that all connections and secrets in the
+      statement are contained in.
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing schema if the sink is namespaced
+  by a schema.
 
 ## Examples
 
@@ -217,8 +200,6 @@ The following example alters a sink originally created from `matview_old` to use
 That is, assume you have a Kafka sink `avro_sink` created from `matview_old`
 (See [`CREATE SINK`:Kafka/Redpanda](/sql/create-sink/kafka/) for more
 information):
-
-
 ```mzsql
 CREATE SINK avro_sink
   FROM matview_old
@@ -241,8 +222,6 @@ subsequent execution of the sink will result in errors and will not be able
 to make progress. See [Valid schema changes](#valid-schema-changes) for
 details.
 {{< /note >}}
-
-
 ```mzsql
 ALTER SINK avro_sink
   SET FROM matview_new
@@ -290,9 +269,7 @@ intermediary materialized view and table).
 At first, the `switch.value` is `false`, so the `transition` materialized view contains the `matview_old` content.
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    CREATE TABLE switch (value bool);
    INSERT INTO switch VALUES (false); -- controls whether we want the new or the old materialized view.
 
@@ -307,9 +284,7 @@ At first, the `switch.value` is `false`, so the `transition` materialized view c
 1. `ALTER SINK` to use `transition`, which currently contains `matview_old` content:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    ALTER SINK avro_sink SET FROM transition;
 
    ```
@@ -317,9 +292,7 @@ At first, the `switch.value` is `false`, so the `transition` materialized view c
 1. Update `switch.value` to `true`, which causes the `transition` materialized view to contain `matview_new` content:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    UPDATE switch SET value = true;
 
    ```
@@ -330,9 +303,7 @@ beyond the time of the switch update. Once advanced, alter sink to use
 `matview_new`:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    -- After sink upper has advanced beyond the time of the switch UPDATE.
    ALTER SINK avro_sink SET FROM matview_new;
 
@@ -341,9 +312,7 @@ beyond the time of the switch update. Once advanced, alter sink to use
 1. Drop the `transition` materialized view and the `switch` table:
 
 
-   <no value>
-
-   ```mzsql
+   <no value>```mzsql
    DROP MATERIALIZED VIEW transition;
    DROP TABLE switch;
 

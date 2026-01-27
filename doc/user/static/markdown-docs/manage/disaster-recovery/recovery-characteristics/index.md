@@ -1,9 +1,5 @@
 # Materialize Cloud DR characteristics
-
 Reference on various failure modes and recovery characteristics of Materialize Cloud.
-
-
-
 The following provides  various failure mode impact and recovery
 characteristics for Materialize.
 

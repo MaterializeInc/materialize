@@ -1,9 +1,5 @@
 # FAQ: Indexes
-
 Frequently asked questions about indexes.
-
-
-
 ## Do indexes in Materialize support `ORDER BY`?
 
 No. Indexes in Materialize do not support `ORDER BY` clauses.
@@ -14,13 +10,12 @@ of key length and value).
 
 As such, indexes in Materialize currently do not provide optimizations for:
 
-- Range queries; that is queries using <code>&gt;</code>, <code>&gt;=</code>,
-  <code>&lt;</code>, <code>&lt;=</code>, `BETWEEN` clauses (e.g., `WHERE
-  quantity > 10`,  <code>price >= 10 AND price &lt;= 50</code>, and `WHERE quantity
+- Range queries; that is queries using `>`, `>=`,
+  `<`, `<=`, `BETWEEN` clauses (e.g., `WHERE
+  quantity > 10`,  `price >= 10 AND price <= 50`, and `WHERE quantity
   BETWEEN 10 AND 20`).
 
 - `GROUP BY`, `ORDER BY` and `LIMIT` clauses.
-
 
 ## Do indexes in Materialize support range queries?
 
@@ -32,9 +27,9 @@ of key length and value).
 
 As such, indexes in Materialize currently do not provide optimizations for:
 
-- Range queries; that is queries using <code>&gt;</code>, <code>&gt;=</code>,
-  <code>&lt;</code>, <code>&lt;=</code>, `BETWEEN` clauses (e.g., `WHERE
-  quantity > 10`,  <code>price >= 10 AND price &lt;= 50</code>, and `WHERE quantity
+- Range queries; that is queries using `>`, `>=`,
+  `<`, `<=`, `BETWEEN` clauses (e.g., `WHERE
+  quantity > 10`,  `price >= 10 AND price <= 50`, and `WHERE quantity
   BETWEEN 10 AND 20`).
 
 - `GROUP BY`, `ORDER BY` and `LIMIT` clauses.

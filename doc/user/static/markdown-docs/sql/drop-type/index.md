@@ -1,9 +1,5 @@
 # DROP TYPE
-
 `DROP TYPE` removes a user-defined data type.
-
-
-
 `DROP TYPE` removes a [custom data type](../create-type). You cannot use it on default data types.
 
 ## Syntax
@@ -103,11 +99,8 @@ DROP TYPE IF EXISTS int4_list;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped type.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped type.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

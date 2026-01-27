@@ -1,7 +1,4 @@
 # Self-managed release versions
-
-
-
 ## V26 releases
 
 

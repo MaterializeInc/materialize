@@ -1,9 +1,5 @@
 # Azure deployment guidelines
-
 General guidelines when deploying Self-Managed Materialize on Azure.
-
-
-
 ## Recommended instance types
 
 As a general guideline, we recommend:
@@ -28,8 +24,6 @@ Azure VM Types with Local NVMe Disk:
 
 > **Warning:** These VM types provide <red>**ephemeral**</red> local NVMe SSD disks. Data is
 > <red>**lost**</red> when the VM is stopped or deleted.
->
->
 
 
 ## Locally-attached NVMe storage
@@ -61,7 +55,6 @@ With this change, the Terraform:
 See [Upgrade Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061).
 
 > **Note:** If deploying `v25.2`, Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26`, this will be handled automatically.
->
 
 
 

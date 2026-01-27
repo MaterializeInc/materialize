@@ -1,9 +1,5 @@
 # Database object explorer
-
 Explore the objects in your databases from the Materialize console.
-
-
-
 Under **Data**, the Materialize Console
 provides a database object explorer.
 

@@ -1,9 +1,5 @@
 # Materialize CLI Configuration
-
 An authentication profile...
-
-
-
 `mz` is configured via a single TOML file stored at
 `$HOME/.config/materialize/mz.toml`.
 

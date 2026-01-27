@@ -1,9 +1,5 @@
 # ALTER DATABASE
-
 `ALTER DATABASE` changes properties of a database.
-
-
-
 Use `ALTER DATABASE` to:
 - Rename a database.
 - Change owner of a database.
@@ -61,11 +57,6 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the database.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-</ul>
-</li>
-</ul>
+- Ownership of the database.
+- In addition, to change owners:
+  - Role membership in `new_owner`.

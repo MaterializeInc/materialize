@@ -1,9 +1,5 @@
 # CREATE CLUSTER
-
 `CREATE CLUSTER` creates a new cluster.
-
-
-
 `CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
 
 ## Syntax
@@ -83,7 +79,6 @@ cluster.
 > Materialize reserves the right to change the capacity at any time. As such, you
 > acknowledge and agree that those values in this table may change at any time,
 > and you should not rely on these values for any capacity planning.
->
 
 
 
@@ -117,9 +112,7 @@ Materialize offers the following legacy cc cluster sizes:
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
 
 
 * `25cc`
@@ -146,7 +139,6 @@ query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluste
 
 > **Warning:** The values in the `mz_cluster_replica_sizes` table may change at any
 > time. You should not rely on them for any kind of capacity planning.
->
 
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
@@ -160,10 +152,7 @@ Materialize also offers some legacy t-shirt cluster sizes for upsert sources.
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
->
 
 
 
@@ -194,6 +183,8 @@ When legacy sizes are enabled for a region, the following sizes are available:
 
 
 See also:
+
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -247,10 +238,8 @@ using [`ALTER CLUSTER`] to set a nonzero replication factor.
 > capacity for work. Replicas are exact copies of one another: each replica must
 > do exactly the same work (i.e., maintain the same dataflows and process the same
 > queries) as all the other replicas of the cluster.
->
 > To increase a cluster's capacity, you should instead increase the cluster's
 > [size](#size).
->
 
 
 ### Credit usage
@@ -423,10 +412,7 @@ You can later add replicas to this cluster with [`ALTER CLUSTER`].
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATECLUSTER</code> privileges on the system.</li>
-</ul>
-
+- `CREATECLUSTER` privileges on the system.
 
 ## See also
 

@@ -1,9 +1,5 @@
 # bytea type
-
 Expresses a Unicode string
-
-
-
 The `bytea` data type allows the storage of [binary strings](https://www.postgresql.org/docs/9.0/datatype-binary.html) or what is typically thought of as "raw bytes". Materialize supports both the typical formats for input and output: the hex format and the historical PostgreSQL escape format. The hex format is preferred.
 
 Hex format strings are preceded by `\x` and escape format strings are preceded by `\`.
@@ -70,7 +66,6 @@ You can [cast](../../functions/cast) `bytea` to [`text`](../text) by assignment.
 > [hex-formatted](#hex-format) string, even if the byte array consists entirely of
 > printable characters. See [handling character data](#handling-character-data)
 > for alternatives.
->
 
 
 #### To `bytea`

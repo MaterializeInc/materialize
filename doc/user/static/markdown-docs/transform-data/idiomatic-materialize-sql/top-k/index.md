@@ -1,36 +1,26 @@
 # Top-K in group
-
 Use idiomatic Materialize SQL to find the top-k/top-n elements in each group.
-
-
-
 ## Overview
 
 The "Top-K in group" query pattern groups by some key and return the first K
 elements within each group according to some ordering.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -198,8 +188,6 @@ For more information on setting `DISTINCT ON INPUT GROUP SIZE`, see
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Select Top-3 items

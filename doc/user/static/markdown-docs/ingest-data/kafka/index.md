@@ -65,8 +65,6 @@ MSK cluster.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -104,7 +102,6 @@ connect:
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the Terraform module repositories for [Amazon MSK](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
 > and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
->
 
 
 This section covers how to create AWS PrivateLink connections
@@ -827,8 +824,6 @@ Cloud Kafka cluster.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 If you already have a Confluent Cloud Kafka cluster, you can skip step 1 and
@@ -948,8 +943,6 @@ self-hosted Kafka cluster.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -988,8 +981,6 @@ Select the option that works best for you.
 > which can be used to create the target groups for each Kafka broker (step 1),
 > the network load balancer (step 2), the TCP listeners (step 3) and the VPC
 > endpoint service (step 5).
->
->
 
 
 This section covers how to create AWS PrivateLink connections
@@ -1555,8 +1546,6 @@ Materialize using [Fly.io](https://fly.io/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 #### Before you begin

@@ -86,7 +86,6 @@ index in the system.
 > **Warning:** Views that directly reference these objects cannot include `NATURAL JOIN` or
 > `*` expressions. Instead, project the required columns and convert all `NATURAL JOIN`s
 > to `USING` joins.
->
 
 
 ### `mz_array_types`
@@ -177,7 +176,6 @@ This table was previously in the `mz_internal` schema. All queries previously re
 
 > **Warning:** The values in this table may change at any time. You should not rely on them for
 > any kind of capacity planning.
->
 
 
 <!-- RELATION_SPEC mz_catalog.mz_cluster_replica_sizes -->
@@ -654,7 +652,6 @@ Field            | Type                 | Meaning
 
 > **Warning:** This view is not indexed in the `mz_catalog_server` cluster. Querying this view
 > can be slow due to the amount of unindexed data that must be scanned.
->
 
 
 The `mz_storage_usage` table describes the historical storage utilization of
@@ -804,12 +801,10 @@ schema.
 
 > **Warning:** The objects in the `mz_internal` schema are not part of Materialize's stable interface.
 > Backwards-incompatible changes to these objects may be made at any time.
->
 
 
 > **Warning:** `SELECT` statements may reference these objects, but creating views that
 > reference these objects is not allowed.
->
 
 
 ## `mz_object_global_ids`
@@ -830,11 +825,9 @@ The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs
 > **Warning:** Do not rely on all statements being logged in this view. Materialize
 > controls the maximum rate at which statements are sampled, and may change
 > this rate at any time.
->
 
 
 > **Warning:** Entries in this view may be cleared on restart (e.g., during Materialize maintenance windows).
->
 
 
 The `mz_recent_activity_log` view contains a log of the SQL statements
@@ -1249,7 +1242,6 @@ use.
 > **Warning:** Following the advice in this view might not always yield resource usage
 > optimizations. You should test any changes in a development environment
 > before deploying the changes to production.
->
 
 
 The `mz_index_advice` view provides advice on opportunities to optimize resource
@@ -1553,7 +1545,6 @@ referenced from
 > **Warning:** Do not rely on all sessions being logged in this view. Materialize
 > controls the maximum rate at which statements are sampled, and may change
 > this rate at any time.
->
 
 
 <!-- RELATION_SPEC mz_internal.mz_session_history -->
@@ -2201,12 +2192,10 @@ schema.
 
 > **Warning:** The objects in the `mz_introspection` schema are not part of Materialize's stable interface.
 > Backwards-incompatible changes to these objects may be made at any time.
->
 
 
 > **Warning:** `SELECT` statements may reference these objects, but creating views that
 > reference these objects is not allowed.
->
 
 
 Introspection relations are maintained by independently collecting internal logging information within each of the replicas of a cluster.

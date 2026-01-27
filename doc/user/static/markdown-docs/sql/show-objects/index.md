@@ -1,9 +1,5 @@
 # SHOW OBJECTS
-
 `SHOW OBJECTS` returns a list of all objects in Materialize for a given schema.
-
-
-
 `SHOW OBJECTS` returns a list of all objects in Materialize for a given schema.
 Objects include tables, sources, sinks, views, materialized views, indexes,
 secrets and connections.

@@ -1,9 +1,5 @@
 # mz_timestamp type
-
 Expresses an internal timestamp
-
-
-
 `mz_timestamp` data expresses an internal timestamp.
 
 ## `mz_timestamp` info

@@ -1,9 +1,5 @@
 # DROP TABLE
-
 `DROP TABLE` removes a table from Materialize.
-
-
-
 `DROP TABLE` removes a table from Materialize.
 
 ## Syntax
@@ -97,11 +93,8 @@ DROP TABLE IF EXISTS t;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped table.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped table.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

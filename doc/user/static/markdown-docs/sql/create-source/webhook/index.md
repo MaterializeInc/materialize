@@ -1,9 +1,5 @@
 # CREATE SOURCE: Webhook
-
 Ingesting data into Materialize with HTTP requests
-
-
-
 [`CREATE SOURCE`](/sql/create-source/) connects Materialize to an external system you want to read data from, and provides details about how to decode and interpret that data.
 
 
@@ -83,7 +79,6 @@ A breakdown of each component is as follows:
 > **Note:** This is a public URL that is open to the internet and has no security. To
 > validate that requests are legitimate, see [Validating requests](#validating-requests).
 > For limits imposed on this endpoint, see [Request limits](#request-limits).
->
 
 
 ## Features
@@ -140,7 +135,6 @@ the `headers` map column.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 It's common for applications using webhooks to provide a method for validating a
@@ -209,7 +203,6 @@ LIMIT 10;
 
 > **Note:** It's not possible to use secrets in a `SELECT` statement, so you'll need to
 > provide these values as raw text for debugging.
->
 
 
 ### Handling duplicated and partial events
@@ -255,7 +248,6 @@ CREATE MATERIALIZED VIEW my_build_jobs_merged AS (
 
 > **Note:** When casting from `text` to `timestamp` you should prefer to use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/pushdown/)
 > function, which enables [temporal filter pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
->
 
 
 ### Handling batch events

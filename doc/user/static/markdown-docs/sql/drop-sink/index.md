@@ -1,9 +1,5 @@
 # DROP SINK
-
 `DROP SINK` removes a sink from Materialize.
-
-
-
 `DROP SINK` removes a sink from Materialize.
 
 Dropping a Kafka sink doesn't drop the corresponding topic. For more information, see the [Kafka documentation](https://kafka.apache.org/documentation/).
@@ -39,11 +35,8 @@ DROP SINK
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped sink.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped sink.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

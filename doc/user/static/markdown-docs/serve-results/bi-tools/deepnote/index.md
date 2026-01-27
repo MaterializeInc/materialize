@@ -1,9 +1,5 @@
 # Deepnote
-
 How to create collaborative data notebooks with Deepnote
-
-
-
 This guide walks you through the steps required to use the collaborative data notebook [Deepnote](https://deepnote.com/) with Materialize.
 
 ## Create an integration
@@ -12,7 +8,6 @@ This guide walks you through the steps required to use the collaborative data no
 2. Go to the **Workspace integrations** page.
   > **Note:** If you are inside a workspace, in the <svg width="12px" height="12px" stroke="currentColor" fill="currentColor" stroke-width="0.5" viewBox="0 0 24 24" focusable="false" aria-hidden="true" height="1em" width="1em" xmlns="http://www.w3.org/2000/svg"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>
 >  **Menu**, click **Integrations**
->
 
 1. Click in the **+ Add Integration** button.
 2. Search and click the **Materialize** option.

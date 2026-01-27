@@ -1,9 +1,5 @@
 # Manage cloud resources
-
 Use Terraform modules to set up cloud resources
-
-
-
 The Terraform modules below provide the cloud infrastructure foundation
 Materialize needs to communicate with components outside of Materialize itself.
 The Materialize provider allows users to manage Materialize resources in the
@@ -15,7 +11,6 @@ objects. A few use cases are captured in the sections below.
 
 > **Note:** While Materialize offers support for its Terraform provider, Materialize does
 > not offer support for these cloud resources modules.
->
 
 
 ### AWS PrivateLink

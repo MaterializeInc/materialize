@@ -1,9 +1,5 @@
 # DROP ROLE
-
 `DROP ROLE` removes a role from Materialize.
-
-
-
 `DROP ROLE` removes a role from Materialize.
 
 ## Syntax
@@ -25,10 +21,7 @@ You cannot drop the current role.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

@@ -1,9 +1,5 @@
 # SHOW VIEWS
-
 `SHOW VIEWS` returns a list of views in Materialize.
-
-
-
 `SHOW VIEWS` returns a list of views in Materialize.
 
 ## Syntax

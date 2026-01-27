@@ -1,36 +1,26 @@
 # First value in group
-
 Use idiomatic Materialize SQL to find the first value in each group.
-
-
-
 ## Overview
 
 The "first value in each group" query pattern returns the first value, according
 to some ordering, in each group.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -128,8 +118,6 @@ For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Use MIN() to find the first value

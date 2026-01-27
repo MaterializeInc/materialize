@@ -1,9 +1,5 @@
 # Census
-
 How to use Census to export data out of Materialize.
-
-
-
 This guide walks you through the steps required to create a [Census](https://www.getcensus.com/) sync using Materialize.
 
 ## Before you begin

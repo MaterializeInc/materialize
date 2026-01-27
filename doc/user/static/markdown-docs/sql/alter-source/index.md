@@ -1,9 +1,5 @@
 # ALTER SOURCE
-
 `ALTER SOURCE` changes certain characteristics of a source.
-
-
-
 Use `ALTER SOURCE` to:
 
 - Add a subsource to a source.
@@ -38,19 +34,12 @@ ALTER SOURCE [IF EXISTS] <name>
 | **WITH (TEXT COLUMNS (`<col>` [, ...]))** | Optional. List of columns to decode as `text` for types that are unsupported in Materialize.  |
 
 
-> **Note:** {{__hugo_ctx pid=34}}
-> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> **Note:** When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 > SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 > process for the new subsource. During this snapshotting, the data ingestion for
 > the existing subsources for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
-> {{__hugo_ctx/}}
->
->
->
->
->
 
 
 
@@ -142,19 +131,12 @@ ALTER SOURCE [IF EXISTS] <name>  RESET (RETAIN HISTORY);
 Note that using a combination of dropping and adding subsources lets you change
 the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
 
-> **Important:** {{__hugo_ctx pid=34}}
-> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> **Important:** When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 > SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 > process for the new subsource. During this snapshotting, the data ingestion for
 > the existing subsources for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
-> {{__hugo_ctx/}}
->
->
->
->
->
 
 
 ### Dropping subsources from a PostgreSQL/MySQL/SQL Server source
@@ -177,19 +159,12 @@ You cannot drop the "progress subsource".
 ALTER SOURCE pg_src ADD SUBSOURCE tbl_a, tbl_b AS b WITH (TEXT COLUMNS [tbl_a.col]);
 ```
 
-> **Important:** {{__hugo_ctx pid=34}}
-> When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
+> **Important:** When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 > SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 > process for the new subsource. During this snapshotting, the data ingestion for
 > the existing subsources for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
-> {{__hugo_ctx/}}
->
->
->
->
->
 
 
 ### Dropping subsources
@@ -204,17 +179,11 @@ DROP SOURCE tbl_a, b CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the source being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the source is namespaced
-by a schema.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the source being altered.
+- In addition, to change owners:
+   - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the source is namespaced
+  by a schema.
 
 ## See also
 

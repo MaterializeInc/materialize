@@ -1,9 +1,5 @@
 # SHOW TYPES
-
 `SHOW TYPES` returns a list of the data types in Materialize.
-
-
-
 `SHOW TYPES` returns a list of the data types in Materialize. Only custom types
 are returned.
 

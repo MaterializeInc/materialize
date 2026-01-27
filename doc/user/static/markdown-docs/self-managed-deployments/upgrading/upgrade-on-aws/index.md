@@ -1,9 +1,5 @@
 # Upgrade on AWS
-
 Upgrade Materialize on AWS using the new Terraform module.
-
-
-
 The following tutorial upgrades your Materialize deployment running on AWS
 Elastic Kubernetes Service (EKS). The tutorial assumes you have installed the
 example on [Install on
@@ -27,11 +23,9 @@ upgrading the Materialize instances.
 > **Note:** For major version upgrades, you can <strong>only</strong> upgrade <strong>one</strong> major version
 > at a time. For example, upgrades from <strong>v26</strong>.1.0 to <strong>v27</strong>.3.0 is
 > permitted but <strong>v26</strong>.1.0 to <strong>v28</strong>.0.0 is not.
->
 
 
 > **Note:** Downgrading is not supported.
->
 
 
 ## Prerequisites
@@ -46,8 +40,6 @@ upgrading the Materialize instances.
 ## Upgrade process
 
 > **Important:** The following procedure performs a rolling upgrade, where both the old and new Materialize instances are running before the old instances are removed. When performing a rolling upgrade, ensure you have enough resources to support having both the old and new Materialize instances running.
->
->
 
 
 ### Step 1: Set up
@@ -99,8 +91,6 @@ upgrading the Materialize instances.
 
 > **Important:** <strong>Always</strong> upgrade the Materialize Operator <strong>before</strong>
 > upgrading the Materialize instances.
->
->
 
 
 <p>To update your Materialize Helm Chart repository:</p>
@@ -120,8 +110,6 @@ upgrading the Materialize instances.
 
 > **Important:** <strong>Always</strong> upgrade the Materialize Operator <strong>before</strong>
 > upgrading the Materialize instances.
->
->
 
 
 <ol>
@@ -146,11 +134,10 @@ to v26.8.0:</p>
 > **Note:** For major version upgrades, you can <strong>only</strong> upgrade <strong>one</strong> major version
 >    at a time. For example, upgrades from <strong>v26</strong>.1.0 to <strong>v27</strong>.3.0 is
 >    permitted but <strong>v26</strong>.1.0 to <strong>v28</strong>.0.0 is not.
->
 
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">helm upgrade -n materialize simple-demo materialize/materialize-operator  <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  -f my-values.yaml <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  --version v26.8.0
+</span></span></span><span class="line"><span class="cl">  -f my-values.yaml <span class="se">\
+</span></span></span><span class="line"><span class="cl">  --version v26.8.0
 </span></span></code></pre></div></li>
 <li>
 <p>Verify that the Operator is running:</p>
@@ -169,8 +156,6 @@ Materialize instances.</p>
 
 > **Important:** <strong>Always</strong> upgrade the Materialize Operator <strong>before</strong>
 > upgrading the Materialize instances.
->
->
 
 
 <p><strong>After</strong> you have upgraded your Materialize Operator, upgrade your
@@ -196,16 +181,16 @@ main
 <li>
 <p>Stage, but not rollout, the Materialize instance version upgrade.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">kubectl patch materialize main<span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  -n materialize-environment <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  --type<span class="o">=</span><span class="s1">&#39;merge&#39;</span> <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  -p <span class="s2">&#34;{\&#34;spec\&#34;: {\&#34;environmentdImageRef\&#34;: \&#34;docker.io/materialize/environmentd:v26.8.0\&#34;}}&#34;</span>
+</span></span></span><span class="line"><span class="cl">  -n materialize-environment <span class="se">\
+</span></span></span><span class="line"><span class="cl">  --type<span class="o">=</span><span class="s1">&#39;merge&#39;</span> <span class="se">\
+</span></span></span><span class="line"><span class="cl">  -p <span class="s2">&#34;{\&#34;spec\&#34;: {\&#34;environmentdImageRef\&#34;: \&#34;docker.io/materialize/environmentd:v26.8.0\&#34;}}&#34;</span>
 </span></span></code></pre></div></li>
 <li>
 <p>Rollout the Materialize instance version change.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">kubectl patch materialize main <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  -n materialize-environment <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  --type<span class="o">=</span><span class="s1">&#39;merge&#39;</span> <span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>  -p <span class="s2">&#34;{\&#34;spec\&#34;: {\&#34;requestRollout\&#34;: \&#34;</span><span class="k">$(</span>uuidgen<span class="k">)</span><span class="s2">\&#34;}}&#34;</span>
+</span></span></span><span class="line"><span class="cl">  -n materialize-environment <span class="se">\
+</span></span></span><span class="line"><span class="cl">  --type<span class="o">=</span><span class="s1">&#39;merge&#39;</span> <span class="se">\
+</span></span></span><span class="line"><span class="cl">  -p <span class="s2">&#34;{\&#34;spec\&#34;: {\&#34;requestRollout\&#34;: \&#34;</span><span class="k">$(</span>uuidgen<span class="k">)</span><span class="s2">\&#34;}}&#34;</span>
 </span></span></code></pre></div></li>
 <li>
 <p>Verify the upgrade by checking the <code>environmentd</code> events:</p>

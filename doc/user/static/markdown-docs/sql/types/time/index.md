@@ -1,9 +1,5 @@
 # time type
-
 Expresses a time without a specific date
-
-
-
 `time` data expresses a time without a specific date.
 
 Detail | Info

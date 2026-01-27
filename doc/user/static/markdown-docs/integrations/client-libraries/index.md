@@ -9,7 +9,6 @@ libraries to interact with Materialize and **create relations**, **execute
 queries** and **stream out results**.
 
 > **Note:** Client libraries tend to run complex introspection queries that may use configuration settings, system tables or features not yet implemented in Materialize. This means that even if PostgreSQL is supported, it's **not guaranteed** that the same integration will work out-of-the-box.
->
 
 
 | Language | Tested drivers                                                  | Notes                                                 |

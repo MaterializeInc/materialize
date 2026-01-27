@@ -1,16 +1,11 @@
 # DROP CLUSTER REPLICA
-
 `DROP CLUSTER REPLICA` removes an existing replica for the specified cluster.
-
-
-
 `DROP CLUSTER REPLICA` deprovisions an existing replica of the specified
 [unmanaged cluster](/sql/create-cluster/#unmanaged-clusters). To remove
 the cluster itself, use the [`DROP CLUSTER`](/sql/drop-cluster) command.
 
 > **Tip:** When getting started with Materialize, we recommend starting with managed
 > clusters.
->
 
 
 ## Syntax
@@ -45,11 +40,8 @@ DROP CLUSTER REPLICA auction_house.bigger;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped cluster replica.</li>
-<li><code>USAGE</code> privileges on the containing cluster.</li>
-</ul>
-
+- Ownership of the dropped cluster replica.
+- `USAGE` privileges on the containing cluster.
 
 
 ## Related pages
