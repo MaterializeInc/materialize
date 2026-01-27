@@ -16,6 +16,8 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+from argparse import Namespace
+from typing import Any, Literal
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
@@ -68,6 +70,22 @@ def flatten(xss):
     return [x for xs in xss for x in xs]
 
 
+def pull_image(image: str) -> None:
+    # Check if image exists locally before pulling
+    image_exists = subprocess.run(
+        ["docker", "images", "-q", image],
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if not image_exists:
+        subprocess.run(
+            ["docker", "pull", image],
+            check=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-full", action="store_true")
     parser.add_argument("--miri-fast", action="store_true")
@@ -107,8 +125,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-    extra_env = {}
-    clusterd_thread: PropagatingThread | None = None
 
     # Don't upload an out of date junit xml when the build fails
     junit_path = (
@@ -117,269 +133,283 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if os.path.exists(junit_path):
         os.remove(junit_path)
 
-    if coverage:
-        # TODO(def-): For coverage inside of clusterd called from unit tests need
-        # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
-        # aggregate the data.
-        (MZ_ROOT / "coverage").mkdir(exist_ok=True)
-        env["CARGO_LLVM_COV_SETUP"] = "no"
-        # There is no pure build command in cargo-llvm-cov, so run with
-        # --version as a workaround.
-        spawn.runv(
-            [
-                "cargo",
-                "llvm-cov",
-                "run",
-                "--bin",
-                "clusterd",
-                "--release",
-                "--no-report",
-                "--",
-                "--version",
-            ],
-            env=env,
+    metadata = json.loads(
+        subprocess.check_output(
+            ["cargo", "metadata", "--no-deps", "--format-version=1"]
         )
+    )
 
-        cmd = [
+    if coverage:
+        run_coverage_test(args, env)
+    elif args.miri_full:
+        run_miri_slow(env)
+    elif args.miri_fast:
+        run_miri_fast(env)
+    elif sanitizer != Sanitizer.none:
+        run_sanitizer(args, env, metadata, sanitizer)
+    else:
+        run_cargo_nextest(c, args, env, metadata)
+
+
+def run_coverage_test(args: Namespace, env: dict[str, str]):
+    # TODO(def-): For coverage inside of clusterd called from unit tests need
+    # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
+    # aggregate the data.
+    (MZ_ROOT / "coverage").mkdir(exist_ok=True)
+    env["CARGO_LLVM_COV_SETUP"] = "no"
+    # There is no pure build command in cargo-llvm-cov, so run with
+    # --version as a workaround.
+    spawn.runv(
+        [
             "cargo",
             "llvm-cov",
-            "nextest",
+            "run",
+            "--bin",
+            "clusterd",
             "--release",
-            "--no-clean",
+            "--no-report",
+            "--",
+            "--version",
+        ],
+        env=env,
+    )
+
+    cmd = [
+        "cargo",
+        "llvm-cov",
+        "nextest",
+        "--release",
+        "--no-clean",
+        "--workspace",
+        "--lcov",
+        "--output-path",
+        "coverage/cargotest.lcov",
+        "--profile=coverage",
+        # We still want a coverage report on crash
+        "--ignore-run-fail",
+    ]
+    try:
+        spawn.runv(cmd + args.args, env=env)
+    finally:
+        spawn.runv(["zstd", "coverage/cargotest.lcov"])
+        buildkite.upload_artifact("coverage/cargotest.lcov.zst")
+
+
+def run_miri_slow(env: dict[str, str]):
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "nightly",
+            "ci/test/cargo-test-miri.sh",
+        ],
+        env=env,
+    )
+
+
+def run_miri_fast(env: dict[str, str]):
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "nightly",
+            "ci/test/cargo-test-miri-fast.sh",
+        ],
+        env=env,
+    )
+
+
+def run_sanitizer(
+    args: Namespace,
+    env: dict[str, str],
+    metadata,
+    sanitizer: Literal[
+        Sanitizer.address,
+        Sanitizer.hwaddress,
+        Sanitizer.cfi,
+        Sanitizer.thread,
+        Sanitizer.leak,
+        Sanitizer.undefined,
+    ],
+):
+    cflags = [
+        f"--target={target(Arch.host())}",
+        f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
+        f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
+    ] + rustc_flags.sanitizer_cflags[sanitizer]
+    ldflags = cflags + [
+        "-fuse-ld=lld",
+        f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
+    ]
+    extra_env = {
+        "CFLAGS": " ".join(cflags),
+        "CXXFLAGS": " ".join(cflags),
+        "LDFLAGS": " ".join(ldflags),
+        "CXXSTDLIB": "stdc++",
+        "CC": "cc",
+        "CXX": "c++",
+        "CPP": "clang-cpp-18",
+        "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+        "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
+        "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "RUSTFLAGS": (
+            env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.sanitizer[sanitizer])
+        ),
+        "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
+    }
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "nightly",
+            *flatten([["--env", f"{key}={val}"] for key, val in extra_env.items()]),
+            "cargo",
+            "build",
             "--workspace",
-            "--lcov",
-            "--output-path",
-            "coverage/cargotest.lcov",
-            "--profile=coverage",
-            # We still want a coverage report on crash
-            "--ignore-run-fail",
-        ]
+            "--no-default-features",
+            "--bin",
+            "clusterd",
+            "-Zbuild-std",
+            "--target",
+            SANITIZER_TARGET,
+            "--profile=ci",
+        ],
+    )
+    # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
+    for pkg in metadata["packages"]:
         try:
-            spawn.runv(cmd + args.args, env=env)
-        finally:
-            spawn.runv(["zstd", "coverage/cargotest.lcov"])
-            buildkite.upload_artifact("coverage/cargotest.lcov.zst")
-    else:
-        if args.miri_full:
             spawn.runv(
                 [
                     "bin/ci-builder",
                     "run",
                     "nightly",
-                    "ci/test/cargo-test-miri.sh",
-                ],
-                env=env,
-            )
-        elif args.miri_fast:
-            spawn.runv(
-                [
-                    "bin/ci-builder",
-                    "run",
-                    "nightly",
-                    "ci/test/cargo-test-miri-fast.sh",
-                ],
-                env=env,
-            )
-        else:
-            if sanitizer != Sanitizer.none:
-                cflags = [
-                    f"--target={target(Arch.host())}",
-                    f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
-                    f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
-                ] + rustc_flags.sanitizer_cflags[sanitizer]
-                ldflags = cflags + [
-                    "-fuse-ld=lld",
-                    f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
-                ]
-                extra_env = {
-                    "CFLAGS": " ".join(cflags),
-                    "CXXFLAGS": " ".join(cflags),
-                    "LDFLAGS": " ".join(ldflags),
-                    "CXXSTDLIB": "stdc++",
-                    "CC": "cc",
-                    "CXX": "c++",
-                    "CPP": "clang-cpp-18",
-                    "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                    "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                    "RUSTFLAGS": (
-                        env.get("RUSTFLAGS", "")
-                        + " "
-                        + " ".join(rustc_flags.sanitizer[sanitizer])
+                    *flatten(
+                        [["--env", f"{key}={val}"] for key, val in extra_env.items()]
                     ),
-                    "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
-                }
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--package",
+                    pkg["name"],
+                    "--no-default-features",
+                    "--profile=sanitizer",
+                    "--cargo-profile=ci",
+                    # We want all tests to run
+                    "--no-fail-fast",
+                    "-Zbuild-std",
+                    "--target",
+                    SANITIZER_TARGET,
+                    *args.args,
+                ],
+                env=env,
+            )
+        except subprocess.CalledProcessError:
+            print(f"Test against package {pkg['name']} failed, continuing")
+
+
+def run_cargo_nextest(
+    c: Composition, args: Namespace, env: dict[str, str], metadata: Any
+) -> None:
+    # Common args for all nextest runs
+    nextest_common_args = [
+        "--all-features",
+        "--cargo-profile=ci",
+        "--profile=ci",
+    ]
+
+    pkgs = [
+        f"--package={p['name']}"
+        for p in metadata["packages"]
+        if p["name"] not in ("mz-environmentd", "mz-balancerd")
+    ]
+
+    # Build `nextest_test_args` based on args and Buildkite parallelism
+    if args.args:
+        nextest_test_args = args.args
+    elif buildkite.get_parallelism_count() == 2:
+        if buildkite.get_parallelism_index() == 1:
+            nextest_test_args = pkgs
+        else:
+            nextest_test_args = [
+                "--package=mz-environmentd",
+                "--package=mz-balancerd",
+            ]
+    else:
+        nextest_test_args = ["--workspace"]
+
+    assert (
+        buildkite.get_parallelism_count() <= 2
+    ), "Special handling of parallelism, only 1 and 2 supported"
+    if buildkite.get_parallelism_count() == 1 or buildkite.get_parallelism_index() == 0:
+
+        def worker() -> None:
+            clusterd = c.compose["services"]["clusterd"]
+            try:
+                image = clusterd["image"]
+                pull_image(image)
+                container_id = subprocess.check_output(
+                    ["docker", "create", image], text=True
+                ).strip()
+                target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
+                os.makedirs(target_dir, exist_ok=True)
+                subprocess.run(
+                    [
+                        "docker",
+                        "cp",
+                        f"{container_id}:/usr/local/bin/clusterd",
+                        target_dir,
+                    ],
+                    check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                print(f"Failed to get clusterd image: {e}")
+                target_dir = os.getenv("CARGO_TARGET_DIR", "target")
+                clusterd_target_dir = target_dir + "/ci-clusterd"
                 spawn.runv(
                     [
-                        "bin/ci-builder",
-                        "run",
-                        "nightly",
-                        *flatten(
-                            [
-                                ["--env", f"{key}={val}"]
-                                for key, val in extra_env.items()
-                            ]
-                        ),
                         "cargo",
                         "build",
                         "--workspace",
-                        "--no-default-features",
                         "--bin",
                         "clusterd",
-                        "-Zbuild-std",
-                        "--target",
-                        SANITIZER_TARGET,
                         "--profile=ci",
                     ],
+                    env={**env, "CARGO_TARGET_DIR": clusterd_target_dir},
                 )
-            else:
-                assert (
-                    buildkite.get_parallelism_count() <= 2
-                ), "Special handling of parallelism, only 1 and 2 supported"
-                if (
-                    buildkite.get_parallelism_count() == 1
-                    or buildkite.get_parallelism_index() == 0
-                ):
-
-                    def worker() -> None:
-                        clusterd = c.compose["services"]["clusterd"]
-                        try:
-                            subprocess.run(
-                                ["docker", "pull", clusterd["image"]],
-                                check=True,
-                                capture_output=True,
-                                stdin=subprocess.DEVNULL,
-                            )
-                            container_id = subprocess.check_output(
-                                ["docker", "create", clusterd["image"]], text=True
-                            ).strip()
-                            target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
-                            os.makedirs(target_dir, exist_ok=True)
-                            subprocess.run(
-                                [
-                                    "docker",
-                                    "cp",
-                                    f"{container_id}:/usr/local/bin/clusterd",
-                                    target_dir,
-                                ],
-                                check=True,
-                            )
-                        except subprocess.CalledProcessError as e:
-                            print(f"Failed to get clusterd image: {e}")
-                            target_dir = os.getenv("CARGO_TARGET_DIR", "target")
-                            clusterd_target_dir = target_dir + "/ci-clusterd"
-                            spawn.runv(
-                                [
-                                    "cargo",
-                                    "build",
-                                    "--workspace",
-                                    "--bin",
-                                    "clusterd",
-                                    "--profile=ci",
-                                ],
-                                env={**env, "CARGO_TARGET_DIR": clusterd_target_dir},
-                            )
-                            shutil.copy(
-                                clusterd_target_dir + "/ci/clusterd",
-                                target_dir + "/ci/",
-                            )
-
-                    clusterd_thread = PropagatingThread(target=worker)
-                    clusterd_thread.start()
-                    spawn.runv(
-                        [
-                            "cargo",
-                            "nextest",
-                            "run",
-                            "--no-run",
-                            "--all-features",
-                            "--cargo-profile=ci",
-                            "--profile=ci",
-                            *(
-                                ["--package=mz-environmentd", "--package=mz-balancerd"]
-                                if buildkite.get_parallelism_count() == 2
-                                else ["--workspace"]
-                            ),
-                        ],
-                        env=env,
-                    )
-                    clusterd_thread.join()
-
-            metadata = json.loads(
-                subprocess.check_output(
-                    ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                shutil.copy(
+                    clusterd_target_dir + "/ci/clusterd",
+                    target_dir + "/ci/",
                 )
-            )
-            if sanitizer != Sanitizer.none:
-                # Can't just use --workspace because of https://github.com/rust-lang/cargo/issues/7160
-                for pkg in metadata["packages"]:
-                    try:
-                        spawn.runv(
-                            [
-                                "bin/ci-builder",
-                                "run",
-                                "nightly",
-                                *flatten(
-                                    [
-                                        ["--env", f"{key}={val}"]
-                                        for key, val in extra_env.items()
-                                    ]
-                                ),
-                                "cargo",
-                                "nextest",
-                                "run",
-                                "--package",
-                                pkg["name"],
-                                "--no-default-features",
-                                "--profile=sanitizer",
-                                "--cargo-profile=ci",
-                                # We want all tests to run
-                                "--no-fail-fast",
-                                "-Zbuild-std",
-                                "--target",
-                                SANITIZER_TARGET,
-                                *args.args,
-                            ],
-                            env=env,
-                        )
-                    except subprocess.CalledProcessError:
-                        print(f"Test against package {pkg['name']} failed, continuing")
 
-            else:
-                pkgs = [
-                    f"--package={p['name']}"
-                    for p in metadata["packages"]
-                    if p["name"] not in ("mz-environmentd", "mz-balancerd")
-                ]
+        clusterd_thread = PropagatingThread(target=worker)
+        clusterd_thread.start()
+        spawn.runv(
+            [
+                "cargo",
+                "nextest",
+                "run",
+                "--no-run",
+                *nextest_common_args,
+                *nextest_test_args,
+            ],
+            env=env,
+        )
+        clusterd_thread.join()
 
-                spawn.runv(
-                    [
-                        "cargo",
-                        "nextest",
-                        "run",
-                        # We want all tests to run
-                        "--no-fail-fast",
-                        "--all-features",
-                        "--profile=ci",
-                        "--cargo-profile=ci",
-                        # Be careful about raising this since it will cause
-                        # contention in cargo test when running against CRDB
-                        # for tagged builds. Also increases test flakiness in
-                        # general.
-                        f"--test-threads={multiprocessing.cpu_count()}",
-                        *(
-                            (
-                                pkgs
-                                if buildkite.get_parallelism_index() == 1
-                                else [
-                                    "--package=mz-environmentd",
-                                    "--package=mz-balancerd",
-                                ]
-                            )
-                            if buildkite.get_parallelism_count() == 2
-                            else ["--workspace"]
-                        ),
-                        *args.args,
-                    ],
-                    env=env,
-                )
+    spawn.runv(
+        [
+            "cargo",
+            "nextest",
+            "run",
+            # We want all tests to run
+            "--no-fail-fast",
+            *nextest_common_args,
+            # Be careful about raising this since it will cause
+            # contention in cargo test when running against CRDB
+            # for tagged builds. Also increases test flakiness in
+            # general.
+            f"--test-threads={multiprocessing.cpu_count()}",
+            *nextest_test_args,
+        ],
+        env=env,
+    )
