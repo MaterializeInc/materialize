@@ -223,7 +223,7 @@ CREATE SINK my_iceberg_sink
   )
   USING AWS CONNECTION aws_connection
   KEY (id)
-  ENVELOPE UPSERT
+  MODE UPSERT
   WITH (COMMIT INTERVAL = '10s');
 ```
 
@@ -231,7 +231,7 @@ CREATE SINK my_iceberg_sink
 
 | Option | Description |
 |--------|-------------|
-| `ENVELOPE UPSERT` | Required. Specifies that the sink uses upsert semantics based on the `KEY`. |
+| `MODE UPSERT` | Required. Specifies that the sink uses upsert semantics based on the `KEY`. |
 | `NAMESPACE` | The Iceberg namespace (database) containing the table. |
 | `TABLE` | The name of the Iceberg table to write to. |
 | `KEY` | **Required.** The columns that uniquely identify rows. Used to track updates and deletes. |
