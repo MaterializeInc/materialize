@@ -31,7 +31,7 @@ mz-cloud-resources = { path = "../cloud-resources" }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
 static_assertions = "1.1"
@@ -50,7 +50,7 @@ tracing-subscriber = "0.3.22"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.4"
+prost-build = "0.14.3"
 
 [features]
 default = ["workspace-hack"]

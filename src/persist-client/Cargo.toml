@@ -53,7 +53,7 @@ num_cpus = "1.17.0"
 prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = "1.0.149"
@@ -61,7 +61,8 @@ timely = "0.25.1"
 tokio = { version = "1.48.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.4.7"
 tokio-stream = "0.1.18"
-tonic = "0.12.1"
+tonic = "0.14.2"
+tonic-prost = "0.14.2"
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
@@ -75,8 +76,8 @@ tempfile = "3.23.0"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
-tonic-build = "0.12.3"
+prost-build = "0.14.3"
+tonic-prost-build = "0.14.2"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]

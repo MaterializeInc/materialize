@@ -69,7 +69,7 @@ parquet = { version = "57", default-features = false, features = ["arrow", "brot
 pin-project = "1.1.10"
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.14.0", default-features = false }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
 rand-8 = { package = "rand", version = "0.8.5" }
@@ -100,7 +100,7 @@ arrow-ipc = "57"
 
 [dev-dependencies]
 async-trait = "0.1.89"
-axum = "0.7.5"
+axum = "0.8.8"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 humantime = "2.3.0"
 mz-http-util = { path = "../http-util" }

@@ -30,7 +30,6 @@ use std::io;
 use std::io::IsTerminal;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -40,11 +39,13 @@ use derivative::Derivative;
 use http::HeaderMap;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
-use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;
 use opentelemetry::{KeyValue, global};
+use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::runtime::Tokio;
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use opentelemetry_sdk::{Resource, trace};
 use prometheus::IntCounter;
 use tonic::metadata::MetadataMap;
@@ -364,9 +365,7 @@ where
         // with the timeout configured according to:
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
         let channel = Endpoint::from_shared(otel_config.endpoint)?
-            .timeout(Duration::from_secs(
-                opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
-            ))
+            .timeout(opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT)
             // TODO(guswynn): investigate if this should be non-lazy.
             .connect_with_connector_lazy({
                 let mut http = HttpConnector::new();
@@ -382,10 +381,11 @@ where
                     ),
                 ))
             });
-        let exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
             .with_channel(channel)
-            .with_metadata(MetadataMap::from_headers(otel_config.headers));
+            .with_metadata(MetadataMap::from_headers(otel_config.headers))
+            .build()?;
         let batch_config = opentelemetry_sdk::trace::BatchConfigBuilder::default()
             .with_max_queue_size(otel_config.max_batch_queue_size)
             .with_max_export_batch_size(otel_config.max_export_batch_size)
@@ -393,68 +393,74 @@ where
             .with_scheduled_delay(otel_config.batch_scheduled_delay)
             .with_max_export_timeout(otel_config.max_export_timeout)
             .build();
-        let tracer = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_trace_config(
-                trace::Config::default().with_resource(
-                    // The latter resources win, so if the user specifies
-                    // `service.name` in the configuration, it will override the
-                    // `service.name` value we configure here.
-                    Resource::new([KeyValue::new(
-                        "service.name",
-                        config.service_name.to_string(),
-                    )])
-                    .merge(&otel_config.resource),
-                ),
-            )
-            .with_exporter(exporter)
+        let batch_span_processor = BatchSpanProcessor::builder(exporter, Tokio)
             .with_batch_config(batch_config)
-            .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .unwrap()
+            .build();
+        let tracer = trace::SdkTracerProvider::builder()
+            .with_resource(
+                Resource::builder()
+                    .with_service_name(config.service_name.to_string())
+                    .with_attributes(
+                        otel_config
+                            .resource
+                            .iter()
+                            .map(|(k, v)| KeyValue::new(k.clone(), v.clone())),
+                        // TODO handle schema url?
+                    )
+                    .build(),
+            )
+            .with_span_processor(batch_span_processor)
+            .with_max_events_per_span(2048)
+            .build()
             .tracer(config.service_name);
 
-        // Create our own error handler to:
-        //   1. Rate limit the number of error logs. By default the OTel library will emit
-        //      an enormous number of duplicate logs if any errors occur, one per batch
-        //      send attempt, until the error is resolved.
-        //   2. Log the errors via our tracing layer, so they are formatted consistently
-        //      with the rest of our logs, rather than the direct `eprintln` used by the
-        //      OTel library.
-        const OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS: u64 = 30;
-        let last_log_in_epoch_seconds = AtomicU64::default();
-        opentelemetry::global::set_error_handler(move |err| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Failed to get duration since Unix epoch")
-                .as_secs();
-            let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
+        // The global error handler was removed:
+        // https://github.com/open-telemetry/opentelemetry-rust/issues/2175
+        // https://github.com/open-telemetry/opentelemetry-rust/pull/2357/changes
+        // https://github.com/open-telemetry/opentelemetry-rust/pull/2260
+        // TODO use a rate limit sampler like https://uptrace.dev/get/opentelemetry-rust/sampling#rate-limit-sampler
+        //// Create our own error handler to:
+        ////   1. Rate limit the number of error logs. By default the OTel library will emit
+        ////      an enormous number of duplicate logs if any errors occur, one per batch
+        ////      send attempt, until the error is resolved.
+        ////   2. Log the errors via our tracing layer, so they are formatted consistently
+        ////      with the rest of our logs, rather than the direct `eprintln` used by the
+        ////      OTel library.
+        //const OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS: u64 = 30;
+        //let last_log_in_epoch_seconds = AtomicU64::default();
+        //opentelemetry::global::set_error_handler(move |err| {
+        //    let now = std::time::SystemTime::now()
+        //        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        //        .expect("Failed to get duration since Unix epoch")
+        //        .as_secs();
+        //    let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
 
-            if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
-                if last_log_in_epoch_seconds
-                    .compare_exchange_weak(last_log, now, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_err()
-                {
-                    return;
-                }
-                use crate::error::ErrorExt;
-                match err {
-                    Error::Trace(err) => {
-                        warn!("OpenTelemetry error: {}", err.display_with_causes());
-                    }
-                    // TODO(guswynn): turn off the metrics feature?
-                    Error::Metric(err) => {
-                        warn!("OpenTelemetry error: {}", err.display_with_causes());
-                    }
-                    Error::Other(err) => {
-                        warn!("OpenTelemetry error: {}", err);
-                    }
-                    _ => {
-                        warn!("unknown OpenTelemetry error");
-                    }
-                }
-            }
-        })
-        .expect("valid error handler");
+        //    if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
+        //        if last_log_in_epoch_seconds
+        //            .compare_exchange_weak(last_log, now, Ordering::Relaxed, Ordering::Relaxed)
+        //            .is_err()
+        //        {
+        //            return;
+        //        }
+        //        use crate::error::ErrorExt;
+        //        match err {
+        //            Error::Trace(err) => {
+        //                warn!("OpenTelemetry error: {}", err.display_with_causes());
+        //            }
+        //            // TODO(guswynn): turn off the metrics feature?
+        //            Error::Metric(err) => {
+        //                warn!("OpenTelemetry error: {}", err.display_with_causes());
+        //            }
+        //            Error::Other(err) => {
+        //                warn!("OpenTelemetry error: {}", err);
+        //            }
+        //            _ => {
+        //                warn!("unknown OpenTelemetry error");
+        //            }
+        //        }
+        //    }
+        //})
+        //.expect("valid error handler");
 
         let (filter, filter_handle) = reload::Layer::new({
             let mut filter = otel_config.filter;
@@ -470,7 +476,6 @@ where
             // logged to a Span, once this max is passed, old events will get dropped
             //
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
-            .max_events_per_span(2048)
             .with_tracer(tracer)
             .and_then(metrics_layer)
             // WARNING, ENTERING SPOOKY ZONE 2.0
@@ -707,7 +712,7 @@ impl OpenTelemetryContext {
     /// defaulting to the default `Context`.
     pub fn attach_as_parent(&self) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
-        tracing::Span::current().set_parent(parent_cx);
+        let _ = tracing::Span::current().set_parent(parent_cx);
     }
 
     /// Attaches this `Context` to the given [`tracing`] Span, as its parent.
@@ -718,7 +723,7 @@ impl OpenTelemetryContext {
     /// defaulting to the default `Context`.
     pub fn attach_as_parent_to(&self, span: &Span) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
-        span.set_parent(parent_cx);
+        let _ = span.set_parent(parent_cx);
     }
 
     /// Obtains a `Context` from the current [`tracing`] span.

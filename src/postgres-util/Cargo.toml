@@ -28,7 +28,7 @@ proptest = { version = "1.9.0", default-features = false, features = [
     "std",
 ], optional = true }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = [
+prost = { version = "0.14.3", features = [
     "no-recursion-limit",
 ], optional = true }
 serde = { version = "1.0.219", features = ["derive"], optional = true }
@@ -53,7 +53,7 @@ tunnel = [
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
+prost-build = "0.14.3"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

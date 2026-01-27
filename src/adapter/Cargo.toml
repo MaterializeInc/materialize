@@ -74,9 +74,9 @@ mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 openssl = { version = "0.10.75", features = ["vendored"] }
-opentelemetry = { version = "0.24.0", features = ["trace"] }
+opentelemetry = { version = "0.31.0", features = ["trace"] }
 prometheus = { version = "0.14.0", default-features = false }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 qcell = "0.5"
 rand = "0.9.2"
 rand_chacha = "0.9.0"
@@ -93,7 +93,7 @@ tokio-postgres = { version = "0.7.15" }
 tokio-stream = "0.1.18"
 tracing = "0.1.44"
 tracing-core = "0.1.35"
-tracing-opentelemetry = { version = "0.25.0" }
+tracing-opentelemetry = { version = "0.32.1" }
 tracing-subscriber = "0.3.22"
 thiserror = "2.0.18"
 url = "2.5.8"

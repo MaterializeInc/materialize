@@ -29,13 +29,17 @@ fn main() {
 
     const ATTR: &str = "#[derive(::serde::Serialize, ::serde::Deserialize)]";
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         // Enabling `emit_rerun_if_changed` will rerun the build script when
         // anything in the include directory (..) changes. This causes quite a
         // bit of spurious recompilation, so we disable it. The default behavior
         // is to re-run if any file in the crate changes; that's still a bit too
         // broad, but it's better.
         .emit_rerun_if_changed(false)
-        .compile_protos_with_config(config, &["destination_sdk.proto"], includes_directories)
+        .compile_with_config(
+            config,
+            &[PathBuf::from("destination_sdk.proto")],
+            includes_directories,
+        )
         .unwrap();
 }

@@ -326,10 +326,6 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
-# Waiting on https://github.com/MaterializeInc/tracing/pull/1 to be submitted
-# upstream.
-tracing-opentelemetry = { git = "https://github.com/MaterializeInc/tracing-opentelemetry.git" }
-
 # Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
 
@@ -358,6 +354,11 @@ iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.g
 # Hopefully we can upstream these changes eventually.
 # Additionally we keep the apache crates updated to latest versions.
 duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
+
+# Just waiting on them to do a release, for updated deps. No changes on our fork.
+jemalloc_pprof = { git = "https://github.com/MaterializeInc/rust-jemalloc-pprof.git", rev = "df74643a3914e9b7595f828aa4dc9f0d7ab1a127" }
+pprof_util = { git = "https://github.com/MaterializeInc/rust-jemalloc-pprof.git", rev = "df74643a3914e9b7595f828aa4dc9f0d7ab1a127" }
+mappings = { git = "https://github.com/MaterializeInc/rust-jemalloc-pprof.git", rev = "df74643a3914e9b7595f828aa4dc9f0d7ab1a127" }
 
 
 # BEGIN LINT CONFIG
