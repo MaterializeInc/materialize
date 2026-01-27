@@ -19,11 +19,19 @@ from materialize import MZ_ROOT
 
 def keywords() -> set[str]:
     with open(MZ_ROOT / "src" / "sql-lexer" / "src" / "keywords.txt") as f:
-        return set(
+        result = set(
             line.strip().lower()
             for line in f.readlines()
             if not line.startswith("#") and len(line.strip()) > 0
         )
+    # On a fresh Materialize: SELECT distinct(name) FROM mz_objects;
+    with open(MZ_ROOT / "test" / "workload-replay" / "objects.txt") as f:
+        result |= set(
+            line.strip().lower()
+            for line in f.readlines()
+            if not line.startswith("#") and len(line.strip()) > 0
+        )
+    return result
 
 
 def main() -> int:
@@ -113,7 +121,7 @@ def main() -> int:
                 count["tables"] += 1
                 new_table_name = set_name(table_name, f"table_{count['tables']}")
                 old_columns = table["columns"]
-                table["columns"] = {}
+                table["columns"] = []
                 for column in old_columns:
                     count["columns"] += 1
                     new_column_name = set_name(
@@ -205,6 +213,7 @@ def main() -> int:
             new_database[new_schema_name] = new_schema
         new["databases"][new_db_name] = new_database
 
+    # TODO: Case discrepancies are not handled. You can call a column `mintimestamp`, but then use it as `minTimestamp`
     pattern = re.compile(
         "|".join(map(re.escape, sorted(mapping, key=len, reverse=True)))
     )
@@ -237,6 +246,8 @@ def main() -> int:
                     for column in child["columns"]:
                         if column["type"] in mapping:
                             column["type"] = mapping[column["type"]]
+                    replace_substr(child, "create_sql")
+                replace_substr(source, "create_sql")
             for view in schema["views"].values():
                 replace_substr(view, "create_sql")
             for mv in schema["materialized_views"].values():
@@ -246,9 +257,11 @@ def main() -> int:
             for sink in schema["sinks"].values():
                 replace_substr(sink, "create_sql")
     for query in workload["queries"]:
-        query["cluster"] = mapping[query["cluster"]]
-        query["database"] = mapping[query["database"]]
-        query["search_path"] = [mapping[schema] for schema in query["search_path"]]
+        query["cluster"] = mapping.get(query["cluster"], query["cluster"])
+        query["database"] = mapping.get(query["database"], query["database"])
+        query["search_path"] = [
+            mapping.get(schema, schema) for schema in query["search_path"]
+        ]
         replace_substr(query, "sql")
         new["queries"].append(query)
     # TODO: Anonymize literals in queries?

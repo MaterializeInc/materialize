@@ -2498,7 +2498,11 @@ def create_ingestions(
 
 
 def run_query(
-    c: Composition, query: dict[str, Any], stats: dict[str, Any], verbose: bool
+    c: Composition,
+    query: dict[str, Any],
+    stats: dict[str, Any],
+    verbose: bool,
+    stop_event: threading.Event,
 ) -> None:
     conn = c.sql_connection(user="mz_system", port=6877)
     with conn.cursor() as cur:
@@ -2510,20 +2514,58 @@ def run_query(
         cur.execute(SQL("SET cluster = {}").format(Literal(query["cluster"])))
         cur.execute(SQL("SET database = {}").format(Literal(query["database"])))
         cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
+
         stats["total"] += 1
+
         try:
             sql, params = pg_params_to_psycopg(query["sql"], query["params"])
             # TODO: Better repacements for <REDACTED>, but requires parsing the SQL, figuring out the column name, object name, looking up the data type, etc.
             sql = sql.replace("'<REDACTED'>", "NULL")
+
             start_time = time.time()
-            cur.execute(sql.encode(), params)
-            end_time = time.time()
-            stats["timings"].append((sql, end_time - start_time))
-            if verbose:
-                print(f"Success: {sql} (params: {params})")
+
+            if query["statement_type"] == "subscribe":
+                if query.get("duration"):
+                    duration = query["duration"]
+                    cur.execute(
+                        SQL("SET LOCAL statement_timeout = {}").format(
+                            Literal(int(duration * 1000))
+                        )
+                    )
+                    end_deadline = start_time + duration
+                row_count = 0
+                try:
+                    for row in cur.stream(sql.encode(), params):
+                        row_count += 1
+                        if query.get("duration"):
+                            if time.time() >= end_deadline:
+                                break
+                        if stop_event.is_set():
+                            return
+                except psycopg.errors.QueryCanceled:
+                    pass
+
+                end_time = time.time()
+                stats["timings"].append((sql, end_time - start_time))
+                stats.setdefault("subscribe_rows", 0)
+
+                if verbose:
+                    print(
+                        f"Success: {sql} ({end_time - start_time:.2f}s), rows: {row_count}"
+                    )
+
+            else:
+                cur.execute(sql.encode(), params)
+                end_time = time.time()
+                stats["timings"].append((sql, end_time - start_time))
+
+                if verbose:
+                    print(f"Success: {sql} (params: {params})")
+
         except psycopg.Error as e:
             stats["failed"] += 1
             stats["errors"][f"{e.sqlstate}: {e}"].append(sql)
+
             if query["finished_status"] == "success":
                 if "unknown catalog item" not in str(e):
                     print(f"Failed: {sql} (params: {params})")
@@ -2550,7 +2592,7 @@ def continuous_queries(
     futures: set[concurrent.futures.Future[None]] = set()
 
     def submit_query(query: dict[str, Any]) -> None:
-        fut = executor.submit(run_query, c, query, stats, verbose)
+        fut = executor.submit(run_query, c, query, stats, verbose, stop_event)
         futures.add(fut)
 
     try:
@@ -2995,8 +3037,8 @@ def compare_table(
         rows.append(
             (
                 "Data ingestion time (s)",
-                stats_old["data_ingestion"]["time"],
-                stats_new["object_creation"]["time"],
+                stats_old["initial_data"]["time"],
+                stats_new["initial_data"]["time"],
                 1.2,
             )
         )
@@ -3061,7 +3103,7 @@ def compare_table(
 
     output_lines = [
         f"{'METRIC':<24} | {'OLD':^12} | {'NEW':^12} | {'CHANGE':^9} | {'THRESHOLD':^9} | {'REGRESSION?':^12}",
-        "-" * 93,
+        "-" * 92,
     ]
 
     regressed = False
@@ -3075,7 +3117,9 @@ def compare_table(
             flag = "!!YES!!"
         else:
             flag = "no"
-        threshold_field = f"{threshold:>9.3f}" if threshold is not None else ""
+        threshold_field = (
+            f"{(threshold - 1) * 100:>8.0f}%" if threshold is not None else ""
+        )
         output_lines.append(
             f"{name:<24} | "
             f"{old:>12.3f} | "
