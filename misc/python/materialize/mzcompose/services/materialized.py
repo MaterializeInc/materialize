@@ -35,6 +35,7 @@ from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.services.postgres import (
     METADATA_STORE,
+    REQUIRES_EXTERNAL_METADATA_STORE,
 )
 
 
@@ -76,7 +77,7 @@ class Materialized(Service):
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_metadata_store: str | bool = False,
+        external_metadata_store: str | bool = REQUIRES_EXTERNAL_METADATA_STORE,
         external_blob_store: str | bool = False,
         blob_store_is_azure: bool = False,
         unsafe_mode: bool = True,
