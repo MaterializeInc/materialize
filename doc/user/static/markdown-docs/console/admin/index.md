@@ -1,9 +1,5 @@
 # Admin (Cloud-only)
-
 Administration component of the Materialize console
-
-
-
 The Materialize Console provides an **Admin** section where you can manage
 client credentials and, for administrators, review your usage and billing
 information.

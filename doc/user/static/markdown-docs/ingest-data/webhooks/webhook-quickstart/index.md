@@ -1,17 +1,11 @@
 # Webhooks quickstart
-
 Learn and prototype with the webhook source without external deoendencies
-
-
-
 Webhook sources let your applications push webhook events into Materialize. This
 quickstart uses an embedded **webhook event generator** that makes it easier for
 you to learn and prototype with no external dependencies.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin

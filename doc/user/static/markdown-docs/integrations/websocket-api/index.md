@@ -1,9 +1,5 @@
 # Connect to Materialize via WebSocket
-
 How to use Materialize via WebSocket
-
-
-
 
 
 You can access Materialize through its interactive WebSocket API endpoint:

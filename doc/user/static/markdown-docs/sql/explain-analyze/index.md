@@ -1,9 +1,5 @@
 # EXPLAIN ANALYZE
-
 Reference page for `EXPLAIN ANALYZE`. `EXPLAIN ANALYZE` is used to understand the performance of indexes and materialized views.
-
-
-
 `EXPLAIN ANALYZE`:
 
 - Summarizes cluster status.
@@ -15,7 +11,6 @@ Reference page for `EXPLAIN ANALYZE`. `EXPLAIN ANALYZE` is used to understand th
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -37,7 +32,6 @@ EXPLAIN ANALYZE CLUSTER
 ```
 > **Tip:** If you want to specify both `CPU` or `MEMORY`, they may be listed in any order;
 > however, each may appear only once.
->
 
 
 Parameter    | Description
@@ -52,11 +46,8 @@ Parameter    | Description
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the explainee are
-contained in.</li>
-</ul>
-
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.
 
 ## Examples
 
@@ -174,8 +165,6 @@ For the below example, assume there are 2 workers in the cluster.
 
 > **Tip:** To determine how many workers a given cluster size has, you can query
 > [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes).
->
->
 
 
 You can explain `MEMORY` and/or `CPU` with the `WITH SKEW` option. For example,

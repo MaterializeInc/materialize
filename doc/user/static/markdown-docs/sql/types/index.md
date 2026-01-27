@@ -253,9 +253,7 @@ Arrays are a multidimensional sequence of any non-array type.
 > compatibility views in the [system catalog](/sql/system-catalog/) must expose
 > array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 > interoperate well with modern data formats like JSON and Avro.
->
 > Use the [`list` type](/sql/types/list) instead.
->
 
 
 ## Details
@@ -559,7 +557,6 @@ You can [cast](../../functions/cast) `bytea` to [`text`](../text) by assignment.
 > [hex-formatted](#hex-format) string, even if the byte array consists entirely of
 > printable characters. See [handling character data](#handling-character-data)
 > for alternatives.
->
 
 
 #### To `bytea`
@@ -2342,7 +2339,6 @@ SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
 
 > **Note:** Like [array containment operators in PostgreSQL](https://www.postgresql.org/docs/current/functions-array.html#FUNCTIONS-ARRAY),
 > list containment operators in Materialize **do not** account for duplicates.
->
 
 
 
@@ -2444,7 +2440,7 @@ Return the number of elements in <code>m</code>.#### `map_build(kvs: list record
 Builds a map from a list of records whose fields are two elements, the
 first of which is <code>text</code>. In the face of duplicate keys, <code>map_build</code> retains
 value from the record in the latest positition. This function is
-purpose-built to process <a href="/sql/create-source/kafka/#headers">Kafka headers</a>.#### `map_agg(keys: text, values: T) -> map[text=>T]`
+purpose-built to process <a href="/sql/create-source/kafka/#headers" >Kafka headers</a>.#### `map_agg(keys: text, values: T) -> map[text=>T]`
 
 Aggregate keys and values (including nulls) as a map [(docs)](/sql/functions/map_agg)
 

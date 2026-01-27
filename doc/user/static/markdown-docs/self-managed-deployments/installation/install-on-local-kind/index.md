@@ -1,9 +1,5 @@
 # Install locally on kind
-
 Deploy Self-managed Materialize to a local kind cluster.
-
-
-
 Self-managed Materialize requires: a Kubernetes (v1.31+) cluster; PostgreSQL as
 a metadata database; blob storage; and a license key.
 
@@ -17,13 +13,10 @@ and deploys the following components:
 - Materialize as a containerized application into your local `kind` cluster.
 
 > **Important:** This tutorial is for local evaluation/testing purposes only.
->
 > - The tutorial uses sample configuration files that are for evaluation/testing
 >   purposes only.
 > - The tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
 >   refer to your organization's official security practices.
->
->
 
 
 ## Prerequisites
@@ -283,8 +276,6 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
       > **Important:** This tutorial is for local evaluation/testing purposes only. For simplicity,
 >       the tutorial uses a Kubernetes metrics server with TLS disabled. In practice,
 >       refer to your organization's official security practices.
->
->
 
 
       ```shell
@@ -401,9 +392,6 @@ Starting in v26.0, Self-Managed Materialize requires a license key.
 >       Refer to the [Troubleshooting Console
 >       Unresponsiveness](/self-managed-deployments/troubleshooting/#troubleshooting-console-unresponsiveness)
 >       guide.
->
->
->
 
 
 ## Next steps

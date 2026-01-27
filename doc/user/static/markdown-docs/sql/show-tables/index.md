@@ -1,9 +1,5 @@
 # SHOW TABLES
-
 `SHOW TABLES` returns a list of all tables available in Materialize.
-
-
-
 `SHOW TABLES` returns a list of all tables available in Materialize.
 
 ## Syntax

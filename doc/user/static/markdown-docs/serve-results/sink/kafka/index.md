@@ -1,9 +1,5 @@
 # Kafka and Redpanda
-
 How to export results from Materialize to Kafka/Redpanda.
-
-
-
 <!-- Ported over content from sink-kafka.md. -->
 
 ## Connectors
@@ -18,8 +14,6 @@ For details on the connector, including syntax, supported formats and examples,
 refer to [`CREATE SINK`](/sql/create-sink/kafka).
 
 > **Tip:** Redpanda uses the same syntax as Kafka [`CREATE SINK`](/sql/create-sink/kafka).
->
->
 
 
 ## Features
@@ -66,8 +60,6 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Segment bytes.      | Defaults to 128 MiB. We recommend going no higher than 256 MiB to avoid
 slow startups when creating new sinks, as they must process the entire progress topic on startup.
 > **Warning:** Dropping a Kafka sink doesn't drop the corresponding topic. For more information, see the [Kafka documentation](https://kafka.apache.org/documentation/).
->
->
 
 
 ### Exactly-once processing

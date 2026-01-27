@@ -1,9 +1,5 @@
 # COMMENT ON
-
 `COMMENT ON` adds or updates the comment of an object.
-
-
-
 Use `COMMENT ON` to:
 
 - Add a comment to an object.
@@ -39,11 +35,8 @@ catalog table.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the object being commented on (unless the object is a role).</li>
-<li>To comment on a role, you must have the <code>CREATEROLE</code> privilege.</li>
-</ul>
-
+- Ownership of the object being commented on (unless the object is a role).
+- To comment on a role, you must have the `CREATEROLE` privilege.
 
 For more information on ownership and privileges, see [Role-based access
 control](/security/).

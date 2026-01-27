@@ -1,9 +1,5 @@
 # SHOW DEFAULT PRIVILEGES
-
 SHOW DEFAULT PRIVILEGES lists the default privileges granted on objects in Materialize.
-
-
-
 `SHOW DEFAULT PRIVILEGES` lists the default privileges granted on objects in Materialize.
 
 ## Syntax

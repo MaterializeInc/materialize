@@ -1,16 +1,10 @@
 # normalize function
-
 Returns a string normalized to the specified Unicode normalization form.
-
-
-
 `normalize` converts a string to a specified Unicode normalization form.
 
 ## Signatures
 
-<no value>
-
-```mzsql
+<no value>```mzsql
 normalize(str)
 normalize(str, form)
 
@@ -43,8 +37,6 @@ For more information, see:
 ## Examples
 
 Normalize a string using the default NFC form:
-
-
 ```mzsql
 SELECT normalize('é') AS normalized;
 
@@ -58,8 +50,6 @@ SELECT normalize('é') AS normalized;
 <hr/>
 
 NFC combines base character with combining marks:
-
-
 ```mzsql
 SELECT normalize('é', NFC) AS nfc;
 
@@ -73,8 +63,6 @@ SELECT normalize('é', NFC) AS nfc;
 <hr/>
 
 NFD decomposes into base character + combining accent:
-
-
 ```mzsql
 SELECT normalize('é', NFD) = E'e\u0301' AS is_decomposed;
 
@@ -88,8 +76,6 @@ SELECT normalize('é', NFD) = E'e\u0301' AS is_decomposed;
 <hr/>
 
 NFKC decomposes compatibility characters like ligatures:
-
-
 ```mzsql
 SELECT normalize('ﬁ', NFKC) AS decomposed;
 
@@ -103,8 +89,6 @@ SELECT normalize('ﬁ', NFKC) AS decomposed;
 <hr/>
 
 NFKC converts superscripts to regular characters:
-
-
 ```mzsql
 SELECT normalize('x²', NFKC) AS normalized;
 

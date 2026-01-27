@@ -1,9 +1,5 @@
 # Connect to Materialize via HTTP
-
 How to use Materialize via HTTP
-
-
-
 You can access Materialize through its "session-less" HTTP API endpoint:
 
 ```bash

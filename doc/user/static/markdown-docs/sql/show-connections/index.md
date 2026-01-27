@@ -1,9 +1,5 @@
 # SHOW CONNECTIONS
-
 `SHOW CONNECTIONS` lists the connections configured in Materialize.
-
-
-
 `SHOW CONNECTIONS` lists the connections configured in Materialize.
 
 ## Syntax

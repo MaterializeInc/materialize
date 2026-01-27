@@ -1,9 +1,5 @@
 # RESET
-
 Reset a configuration parameter to its default value.
-
-
-
 `RESET` restores the value of a configuration parameter to its default value.
 This command is an alternative spelling for [`SET...TO DEFAULT`](../set).
 
@@ -20,8 +16,6 @@ Syntax element | Description
 ---------------|------------
 `<parameter_name>` | The configuration parameter's name.
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -84,11 +78,6 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Examples
 

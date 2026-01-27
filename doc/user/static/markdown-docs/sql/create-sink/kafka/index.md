@@ -1,13 +1,8 @@
 # CREATE SINK: Kafka/Redpanda
-
 Connecting Materialize to a Kafka or Redpanda broker sink
-
-
-
 > **Note:** The `CREATE SINK` syntax, supported formats, and features are the
 > same for Kafka and Redpanda broker. For simplicity, this page uses
 > "Kafka" to refer to both Kafka and Redpanda.
->
 
 
 `CREATE SINK` connects Materialize to an external system
@@ -551,8 +546,6 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Retention           | **Must be disabled.** Enabling retention can cause Materialize to violate its [exactly-once guarantees](#exactly-once-processing).
 | Progress topic | Tiered storage      | We recommend disabling tiered storage to allow for more aggressive data compaction. Fully compacted data requires minimal storage, typically only tens of bytes per sink, making it cost-effective to maintain directly on local disk.
 > **Warning:** Dropping a Kafka sink doesn't drop the corresponding topic. For more information, see the [Kafka documentation](https://kafka.apache.org/documentation/).
->
->
 
 
 ### Exactly-once processing
@@ -641,21 +634,15 @@ partioning](#custom-partitioning).
 
 To execute the `CREATE SINK` command, you need:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>SELECT</code> privileges on the item being written out to an external system.
-<ul>
-<li>NOTE: if the item is a materialized view, then the view owner must also have the necessary privileges to
-execute the view definition.</li>
-</ul>
-</li>
-<li><code>CREATE</code> privileges on the containing cluster if the sink is created in an existing cluster.</li>
-<li><code>CREATECLUSTER</code> privileges on the system if the sink is not created in an existing cluster.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the sink definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the
-statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `SELECT` privileges on the item being written out to an external system.
+  - NOTE: if the item is a materialized view, then the view owner must also have the necessary privileges to
+    execute the view definition.
+- `CREATE` privileges on the containing cluster if the sink is created in an existing cluster.
+- `CREATECLUSTER` privileges on the system if the sink is not created in an existing cluster.
+- `USAGE` privileges on all connections and secrets used in the sink definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the
+  statement are contained in.
 
 See also [Required Kafka ACLs](#required-kafka-acls).
 
@@ -747,7 +734,6 @@ There are three ways to resolve this error:
   > **Note:** Maintaining the `deduped` materialized view requires memory proportional to the
 >   number of records in `original_input`. Be sure to assign `deduped`
 >   to a cluster with adequate resources to handle your data volume.
->
 
 
 * Use the `NOT ENFORCED` clause to disable Materialize's validation of the key's
@@ -770,7 +756,6 @@ There are three ways to resolve this error:
   > **Warning:** If the key is not in fact unique, downstream consumers may not be able to
 >   correctly interpret the data in the topic, and Kafka key compaction may
 >   incorrectly garbage collect records from the topic.
->
 
 
 

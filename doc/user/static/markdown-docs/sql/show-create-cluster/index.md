@@ -1,9 +1,5 @@
 # SHOW CREATE CLUSTER
-
 `SHOW CREATE CLUSTER` returns the DDL statement used to create the cluster.
-
-
-
 `SHOW CREATE CLUSTER` returns the DDL statement used to create the cluster.
 
 ## Syntax

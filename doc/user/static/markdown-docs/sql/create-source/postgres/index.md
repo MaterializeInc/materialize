@@ -1,9 +1,5 @@
 # CREATE SOURCE: PostgreSQL (Legacy Syntax)
-
 Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC).
-
-
-
 > **Disambiguation:** This page reflects the legacy syntax, which requires downtime to handle upstream DDL changes. For the new syntax which can handle adding or dropping columns to the upstream tables without downtime, see the [new reference page](/sql/create-source/postgres-v2).
 
 
@@ -26,11 +22,9 @@ statements.
 > [Azure DB](/ingest-data/postgres-azure-db/),
 > [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 > [Self-hosted](/ingest-data/postgres-self-hosted/).
->
 
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -162,9 +156,6 @@ same source across multiple materializations.
 > unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>DROP SOURCE</code></a> or manually delete the replication slot.</p>
 > </li>
 > </ul>
->
->
->
 
 
 ##### PostgreSQL schemas
@@ -219,8 +210,6 @@ Materialize supports schema changes in the upstream database as follows:
 > additions and drops, see [`CREATE SOURCE (New
 > Syntax)`](/sql/create-source/postgres-v2/) and [`CREATE TABLE FROM
 > SOURCE`](/sql/create-table).
->
->
 
 <ul>
 <li>
@@ -362,7 +351,6 @@ create a new view (materialized or non-) that unions the new table.
 > [Azure DB](/ingest-data/postgres-azure-db/),
 > [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 > [Self-hosted](/ingest-data/postgres-self-hosted/).
->
 
 
 ### Creating a connection
@@ -395,7 +383,6 @@ through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 **AWS PrivateLink:**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -493,19 +480,9 @@ CREATE SOURCE mz_source
 
 ### Handling errors and schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 To handle upstream [schema changes](#schema-changes) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected

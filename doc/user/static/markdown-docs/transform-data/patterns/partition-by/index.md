@@ -1,9 +1,5 @@
 # Partitioning and filter pushdown
-
 Declare how collections are stored.
-
-
-
 [//]: # "TODO link to the source table docs once that feature is documented."
 
 A few types of Materialize collections are durably written to storage: [materialized views](/sql/create-materialized-view/), [tables](/sql/create-table), and [sources](/sql/create-source).
@@ -20,7 +16,6 @@ more efficient.
 
 > **Note:** The `PARTITION BY` option has no impact on the order in which records are returned by queries.
 > If you want to return results in a specific order, use an `ORDER BY` clause on your [`SELECT` statement](/sql/select/).
->
 
 
 ## Syntax
@@ -43,7 +38,6 @@ if many rows have the same `event_date`, those rows would be partitioned by the 
 Durable collections without a `PARTITION BY` option can be partitioned arbitrarily.
 
 > **Note:** The `PARTITION BY` option does not mean that rows with different values for the specified columns will be stored in different parts, only that rows with similar values for those columns should be stored together.
->
 
 
 ## Requirements
@@ -135,8 +129,6 @@ For timeseries or "event"-type collections, it's often useful to partition the d
 If you wait a few minutes longer until there are no events that match the temporal filter, you'll notice that not only does the query return zero rows, but the explain shows that we fetched zero parts.
 
 > **Note:** The exact numbers you see here may vary: parts can be much larger than a single row, and the actual level of filtering may fluctuate for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
->
->
 
 
 ### Partitioning by category
@@ -174,5 +166,3 @@ Other datasets don't have a strong timeseries component, but they do have a clea
     ```
 
 > **Note:** As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections... but for datasets of over a few gigabytes, we should reliably be able to filter down to a subset of the parts we'd otherwise need to fetch.
->
->

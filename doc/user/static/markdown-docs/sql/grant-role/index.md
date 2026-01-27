@@ -1,9 +1,5 @@
 # GRANT ROLE
-
 `GRANT` grants membership of one role to another role.
-
-
-
 `GRANT` grants membership of one role to another role. Roles can be members of
 other roles, as well as inherit all the privileges of those roles.
 
@@ -36,10 +32,7 @@ GRANT data_scientist TO joe, mike;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Useful views
 

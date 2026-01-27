@@ -1,9 +1,5 @@
 # COPY FROM
-
 `COPY FROM` copies data into a table using the COPY protocol.
-
-
-
 `COPY FROM` copies data into a table using the [Postgres `COPY` protocol][pg-copy-from].
 
 ## Syntax
@@ -72,11 +68,8 @@ COPY t FROM STDIN (DELIMITER '|');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the table.</li>
-<li><code>INSERT</code> privileges on the table.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the table.
+- `INSERT` privileges on the table.
 
 [pg-copy-from]: https://www.postgresql.org/docs/14/sql-copy.html
 

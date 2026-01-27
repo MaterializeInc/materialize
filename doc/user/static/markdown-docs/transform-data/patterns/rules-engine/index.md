@@ -1,9 +1,5 @@
 # Rules execution engine
-
 Encode rules as data and apply them using lateral joins.
-
-
-
 A rules engine is a powerful way to make decisions based on data.
 With Materialize, you can execute those rules continuously.
 
@@ -92,7 +88,6 @@ LATERAL (
     ```
 
    > **Tip:** If running this example in a client, use `COPY(SUBSCRIBE...) TO STDOUT;`.
->
 
 
     ```nofmt

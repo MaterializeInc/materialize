@@ -1,9 +1,5 @@
 # Dataflow troubleshooting
-
 How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected.
-
-
-
 If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)
 and [`Transform data`](/transform-data/troubleshooting/) troubleshooting guides,
 going a level deeper in the stack might be needed. This guide collects common
@@ -118,7 +114,6 @@ queries we want to debug.
 > consequence, you should expect the results of the queries below to vary
 > depending on the values set for the `cluster` and `cluster_replica`
 > [configuration parameters](/sql/set/#other-configuration-parameters).
->
 
 
 <!--
@@ -532,4 +527,3 @@ index, you have to drop and recreate all downstream dependencies.
 > which incurs downtime while the objects are recreated and backfilled with
 > pre-existing data. We recommend doing a [blue/green deployment](/manage/dbt/blue-green-deployments/)
 > to handle these changes in production environments.
->

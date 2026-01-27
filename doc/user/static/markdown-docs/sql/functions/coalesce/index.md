@@ -1,9 +1,5 @@
 # COALESCE function
-
 Returns the first non-NULL element provided.
-
-
-
 `COALESCE` returns the first non-`NULL` element provided.
 
 ## Signatures

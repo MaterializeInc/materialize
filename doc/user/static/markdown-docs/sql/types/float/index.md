@@ -1,9 +1,5 @@
 # Floating-point types
-
 Express signed, inexact numbers
-
-
-
 ## `real` info
 
 Detail | Info

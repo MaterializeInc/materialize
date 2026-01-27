@@ -1,9 +1,5 @@
 # SUBSTRING function
-
 Returns substring at specified positions
-
-
-
 `SUBSTRING` returns a specified substring of a string.
 
 ## Signatures

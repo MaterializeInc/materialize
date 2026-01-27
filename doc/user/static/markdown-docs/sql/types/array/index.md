@@ -1,9 +1,5 @@
 # Array types
-
 Express sequences of other types
-
-
-
 Arrays are a multidimensional sequence of any non-array type.
 
 > **Warning:** We do not recommend using arrays, which exist in Materialize primarily to
@@ -11,9 +7,7 @@ Arrays are a multidimensional sequence of any non-array type.
 > compatibility views in the [system catalog](/sql/system-catalog/) must expose
 > array types. Unfortunately, PostgreSQL arrays have odd semantics and do not
 > interoperate well with modern data formats like JSON and Avro.
->
 > Use the [`list` type](/sql/types/list) instead.
->
 
 
 ## Details

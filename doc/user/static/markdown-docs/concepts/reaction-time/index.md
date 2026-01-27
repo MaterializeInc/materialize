@@ -1,9 +1,5 @@
 # Reaction Time, Freshness, and Query Latency
-
 Learn about indexes in Materialize.
-
-
-
 In operational data systems, the performance and responsiveness of queries depend not only on how fast a query runs, but also on how current the underlying data is. This page introduces three foundational concepts for evaluating and understanding system responsiveness in Materialize:
 
 * **Freshness**: the time it takes for a change in an upstream system to become visible in the results of a query.

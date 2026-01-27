@@ -45,8 +45,6 @@ that the subscription depends on to **retain history**.
 > **Important:** Configuring indexes to retain history is not recommended. Instead, consider
 > creating a materialized view for your subscription query and configuring the
 > history retention period on that view.
->
->
 
 
 To configure the history retention period for sources, tables and materialized
@@ -91,8 +89,6 @@ See also [Considerations](#considerations).
 > not recommended. Instead, consider creating a materialized view for your
 > subscription query and configuring the history retention period on that view.
 > See [Considerations](#considerations).
->
->
 
 
 To set the history retention period for [sources](/sql/create-source/),
@@ -291,7 +287,6 @@ more efficient.
 
 > **Note:** The `PARTITION BY` option has no impact on the order in which records are returned by queries.
 > If you want to return results in a specific order, use an `ORDER BY` clause on your [`SELECT` statement](/sql/select/).
->
 
 
 ## Syntax
@@ -314,7 +309,6 @@ if many rows have the same `event_date`, those rows would be partitioned by the 
 Durable collections without a `PARTITION BY` option can be partitioned arbitrarily.
 
 > **Note:** The `PARTITION BY` option does not mean that rows with different values for the specified columns will be stored in different parts, only that rows with similar values for those columns should be stored together.
->
 
 
 ## Requirements
@@ -406,8 +400,6 @@ For timeseries or "event"-type collections, it's often useful to partition the d
 If you wait a few minutes longer until there are no events that match the temporal filter, you'll notice that not only does the query return zero rows, but the explain shows that we fetched zero parts.
 
 > **Note:** The exact numbers you see here may vary: parts can be much larger than a single row, and the actual level of filtering may fluctuate for small datasets as data is compacted together internally. However, datasets of a few gigabytes or larger should reliably see benefits from this optimization.
->
->
 
 
 ### Partitioning by category
@@ -445,8 +437,6 @@ Other datasets don't have a strong timeseries component, but they do have a clea
     ```
 
 > **Note:** As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections... but for datasets of over a few gigabytes, we should reliably be able to filter down to a subset of the parts we'd otherwise need to fetch.
->
->
 
 
 
@@ -500,8 +490,6 @@ To use histograms to compute exact percentiles:
   > **Note:** The use of the cross join produces a number of outputs that is quadratic in
 >   the input. And, while the results will only be linear in size, it may take a
 >   disproportionate amount of time to produce and maintain.
->
->
 
 
 ### Example
@@ -552,8 +540,6 @@ To use histograms to compute exact percentiles:
    > **Note:** The use of the cross join produces a number of outputs that is quadratic in
 >    the input. And, while the results will only be linear in size, it may take a
 >    disproportionate amount of time to produce and maintain.
->
->
 
 
 1. You can then query `distribution` by the `cumulative_density` field to
@@ -601,8 +587,6 @@ same for HDR histograms.
 > `input` table from the [Using histograms to compute exact percentiles
 > example](#example). If you have created and populated the table, skip the
 > corresponding steps.
->
->
 
 
 1. Create a table `input`:
@@ -906,7 +890,6 @@ LATERAL (
     ```
 
    > **Tip:** If running this example in a client, use `COPY(SUBSCRIBE...) TO STDOUT;`.
->
 
 
     ```nofmt
@@ -994,7 +977,6 @@ WHERE mz_now() <= event_ts + INTERVAL '5min'
 > **Note:** It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
 > However, there are currently no valid operators for the [`mz_timestamp`
 > type](/sql/types/mz_timestamp) that would allow this.  See [`mz_now()` requirements and restrictions](#mz_now-requirements-and-restrictions).
->
 
 
 The following diagram shows record `B` falling out of the result set as time
@@ -1014,8 +996,6 @@ moves forward:
 
 > **Tip:** When possible, prefer materialized views when using temporal filter to take
 > advantage of custom consolidation.
->
->
 
 
 When creating a temporal filter using
@@ -1072,8 +1052,6 @@ After you have tried the examples, make sure to drop these objects and spin down
 
 > **Tip:** When possible, prefer materialized views when using temporal filter to take
 > advantage of custom consolidation.
->
->
 
 
 ### Sliding window
@@ -1306,4 +1284,3 @@ The filter in our query appears in the `pushdown=` list at the bottom of the out
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
 > **Note:** See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
->

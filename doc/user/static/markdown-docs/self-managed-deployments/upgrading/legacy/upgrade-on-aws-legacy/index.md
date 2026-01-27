@@ -1,9 +1,5 @@
 # Upgrade on AWS (Legacy Terraform)
-
 Procedure to upgrade your Materialize operator and instances running on AWS
-
-
-
 > **Disambiguation:** - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your Terraform version to `v0.6.1` or higher, <a href="https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061" >AWS Terraform v0.6.1 Upgrade Notes</a>. - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided Terraforms, you must prepare your nodes by adding the required labels. For detailed instructions, see [Prepare for swap and upgrade to v26.0](/installation/upgrade-to-swap/).
 
 
@@ -21,8 +17,6 @@ or the root).
 > at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
 > but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
 > not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216).
->
->
 
 
 
@@ -49,8 +43,6 @@ to upgrade.
 > Materialize instances are running before the the old instance are removed.
 > When performing a rolling upgrade, ensure you have enough resources to support
 > having both the old and new Materialize instances running.
->
->
 
 
 ### Terraform
@@ -98,11 +90,7 @@ deployment does not have a license key configured, contact <a href="https://mate
 
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated Terraform modules to your existing deployments.
->
->
 >    See [Materialize on AWS releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-aws-terraform-module) for notable changes.
->
->
 
 
 

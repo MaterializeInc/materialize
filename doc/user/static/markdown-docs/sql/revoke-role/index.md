@@ -1,9 +1,5 @@
 # REVOKE ROLE
-
 `REVOKE` revokes membership of one role from another role.
-
-
-
 `REVOKE` revokes membership of a role from the target role.
 
 ## Syntax
@@ -32,10 +28,7 @@ REVOKE data_scientist FROM joe, mike;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the systems.</li>
-</ul>
-
+- `CREATEROLE` privileges on the systems.
 
 ## Useful views
 

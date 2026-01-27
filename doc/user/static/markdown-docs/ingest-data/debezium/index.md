@@ -1,9 +1,5 @@
 # Debezium
-
 How to propagate Change Data Capture (CDC) data from a database to Materialize using Debezium
-
-
-
 You can use [Debezium](https://debezium.io/) to propagate Change Data Capture
 (CDC) data to Materialize from databases that are not supported via native
 connectors. For PostgreSQL and MySQL databases, we **strongly recommend** using

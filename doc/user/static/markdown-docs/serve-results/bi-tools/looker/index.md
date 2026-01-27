@@ -1,9 +1,5 @@
 # Looker
-
 How to create dashboards with Looker
-
-
-
 You can use [Looker](https://cloud.google.com/looker-bi) to create dashboards
 based on the data maintained in Materialize.
 

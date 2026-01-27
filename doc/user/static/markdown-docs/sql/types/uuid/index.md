@@ -1,9 +1,5 @@
 # uuid type
-
 Expresses a universally-unique identifier
-
-
-
 `uuid` data expresses a universally-unique identifier (UUID).
 
 Detail | Info

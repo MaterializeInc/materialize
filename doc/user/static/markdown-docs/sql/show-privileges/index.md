@@ -1,9 +1,5 @@
 # SHOW PRIVILEGES
-
 SHOW PRIVILEGES lists the privileges granted on all objects via role-based access control (RBAC).
-
-
-
 `SHOW PRIVILEGES` lists the privileges granted on all objects via
 [role-based access control](/security/) (RBAC).
 

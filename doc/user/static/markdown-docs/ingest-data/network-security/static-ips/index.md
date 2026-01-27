@@ -1,9 +1,5 @@
 # Static IP addresses (Cloud-only)
-
 Materialize Cloud provides static IP addresses that you can use to configure egress policies in your virtual networks that target outbound traffic to Materialize.
-
-
-
 Each Materialize Cloud region is associated with a unique set of static egress
 [Classless Inter-Domain Routing (CIDR)](https://aws.amazon.com/what-is/cidr/)
 blocks. All connections to the public internet initiated by your Materialize
@@ -11,7 +7,6 @@ region will originate from an IP address in the provided blocks.
 
 > **Note:** On rare occasion, we may need to change the static egress CIDR blocks associated
 > with a region. We make every effort to provide advance notice of such changes.
->
 
 
 When connecting Materialize to services in your private networks (e.g., Kafka,

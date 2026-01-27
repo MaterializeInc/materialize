@@ -1,9 +1,5 @@
 # SHOW DATABASES
-
 `SHOW DATABASES` returns a list of all databases in Materialize.
-
-
-
 `SHOW DATABASES` returns a list of all databases in Materialize.
 
 ## Syntax

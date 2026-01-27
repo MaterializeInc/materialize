@@ -1,9 +1,5 @@
 # FAQ
-
 Frequently asked questions about self-managed deployments.
-
-
-
 ## How long do license keys last?
 
 Community edition license keys are valid for one year. Enterprise license

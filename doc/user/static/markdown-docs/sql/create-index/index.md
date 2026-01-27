@@ -1,9 +1,5 @@
 # CREATE INDEX
-
 `CREATE INDEX` creates an in-memory index on a source, view, or materialized view.
-
-
-
 `CREATE INDEX` creates an in-memory [index](/concepts/indexes/) on a source, view, or materialized view.
 
 In Materialize, indexes store query results in memory within a specific [cluster](/concepts/clusters/), and keep these results **incrementally updated** as new data arrives. This ensures that indexed data remains [fresh](/concepts/reaction-time), reflecting the latest changes with minimal latency.
@@ -159,34 +155,34 @@ the view results in durable storage and can be accessed across clusters, indexes
 on views compute and store view results in memory within a <strong>single</strong> cluster.
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 
 #### Indexes and query optimizations
@@ -282,14 +278,11 @@ For more details on using indexes to optimize queries, see [Optimization](../../
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the object on which to create the index.</li>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>CREATE</code> privileges on the containing cluster.</li>
-<li><code>USAGE</code> privileges on all types used in the index definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all types in the statement are contained in.</li>
-</ul>
-
+- Ownership of the object on which to create the index.
+- `CREATE` privileges on the containing schema.
+- `CREATE` privileges on the containing cluster.
+- `USAGE` privileges on all types used in the index definition.
+- `USAGE` privileges on the schemas that all types in the statement are contained in.
 
 ## Related pages
 

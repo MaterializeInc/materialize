@@ -1,9 +1,5 @@
 # mz secret
-
 The `mz secret` command manages users in a region.
-
-
-
 The `mz secret` command manages secrets in a region.
 
 ## `create`
@@ -22,7 +18,6 @@ new value, if it exists.
 
 > **Note:** Using this command is preferred to executing [`CREATE SECRET`](/sql/create-secret) directly, as it avoids leaving the
 > secret's value in your shell history.
->
 
 
 ### Arguments

@@ -1,9 +1,5 @@
 # Idiomatic Materialize SQL chart
-
 Cheatsheet of idiomatic Materialize SQL.
-
-
-
 Materialize follows the SQL standard (SQL-92) implementation and strives for
 compatibility with the PostgreSQL dialect. However, for some use cases,
 Materialize provides its own idiomatic query patterns that can provide better
@@ -191,27 +187,21 @@ WHERE order_date + interval '30' minutes >= mz_now()
 
 ## Window Functions
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 

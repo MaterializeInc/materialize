@@ -1,9 +1,5 @@
 # Amazon Managed Streaming for Apache Kafka (Amazon MSK)
-
 How to securely connect an Amazon MSK cluster as a source to Materialize.
-
-
-
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
 with the PostgreSQL ones. We should add information about using AWS IAM
 authentication then."
@@ -13,8 +9,6 @@ MSK cluster.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -52,7 +46,6 @@ connect:
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the Terraform module repositories for [Amazon MSK](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
 > and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
->
 
 
 This section covers how to create AWS PrivateLink connections

@@ -1,9 +1,5 @@
 # mz user
-
 The `mz user` command manages users in your organization.
-
-
-
 The `mz user` command manages users in your organization.
 
 ## `create`

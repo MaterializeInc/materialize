@@ -1,9 +1,5 @@
 # SHOW SOURCES
-
 `SHOW SOURCES` returns a list of all sources available in Materialize.
-
-
-
 `SHOW SOURCES` returns a list of all sources available in Materialize.
 
 ## Syntax

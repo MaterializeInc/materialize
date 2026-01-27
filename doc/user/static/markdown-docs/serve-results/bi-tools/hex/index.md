@@ -1,9 +1,5 @@
 # Hex
-
 How to create collaborative data notebooks with Hex
-
-
-
 This guide walks you through the steps required to use the collaborative data notebook [Hex](https://hex.tech/) with Materialize.
 
 ## Create an integration

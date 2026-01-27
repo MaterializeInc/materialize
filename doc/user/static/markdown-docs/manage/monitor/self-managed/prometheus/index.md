@@ -1,11 +1,6 @@
 # Grafana using Prometheus
-
 How to monitor the performance and overall health of your Materialize instance using Prometheus and Grafana.
-
-
-
 > **Warning:** The metrics scraped are unstable and may change across releases.
->
 
 
 This guide walks you through the steps required to monitor the performance and
@@ -20,7 +15,6 @@ Ensure you have:
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) installed and configured
 
 > **Important:** This guide assumes you have administrative access to your Kubernetes cluster and the necessary permissions to install Prometheus.
->
 
 
 ## 1. Download our Prometheus scrape configurations (`prometheus.yml`)
@@ -35,7 +29,6 @@ Ensure you have:
 ## 2. Install Prometheus to your Kubernetes cluster
 
   > **Note:** This guide uses the [prometheus-community](https://github.com/prometheus-community/helm-charts) Helm chart to install Prometheus.
->
 
 
 
@@ -67,7 +60,6 @@ Ensure you have:
     ```
 
     > **Warning:** The port forwarding method is for testing purposes only. For production environments, configure an ingress controller to securely expose the Grafana UI.
->
 
 
 3. Open the Grafana UI on [http://localhost:3000](http://localhost:3000) in a browser.

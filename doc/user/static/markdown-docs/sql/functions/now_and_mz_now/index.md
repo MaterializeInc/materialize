@@ -1,9 +1,5 @@
 # now and mz_now functions
-
 Details the differences between the `now()` and `mz_now()` functions.
-
-
-
 In Materialize, `now()` returns the value of the system clock when the
 transaction began as a [`timestamp with time zone`] value.
 

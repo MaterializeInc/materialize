@@ -1,9 +1,5 @@
 # justify_days function
-
 Adjust interval so 30-day time periods are represented as months
-
-
-
 `justify_days` returns a new [`interval`](../../types/interval) such that 30-day time periods are
 converted to months.
 

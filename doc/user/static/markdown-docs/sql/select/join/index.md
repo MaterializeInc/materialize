@@ -1,9 +1,5 @@
 # JOIN
-
 `JOIN` lets you combine two or more table expressions.
-
-
-
 `JOIN` lets you combine two or more table expressions into a single table
 expression.
 
@@ -74,7 +70,6 @@ left-hand row according to the usual rules of the selected join type.
 > materialize a view containing a `LATERAL` subquery without first inspecting the
 > plan via the [`EXPLAIN PLAN`](/sql/explain-plan/) statement. In many common patterns
 > involving `LATERAL` joins, Materialize can optimize away the join entirely.
->
 
 
 As a simple example, the following query uses `LATERAL` to count from 1 to `x`

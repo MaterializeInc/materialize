@@ -1,9 +1,5 @@
 # DROP VIEW
-
 `DROP VIEW` removes a view from Materialize.
-
-
-
 `DROP VIEW` removes a view from Materialize.
 
 ## Conceptual framework
@@ -48,11 +44,8 @@ DROP VIEW
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped view.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped view.
+- `USAGE` privileges on the containing schema.
 
 ## Related pages
 

@@ -1,9 +1,5 @@
 # mz config
-
 The `mz config` command manages global configuration parameters for `mz`.
-
-
-
 The `mz config` command manages [global configuration parameters] for `mz`.
 
 ## `get`

@@ -1,9 +1,5 @@
 # `SELECT` and `SUBSCRIBE`
-
 Querying results from Materialize using `SELECT` and `SUBSCRIBE`.
-
-
-
 You can query results from Materialize using `SELECT` and `SUBSCRIBE` SQL
 statements. Because Materialize uses the PostgreSQL wire protocol, it works
 out-of-the-box with a wide range of SQL clients and tools that support
@@ -70,7 +66,6 @@ You can use `SUBSCRIBE` to:
 - Replicate the complete history of a relation while `SUBSCRIBE` is active.
 
 > **Tip:** Use materialized view (instead of an indexed view) with `SUBSCRIBE`.
->
 
 
 For more information, see [`SUBSCRIBE`](/sql/subscribe/) reference page.  See

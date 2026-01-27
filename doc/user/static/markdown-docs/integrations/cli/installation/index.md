@@ -1,9 +1,5 @@
 # Materialize CLI Installation
-
 The Materialize CLI can be installed through several different methods.
-
-
-
 We offer several installation methods for `mz` on macOS and Linux.
 
 ## macOS

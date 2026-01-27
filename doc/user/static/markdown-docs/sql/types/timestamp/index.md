@@ -1,9 +1,5 @@
 # Timestamp types
-
 Expresses a date and time
-
-
-
 `timestamp` and `timestamp with time zone` data expresses a date and time in
 UTC.
 

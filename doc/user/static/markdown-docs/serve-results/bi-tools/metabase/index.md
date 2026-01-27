@@ -1,9 +1,5 @@
 # Metabase
-
 How to create real-time dashboards with Metabase
-
-
-
 You can use [Metabase](https://www.metabase.com/) to create real-time dashboards
 based on the data maintained in Materialize.
 

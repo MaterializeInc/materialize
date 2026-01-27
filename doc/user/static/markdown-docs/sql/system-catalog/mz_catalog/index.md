@@ -1,9 +1,5 @@
 # mz_catalog
-
 mz_catalog is a system catalog that exposes metadata in Materialize's native format.
-
-
-
 The following sections describe the available relations in the `mz_catalog`
 schema. These relations contain metadata about objects in Materialize,
 including descriptions of each database, schema, source, table, view, sink, and
@@ -12,7 +8,6 @@ index in the system.
 > **Warning:** Views that directly reference these objects cannot include `NATURAL JOIN` or
 > `*` expressions. Instead, project the required columns and convert all `NATURAL JOIN`s
 > to `USING` joins.
->
 
 
 ### `mz_array_types`
@@ -103,7 +98,6 @@ This table was previously in the `mz_internal` schema. All queries previously re
 
 > **Warning:** The values in this table may change at any time. You should not rely on them for
 > any kind of capacity planning.
->
 
 
 <!-- RELATION_SPEC mz_catalog.mz_cluster_replica_sizes -->
@@ -580,7 +574,6 @@ Field            | Type                 | Meaning
 
 > **Warning:** This view is not indexed in the `mz_catalog_server` cluster. Querying this view
 > can be slow due to the amount of unindexed data that must be scanned.
->
 
 
 The `mz_storage_usage` table describes the historical storage utilization of

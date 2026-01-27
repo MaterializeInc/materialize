@@ -1,9 +1,5 @@
 # Amazon S3
-
 How to export results from Materialize to Amazon S3.
-
-
-
 This guide walks you through the steps required to export results from
 Materialize to Amazon S3. Copying results to S3 is
 useful to perform tasks like periodic backups for auditing, or downstream
@@ -174,7 +170,6 @@ Next, you must attach the policy you just created to a Materialize-specific
    > **Warning:** Failing to constrain the external ID in your role trust policy
 >    will allow other Materialize customers to assume your role and use AWS
 >    privileges you have granted the role!
->
 
 
 1. Back in Materialize, validate the AWS connection you created using the

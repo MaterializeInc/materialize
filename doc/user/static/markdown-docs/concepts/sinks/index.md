@@ -1,9 +1,5 @@
 # Sinks
-
 Learn about sinks in Materialize.
-
-
-
 ## Overview
 
 Sinks are the inverse of sources and represent a connection to an external

@@ -1,9 +1,5 @@
 # Install on AWS
-
 Install Materialize on AWS using the new Terraform module.
-
-
-
 Materialize provides a set of modular [Terraform
 modules](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
 that can be used to deploy all services required for Materialize to run on AWS.
@@ -24,13 +20,8 @@ setup from this repository.
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 
@@ -121,10 +112,10 @@ An active AWS account with appropriate permissions to create:
 
 | License key type | Deployment type | Action |
 | --- | --- | --- |
-| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/"><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/">https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
-| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
-| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/">https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
-| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/">Materialize support</a>. |
+| Community | New deployments | <p>To get a license key:</p> <ul> <li>If you have a Cloud account, visit the <a href="https://console.materialize.com/license/" ><strong>License</strong> page in the Materialize Console</a>.</li> <li>If you do not have a Cloud account, visit <a href="https://materialize.com/self-managed/community-license/" >https://materialize.com/self-managed/community-license/</a>.</li> </ul> |
+| Community | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
+| Enterprise | New deployments | Visit <a href="https://materialize.com/self-managed/enterprise-license/" >https://materialize.com/self-managed/enterprise-license/</a> to purchase an Enterprise license. |
+| Enterprise | Existing deployments | Contact <a href="https://materialize.com/docs/support/" >Materialize support</a>. |
 
 
 ## Getting started: Simple example
@@ -135,13 +126,8 @@ An active AWS account with appropriate permissions to create:
 > for production deployments: **future releases of the modules will contain
 > breaking changes.** Instead, to use as a starting point for your own production
 > deployment, either:
->
 > - Fork the repo and pin to a specific version; or
->
 > - Use the code as a reference when developing your own deployment.
->
->
->
 
 
 ### Step 1: Set Up the Environment
@@ -200,7 +186,6 @@ An active AWS account with appropriate permissions to create:
    <code>[&quot;0.0.0.0/0&quot;]</code> (<red><strong>all</strong></red> IPv4 addresses on the internet).</li>
    </ul>
    > **Note:** Refer to your organization's security practices to set these values accordingly.
-   >
 
 ### Step 3: Apply the Terraform
 
@@ -221,14 +206,10 @@ An active AWS account with appropriate permissions to create:
    proceed.
 
    > **Tip:** If you previously logged in to Amazon ECR Public, a cached auth token may cause 403 errors even when pulling public images. To remove the token, run:
->
 >    ```bash
 >    docker logout public.ecr.aws
 >    ```
->
 >    Then, re-apply the Terraform configuration.
->
->
 
 
 1. From the output, you will need the following fields to connect using the
@@ -242,7 +223,6 @@ An active AWS account with appropriate permissions to create:
 
    > **Tip:** Your shell may show an ending marker (such as `%`) because the
 >    output did not end with a newline. Do not include the marker when using the value.
->
 
 
 
@@ -278,7 +258,7 @@ An active AWS account with appropriate permissions to create:
 
 
    <p>If you run into an error during deployment, refer to the
-   <a href="/self-managed-deployments/troubleshooting/">Troubleshooting</a>.</p>
+   <a href="/self-managed-deployments/troubleshooting/" >Troubleshooting</a>.</p>
 
 ### Step 5: Connect to Materialize
 
@@ -300,9 +280,7 @@ PostgreSQL-compatible tools/drivers using the following ports:
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -319,8 +297,6 @@ PostgreSQL-compatible tools/drivers using the following ports:
 >    warning with regards to the certificate. In production, run with
 >    certificates from an official Certificate Authority (CA) rather than
 >    self-signed certificates.
->
->
 
 
 1. Log in as `mz_system`, using `external_login_password_mz_system` as the
@@ -345,9 +321,7 @@ PostgreSQL-compatible tools/drivers using the following ports:
 > **Note:** - **If using a public NLB:** Both SQL and Console are available via the
 > public NLB. You can connect directly using the NLB's DNS name from anywhere
 > on the internet (subject to your `ingress_cidr_blocks` configuration).
->
 > - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
->
 
 
 
@@ -382,7 +356,6 @@ PostgreSQL-compatible tools/drivers using the following ports:
 
 > **Tip:** To reduce cost in your demo environment, you can tweak subnet CIDRs
 > and instance types in `main.tf`.
->
 
 
 You can customize each Terraform module independently.

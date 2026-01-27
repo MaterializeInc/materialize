@@ -1,9 +1,5 @@
 # Get started with the Materialize provider
-
 Introductory setup with Materialize Terraform provider
-
-
-
 The following guide provides an introduction to the Materialize Terraform
 provider and setup.
 
@@ -35,7 +31,6 @@ provide:
 > Terraform state file**. Ensure that your initial configuration
 > matches your intended deployment type, and do not switch to a
 > different deployment type afterward.
->
 
 
 

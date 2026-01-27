@@ -12,11 +12,11 @@ You can ingest data into Materialize from various external systems:
     Databases (CDC)
   </div>
   <ul>
-<li><a href="/ingest-data/postgres/">PostgreSQL</a></li>
-<li><a href="/ingest-data/mysql/">MySQL</a></li>
-<li><a href="/ingest-data/sql-server/">SQL Server</a></li>
-<li><a href="/ingest-data/cdc-cockroachdb/">CockroachDB</a></li>
-<li><a href="/ingest-data/mongodb/">MongoDB</a></li>
+<li><a href="/ingest-data/postgres/" >PostgreSQL</a></li>
+<li><a href="/ingest-data/mysql/" >MySQL</a></li>
+<li><a href="/ingest-data/sql-server/" >SQL Server</a></li>
+<li><a href="/ingest-data/cdc-cockroachdb/" >CockroachDB</a></li>
+<li><a href="/ingest-data/mongodb/" >MongoDB</a></li>
 </ul>
 
 </div>
@@ -26,8 +26,8 @@ You can ingest data into Materialize from various external systems:
     Message Brokers
   </div>
   <ul>
-<li><a href="/ingest-data/kafka/">Kafka</a></li>
-<li><a href="/sql/create-source/kafka">Redpanda</a></li>
+<li><a href="/ingest-data/kafka/" >Kafka</a></li>
+<li><a href="/sql/create-source/kafka" >Redpanda</a></li>
 </ul>
 
 </div>
@@ -37,9 +37,9 @@ You can ingest data into Materialize from various external systems:
     Webhooks
   </div>
   <ul>
-<li><a href="/ingest-data/webhooks/amazon-eventbridge/">Amazon EventBridge</a></li>
-<li><a href="/ingest-data/webhooks/segment/">Segment</a></li>
-<li><a href="/sql/create-source/webhook">Other webhooks</a></li>
+<li><a href="/ingest-data/webhooks/amazon-eventbridge/" >Amazon EventBridge</a></li>
+<li><a href="/ingest-data/webhooks/segment/" >Segment</a></li>
+<li><a href="/sql/create-source/webhook" >Other webhooks</a></li>
 </ul>
 
 </div>
@@ -56,8 +56,6 @@ Materialize ingests data from external systems using
 data.
 
 > **Tip:** If possible, dedicate a cluster just for sources.
->
->
 
 
 ## Snapshotting
@@ -114,19 +112,12 @@ as it arrives, in real time.
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Running/steady-state
 
@@ -156,10 +147,7 @@ data from the upstream system.
 
 > **Tip:** If possible, use a dedicated cluster just for sources. That is, avoid
 > using the same cluster for sources and other objects, such as sinks, etc.
->
 > See [Best practices](#best-practices) for more details.
->
->
 
 
 ### Process
@@ -230,9 +218,9 @@ size](/sql/alter-cluster/#alter-cluster-size) to complete the operation.
 </span></span></span></code></pre></div><blockquote>
 <p><strong>Note:</strong> Resizing a cluster with sources requires the cluster to restart. This operation
 incurs downtime for the duration it takes for all objects in the cluster to
-<a href="/ingest-data/#hydration">hydrate</a>.</p>
-<p>You might want to let the new-sized replica hydrate before shutting down the
-current replica. See <a href="/sql/alter-cluster/#zero-downtime-cluster-resizing">zero-downtime cluster
+<a href="/ingest-data/#hydration" >hydrate</a>.
+You might want to let the new-sized replica hydrate before shutting down the
+current replica. See <a href="/sql/alter-cluster/#zero-downtime-cluster-resizing" >zero-downtime cluster
 resizing</a> about automating
 this process.</p>
 </blockquote>
@@ -254,13 +242,10 @@ ALTER CLUSTER <cluster_name> SET ( SIZE = <new_size> );
 > **Note:** Resizing a cluster with sources requires the cluster to restart. This operation
 > incurs downtime for the duration it takes for all objects in the cluster to
 > [hydrate](#hydration).
->
 > You might want to let the new-sized replica hydrate before shutting down the
 > current replica. See [zero-downtime cluster
 > resizing](/sql/alter-cluster/#zero-downtime-cluster-resizing) about automating
 > this process.
->
->
 
 
 
@@ -281,8 +266,6 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -297,7 +280,6 @@ Ensure that you have:
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -362,7 +344,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
@@ -452,7 +433,6 @@ retrieve the AWS principal needed to configure the AWS PrivateLink service.
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the Terraform module repositories for [Amazon MSK](https://github.com/MaterializeInc/terraform-aws-msk-privatelink)
 > and [self-managed Kafka clusters](https://github.com/MaterializeInc/terraform-aws-kafka-privatelink).
->
 
 
 This section covers how to create AWS PrivateLink connections
@@ -631,7 +611,6 @@ connection you just configured:
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
->
 
 
 1. #### Create target groups
@@ -780,7 +759,6 @@ This PostgreSQL connection can then be reused across multiple [`CREATE SOURCE`](
 > **Note:** Materialize provides a Terraform module that automates the creation and
 > configuration of AWS resources for a PrivateLink connection. For more details,
 > see the [Terraform module repository](https://github.com/MaterializeInc/terraform-aws-rds-privatelink).
->
 
 
 1. #### Create target groups
@@ -946,8 +924,6 @@ This MySQL connection can then be reused across multiple [`CREATE SOURCE`](https
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
@@ -1021,7 +997,6 @@ refer to the [CockroachDB documentation](https://www.cockroachlabs.com/docs/stab
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 In Materialize, a [cluster](/concepts/clusters/) is an isolated environment,
@@ -1341,8 +1316,6 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ### Before you begin
@@ -1357,7 +1330,6 @@ Ensure that you have:
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -1423,7 +1395,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The `CHECK` clause defines how to validate each request. At the time of writing,
@@ -1662,7 +1633,6 @@ The architecture consists of the following components:
 
 > **Important:** For Debezium to capture changes, your MongoDB deployment must be configured as a
 > replica set or a sharded cluster.
->
 
 
 Create a user (e.g., `debezium_materialize_user`) with the necessary permissions
@@ -1737,7 +1707,6 @@ Register the MongoDB connector with the following configuration:
 > **Important:** The `capture.mode` must be `change_streams_update_full`, the default. This
 > forces Debezium to send the entire document state for every change, which allows
 > Materialize to use the `UPSERT` envelope.
->
 
 
 1. Create a `dbz_mongodb_connector.json` file with your connector configuration:
@@ -1784,16 +1753,13 @@ Register the MongoDB connector with the following configuration:
 >    different BSON types across documents, ensure that same field uses a
 >    consistent BSON type across the collection to avoid schema inference
 >    errors.
->
 >    For example, if the first document has `price: 40`, the registered Avro
 >    schema infers the `price` field type to be `int`. If a subsequent document
 >    has `price: 2.25` (a decimal value), it will cause a schema mismatch error.
 >    To avoid this, explicitly specify the BSON type in your documents using
 >    `NumberDecimal()`, e.g., `price: NumberDecimal("40.00")` and `price:
 >    NumberDecimal("2.25")`.
->
 >    If you cannot enforce a consistent BSON type, you can omit the unwrap.
->
 
 
 2. Register the connector with Kafka Connect:
@@ -1866,7 +1832,6 @@ Query the data using standard SQL.
   ```
 
   > **Note:** The query includes the Kafka message `id` field as a column in the table.
->
 
 
   ```none
@@ -1881,8 +1846,6 @@ Query the data using standard SQL.
   > **Tip:** If you did not use the `unwrap` transform, the document is stored as a JSON
 >   string in the `after` field in `mdb_items`. You can create a [parsing
 >   view](/sql/types/jsonb/#parsing) to map the individual document fields to columns instead.
->
->
 
 
 - To query the mdb_orders:
@@ -1892,7 +1855,6 @@ Query the data using standard SQL.
   ```
 
   > **Note:** The query includes the Kafka message `id` field as a column in the table.
->
 
 
   ```none
@@ -1908,8 +1870,6 @@ Query the data using standard SQL.
 >   string in the `after` field in `mdb_orders`. You can create a [parsing
 >   view](/sql/types/jsonb/#parsing) to map the individual document fields to
 >   columns instead.
->
->
 
 
 ## Troubleshooting
@@ -2078,7 +2038,6 @@ gives you the following benefits:
 > **Note:** MySQL-compatible database systems are not guaranteed to work with the MySQL
 > source out-of-the-box. [MariaDB](https://mariadb.org/), [Vitess](https://vitess.io/)
 > and [PlanetScale](https://planetscale.com/) are currently **not supported**.
->
 
 
 The MySQL source requires **MySQL 5.7+** and is compatible with most common
@@ -2095,23 +2054,11 @@ or reach out in the Materialize [Community Slack](https://materialize.com/s/chat
 
 ## Considerations
 
-
-  {{__hugo_ctx pid=36}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -2120,9 +2067,9 @@ Materialize supports schema changes in the upstream database as follows:
 <ul>
 <li>
 <p>Adding columns to tables. Materialize will <strong>not ingest</strong> new columns
-added upstream unless you use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to
+added upstream unless you use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to
 first drop the affected subsource, and then add the table back to the source
-using <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
+using <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
 </li>
 <li>
 <p>Dropping columns that were added after the source was created. These
@@ -2140,8 +2087,8 @@ when the source was created.</p>
 <p>All other schema changes to upstream tables will set the corresponding
 subsource into an error state, which prevents you from reading from the
 subsource.</p>
-<p>To handle incompatible <a href="#schema-changes">schema changes</a>, use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to first drop the affected subsource,
-and then <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
+<p>To handle incompatible <a href="#schema-changes" >schema changes</a>, use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to first drop the affected subsource,
+and then <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
 subsource back to the source. When you add the subsource, it will have the
 updated schema from the corresponding upstream table.</p>
 
@@ -2181,11 +2128,11 @@ updated schema from the corresponding upstream table.</p>
 <li><code>varchar</code></li>
 </ul>
 
-<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/">data
+<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/" >data
 types</a></strong>, you can:</p>
 <ul>
 <li>
-<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types"><code>TEXT COLUMNS</code>
+<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types" ><code>TEXT COLUMNS</code>
 option</a> for the
 following unsupported  MySQL types:</p>
 <ul>
@@ -2196,7 +2143,7 @@ following unsupported  MySQL types:</p>
 expected MySQL type features.</p>
 </li>
 <li>
-<p>Use the <a href="/sql/create-source/mysql/#excluding-columns"><code>EXCLUDE COLUMNS</code></a>
+<p>Use the <a href="/sql/create-source/mysql/#excluding-columns" ><code>EXCLUDE COLUMNS</code></a>
 option to exclude any columns that contain unsupported data types.</p>
 </li>
 </ul>
@@ -2215,24 +2162,12 @@ the upstream table:</p>
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}
-
-
-
-
 
 
 ---
@@ -2446,8 +2381,7 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>
 
 
 
@@ -2465,8 +2399,6 @@ Kafka sources.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Configuration
@@ -2502,8 +2434,6 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -2519,7 +2449,6 @@ Ensure that you have:
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -2584,7 +2513,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
@@ -2689,8 +2617,6 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ### Before you begin
@@ -2705,7 +2631,6 @@ Ensure that you have:
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -2767,7 +2692,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The `CHECK` clause defines how to validate each request. At the time of writing,
@@ -2823,7 +2747,6 @@ mapping:
 >  2. Click **Settings**.
 >  3. In **Shared Secret**, enter the secret created in the **Step 2**.
 >  4. Click **Save Changes**.
->
 
 
 ## Step 6. Validate incoming data
@@ -2968,8 +2891,6 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -2985,7 +2906,6 @@ Ensure that you have:
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -3050,7 +2970,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).
@@ -3300,23 +3219,11 @@ Data Capture (CDC) support.
 
 ## Considerations
 
-
-  {{__hugo_ctx pid=38}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -3380,7 +3287,7 @@ table.
 <li><code>uniqueidentifier</code></li>
 </ul>
 
-<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/">data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types"><code>EXCLUDE COLUMNS</code> option</a> for the
+<p>Replicating tables that contain <strong>unsupported <a href="/sql/types/" >data types</a></strong> is possible via the <a href="/sql/create-source/sql-server/#handling-unsupported-types" ><code>EXCLUDE COLUMNS</code> option</a> for the
 following types:</p>
 <ul style="column-count: 3">
 <li><code>text</code></li>
@@ -3388,7 +3295,7 @@ following types:</p>
 <li><code>image</code></li>
 <li><code>varbinary(max)</code></li>
 </ul>
-<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types">SQL Server does not provide
+<p>Columns with the specified types need to be excluded because <a href="https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/cdc-capture-instance-ct-transact-sql?view=sql-server-2017#large-object-data-types" >SQL Server does not provide
 the &ldquo;before&rdquo;</a>
 value when said column is updated.</p>
 
@@ -3440,24 +3347,12 @@ If two capture instances for a table share the same timestamp (unlikely given th
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}
-
-
-
-
 
 
 ---
@@ -3803,7 +3698,6 @@ region will originate from an IP address in the provided blocks.
 
 > **Note:** On rare occasion, we may need to change the static egress CIDR blocks associated
 > with a region. We make every effort to provide advance notice of such changes.
->
 
 
 When connecting Materialize to services in your private networks (e.g., Kafka,
@@ -3934,7 +3828,6 @@ cluster. Next, you'll configure Materialize to consume this data.
 > (e.g. `quickstart`), you don't need to create a new cluster. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 1. In the [SQL Shell](/console/), or your preferred SQL
@@ -4003,8 +3896,6 @@ into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ### Before you begin
@@ -4017,7 +3908,6 @@ Ensure that you have a Stripe account.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -4100,7 +3990,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The `CHECK` clause defines how to validate each request. For details on the
@@ -4196,8 +4085,6 @@ troubleshooting](/transform-data/troubleshooting) guide instead.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Why isn't my source ingesting data?
@@ -4242,26 +4129,26 @@ breaks out of the query).
 the upstream database, the number of tables (more tables can be parallelized in Postgres), and the <a href="/sql/create-cluster/#size" >size of your ingestion cluster</a>.</p>
 <p>We&rsquo;ve observed the following approximate snapshot rates from PostgreSQL:</p>
 <table>
-<thead>
-<tr>
-<th>Cluster Size</th>
-<th>Snapshot Rate</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>25 cc</td>
-<td>~20 MB/s</td>
-</tr>
-<tr>
-<td>100 cc</td>
-<td>~50 MB/s</td>
-</tr>
-<tr>
-<td>800 cc</td>
-<td>~200 MB/s</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Cluster Size</th>
+          <th>Snapshot Rate</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>25 cc</td>
+          <td>~20 MB/s</td>
+      </tr>
+      <tr>
+          <td>100 cc</td>
+          <td>~50 MB/s</td>
+      </tr>
+      <tr>
+          <td>800 cc</td>
+          <td>~200 MB/s</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -4289,26 +4176,26 @@ monitor its progress. See [Monitoring data ingestion](/ingest-data/monitoring-da
 the upstream database, the number of tables (more tables can be parallelized in Postgres), and the <a href="/sql/create-cluster/#size" >size of your ingestion cluster</a>.</p>
 <p>We&rsquo;ve observed the following approximate snapshot rates from PostgreSQL:</p>
 <table>
-<thead>
-<tr>
-<th>Cluster Size</th>
-<th>Snapshot Rate</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>25 cc</td>
-<td>~20 MB/s</td>
-</tr>
-<tr>
-<td>100 cc</td>
-<td>~50 MB/s</td>
-</tr>
-<tr>
-<td>800 cc</td>
-<td>~200 MB/s</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Cluster Size</th>
+          <th>Snapshot Rate</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>25 cc</td>
+          <td>~20 MB/s</td>
+      </tr>
+      <tr>
+          <td>100 cc</td>
+          <td>~50 MB/s</td>
+      </tr>
+      <tr>
+          <td>800 cc</td>
+          <td>~200 MB/s</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -4320,8 +4207,8 @@ back down once the snapshot completes.
 </span></span></span></code></pre></div><blockquote>
 <p><strong>Note:</strong> Resizing a cluster with sources requires the cluster to restart. This operation
 incurs downtime for the duration it takes for all objects in the cluster to
-<a href="/ingest-data/#hydration" >hydrate</a>.</p>
-<p>You might want to let the new-sized replica hydrate before shutting down the
+<a href="/ingest-data/#hydration" >hydrate</a>.
+You might want to let the new-sized replica hydrate before shutting down the
 current replica. See <a href="/sql/alter-cluster/#zero-downtime-cluster-resizing" >zero-downtime cluster
 resizing</a> about automating
 this process.</p>
@@ -4364,8 +4251,6 @@ you to learn and prototype with no external dependencies.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin

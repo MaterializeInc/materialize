@@ -1,16 +1,10 @@
 # Ingest data from Azure DB
-
 How to stream data from Azure DB for MySQL to Materialize
-
-
-
 This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)
 to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -29,7 +23,6 @@ to Materialize using the [MySQL source](/sql/create-source/mysql/).
 
 > **Note:** GTID-based replication is supported for Azure DB for MySQL [flexible server](https://learn.microsoft.com/en-us/azure/mysql/flexible-server/overview-single).
 > It is **not supported** for single server databases.
->
 
 
 Before creating a source in Materialize, you **must** configure Azure DB for
@@ -446,7 +439,6 @@ user for Materialize with sufficient privileges to manage replication.
 > **Note:** If you are prototyping and your Azure DB instance is publicly accessible, **you
 > can skip this step**. For production scenarios, we recommend configuring one of
 > the network security options below.
->
 
 
 
@@ -590,7 +582,6 @@ to serve as your SSH bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 In Materialize, a [cluster](/concepts/clusters/) is an isolated
@@ -730,8 +721,6 @@ your networking configuration.
 Once you have created the connection, you can use the connection in the
 [`CREATE SOURCE`](/sql/create-source/) command to connect to your MySQL instance and start ingesting
 data:
-
-
 ```mzsql
 CREATE SOURCE mz_source
   FROM MYSQL CONNECTION mysql_connection
@@ -880,23 +869,11 @@ new data arrives, and serving results efficiently.
 
 ## Considerations
 
-
-  {{__hugo_ctx pid=36}}
 ### Schema changes
 
-
-  {{__hugo_ctx pid=37}}
 > **Note:** Work to more smoothly support ddl changes to upstream tables is currently in
 > progress. The work introduces the ability to re-ingest the same upstream table
 > under a new schema and switch over without downtime.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Materialize supports schema changes in the upstream database as follows:
 
@@ -905,9 +882,9 @@ Materialize supports schema changes in the upstream database as follows:
 <ul>
 <li>
 <p>Adding columns to tables. Materialize will <strong>not ingest</strong> new columns
-added upstream unless you use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to
+added upstream unless you use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to
 first drop the affected subsource, and then add the table back to the source
-using <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
+using <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a>.</p>
 </li>
 <li>
 <p>Dropping columns that were added after the source was created. These
@@ -925,8 +902,8 @@ when the source was created.</p>
 <p>All other schema changes to upstream tables will set the corresponding
 subsource into an error state, which prevents you from reading from the
 subsource.</p>
-<p>To handle incompatible <a href="#schema-changes">schema changes</a>, use <a href="/sql/alter-source/#context"><code>DROP SOURCE</code></a> to first drop the affected subsource,
-and then <a href="/sql/alter-source/"><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
+<p>To handle incompatible <a href="#schema-changes" >schema changes</a>, use <a href="/sql/alter-source/#context" ><code>DROP SOURCE</code></a> to first drop the affected subsource,
+and then <a href="/sql/alter-source/" ><code>ALTER SOURCE...ADD SUBSOURCE</code></a> to add the
 subsource back to the source. When you add the subsource, it will have the
 updated schema from the corresponding upstream table.</p>
 
@@ -966,11 +943,11 @@ updated schema from the corresponding upstream table.</p>
 <li><code>varchar</code></li>
 </ul>
 
-<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/">data
+<p>When replicating tables that contain the <strong>unsupported <a href="/sql/types/" >data
 types</a></strong>, you can:</p>
 <ul>
 <li>
-<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types"><code>TEXT COLUMNS</code>
+<p>Use <a href="/sql/create-source/mysql/#handling-unsupported-types" ><code>TEXT COLUMNS</code>
 option</a> for the
 following unsupported  MySQL types:</p>
 <ul>
@@ -981,7 +958,7 @@ following unsupported  MySQL types:</p>
 expected MySQL type features.</p>
 </li>
 <li>
-<p>Use the <a href="/sql/create-source/mysql/#excluding-columns"><code>EXCLUDE COLUMNS</code></a>
+<p>Use the <a href="/sql/create-source/mysql/#excluding-columns" ><code>EXCLUDE COLUMNS</code></a>
 option to exclude any columns that contain unsupported data types.</p>
 </li>
 </ul>
@@ -1000,17 +977,9 @@ the upstream table:</p>
 
 ### Modifying an existing source
 
-
-  {{__hugo_ctx pid=34}}
 When you add a new subsource to an existing source ([`ALTER SOURCE ... ADD
 SUBSOURCE ...`](/sql/alter-source/)), Materialize starts the snapshotting
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
 once the process finishes, resize the cluster for steady-state.
-{{__hugo_ctx/}}
-
-
-
-
-{{__hugo_ctx/}}

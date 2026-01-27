@@ -1,16 +1,10 @@
 # Ingest data from Google Cloud SQL
-
 How to stream data from Google Cloud SQL for PostgreSQL to Materialize
-
-
-
 This page shows you how to stream data from [Google Cloud SQL for PostgreSQL](https://cloud.google.com/sql/postgresql)
 to Materialize using the[PostgreSQL source](/sql/create-source/postgres/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 
@@ -98,7 +92,6 @@ all tables in the schema instead of naming the specific tables:</p>
 > **Note:** If you are prototyping and your Google Cloud SQL instance is publicly
 > accessible, **you can skip this step**. For production scenarios, we recommend
 > configuring one of the network security options below.
->
 
 
 
@@ -243,7 +236,6 @@ bastion host.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -285,9 +277,7 @@ your networking configuration.
 client connected to Materialize, use the [`CREATE
 SECRET`](/sql/create-secret/) command to securely store the password for the
 `materialize` PostgreSQL user you created
-[earlier](#2-create-a-publication-and-a-replication-user):
-
-   ```mzsql
+[earlier](#2-create-a-publication-and-a-replication-user):   ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
    ```
@@ -295,8 +285,6 @@ SECRET`](/sql/create-secret/) command to securely store the password for the
 1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
 connection object with access and authentication details for Materialize to
 use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -322,9 +310,7 @@ use:
 1. In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
 client connected to Materialize, use the [`CREATE
 CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-tunnel connection:
-
-   ```mzsql
+tunnel connection:   ```mzsql
    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
        HOST '<SSH_BASTION_HOST>',
        PORT <SSH_BASTION_PORT>,
@@ -341,8 +327,6 @@ tunnel connection:
    created for your SSH bastion host.
 
 1. Get Materialize's public keys for the SSH tunnel connection:
-
-
    ```mzsql
    SELECT * FROM mz_ssh_tunnel_connections;
 
@@ -350,8 +334,6 @@ tunnel connection:
 
 1. Log in to your SSH bastion host and add Materialize's public keys to the
 `authorized_keys` file, for example:
-
-
    ```mzsql
    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
@@ -361,8 +343,6 @@ tunnel connection:
 1. Back in the SQL client connected to Materialize, validate the SSH tunnel
 connection you created using the [`VALIDATE
 CONNECTION`](/sql/validate-connection) command:
-
-
    ```mzsql
    VALIDATE CONNECTION ssh_connection;
 
@@ -372,8 +352,6 @@ CONNECTION`](/sql/validate-connection) command:
 1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
 password for the `materialize` PostgreSQL user you created
 [earlier](#2-create-a-publication-and-a-replication-user):
-
-
    ```mzsql
    CREATE SECRET pgpass AS '<PASSWORD>';
 
@@ -381,8 +359,6 @@ password for the `materialize` PostgreSQL user you created
 
 1.
 Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
-
-
    ```mzsql
    CREATE CONNECTION pg_connection TO POSTGRES (
      HOST '<host>',
@@ -741,5 +717,4 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>

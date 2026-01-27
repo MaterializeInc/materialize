@@ -1,9 +1,5 @@
 # Views
-
 Learn about views in Materialize.
-
-
-
 ## Overview
 
 Views represent queries that are saved under a name for reference. Views provide
@@ -127,7 +123,6 @@ having to perform additional computation.
 > computationally free. However, querying an indexed materialized view within the
 > cluster associated with the index is faster since the results are served from
 > memory rather than from storage.
->
 
 
 
@@ -147,34 +142,34 @@ on views compute and store view results in memory within a <strong>single</stron
 
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 
 <p>For example:</p>
@@ -222,7 +217,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 
 
@@ -246,7 +240,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 ## General information
 

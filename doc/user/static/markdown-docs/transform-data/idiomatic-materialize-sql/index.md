@@ -49,14 +49,11 @@ Materialize provides an idiomatic SQL as an alternative to the `ANY()`
 expression.
 
 > ### Materialize and equi-join `ON fieldX = ANY(<array|list|map>)`
->
 > When evaluating an equi-join whose `ON` expression includes the [`ANY` operator
 > expression](/sql/functions/#expression-bool_op-any)
 > (i.e., `ON fieldX = ANY(<array|list|map>)`), Materialize performs a cross join,
 > which can lead to a significant increase in memory usage. If possible, rewrite
 > the query to perform an equi-join on the unnested values.
->
->
 
 
 
@@ -159,8 +156,6 @@ WHERE a.fieldZ = ANY(b.array_field) -- Anti-pattern. Avoid.
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Find orders with any sales items
@@ -274,27 +269,21 @@ The "first value in each group" query pattern returns the first value, according
 to some ordering, in each group.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -392,8 +381,6 @@ For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Use MIN() to find the first value
@@ -624,27 +611,21 @@ interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -653,8 +634,6 @@ function.
 
 > **Important:** Do not use if the "lag over (order by)" ordering cannot be represented by an
 > equality match.
->
->
 
 
 ### Exclude the first row in results
@@ -687,8 +666,6 @@ row.
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lag over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 <br>
@@ -765,8 +742,6 @@ query *includes* the first row, returning `null` as its lag value.
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lag over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 
@@ -818,8 +793,6 @@ FROM tableA;
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Find previous row's value (exclude the first row in results)
@@ -856,8 +829,6 @@ ORDER BY order_date;
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lag over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 </td>
@@ -921,8 +892,6 @@ ORDER BY order_date;
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lag over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 </td>
@@ -972,27 +941,21 @@ The "last value in each group" query pattern returns the last value, according
 to some ordering, in each group.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -1046,8 +1009,6 @@ queries.</red>
 
 > **Note:** Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 > FOLLOWING`.
->
->
 
 
 <br>
@@ -1104,8 +1065,6 @@ For more information on setting `AGGREGATE INPUT GROUP SIZE`, see
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Use MAX() to find the last value
@@ -1153,8 +1112,6 @@ for last value in each group queries.</red>
 
 > **Note:** Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 > FOLLOWING`.
->
->
 
 
 <div style="background-color: var(--code-block)">
@@ -1229,8 +1186,6 @@ for last value in each group queries.</red>
 
 > **Note:** Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 > FOLLOWING`.
->
->
 
 
 <div style="background-color: var(--code-block)">
@@ -1306,8 +1261,6 @@ ORDER BY o.order_id, o.item;
 
 > **Note:** Materialize does not support `RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED
 > FOLLOWING`.
->
->
 
 
 <div style="background-color: var(--code-block)">
@@ -1374,27 +1327,21 @@ interval), Materialize provides an idiomatic SQL as an alternative to the window
 function.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -1403,8 +1350,6 @@ function.
 
 > **Important:** Do not use if the "lead over (order by)" ordering cannot be represented by an
 > equality match.
->
->
 
 
 ### Exclude the last row in results
@@ -1436,8 +1381,6 @@ does not have a next row.
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 <br>
@@ -1514,8 +1457,6 @@ last row, returning `null` as its lead value.
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 
@@ -1564,8 +1505,6 @@ FROM tableA;
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Find next row's value (exclude the last row in results)
@@ -1602,8 +1541,6 @@ ORDER BY order_date;
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 
@@ -1669,8 +1606,6 @@ ORDER BY order_date;
 
 > **Important:** The idiomatic Materialize SQL applies only to those "lead over" queries whose
 > ordering can be represented by some **equality condition**.
->
->
 
 
 
@@ -1793,7 +1728,7 @@ the query to use `UNION ALL` or `UNION` instead, deduplicating as necessary:
 #### Examples
 
 
-| <blue>Materialize SQL</blue> ✅ | <p><strong>Rewrite as UNION ALL with possible duplicates</strong></p> <span class="copyableCode"> <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">forecast_completed_orders_duplicates_possible</span> <span class="k">AS</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">status</span> <span class="o">=</span> <span class="s1">&#39;Shipped&#39;</span> </span></span><span class="line"><span class="cl"><span class="k">UNION</span> <span class="k">ALL</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">order_date</span> <span class="o">+</span> <span class="nb">interval</span> <span class="s1">&#39;30&#39;</span> <span class="k">minutes</span> <span class="o">&gt;=</span> <span class="n">mz_now</span><span class="p">()</span> </span></span><span class="line"><span class="cl"><span class="p">;</span> </span></span></code></pre></div></span> <p><strong>Rewrite as UNION ALL that avoids duplicates across queries</strong></p> <span class="copyableCode"> <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">forecast_completed_orders_deduplicated_union_all</span> <span class="k">AS</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">status</span> <span class="o">=</span> <span class="s1">&#39;Shipped&#39;</span> </span></span><span class="line"><span class="cl"><span class="k">UNION</span> <span class="k">ALL</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">order_date</span> <span class="o">+</span> <span class="nb">interval</span> <span class="s1">&#39;30&#39;</span> <span class="k">minutes</span> <span class="o">&gt;=</span> <span class="n">mz_now</span><span class="p">()</span> </span></span><span class="line"><span class="cl"><span class="k">AND</span> <span class="n">status</span> <span class="o">!=</span> <span class="s1">&#39;Shipped&#39;</span> <span class="c1">-- Deduplicate by excluding those with status &#39;Shipped&#39; </span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="p">;</span> </span></span></code></pre></div></span> <p><strong>Rewrite as UNION to deduplicate any and all duplicated results</strong></p> <span class="copyableCode"> <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">forecast_completed_orders_deduplicated_results</span> <span class="k">AS</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">status</span> <span class="o">=</span> <span class="s1">&#39;Shipped&#39;</span> </span></span><span class="line"><span class="cl"><span class="k">UNION</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">order_date</span> <span class="o">+</span> <span class="nb">interval</span> <span class="s1">&#39;30&#39;</span> <span class="k">minutes</span> <span class="o">&gt;=</span> <span class="n">mz_now</span><span class="p">()</span> </span></span><span class="line"><span class="cl"><span class="p">;</span> </span></span></code></pre></div></span>  |
+| <blue>Materialize SQL</blue> ✅ | <p><strong>Rewrite as UNION ALL with possible duplicates</strong></p> <span class="copyableCode"> <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">forecast_completed_orders_duplicates_possible</span> <span class="k">AS</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">status</span> <span class="o">=</span> <span class="s1">&#39;Shipped&#39;</span> </span></span><span class="line"><span class="cl"><span class="k">UNION</span> <span class="k">ALL</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">order_date</span> <span class="o">+</span> <span class="nb">interval</span> <span class="s1">&#39;30&#39;</span> <span class="k">minutes</span> <span class="o">&gt;=</span> <span class="n">mz_now</span><span class="p">()</span> </span></span><span class="line"><span class="cl"><span class="p">;</span> </span></span></code></pre></div></span> <p><strong>Rewrite as UNION ALL that avoids duplicates across queries</strong></p> <span class="copyableCode"> <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">forecast_completed_orders_deduplicated_union_all</span> <span class="k">AS</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">status</span> <span class="o">=</span> <span class="s1">&#39;Shipped&#39;</span> </span></span><span class="line"><span class="cl"><span class="k">UNION</span> <span class="k">ALL</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">order_date</span> <span class="o">+</span> <span class="nb">interval</span> <span class="s1">&#39;30&#39;</span> <span class="k">minutes</span> <span class="o">&gt;=</span> <span class="n">mz_now</span><span class="p">()</span> </span></span><span class="line"><span class="cl"><span class="k">AND</span> <span class="n">status</span> <span class="o">!=</span> <span class="s1">&#39;Shipped&#39;</span> <span class="c1">-- Deduplicate by excluding those with status &#39;Shipped&#39; </span></span></span><span class="line"><span class="cl"><span class="p">;</span> </span></span></code></pre></div></span> <p><strong>Rewrite as UNION to deduplicate any and all duplicated results</strong></p> <span class="copyableCode"> <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">forecast_completed_orders_deduplicated_results</span> <span class="k">AS</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">status</span> <span class="o">=</span> <span class="s1">&#39;Shipped&#39;</span> </span></span><span class="line"><span class="cl"><span class="k">UNION</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="n">item</span><span class="p">,</span> <span class="n">quantity</span><span class="p">,</span> <span class="n">status</span> <span class="k">from</span> <span class="n">orders</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">order_date</span> <span class="o">+</span> <span class="nb">interval</span> <span class="s1">&#39;30&#39;</span> <span class="k">minutes</span> <span class="o">&gt;=</span> <span class="n">mz_now</span><span class="p">()</span> </span></span><span class="line"><span class="cl"><span class="p">;</span> </span></span></code></pre></div></span>  |
 | <red>Anti-pattern</red> ❌ | <p><red>Not supported</red></p> <div style="background-color: var(--code-block)"> <pre tabindex="0"><code class="language-none" data-lang="none">-- Unsupported CREATE MATERIALIZED VIEW forecast_completed_orders_unsupported AS SELECT item, quantity, status from orders WHERE status = &#39;Shipped&#39; OR order_date + interval &#39;30&#39; minutes &gt;= mz_now(); </code></pre></div> |
 
 
@@ -1809,27 +1744,21 @@ The "Top-K in group" query pattern groups by some key and return the first K
 elements within each group according to some ordering.
 
 > ### Materialize and window functions
->
 > For [window functions](/sql/functions/#window-functions), when an input record
 > in a partition (as determined by the `PARTITION BY` clause of your window
 > function) is added/removed/changed, Materialize recomputes the results for the
 > entire window partition. This means that when a new batch of input data arrives
 > (that is, every second), **the amount of computation performed is proportional
 > to the total size of the touched partitions**.
->
 > For example, assume that in a given second, 20 input records change, and these
 > records belong to **10** different partitions, where the average size of each
 > partition is **100**. Then, amount of work to perform is proportional to
 > computing the window function results for **10\*100=1000** rows.
->
 > To avoid performance issues that may arise as the number of records grows,
 > consider rewriting your query to use idiomatic Materialize SQL instead of window
 > functions. If your query cannot be rewritten without the window functions and
 > the performance of window functions is insufficient for your use case, please
 > [contact our team](/support/).
->
->
->
 
 
 
@@ -1997,8 +1926,6 @@ For more information on setting `DISTINCT ON INPUT GROUP SIZE`, see
 
 > **Note:** The example data can be found in the
 > [Appendix](/transform-data/idiomatic-materialize-sql/appendix/example-orders).
->
->
 
 
 ### Select Top-3 items

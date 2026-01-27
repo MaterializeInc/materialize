@@ -1,9 +1,5 @@
 # mz-debug self-managed
-
 Use mz-debug to debug Self-Managed Materialize Kubernetes environments.
-
-
-
 `mz-debug self-managed` debugs Kubernetes-based Materialize deployments. It
 collects:
 

@@ -1,9 +1,5 @@
 # SHOW CREATE MATERIALIZED VIEW
-
 `SHOW CREATE MATERIALIZED VIEW` returns the statement used to create the materialized view
-
-
-
 `SHOW CREATE MATERIALIZED VIEW` returns the DDL statement used to create the materialized view.
 
 ## Syntax
@@ -35,10 +31,7 @@ SHOW CREATE MATERIALIZED VIEW winning_bids;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the materialized view.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the materialized view.
 
 ## Related pages
 

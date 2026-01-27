@@ -13,8 +13,6 @@ Kafka sources.
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Configuration
@@ -55,16 +53,12 @@ skip straight to [Step 2](#step-2-create-a-user).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Step 1. Create a Redpanda Cloud cluster
 
 > **Note:** Once created, provisioning a Dedicated Redpanda Cloud cluster can take up to 40 minutes.
->
 > Serverless clusters are provisioned in a few minutes.
->
 
 
 1. Sign in to the [Redpanda Cloud console](https://cloud.redpanda.com/).

@@ -1,9 +1,5 @@
 # SHOW INDEXES
-
 SHOW INDEXES provides details about indexes built on a source, view, or materialized view
-
-
-
 `SHOW INDEXES` provides details about indexes built on a source, view, or materialized view.
 
 ## Syntax

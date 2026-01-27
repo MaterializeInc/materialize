@@ -1,14 +1,9 @@
 # Blue-green deployment
-
 How to use dbt for blue-green deployments.
-
-
-
 > **Tip:** Once your dbt project is ready to move out of development, or as soon as you
 > start managing multiple users and deployment environments, we recommend
 > checking the code in to **version control** and setting up an **automated
 > workflow** to control the deployment of changes.
->
 
 
 The `dbt-materialize` adapter ships with helper macros to automate blue/green
@@ -36,7 +31,6 @@ These permissions are required because the blue/green deployment process needs t
 > Unlike other objects, sinks must not be recreated in the process of a blue/green
 > deployment, and must instead cut over to the new definition of their upstream
 > dependencies after the environment swap.
->
 
 
 In a blue/green deployment, you first deploy your code changes to a deployment
@@ -90,14 +84,11 @@ These environments are later swapped transparently.
     > If you encounter an error like `String 'deploy:' is not valid YAML`, you
 >   might need to use an alternative syntax depending on your terminal environment.
 >   Different terminals handle quotes differently, so try:
->
 >   ```bash
 >   dbt run --vars "{\"deploy\": true}"
 >   ```
->
 >   This alternative syntax is compatible with Windows terminals, PowerShell, or
 >   PyCharm Terminal.
->
 
 
 
@@ -140,7 +131,6 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
 > **Warning:** To avoid breakages in your production environment, we recommend **carefully
 > [validating](#validation)** the results of the deployed changes in the deployment
 > environment before cutting over.
->
 
 
 1. Once `deploy_await` returns successfully and you have [validated the results](#validation)
@@ -197,4 +187,3 @@ deployment environment to ensure it's safe to [cutover](#cutover-and-cleanup).
    > **Note:** Any **active `SUBSCRIBE` commands** attached to the swapped
 >    cluster(s) **will break**. On retry, the client will automatically connect
 >    to the newly deployed cluster
->

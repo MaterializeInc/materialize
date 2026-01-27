@@ -1,9 +1,5 @@
 # mz-debug emulator
-
 Use mz-debug to debug Materialize Emulator environments running in Docker.
-
-
-
 `mz-debug emulator` debugs Docker-based Materialize deployments. It collects:
 
 - Docker logs and resource information.

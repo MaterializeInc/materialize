@@ -1,9 +1,5 @@
 # Materialize CRD Field Descriptions
-
 Reference page on Materialize CRD Fields
-
-
-
 
 
 
@@ -355,21 +351,17 @@ generation has caught up, consult the <code>UpToDate</code> condition in the
 status of the Materialize Resource. If the condition&rsquo;s reason is
 <code>ReadyToPromote</code> the new generation is ready to promote.</p>
 > **Warning:** Do not leave new generations unpromoted indefinitely.
->
 >   The new generation keeps open read holds which prevent compaction. Once promoted or
 >   cancelled, those read holds are released. If left unpromoted for an extended time, this
 >   data can build up, and can cause extreme deletion load on the metadata backend database
 >   when finally promoted or cancelled.
->
 
 </li>
 <li>
 <p><code>ImmediatelyPromoteCausingDowntime</code>:<br>  > **Warning:** THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
->
 >   This strategy should ONLY be used by customers with physical hardware who do not have
 >   enough hardware for the `WaitUntilReady` strategy. If you think you want this, please
 >   consult with Materialize engineering to discuss your situation.
->
 </p>
 <p>Tear down the old generation of pods and promote the new generation of pods immediately,
 without waiting for the new generation of pods to be ready.</p>

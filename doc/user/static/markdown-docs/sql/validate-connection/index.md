@@ -1,9 +1,5 @@
 # VALIDATE CONNECTION
-
 `VALIDATE CONNECTION` validates the connection and authentication parameters provided in a `CREATE CONNECTION` statement against the target external system
-
-
-
 `VALIDATE CONNECTION` validates the connection and authentication parameters
 provided in a `CREATE CONNECTION` statement against the target external
 system.
@@ -27,11 +23,8 @@ a validation error.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on the connection.</li>
-</ul>
-
+- `USAGE` privileges on the containing schema.
+- `USAGE` privileges on the connection.
 
 ## Related pages
 

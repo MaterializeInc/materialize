@@ -1,9 +1,5 @@
 # Monitoring data ingestion
-
 How to monitor the snapshotting progress and data lag for your sources.
-
-
-
 ## Monitoring the snapshotting progress
 
 In the Materialize Console, the Overview page for the source displays the

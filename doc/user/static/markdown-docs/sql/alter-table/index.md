@@ -1,9 +1,5 @@
 # ALTER TABLE
-
 `ALTER TABLE` changes properties of a table.
-
-
-
 Use `ALTER TABLE` to:
 
 - Rename a table.
@@ -96,13 +92,8 @@ ALTER TABLE <name> RESET (RETAIN HISTORY);
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the table being altered.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing schema if the table is namespaced by
-a schema.</li>
-</ul>
-</li>
-</ul>
+- Ownership of the table being altered.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing schema if the table is namespaced by
+  a schema.

@@ -1,9 +1,5 @@
 # PHP cheatsheet
-
 Use PHP PDO to connect, insert, manage, query and stream from Materialize.
-
-
-
 Materialize is **wire-compatible** with PostgreSQL, which means that PHP applications can use common PostgreSQL clients to interact with Materialize. In this guide, we'll use the [PDO_PGSQL driver](https://www.php.net/manual/en/ref.pdo-pgsql.php) to connect to Materialize and issue SQL commands.
 
 ## Connect

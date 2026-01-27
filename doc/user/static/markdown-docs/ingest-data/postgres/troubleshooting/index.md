@@ -1,9 +1,5 @@
 # Troubleshooting
-
 Troubleshooting guides for PostgreSQL source errors in Materialize
-
-
-
 This section contains troubleshooting guides for specific errors you may
 encounter when using PostgreSQL sources in Materialize. These guides focus on
 errors that are unique to the PostgreSQL replication workflow, including issues

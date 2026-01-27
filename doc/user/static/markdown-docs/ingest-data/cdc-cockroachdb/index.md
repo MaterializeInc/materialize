@@ -1,13 +1,7 @@
 # CockroachDB CDC using Kafka and Changefeeds
-
 How to propagate Change Data Capture (CDC) data from a CockroachDB database to Materialize
-
-
-
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 Change Data Capture (CDC) allows you to track and propagate changes in a
@@ -81,7 +75,6 @@ refer to the [CockroachDB documentation](https://www.cockroachlabs.com/docs/stab
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 In Materialize, a [cluster](/concepts/clusters/) is an isolated environment,

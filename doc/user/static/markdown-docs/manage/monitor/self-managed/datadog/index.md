@@ -1,9 +1,5 @@
 # Datadog using Prometheus SQL Exporter
-
 How to monitor the performance and overall health of your Materialize region using Datadog.
-
-
-
 This guide walks you through the steps required to monitor the performance and
 overall health of your Materialize region using [Datadog](https://www.datadoghq.com/).
 
@@ -34,7 +30,6 @@ which has been tried and tested in production environments.
 >    `config.yml.example`](https://github.com/MaterializeIncLabs/materialize-monitoring/blob/main/sql_exporter/config.yml)
 >    as guidance to bootstrap your monitoring with some key Materialize metrics
 >    and indicators.
->
 
 
 
@@ -43,7 +38,6 @@ which has been tried and tested in production environments.
 
    > **Note:** You must escape the special `@` character in `USER` for a successful
 >    connection. Example: instead of `name@email.com`, use `name%40email.com`.
->
 
 
    **Filename:** config.yml

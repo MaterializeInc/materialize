@@ -1,9 +1,5 @@
 # justify_hours function
-
 Adjust interval so 24-hour time periods are represented as days
-
-
-
 `justify_hours` returns a new [`interval`](../../types/interval) such that 24-hour time periods are
 converted to days.
 

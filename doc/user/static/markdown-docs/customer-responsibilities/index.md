@@ -1,9 +1,5 @@
 # Customer responsibility model (Cloud)
-
 Details about the Materialize Cloud's customer responsibility model.
-
-
-
 The Materialize Cloud platform is built with a **shared responsibility model**
 to ensure the highest levels of data integrity, availability, and resilience.
 This page outlines the specific responsibilities of customers to manage their

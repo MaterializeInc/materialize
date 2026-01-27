@@ -1,9 +1,5 @@
 # string_agg function
-
 Concatenates the non-null input values into a string. Each value after the first is preceded by the corresponding delimiter (if it's not null).
-
-
-
 The `string_agg(value, delimiter)` aggregate function concatenates the non-null
 input values (i.e. `value`) into [`text`](/sql/types/text). Each value after the
 first is preceded by its corresponding `delimiter`, where _null_ values are

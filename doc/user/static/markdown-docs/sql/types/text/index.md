@@ -1,9 +1,5 @@
 # text type
-
 Expresses a Unicode string
-
-
-
 `text` data expresses a Unicode string. This is equivalent to `string` or
 `varchar` in other RDBMSes.
 

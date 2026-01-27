@@ -1,9 +1,5 @@
 # jsonb_agg function
-
 Aggregates values (including nulls) as a jsonb array.
-
-
-
 The `jsonb_agg(expression)` function aggregates all values indicated by its expression,
 returning the values (including nulls) as a [`jsonb`](/sql/types/jsonb) array.
 The input values to the aggregate can be [filtered](../filters).

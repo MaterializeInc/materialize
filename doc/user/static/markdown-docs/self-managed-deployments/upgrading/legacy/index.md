@@ -7,29 +7,28 @@ Upgrading Self-Managed Materialize using legacy Terraform modules
 <h4 id="upgrade-using-legacy-terraform-modules">Upgrade using Legacy Terraform Modules</h4>
 > **Tip:** The Terraform modules are provided as examples. They are not required for
 > upgrading Materialize.
->
 
 <table>
-<thead>
-<tr>
-<th>Guide</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/" >Upgrade on AWS (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/" >Upgrade on Azure (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
-</tr>
-<tr>
-<td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/" >Upgrade on GCP (Legacy Terraform)</a></td>
-<td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Guide</th>
+          <th>Description</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/" >Upgrade on AWS (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/" >Upgrade on Azure (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).</td>
+      </tr>
+      <tr>
+          <td><a href="/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/" >Upgrade on GCP (Legacy Terraform)</a></td>
+          <td>Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).</td>
+      </tr>
+  </tbody>
 </table>
 
 
@@ -57,8 +56,6 @@ or the root).
 > at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
 > but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
 > not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216).
->
->
 
 
 
@@ -85,8 +82,6 @@ to upgrade.
 > Materialize instances are running before the the old instance are removed.
 > When performing a rolling upgrade, ensure you have enough resources to support
 > having both the old and new Materialize instances running.
->
->
 
 
 ### Terraform
@@ -134,11 +129,7 @@ deployment does not have a license key configured, contact <a href="https://mate
 
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated Terraform modules to your existing deployments.
->
->
 >    See [Materialize on AWS releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-aws-terraform-module) for notable changes.
->
->
 
 
 
@@ -351,8 +342,6 @@ directory or the root).
 > at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
 > but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
 > not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216).
->
->
 
 
 
@@ -380,8 +369,6 @@ to upgrade.
 > Materialize instances are running before the the old instance are removed.
 > When performing a rolling upgrade, ensure you have enough resources to support
 > having both the old and new Materialize instances running.
->
->
 
 
 ### Azure subscription
@@ -479,9 +466,6 @@ deployment does not have a license key configured, contact <a href="https://mate
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated
 >    Terraform modules to your existing deployments.
->
->
->
 
 
 1. Optional. Create a virtual environment, specifying a path for the new virtual
@@ -718,8 +702,6 @@ or the root).
 > at a time. For example, upgrades from **v26**.1.0 to **v27**.2.0 is permitted
 > but **v26**.1.0 to **v28**.0.0 is not. Skipping major versions or downgrading is
 > not supported. To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216).
->
->
 
 
 
@@ -742,8 +724,6 @@ or the root).
 > Materialize instances are running before the the old instance are removed.
 > When performing a rolling upgrade, ensure you have enough resources to support
 > having both the old and new Materialize instances running.
->
->
 
 
 ### Google cloud project
@@ -775,8 +755,6 @@ Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terr
 > **Tip:** Using `gcloud` to install `kubectl` will also install the needed plugins.
 > Otherwise, you will need to manually install the `gke-gcloud-auth-plugin` for
 > `kubectl`.
->
->
 
 
 - If you do not have `kubectl`, install `kubectl`.  To install, see [Install
@@ -817,7 +795,6 @@ deployment does not have a license key configured, contact <a href="https://mate
 
    > **Tip:** You do not need to configure a default Compute Region and Zone as you will
 >    specify the region.
->
 
 
 1. To the service account that will be used to perform the upgrade,
@@ -875,7 +852,6 @@ deployment does not have a license key configured, contact <a href="https://mate
    ```
 
    > **Tip:** If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
->
 
 
 ### B. Upgrade Materialize operator and instances
@@ -893,11 +869,7 @@ deployment does not have a license key configured, contact <a href="https://mate
    > **Tip:** If upgrading from a deployment that was set up using an earlier version of the
 >    Terraform modules, additional considerations may apply when using an updated
 >    Terraform modules to your existing deployments.
->
->
 >    See [Materialize on GCP releases](/self-managed-deployments/appendix/legacy/appendix-legacy-terraform-releases/#materialize-on-gcp-terraform-module) for notable changes.
->
->
 
 
 1. Configure `kubectl` to connect to your EKS cluster, specifying:

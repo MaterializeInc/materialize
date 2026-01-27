@@ -1,9 +1,5 @@
 # CREATE TABLE
-
 `CREATE TABLE` creates a table that is persisted in durable storage.
-
-
-
 `CREATE TABLE` defines a table that is persisted in durable storage.
 
 In Materialize, you can create:
@@ -70,8 +66,6 @@ CREATE [TEMP|TEMPORARY] TABLE [IF NOT EXISTS] <table_name> (
 
 
 > **Note:** You must be on **v26+** to use the new syntax.
->
->
 
 
 To create a read-only table from a [source](/sql/create-source/) connected
@@ -130,8 +124,6 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 
 
 > **Note:** You must be on **v26+** to use the new syntax.
->
->
 
 
 ### Table names and column names
@@ -158,8 +150,6 @@ timestamp), you are not able to query the table until snapshotting is complete.<
 > the existing tables for the same source is temporarily blocked. As such, if
 > possible, you can resize the cluster to speed up the snapshotting process and
 > once the process finishes, resize the cluster for steady-state.
->
->
 
 ### Supported data types
 
@@ -265,13 +255,10 @@ table.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all types used in the table definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all types in the statement are
-contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the table definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
 
 ## Examples
 
@@ -280,8 +267,6 @@ contained in.</li>
 The following example uses `CREATE TABLE` to create a new read-write table
 `mytable` with two columns `a` (of type `int`) and `b` (of type `text` and
 not nullable):
-
-
 ```mzsql
 CREATE TABLE mytable (a int, b text NOT NULL);
 
@@ -291,8 +276,6 @@ Once a user-populated table is created, you can perform CRUD
 (Create/Read/Update/Write) operations on it.
 
 The following example uses [`INSERT`](/sql/insert/) to write two rows to the table:
-
-
 ```mzsql
 INSERT INTO mytable VALUES
 (1, 'hello'),
@@ -302,8 +285,6 @@ INSERT INTO mytable VALUES
 ```
 
 The following example uses [`SELECT`](/sql/select/) to read all rows from the table:
-
-
 ```mzsql
 SELECT * FROM mytable;
 
@@ -322,16 +303,11 @@ SELECT * FROM mytable;
 
 
 > **Note:** You must be on **v26+** to use the new syntax.
->
->
 > The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
 > enabled logical replication, created the publication for the various tables and
 > replication user, and updated the network configuration).
->
 > For details about configuring your upstream system, see the [PostgreSQL
 > integration guides](/ingest-data/postgres/#supported-versions-and-services).
->
->
 
 
 
@@ -350,8 +326,6 @@ the referenced table names.
 types](/sql/create-table/#supported-data-types).
 
 {{< /note >}}
-
-
 ```mzsql
 /* This example assumes:
   - In the upstream PostgreSQL, you have defined:
@@ -399,8 +373,6 @@ these tables.
 
 
 Once the snapshotting process completes and the table is in the running state, you can query the table:
-
-
 ```mzsql
 SELECT * FROM items;
 

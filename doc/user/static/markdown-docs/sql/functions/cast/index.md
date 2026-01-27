@@ -1,9 +1,5 @@
 # CAST function and operator
-
 Returns the value converted to the specified type
-
-
-
 The `cast` function and operator return a value converted to the specified [type](../../types/).
 
 ## Signatures

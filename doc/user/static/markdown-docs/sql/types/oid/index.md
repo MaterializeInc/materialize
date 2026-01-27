@@ -1,9 +1,5 @@
 # oid type
-
 Express a PostgreSQL-compatible object identifier
-
-
-
 `oid` expresses a PostgreSQL-compatible object identifier.
 
 Detail | Info

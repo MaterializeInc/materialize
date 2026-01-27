@@ -1,9 +1,5 @@
 # ALTER ROLE
-
 `ALTER ROLE` alters the attributes of an existing role.
-
-
-
 `ALTER ROLE` alters the attributes of an existing role.[^1]
 
 [^1]: Materialize does not support the `SET ROLE` command.
@@ -169,7 +165,6 @@ rj  f
 #### Removing a role's password (Self-Managed)
 
 > **Warning:** Setting a NULL password removes the password.
->
 
 
 ```mzsql
@@ -185,10 +180,7 @@ ALTER ROLE rj PASSWORD 'new_password';
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

@@ -1,9 +1,5 @@
 # mz_aclitem type
-
 Expresses a granted privilege on some object
-
-
-
 `mz_aclitem` data expresses a granted privilege on some object.
 
 ## `mz_aclitem` info

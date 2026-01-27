@@ -407,7 +407,6 @@ mz region enable [options...]
 ```
 
 > **Warning:** You cannot disable a region with `mz`. To disable a region, contact support.
->
 
 
 ### Arguments
@@ -521,7 +520,6 @@ new value, if it exists.
 
 > **Note:** Using this command is preferred to executing [`CREATE SECRET`](/sql/create-secret) directly, as it avoids leaving the
 > secret's value in your shell history.
->
 
 
 ### Arguments

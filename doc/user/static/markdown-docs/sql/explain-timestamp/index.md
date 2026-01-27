@@ -1,15 +1,10 @@
 # EXPLAIN TIMESTAMP
-
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement.
-
-
-
 `EXPLAIN TIMESTAMP` displays the timestamps used for a `SELECT` statement -- valuable information to investigate query delays.
 
 > **Warning:** `EXPLAIN` is not part of Materialize's stable interface and is not subject to
 > our backwards compatibility guarantee. The syntax and output of `EXPLAIN` may
 > change arbitrarily in future versions of Materialize.
->
 
 
 ## Syntax
@@ -177,7 +172,5 @@ Each source contains two frontiers:
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the query are
-contained in.</li>
-</ul>
+- `USAGE` privileges on the schemas that all relations in the query are
+  contained in.

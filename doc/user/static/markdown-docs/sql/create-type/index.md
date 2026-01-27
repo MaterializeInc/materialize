@@ -1,9 +1,5 @@
 # CREATE TYPE
-
 `CREATE TYPE` defines a new data type.
-
-
-
 `CREATE TYPE` defines a custom data type, which let you create named versions of
 anonymous types or provide a shorthand for other types. For more information,
 see [SQL Data Types: Custom types](../types/#custom-types).
@@ -158,13 +154,10 @@ custom_nested_row_type
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all types used in the type definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all types in the statement are
-contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all types used in the type definition.
+- `USAGE` privileges on the schemas that all types in the statement are
+  contained in.
 
 ## Related pages
 

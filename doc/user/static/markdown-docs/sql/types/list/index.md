@@ -1,9 +1,5 @@
 # List types
-
 Lists are ordered sequences of homogenously typed elements
-
-
-
 Lists are ordered sequences of homogenously typed elements. Lists' elements can
 be other lists, known as "layered lists."
 
@@ -541,7 +537,6 @@ SELECT '{{1.5,NULL},{2.25}}'::numeric(38,2) list list AS text_to_list;
 
 > **Note:** Like [array containment operators in PostgreSQL](https://www.postgresql.org/docs/current/functions-array.html#FUNCTIONS-ARRAY),
 > list containment operators in Materialize **do not** account for duplicates.
->
 
 
 

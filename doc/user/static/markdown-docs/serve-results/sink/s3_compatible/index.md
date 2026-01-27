@@ -1,9 +1,5 @@
 # S3 Compatible Object Storage
-
 How to export results from Materialize to S3 compatible object storage
-
-
-
 This guide walks you through the steps required to export results from
 Materialize to an S3 compatible object storage service, such as Google
 Cloud Storage, or Cloudflare R2.
@@ -34,7 +30,6 @@ Cloud Storage, or Cloudflare R2.
     ```
 
 > **Warning:** `VALIDATE CONNECTION` only works for AWS S3 connections. Using `VALIDATE CONNECTION` to test a connection to S3 compatible object storage service will result in an error. However, you can still use the connection to copy data.
->
 
 
 ## Step 2. Run a bulk export

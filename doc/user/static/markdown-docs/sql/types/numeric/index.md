@@ -1,9 +1,5 @@
 # numeric type
-
 Expresses an exact number with user-defined precision and scale
-
-
-
 `numeric` data expresses an exact number with user-defined precision and scale.
 
 Detail | Info

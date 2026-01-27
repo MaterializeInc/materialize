@@ -1,9 +1,5 @@
 # EXPLAIN FILTER PUSHDOWN
-
 `EXPLAIN FILTER PUSHDOWN` reports filter pushdown statistics for `SELECT` statements and materialized views.
-
-
-
 
 > **Public Preview:** This feature is in public preview.
 
@@ -127,7 +123,5 @@ SELECT count(*) FROM bids WHERE bid_time + '1 hour' > mz_now();
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schemas that all relations in the explainee are
-contained in.</li>
-</ul>
+- `USAGE` privileges on the schemas that all relations in the explainee are
+  contained in.

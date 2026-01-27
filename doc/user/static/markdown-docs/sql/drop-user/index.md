@@ -1,9 +1,5 @@
 # DROP USER
-
 `DROP USER` removes a role from Materialize.
-
-
-
 `DROP USER` removes a role from Materialize. `DROP USER` is an alias for [`DROP ROLE`](../drop-role).
 
 
@@ -22,10 +18,7 @@ Syntax element | Description
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATEROLE</code> privileges on the system.</li>
-</ul>
-
+- `CREATEROLE` privileges on the system.
 
 ## Related pages
 

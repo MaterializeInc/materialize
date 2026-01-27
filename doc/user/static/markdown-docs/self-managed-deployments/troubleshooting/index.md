@@ -1,7 +1,4 @@
 # Troubleshooting
-
-
-
 ## Troubleshooting Kubernetes
 
 To check the status of the Materialize operator:

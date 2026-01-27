@@ -1,16 +1,11 @@
 # CREATE CLUSTER REPLICA
-
 `CREATE CLUSTER REPLICA` provisions a new replica of a cluster.
-
-
-
 
 `CREATE CLUSTER REPLICA` provisions a new replica for an [**unmanaged**
 cluster](/sql/create-cluster/#unmanaged-clusters).
 
 > **Tip:** When getting started with Materialize, we recommend starting with managed
 > clusters.
->
 
 
 ## Syntax
@@ -46,7 +41,6 @@ to the new replica.
 > Materialize reserves the right to change the capacity at any time. As such, you
 > acknowledge and agree that those values in this table may change at any time,
 > and you should not rely on these values for any capacity planning.
->
 
 
 
@@ -81,9 +75,7 @@ Materialize offers the following legacy cc cluster sizes:
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
 
 
 * `25cc`
@@ -110,7 +102,6 @@ query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluste
 
 > **Warning:** The values in the `mz_cluster_replica_sizes` table may change at any
 > time. You should not rely on them for any kind of capacity planning.
->
 
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
@@ -118,6 +109,8 @@ Clusters of larger sizes can process data faster and handle larger data volumes.
 
 
 See also:
+
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -151,10 +144,7 @@ CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the cluster.</li>
-</ul>
-
+- Ownership of the cluster.
 
 ## See also
 

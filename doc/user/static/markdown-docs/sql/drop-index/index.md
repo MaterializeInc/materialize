@@ -1,9 +1,5 @@
 # DROP INDEX
-
 DROP INDEX removes an index
-
-
-
 `DROP INDEX` removes an index from Materialize.
 
 ## Syntax
@@ -21,19 +17,14 @@ Syntax element | Description
 
 > **Note:** Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX
 > RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
->
->
 
 
 ## Privileges
 
 To execute the `DROP INDEX` statement, you need:
 
-<ul>
-<li>Ownership of the dropped index.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped index.
+- `USAGE` privileges on the containing schema.
 
 ## Examples
 
@@ -42,8 +33,6 @@ To execute the `DROP INDEX` statement, you need:
 > **Tip:** In the **Materialize Console**, you can view existing indexes in the [**Database
 > object explorer**](/console/data/). Alternatively, you can use the
 > [`SHOW INDEXES`](/sql/show-indexes) command.
->
->
 
 
 Using the  `DROP INDEX` commands, the following example drops an index named `q01_geo_idx`.

@@ -1,9 +1,5 @@
 # Durable subscriptions
-
 How to enable lossless, durable subscriptions to your changing results in Materialize
-
-
-
 [//]: # "TODO: Move to Serve results section"
 
 [Subscriptions](/sql/subscribe/) allow you to stream changing results from
@@ -35,8 +31,6 @@ that the subscription depends on to **retain history**.
 > **Important:** Configuring indexes to retain history is not recommended. Instead, consider
 > creating a materialized view for your subscription query and configuring the
 > history retention period on that view.
->
->
 
 
 To configure the history retention period for sources, tables and materialized
@@ -81,8 +75,6 @@ See also [Considerations](#considerations).
 > not recommended. Instead, consider creating a materialized view for your
 > subscription query and configuring the history retention period on that view.
 > See [Considerations](#considerations).
->
->
 
 
 To set the history retention period for [sources](/sql/create-source/),

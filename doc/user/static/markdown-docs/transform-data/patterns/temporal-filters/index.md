@@ -1,9 +1,5 @@
 # Temporal filters (time windows)
-
 Perform time-windowed computation over temporal data.
-
-
-
 A **temporal filter** is a query condition/predicate that uses the
 [`mz_now()`](/sql/functions/now_and_mz_now) function to filter data based on a
 time-related condition. Using a temporal filter reduces the working dataset,
@@ -31,7 +27,6 @@ WHERE mz_now() <= event_ts + INTERVAL '5min'
 > **Note:** It may feel more natural to write this filter as the equivalent `WHERE event_ts >= mz_now() - INTERVAL '5min'`.
 > However, there are currently no valid operators for the [`mz_timestamp`
 > type](/sql/types/mz_timestamp) that would allow this.  See [`mz_now()` requirements and restrictions](#mz_now-requirements-and-restrictions).
->
 
 
 The following diagram shows record `B` falling out of the result set as time
@@ -51,8 +46,6 @@ moves forward:
 
 > **Tip:** When possible, prefer materialized views when using temporal filter to take
 > advantage of custom consolidation.
->
->
 
 
 When creating a temporal filter using
@@ -109,8 +102,6 @@ After you have tried the examples, make sure to drop these objects and spin down
 
 > **Tip:** When possible, prefer materialized views when using temporal filter to take
 > advantage of custom consolidation.
->
->
 
 
 ### Sliding window
@@ -343,4 +334,3 @@ The filter in our query appears in the `pushdown=` list at the bottom of the out
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
 > **Note:** See the guide on [partitioning and filter pushdown](/transform-data/patterns/partition-by/) for a **private preview** feature that can make the filter pushdown optimization more predictable.
->

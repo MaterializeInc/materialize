@@ -1,9 +1,5 @@
 # Appendix: Alternative cluster architectures
-
 If the recommended 3-tier architecture is infeasible, can use a 2-cluster or a 1-cluster pattern.
-
-
-
 If the [recommended three-tier
 architecture](/manage/operational-guidelines/#three-tier-architecture)
 is infeasible or unnecessary due to low volume or a **non**-production setup, a
@@ -21,7 +17,7 @@ Serving cluster" ></p>
 | Tier | Description |
 | --- | --- |
 | <strong>Source cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for <a href="/concepts/sources/" >sources</a>.</p> <p>In addition, for upsert sources:</p> <ul> <li> <p>Consider separating upsert sources from your other sources. Upsert sources have higher resource requirements (since, for upsert sources, Materialize maintains each key and associated last value for the key as well as to perform deduplication). As such, if possible, use a separate source cluster for upsert sources.</p> </li> <li> <p>Consider using a larger cluster size during snapshotting for upsert sources. Once the snapshotting operation is complete, you can downsize the cluster to align with the steady-state ingestion.</p> </li> </ul>  |
-| <strong>Compute/Transform + Serving cluster</strong> | <p><strong>A dedicated cluster</strong> for both compute/transformation and serving queries:</p> <ul> <li> <p><a href="/concepts/views/#views" >Views</a> that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a two-tier architecture, compute and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead. >     |
+| <strong>Compute/Transform + Serving cluster</strong> | <p><strong>A dedicated cluster</strong> for both compute/transformation and serving queries:</p> <ul> <li> <p><a href="/concepts/views/#views" >Views</a> that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a two-tier architecture, compute and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead.    |
 
 <p>Benefits of a two-tier architecture include:</p>
 <ul>
@@ -57,7 +53,7 @@ architecture" ></p>
 
 | Tier | Description |
 | --- | --- |
-| <strong>All-in-one cluster</strong> | <p><strong>A cluster</strong> for <a href="/concepts/sources/" >sources</a>, compute/transformation and serving queries:</p> <ul> <li> <p>Sources to ingest data.</p> </li> <li> <p>Views that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a 1-tier single-cluster architecture, sources, compute, and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead. >     |
+| <strong>All-in-one cluster</strong> | <p><strong>A cluster</strong> for <a href="/concepts/sources/" >sources</a>, compute/transformation and serving queries:</p> <ul> <li> <p>Sources to ingest data.</p> </li> <li> <p>Views that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a 1-tier single-cluster architecture, sources, compute, and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead.    |
 
 <p><strong>Benefits of a one-tier architecture</strong> include:</p>
 <ul>

@@ -1,9 +1,5 @@
 # ALTER CLUSTER REPLICA
-
 `ALTER CLUSTER REPLICA` changes properties of a cluster replica.
-
-
-
 Use `ALTER CLUSTER REPLICA` to:
 - Rename a cluster replica.
 - Change owner of a cluster replica.
@@ -31,7 +27,6 @@ ALTER CLUSTER REPLICA <name> RENAME TO <new_name>;
 
 
 > **Note:** You cannot rename replicas in system clusters.
->
 
 
 
@@ -64,16 +59,10 @@ membership in the `<new_owner_role>`.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the cluster replica.</li>
-<li>In addition, to change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing cluster.</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the cluster replica.
+- In addition, to change owners:
+  - Role membership in `new_owner`.
+  - `CREATE` privileges on the containing cluster.
 
 ## Example
 

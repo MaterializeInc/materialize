@@ -1,13 +1,8 @@
 # Support
-
 How to get support for Materialize
-
-
-
 Whether you're building, scaling, or debugging, we're here to help.
 
 > **Note:** We're retiring access to Slack and Microsoft Teams workspaces. We've introduced the messenger app to streamline and scale how users engage with support — starting with AI-first assistance and seamless escalation paths when needed.
->
 
 
 ## Materialize Support
@@ -27,7 +22,6 @@ widget on the bottom right.
 
 > **Tip:** If you are an SLA Supported Customer who is experiencing an [**urgent** issue](#urgent-issues-for-sla-supported-customers-only),
 > you can use the **Report Production Outage** option for fastest response.
->
 
 
 ### Email

@@ -140,8 +140,6 @@ as well as user clusters.
 
 > **Tip:** In general, you should not have to override the defaults. At minimum, we
 > recommend that you keep the 25-200cc cluster sizes.
->
->
 
 
 ```yaml
@@ -176,8 +174,6 @@ operator:
 > **Note:** If you have modified the default cluster size configurations, you can query the
 > [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 > system catalog table for the specific resource allocations.
->
->
 
 
 
@@ -222,10 +218,7 @@ Materialize-provided Terraforms.</p>
 > to ensure compatibility.</p>
 > </li>
 > </ul>
->
->
 > See also [General notes for upgrades](/self-managed-deployments/upgrading/)
->
 
 <ol>
 <li>

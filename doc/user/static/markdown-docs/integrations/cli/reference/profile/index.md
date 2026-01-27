@@ -1,9 +1,5 @@
 # mz profile
-
 The `mz profile` command manages authentication profiles for `mz`.
-
-
-
 The `mz profile` command manages [authentication profiles] for `mz`.
 
 ## `init`

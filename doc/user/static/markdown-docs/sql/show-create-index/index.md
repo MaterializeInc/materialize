@@ -1,9 +1,5 @@
 # SHOW CREATE INDEX
-
 `SHOW CREATE INDEX` returns the statement used to create the index.
-
-
-
 `SHOW CREATE INDEX` returns the DDL statement used to create the index.
 
 ## Syntax
@@ -46,10 +42,7 @@ SHOW CREATE INDEX my_view_idx;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the index.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the index.
 
 ## Related pages
 

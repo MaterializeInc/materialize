@@ -1,9 +1,5 @@
 # REVOKE PRIVILEGE
-
 `REVOKE` revokes privileges from a database object.
-
-
-
 `REVOKE` revokes privileges from a database object. The `PUBLIC` pseudo-role can
 be used to indicate that the privileges should be revoked from all roles
 (including roles that might not exist yet).
@@ -13,8 +9,6 @@ be used to indicate that the privileges should be revoked from all roles
 > **Note:** The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
 > [*applicable* privileges](#applicable-privileges-to-revoke) for the
 > object type.
->
->
 
 
 
@@ -92,10 +86,9 @@ FROM <role_name> [, ... ];
 
 **Materialized view/view/source:**
 
-> **Note:** To read from a views or a materialized views, you must have <code>SELECT</code> privileges
-> on the view/materialized views. That is, having <code>SELECT</code> privileges on the
+> **Note:** To read from a views or a materialized views, you must have `SELECT` privileges
+> on the view/materialized views. That is, having `SELECT` privileges on the
 > underlying objects defining the view/materialized view is insufficient.
->
 
 
 For specific materialized view(s)/view(s)/source(s):
@@ -201,10 +194,8 @@ FROM <role_name> [, ... ];
 
 For all tables or all tables in a specific schema(s) or in a specific database(s):
 
-> **Note:** Granting privileges via <code>ALL TABLES [...]</code> also applies to sources, views, and
+> **Note:** Granting privileges via `ALL TABLES [...]` also applies to sources, views, and
 > materialized views (for the applicable privileges).
->
->
 
 
 ```mzsql
@@ -233,7 +224,7 @@ FROM <role_name> [, ... ];
 | <strong>DELETE</strong> | <p>Permission to delete rows from an object.</p> <p>Deleting rows may also require <strong>SELECT</strong> if a read is needed to determine which rows to delete.</p>  | <code>d</code> | <ul> <li><code>TABLE</code></li> </ul>  |
 | <strong>CREATE</strong> | Permission to create a new objects within the specified object. | <code>C</code> | <ul> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>CLUSTER</code></li> </ul>  |
 | <strong>USAGE</strong> | <a name="privilege-usage"></a> Permission to use or reference an object (e.g., schema/type lookup). | <code>U</code> | <ul> <li><code>CLUSTER</code></li> <li><code>CONNECTION</code></li> <li><code>DATABASE</code></li> <li><code>SCHEMA</code></li> <li><code>SECRET</code></li> <li><code>TYPE</code></li> </ul>  |
-| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the <code>CREATEROLE</code> privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > <code>CREATEROLE</code> unnecessarily. > | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
+| <strong>CREATEROLE</strong> | <p>Permission to create/modify/delete roles and manage role memberships for any role in the system.</p> > **Warning:** Roles with the `CREATEROLE` privilege can obtain the privileges of any other > role in the system by granting themselves that role. Avoid granting > `CREATEROLE` unnecessarily. | <code>R</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATEDB</strong> | Permission to create new databases. | <code>B</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATECLUSTER</strong> | Permission to create new clusters. | <code>N</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
 | <strong>CREATENETWORKPOLICY</strong> | Permission to create network policies to control access at the network layer. | <code>P</code> | <ul> <li><code>SYSTEM</code></li> </ul>  |
@@ -263,13 +254,10 @@ FROM <role_name> [, ... ];
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of affected objects.</li>
-<li><code>USAGE</code> privileges on the containing database if the affected object is a schema.</li>
-<li><code>USAGE</code> privileges on the containing schema if the affected object is namespaced by a schema.</li>
-<li><em>superuser</em> status if the privilege is a system privilege.</li>
-</ul>
-
+- Ownership of affected objects.
+- `USAGE` privileges on the containing database if the affected object is a schema.
+- `USAGE` privileges on the containing schema if the affected object is namespaced by a schema.
+- _superuser_ status if the privilege is a system privilege.
 
 
 ## Examples

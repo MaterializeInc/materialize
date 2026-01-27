@@ -1,9 +1,5 @@
 # map_agg function
-
 Aggregate keys and values (excluding null keys) into a map
-
-
-
 The `map_agg(keys, values)` aggregate function zips together `keys`
 and `values` into a [`map`](/sql/types/map).
 

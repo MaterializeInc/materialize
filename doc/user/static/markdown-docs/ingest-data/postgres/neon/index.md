@@ -1,13 +1,7 @@
 # Ingest data from Neon
-
 How to stream data from Neon to Materialize
-
-
-
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 [Neon](https://neon.tech) is a fully managed serverless PostgreSQL provider. It
@@ -35,7 +29,6 @@ Console.
 > **Warning:** Enabling logical replication applies **globally** to all databases in your Neon
 > project, and **cannot be reverted**. It also **restarts all computes**, which
 > means that any active connections are dropped and have to reconnect.
->
 
 
 Materialize uses PostgreSQL's [logical replication](https://www.postgresql.org/docs/current/logical-replication.html)
@@ -186,7 +179,6 @@ curl 'https://console.neon.tech/api/v2/projects/<project_id>/branches/<branch_id
 > **Note:** If you are prototyping and your Neon instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 > to limit the IP addresses that can connect to your Neon instance.
->
 
 
 
@@ -220,7 +212,6 @@ will need to allow inbound traffic from Materialize IP addresses.
 > **Note:** If you are prototyping and your Neon instance is publicly accessible, **you can
 > skip this step**. For production scenarios, we recommend using [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
 > to limit the IP addresses that can connect to your Neon instance.
->
 
 
 If you use Neon's [**IP Allow**](https://neon.tech/docs/introduction/ip-allow)
@@ -249,7 +240,6 @@ preferred SQL client connected to Materialize.
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 <p>In Materialize, a <a href="/concepts/clusters/" >cluster</a> is an isolated environment,
@@ -661,5 +651,4 @@ unbounded disk space usage, make sure to use <a href="/sql/drop-source/" ><code>
 process for the new subsource. During this snapshotting, the data ingestion for
 the existing subsources for the same source is temporarily blocked. As such, if
 possible, you can resize the cluster to speed up the snapshotting process and
-once the process finishes, resize the cluster for steady-state.
-</p>
+once the process finishes, resize the cluster for steady-state.</p>

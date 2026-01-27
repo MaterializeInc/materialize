@@ -1,9 +1,5 @@
 # ALTER SYSTEM SET
-
 `ALTER SYSTEM SET` globally modifies the value of a configuration parameter.
-
-
-
 Use `ALTER SYSTEM SET` to globally modify the value of a configuration parameter.
 
 To see the current value of a configuration parameter, use [`SHOW`](../show).
@@ -20,8 +16,6 @@ Syntax element | Description
 `<value>`               | The value to assign to the configuration parameter.
 **DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -84,20 +78,12 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ## Privileges
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><a href="/security/cloud/users-service-accounts/#organization-roles"><em>Superuser</em> privileges</a></li>
-</ul>
-
+- [_Superuser_ privileges](/security/cloud/users-service-accounts/#organization-roles)
 
 ## Related pages
 

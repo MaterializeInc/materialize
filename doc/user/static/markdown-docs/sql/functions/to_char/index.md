@@ -1,9 +1,5 @@
 # to_char function
-
 Converts a timestamp into a string using the specified format.
-
-
-
 `to_char` converts a timestamp into a string using the specified format.
 
 The format string can be composed of any number of [format

@@ -1,9 +1,5 @@
 # Table functions
-
 Functions that return multiple rows
-
-
-
 ## Overview
 
 [Table functions](/sql/functions/#table-functions) return multiple rows from one
@@ -61,8 +57,6 @@ The query returns 5 rows, one row for each list item:
 > **Tip:** For illustrative purposes, the original `scores` column is included in the
 > results (i.e., query projection). In practice, you generally would omit
 > including the original list to minimize the return data size.
->
->
 
 
 ## `WITH ORDINALITY`

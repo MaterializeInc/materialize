@@ -1,9 +1,5 @@
 # Golang cheatsheet
-
 Use Go to connect, insert, manage, query and stream from Materialize.
-
-
-
 Materialize is **wire-compatible** with PostgreSQL, which means that Go applications can use the standard library's [`database/sql`](https://pkg.go.dev/database/sql) package with a PostgreSQL driver to interact with Materialize. In this guide, we'll use the [`pgx` driver](https://github.com/jackc/pgx) to connect to Materialize and issue SQL commands.
 
 ## Connect

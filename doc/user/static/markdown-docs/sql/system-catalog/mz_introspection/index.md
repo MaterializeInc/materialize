@@ -1,20 +1,14 @@
 # mz_introspection
-
 mz_introspection is a system catalog schema which contains replica introspection relations. This schema is not part of Materialize's stable interface.
-
-
-
 The following sections describe the available objects in the `mz_introspection`
 schema.
 
 > **Warning:** The objects in the `mz_introspection` schema are not part of Materialize's stable interface.
 > Backwards-incompatible changes to these objects may be made at any time.
->
 
 
 > **Warning:** `SELECT` statements may reference these objects, but creating views that
 > reference these objects is not allowed.
->
 
 
 Introspection relations are maintained by independently collecting internal logging information within each of the replicas of a cluster.

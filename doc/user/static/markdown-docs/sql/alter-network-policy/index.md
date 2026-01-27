@@ -1,9 +1,5 @@
 # ALTER NETWORK POLICY (Cloud)
-
 `ALTER NETWORK POLICY` alters an existing network policy.
-
-
-
 *Available for Materialize Cloud only*
 
 `ALTER NETWORK POLICY` alters an existing network policy. Network policies are
@@ -46,7 +42,6 @@ will be pre-installed. This policy has a wide open ingress rule `allow
 > Before dropping the `default` network policy, a _superuser_ (i.e. `Organization
 > Admin`) must run [`ALTER SYSTEM SET network_policy`](/sql/alter-system-set) to
 > change the default value.
->
 
 
 ### Lockout prevention
@@ -59,10 +54,7 @@ that could lock them out of the system.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the network policy.</li>
-</ul>
-
+- Ownership of the network policy.
 
 ## Examples
 

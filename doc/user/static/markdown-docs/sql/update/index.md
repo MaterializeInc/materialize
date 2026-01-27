@@ -1,9 +1,5 @@
 # UPDATE
-
 `UPDATE` changes values stored in tables.
-
-
-
 `UPDATE` changes values stored in [user-created tables](../create-table).
 
 ## Syntax

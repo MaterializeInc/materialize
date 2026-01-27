@@ -1,9 +1,5 @@
 # Usage (Self-Managed)
-
 Overview of the resource usage for Self-Managed Materialize.
-
-
-
 ## Compute
 
 In Materialize, [clusters](/concepts/clusters/) are pools of compute resources
@@ -14,8 +10,6 @@ guarantees](/get-started/isolation-level/).
 > **Note:** In Materialize,various [system clusters](/sql/system-clusters/) are
 > pre-installed to improve the user experience as well as support system
 > administration tasks.
->
->
 
 
 You must provision at least one cluster to power your workloads. You can then

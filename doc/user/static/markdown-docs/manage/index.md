@@ -50,7 +50,7 @@ Serving cluster" ></p>
 | Tier | Description |
 | --- | --- |
 | <strong>Source cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for <a href="/concepts/sources/" >sources</a>.</p> <p>In addition, for upsert sources:</p> <ul> <li> <p>Consider separating upsert sources from your other sources. Upsert sources have higher resource requirements (since, for upsert sources, Materialize maintains each key and associated last value for the key as well as to perform deduplication). As such, if possible, use a separate source cluster for upsert sources.</p> </li> <li> <p>Consider using a larger cluster size during snapshotting for upsert sources. Once the snapshotting operation is complete, you can downsize the cluster to align with the steady-state ingestion.</p> </li> </ul>  |
-| <strong>Compute/Transform + Serving cluster</strong> | <p><strong>A dedicated cluster</strong> for both compute/transformation and serving queries:</p> <ul> <li> <p><a href="/concepts/views/#views" >Views</a> that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a two-tier architecture, compute and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead. >     |
+| <strong>Compute/Transform + Serving cluster</strong> | <p><strong>A dedicated cluster</strong> for both compute/transformation and serving queries:</p> <ul> <li> <p><a href="/concepts/views/#views" >Views</a> that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a two-tier architecture, compute and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead.    |
 
 <p>Benefits of a two-tier architecture include:</p>
 <ul>
@@ -86,7 +86,7 @@ architecture" ></p>
 
 | Tier | Description |
 | --- | --- |
-| <strong>All-in-one cluster</strong> | <p><strong>A cluster</strong> for <a href="/concepts/sources/" >sources</a>, compute/transformation and serving queries:</p> <ul> <li> <p>Sources to ingest data.</p> </li> <li> <p>Views that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a 1-tier single-cluster architecture, sources, compute, and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead. >     |
+| <strong>All-in-one cluster</strong> | <p><strong>A cluster</strong> for <a href="/concepts/sources/" >sources</a>, compute/transformation and serving queries:</p> <ul> <li> <p>Sources to ingest data.</p> </li> <li> <p>Views that define the transformations.</p> </li> <li> <p>Indexes on views to maintain up-to-date results in memory and serve queries.</p> </li> </ul> <p>With a 1-tier single-cluster architecture, sources, compute, and queries compete for the same cluster resources.</p> > **Tip:** Except for when used with a [sink](/serve-results/sink/), > [subscribe](/sql/subscribe/), or [temporal > filters](/transform-data/patterns/temporal-filters/), avoid creating > materialized views on a shared cluster used for both compute/transformat > operations and serving queries. Use indexed views instead.    |
 
 <p><strong>Benefits of a one-tier architecture</strong> include:</p>
 <ul>
@@ -139,7 +139,6 @@ cluster's rehydration time**.
 
 > **Note:** The hybrid strategy is available if your deployment uses a [three-tier or a
 > two-tier architecture](/manage/operational-guidelines/).
->
 
 
 Materialize supports multi-replica clusters, allowing for distribution across
@@ -181,8 +180,6 @@ If you require resilience beyond a single region, consider the Level 3 strategy.
 > **Note:** The duplicate environment strategy assumes the use of Infrastructure-as-Code
 > (IaC) practice for managing the environment. This ensures that catalog data,
 > including your RBAC setup, is identical in the second environment.
->
->
 
 
 For region-level fault tolerance, you can choose to have a second Materialize
@@ -208,11 +205,9 @@ variation](#hybrid-variation).
 
 > **Note:** - The hybrid strategy is available if your deployment uses a [three-tier or a
 > two-tier architecture](/manage/operational-guidelines/).
->
 > - The duplicate environment strategy assumes the use of Infrastructure-as-Code
 > (IaC) practice for managing the environment. This ensures that catalog data,
 > including your RBAC setup, is identical in the second environment.
->
 
 
 For a more cost-effective variation to the duplicate Materialize environment in
@@ -306,7 +301,7 @@ architecture"></p>
 | Tier | Description |
 | --- | --- |
 | <strong>Source cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for <a href="/concepts/sources/" >sources</a>.</p> <p>In addition, for upsert sources:</p> <ul> <li> <p>Consider separating upsert sources from your other sources. Upsert sources have higher resource requirements (since, for upsert sources, Materialize maintains each key and associated last value for the key as well as to perform deduplication). As such, if possible, use a separate source cluster for upsert sources.</p> </li> <li> <p>Consider using a larger cluster size during snapshotting for upsert sources. Once the snapshotting operation is complete, you can downsize the cluster to align with the steady-state ingestion.</p> </li> </ul>  |
-| <strong>Compute/Transform cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for compute/transformation:</p> <ul> <li> <p><a href="/concepts/views/#materialized-views" >Materialized views</a> to persist, in durable storage, the results that will be served. Results of materialized views are available across all clusters.</p> > **Tip:** If you are using <strong>stacked views</strong> (i.e., views whose definition depends >   on other views) to reduce SQL complexity, generally, only the topmost >   view (i.e., the view whose results will be served) should be a >   materialized view. The underlying views that do not serve results do not >   need to be materialized. >     </li> <li> <p>Indexes, <strong>only as needed</strong>, to make transformation fast (such as possibly <a href="/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins" >indexes on join keys</a>).</p> > **Tip:** From the compute/transformation clusters, do not create indexes on the >   materialized views for the purposes of serving the view results. >   Instead, use the [serving cluster(s)](#tier-serving-clusters) when >   creating indexes to serve the results. >  >     </li> </ul>  |
+| <strong>Compute/Transform cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for compute/transformation:</p> <ul> <li> <p><a href="/concepts/views/#materialized-views" >Materialized views</a> to persist, in durable storage, the results that will be served. Results of materialized views are available across all clusters.</p> > **Tip:** If you are using <strong>stacked views</strong> (i.e., views whose definition depends >   on other views) to reduce SQL complexity, generally, only the topmost >   view (i.e., the view whose results will be served) should be a >   materialized view. The underlying views that do not serve results do not >   need to be materialized.  </li> <li> <p>Indexes, <strong>only as needed</strong>, to make transformation fast (such as possibly <a href="/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins" >indexes on join keys</a>).</p> > **Tip:** From the compute/transformation clusters, do not create indexes on the >   materialized views for the purposes of serving the view results. >   Instead, use the [serving cluster(s)](#tier-serving-clusters) when >   creating indexes to serve the results.  </li> </ul>  |
 | <strong>Serving cluster(s)</strong> | <a name="tier-serving-clusters"></a> <strong>A dedicated cluster(s)</strong> for serving queries, including <a href="/concepts/indexes/" >indexes</a> on the materialized views. Indexes are local to the cluster in which they are created. |
 
 <p>Benefits of a three-tier architecture include:</p>
@@ -406,21 +401,21 @@ service accounts to perform their duties.
 ##### Restrict the assignment of **Organization Admin** role
 
 
-{{< include-md file="shared-content/rbac-cloud/org-admin-recommendation.md" >}}
+{{% include-headless "/headless/rbac-cloud/org-admin-recommendation" %}}
 
 
 
 ##### Restrict the granting of `CREATEROLE` privilege
 
 
-{{< include-md file="shared-content/rbac-cloud/createrole-consideration.md" >}}
+{{% include-headless "/headless/rbac-cloud/createrole-consideration" %}}
 
 
 
 ##### Use Reusable Roles for Privilege Assignment
 
 
-{{< include-md file="shared-content/rbac-cloud/use-resusable-roles.md" >}}
+{{% include-headless "/headless/rbac-cloud/use-resusable-roles" %}}
 
 See also [Manage database roles](/security/access-control/manage-roles/).
 
@@ -429,7 +424,7 @@ See also [Manage database roles](/security/access-control/manage-roles/).
 ##### Audit for unused roles and privileges.
 
 
-{{< include-md file="shared-content/rbac-cloud/audit-remove-roles.md" >}}
+{{% include-headless "/headless/rbac-cloud/audit-remove-roles" %}}
 
 See also [Show roles in
 system](/security/cloud/access-control/manage-roles/#show-roles-in-system) and [Drop
@@ -457,14 +452,14 @@ service accounts to perform their duties.
 ##### Restrict the granting of `CREATEROLE` privilege
 
 
-{{< include-md file="shared-content/rbac-sm/createrole-consideration.md" >}}
+{{% include-headless "/headless/rbac-sm/createrole-consideration" %}}
 
 
 
 ##### Use Reusable Roles for Privilege Assignment
 
 
-{{< include-md file="shared-content/rbac-sm/use-resusable-roles.md" >}}
+{{% include-headless "/headless/rbac-sm/use-resusable-roles" %}}
 
 See also [Manage database roles](/security/self-managed/access-control/manage-roles/).
 
@@ -473,7 +468,7 @@ See also [Manage database roles](/security/self-managed/access-control/manage-ro
 ##### Audit for unused roles and privileges.
 
 
-{{< include-md file="shared-content/rbac-sm/audit-remove-roles.md" >}}
+{{% include-headless "/headless/rbac-sm/audit-remove-roles" %}}
 
 See also [Show roles in
 system](/security/self-managed/access-control/manage-roles/#show-roles-in-system)
@@ -503,7 +498,6 @@ other database that requires a non-native adapter.
 > **Note:** The `dbt-materialize` adapter can only be used with **dbt Core**. Making the
 > adapter available in dbt Cloud depends on prioritization by dbt Labs. If you
 > require dbt Cloud support, please [reach out to the dbt Labs team](https://www.getdbt.com/community/join-the-community/).
->
 
 
 

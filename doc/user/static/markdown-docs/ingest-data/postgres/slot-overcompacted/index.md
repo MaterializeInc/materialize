@@ -1,9 +1,5 @@
 # Troubleshooting: Slot overcompacted
-
 How to troubleshoot and resolve the slot overcompacted error with PostgreSQL sources in Materialize
-
-
-
 This guide helps you troubleshoot and resolve the "slot overcompacted" error that
 can occur with PostgreSQL sources in Materialize.
 
@@ -90,7 +86,6 @@ ORDER BY age DESC;
 
 > **Warning:** This will cause Materialize to take a new snapshot, which may take
 > time and temporarily increase load on your PostgreSQL database.
->
 
 
 Once a slot has been overcompacted, the data is permanently lost from the WAL.

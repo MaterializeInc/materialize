@@ -1,9 +1,5 @@
 # SHOW ROLES
-
 `SHOW ROLES` lists the roles available in Materialize.
-
-
-
 `SHOW ROLES` lists the roles available in Materialize.
 
 ## Syntax

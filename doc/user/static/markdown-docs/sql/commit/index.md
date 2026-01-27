@@ -1,9 +1,5 @@
 # COMMIT
-
 `COMMIT` ends a transaction block and commits all changes if the transaction statements succeed.
-
-
-
 `COMMIT` ends the current [transaction](/sql/begin/#details). Upon the `COMMIT`
 statement:
 
@@ -67,7 +63,7 @@ transaction are committed at the same timestamp.</p>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1">-- Subsequent INSERTs must write to sales_items table only
 </span></span></span><span class="line"><span class="cl"><span class="c1">-- Otherwise, the COMMIT will error and roll back the transaction.
-</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">orders</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">11</span><span class="p">,</span><span class="n">current_timestamp</span><span class="p">,</span><span class="s1">&#39;chocolate cake&#39;</span><span class="p">,</span><span class="mf">1</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl"><span class="k">INSERT</span> <span class="k">INTO</span> <span class="n">orders</span> <span class="k">VALUES</span> <span class="p">(</span><span class="mf">11</span><span class="p">,</span><span class="n">current_timestamp</span><span class="p">,</span><span class="s1">&#39;chocolate chip cookie&#39;</span><span class="p">,</span><span class="mf">20</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl"><span class="k">COMMIT</span><span class="p">;</span>
@@ -106,7 +102,6 @@ queries in the transaction.
 
 > **Note:** The transaction will additionally hold back normal compaction of the objects,
 > potentially increasing memory usage for very long running transactions.
->
 
 
 ## See also

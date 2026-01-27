@@ -1,9 +1,5 @@
 # jsonb type
-
 Expresses a JSON object
-
-
-
 `jsonb` data expresses a JSON object similar to
 [PostgreSQL's implementation](https://www.postgresql.org/docs/current/datatype-json.html).
 

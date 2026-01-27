@@ -1,9 +1,5 @@
 # User profile
-
 Manage your user profile and account settings from the Materialize console.
-
-
-
 ## Materialize Cloud
 
 For Materialize Cloud, you can manage your user profile and account settings from the [Materialize

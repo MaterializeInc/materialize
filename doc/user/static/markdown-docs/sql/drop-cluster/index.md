@@ -1,9 +1,5 @@
 # DROP CLUSTER
-
 `DROP CLUSTER` removes an existing cluster from Materialize.
-
-
-
 `DROP CLUSTER` removes an existing cluster from Materialize. If there are indexes or materialized views depending on the cluster, you must explicitly drop them first, or use the `CASCADE` option.
 
 ## Syntax
@@ -57,10 +53,7 @@ DROP CLUSTER auction_house CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped cluster.</li>
-</ul>
-
+- Ownership of the dropped cluster.
 
 ## Related pages
 

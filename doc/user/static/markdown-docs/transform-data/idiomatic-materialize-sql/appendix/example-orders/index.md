@@ -1,9 +1,5 @@
 # Example data: items and orders
-
 Sample data used in various examples.
-
-
-
 The following sample data is used in the various Idiomatic Materialize SQL
 pages:
 

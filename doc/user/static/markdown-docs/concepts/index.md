@@ -24,129 +24,123 @@ Refer to the individual pages for more information.
 ## Namespaces
 
 
-<p>Namespaces are a way to organize Materialize objects logically. In organizations
+Namespaces are a way to organize Materialize objects logically. In organizations
 with multiple objects, namespaces help avoid naming conflicts and make it easier
-to manage objects.</p>
-<h2 id="namespace-hierarchy">Namespace hierarchy</h2>
-<p>Materialize follows SQL standard&rsquo;s namespace hierarchy for most objects (for the
-exceptions, see <a href="#other-objects" >Other objects</a>).</p>
-<table>
-<thead>
-<tr>
-<th></th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>1st/Highest level:</td>
-<td><strong>Database</strong></td>
-</tr>
-<tr>
-<td>2nd level:</td>
-<td><strong>Schema</strong></td>
-</tr>
-<tr>
-<td>3rd level:</td>
-<td><table><tbody><tr><td><ul><li><strong>Table</strong></li><li><strong>View</strong></li><li><strong>Materialized view</strong></li><li><strong>Connection</strong></li></ul></td><td><ul><li><strong>Source</strong></li><li><strong>Sink</strong></li><li><strong>Index</strong></li></ul></td><td><ul><li><strong>Type</strong></li><li><strong>Function</strong></li><li><strong>Secret</strong></li></ul></td></tr></tbody></table></td>
-</tr>
-<tr>
-<td>4th/Lowest level:</td>
-<td><strong>Column</strong></td>
-</tr>
-</tbody>
-</table>
-<p>Each layer in the hierarchy can contain elements from the level immediately
-beneath it. That is,</p>
-<ul>
-<li>Databases can contain: schemas;</li>
-<li>Schemas can contain: tables, views, materialized views, connections, sources,
-sinks, indexes, types, functions, and secrets;</li>
-<li>Tables, views, and materialized views can contain: columns.</li>
-</ul>
-<h3 id="qualifying-names">Qualifying names</h3>
-<p>Namespaces enable disambiguation and access to objects across different
+to manage objects.
+
+## Namespace hierarchy
+
+Materialize follows SQL standard's namespace hierarchy for most objects (for the
+exceptions, see [Other objects](#other-objects)).
+
+|                           |             |
+|---------------------------| ------------|
+| 1st/Highest level:        |  **Database** |
+| 2nd level:                |  **Schema**   |
+| 3rd level:                | <table><tbody><tr><td><ul><li>**Table**</li><li>**View**</li><li>**Materialized view**</li><li>**Connection**</li></ul></td><td><ul><li>**Source**</li><li>**Sink**</li><li>**Index**</li></ul></td><td><ul><li>**Type**</li><li>**Function**</li><li>**Secret**</li></ul></td></tr></tbody></table>|
+| 4th/Lowest level:             | **Column**     |
+
+Each layer in the hierarchy can contain elements from the level immediately
+beneath it. That is,
+
+- Databases can contain: schemas;
+- Schemas can contain: tables, views, materialized views, connections, sources,
+sinks, indexes, types, functions, and secrets;
+- Tables, views, and materialized views can contain: columns.
+
+
+### Qualifying names
+
+Namespaces enable disambiguation and access to objects across different
 databases and schemas. Namespaces use the dot notation format
-(<code>&lt;database&gt;.&lt;schema&gt;....</code>) and allow you to refer to objects by:</p>
-<ul>
-<li>
-<p><strong>Fully qualified names</strong></p>
-<p>Used to reference objects in a different database (Materialize allows
-cross-database queries); e.g.,</p>
-<pre tabindex="0"><code>&lt;Database&gt;.&lt;Schema&gt;
-&lt;Database&gt;.&lt;Schema&gt;.&lt;Source&gt;
-&lt;Database&gt;.&lt;Schema&gt;.&lt;View&gt;
-&lt;Database&gt;.&lt;Schema&gt;.&lt;Table&gt;.&lt;Column&gt;
-</code></pre>> **Tip:** You can use fully qualified names to reference objects within the same
+(`<database>.<schema>....`) and allow you to refer to objects by:
+
+- **Fully qualified names**
+
+  Used to reference objects in a different database (Materialize allows
+  cross-database queries); e.g.,
+
+  ```
+  <Database>.<Schema>
+  <Database>.<Schema>.<Source>
+  <Database>.<Schema>.<View>
+  <Database>.<Schema>.<Table>.<Column>
+  ```
+
+  > **Tip:** You can use fully qualified names to reference objects within the same
 >   database (or within the same database and schema). However, for brevity and
 >   readability, you may prefer to use qualified names instead.
->
->
 
-</li>
-<li>
-<p><strong>Qualified names</strong></p>
-<ul>
-<li>
-<p>Used to reference objects within the same database but different schema, use
-the schema and object name; e.g.,</p>
-<pre tabindex="0"><code>&lt;Schema&gt;.&lt;Source&gt;
-&lt;Schema&gt;.&lt;View&gt;
-&lt;Schema&gt;.&lt;Table&gt;.&lt;Column&gt;
-</code></pre></li>
-<li>
-<p>Used to reference objects within the same database and schema, use the
-object name; e.g.,</p>
-<pre tabindex="0"><code>&lt;Source&gt;
-&lt;View&gt;
-&lt;Table&gt;.&lt;Column&gt;
-&lt;View&gt;.&lt;Column&gt;
-</code></pre></li>
-</ul>
-</li>
-</ul>
-<h2 id="namespace-constraints">Namespace constraints</h2>
-<p>All namespaces must adhere to <a href="/sql/identifiers" >identifier rules</a>.</p>
-<h2 id="other-objects">Other objects</h2>
-<p>The following Materialize objects  exist outside the standard SQL namespace
-hierarchy:</p>
-<ul>
-<li>
-<p><strong>Clusters</strong>: Referenced directly by its name.</p>
-<p>For example, to create a materialized view in the cluster <code>cluster1</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">CREATE</span> <span class="k">MATERIALIZED</span> <span class="k">VIEW</span> <span class="n">mv</span> <span class="k">IN</span> <span class="k">CLUSTER</span> <span class="n">cluster1</span> <span class="k">AS</span> <span class="mf">...</span><span class="p">;</span>
-</span></span></code></pre></div></li>
-<li>
-<p><strong>Cluster replicas</strong>: Referenced as <code>&lt;cluster-name&gt;.&lt;replica-name&gt;</code>.</p>
-<p>For example, to delete replica <code>r1</code> in cluster <code>cluster1</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">DROP</span> <span class="k">CLUSTER</span> <span class="k">REPLICA</span> <span class="n">cluster1</span><span class="mf">.</span><span class="n">r1</span>
-</span></span></code></pre></div></li>
-<li>
-<p><strong>Roles</strong>: Referenced by their name. For example, to alter the <code>manager</code> role, your SQL statement would be:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">ALTER</span> <span class="k">ROLE</span> <span class="n">manager</span> <span class="mf">...</span>
-</span></span></code></pre></div></li>
-</ul>
-<h3 id="other-object-namespace-constraints">Other object namespace constraints</h3>
-<ul>
-<li>
-<p>Two clusters or two roles cannot have the same name. However, a cluster and a
-role can have the same name.</p>
-</li>
-<li>
-<p>Replicas can have the same names as long as they belong to different clusters.
-Materialize automatically assigns names to replicas (e.g., <code>r1</code>, <code>r2</code>).</p>
-</li>
-</ul>
-<h2 id="database-details">Database details</h2>
-<ul>
-<li>By default, Materialize regions have a database named <code>materialize</code>.</li>
-<li>By default, each database has a schema called <code>public</code>.</li>
-<li>You can specify which database you connect to either when you connect (e.g.
-<code>psql -d my_db ...</code>) or within SQL using <a href="/sql/set/" ><code>SET DATABASE</code></a> (e.g.
-<code>SET DATABASE = my_db</code>).</li>
-<li>Materialize allows cross-database queries.</li>
-</ul>
 
+- **Qualified names**
+
+  - Used to reference objects within the same database but different schema, use
+    the schema and object name; e.g.,
+
+    ```
+    <Schema>.<Source>
+    <Schema>.<View>
+    <Schema>.<Table>.<Column>
+    ```
+
+  - Used to reference objects within the same database and schema, use the
+    object name; e.g.,
+
+    ```
+    <Source>
+    <View>
+    <Table>.<Column>
+    <View>.<Column>
+    ```
+
+## Namespace constraints
+
+All namespaces must adhere to [identifier rules](/sql/identifiers).
+
+
+## Other objects
+
+The following Materialize objects  exist outside the standard SQL namespace
+hierarchy:
+
+- **Clusters**: Referenced directly by its name.
+
+  For example, to create a materialized view in the cluster `cluster1`:
+
+  ```mzsql
+  CREATE MATERIALIZED VIEW mv IN CLUSTER cluster1 AS ...;
+  ```
+
+- **Cluster replicas**: Referenced as `<cluster-name>.<replica-name>`.
+
+  For example, to delete replica `r1` in cluster `cluster1`:
+
+  ```mzsql
+  DROP CLUSTER REPLICA cluster1.r1
+  ```
+
+- **Roles**: Referenced by their name. For example, to alter the `manager` role, your SQL statement would be:
+
+  ```mzsql
+  ALTER ROLE manager ...
+  ```
+
+### Other object namespace constraints
+
+- Two clusters or two roles cannot have the same name. However, a cluster and a
+  role can have the same name.
+
+- Replicas can have the same names as long as they belong to different clusters.
+  Materialize automatically assigns names to replicas (e.g., `r1`, `r2`).
+
+## Database details
+
+- By default, Materialize regions have a database named `materialize`.
+- By default, each database has a schema called `public`.
+- You can specify which database you connect to either when you connect (e.g.
+  `psql -d my_db ...`) or within SQL using [`SET DATABASE`](/sql/set/) (e.g.
+  `SET DATABASE = my_db`).
+- Materialize allows cross-database queries.
 
 
 ---
@@ -205,9 +199,6 @@ and serve queries.
 > a cluster, you must increase its size.</p>
 > </li>
 > </ul>
->
->
->
 
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
@@ -247,8 +238,6 @@ As your workload changes, you can [resize a cluster](/sql/alter-cluster/).
 
 > **Tip:** To gauge the performance and utilization of your clusters, use the
 > [**Environment Overview** page in the Materialize Console](/console/monitoring/).
->
->
 
 
 ## Best practices
@@ -267,7 +256,7 @@ architecture"></p>
 | Tier | Description |
 | --- | --- |
 | <strong>Source cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for <a href="/concepts/sources/" >sources</a>.</p> <p>In addition, for upsert sources:</p> <ul> <li> <p>Consider separating upsert sources from your other sources. Upsert sources have higher resource requirements (since, for upsert sources, Materialize maintains each key and associated last value for the key as well as to perform deduplication). As such, if possible, use a separate source cluster for upsert sources.</p> </li> <li> <p>Consider using a larger cluster size during snapshotting for upsert sources. Once the snapshotting operation is complete, you can downsize the cluster to align with the steady-state ingestion.</p> </li> </ul>  |
-| <strong>Compute/Transform cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for compute/transformation:</p> <ul> <li> <p><a href="/concepts/views/#materialized-views" >Materialized views</a> to persist, in durable storage, the results that will be served. Results of materialized views are available across all clusters.</p> > **Tip:** If you are using <strong>stacked views</strong> (i.e., views whose definition depends >   on other views) to reduce SQL complexity, generally, only the topmost >   view (i.e., the view whose results will be served) should be a >   materialized view. The underlying views that do not serve results do not >   need to be materialized. >     </li> <li> <p>Indexes, <strong>only as needed</strong>, to make transformation fast (such as possibly <a href="/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins" >indexes on join keys</a>).</p> > **Tip:** From the compute/transformation clusters, do not create indexes on the >   materialized views for the purposes of serving the view results. >   Instead, use the [serving cluster(s)](#tier-serving-clusters) when >   creating indexes to serve the results. >  >     </li> </ul>  |
+| <strong>Compute/Transform cluster(s)</strong> | <p><strong>A dedicated cluster(s)</strong> for compute/transformation:</p> <ul> <li> <p><a href="/concepts/views/#materialized-views" >Materialized views</a> to persist, in durable storage, the results that will be served. Results of materialized views are available across all clusters.</p> > **Tip:** If you are using <strong>stacked views</strong> (i.e., views whose definition depends >   on other views) to reduce SQL complexity, generally, only the topmost >   view (i.e., the view whose results will be served) should be a >   materialized view. The underlying views that do not serve results do not >   need to be materialized.  </li> <li> <p>Indexes, <strong>only as needed</strong>, to make transformation fast (such as possibly <a href="/transform-data/optimization/#optimize-multi-way-joins-with-delta-joins" >indexes on join keys</a>).</p> > **Tip:** From the compute/transformation clusters, do not create indexes on the >   materialized views for the purposes of serving the view results. >   Instead, use the [serving cluster(s)](#tier-serving-clusters) when >   creating indexes to serve the results.  </li> </ul>  |
 | <strong>Serving cluster(s)</strong> | <a name="tier-serving-clusters"></a> <strong>A dedicated cluster(s)</strong> for serving queries, including <a href="/concepts/indexes/" >indexes</a> on the materialized views. Indexes are local to the cluster in which they are created. |
 
 <p>Benefits of a three-tier architecture include:</p>
@@ -329,7 +318,6 @@ views](/concepts/views/#materialized-views).
 
 > **Note:** In practice, you may find that you rarely need to index a source
 > without performing some transformation using a view, etc.
->
 
 
 In Materialize, you can create indexes on a [source](/concepts/sources/) to
@@ -382,8 +370,6 @@ materialized views require no additional computation to keep results up-to-date.
 > free. However, querying an indexed materialized view within the cluster where
 > the index is created is faster since the results are served from memory rather
 > than from storage.
->
->
 
 
 For best practices on using indexes, and understanding when to use indexed views
@@ -415,7 +401,6 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 ### Index usage
 
 > **Important:** Indexes are local to a cluster. Queries in one cluster cannot use the indexes in another, different cluster.
->
 
 
 Unlike some other databases, Materialize can use an index to serve query results
@@ -504,105 +489,18 @@ The following table shows various queries and whether Materialize performs a
 point lookup or an index scan.
 
 
-
-
-<table>
-<thead>
-<tr>
-<th>Query</th>
-<th>Index usage</th>
-
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="k">IN</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">20</span><span class="p">);</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup. Query uses <code>OR</code> to combine conditions on the <strong>same</strong> field.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup on <code>quantity</code>, then filter on <code>price</code>.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="p">(</span><span class="n">quantity</span><span class="p">,</span> <span class="n">price</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">5.00</span><span class="p">);</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup on <code>quantity</code>, then filter on <code>price</code>.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">&lt;=</span> <span class="mf">10</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">round</span><span class="p">(</span><span class="n">quantity</span><span class="p">)</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="c1">-- Assume quantity is an integer
-</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span>
-</span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span><span class="o">::</span><span class="nb">TEXT</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan, assuming <code>quantity</code> field in <code>orders_view</code> is an integer.
-In the first query, the quantity is implicitly cast to text.
-In the second query, the quantity is explicitly cast to text.
-</td>
-</tr>
-
-</tbody>
-</table>
-
+| Query | Index Usage |
+| --- | --- |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="k">IN</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">20</span><span class="p">);</span> </span></span></code></pre></div> | Point lookup. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup. Query uses <code>OR</code> to combine conditions on the <strong>same</strong> field. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup on <code>quantity</code>, then filter on <code>price</code>. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="p">(</span><span class="n">quantity</span><span class="p">,</span> <span class="n">price</span><span class="p">)</span> <span class="o">=</span> <span class="p">(</span><span class="mf">10</span><span class="p">,</span> <span class="mf">5.00</span><span class="p">);</span> </span></span></code></pre></div> | Point lookup on <code>quantity</code>, then filter on <code>price</code>. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">5.00</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">&lt;=</span> <span class="mf">10</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">round</span><span class="p">(</span><span class="n">quantity</span><span class="p">)</span> <span class="o">=</span> <span class="mf">20</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="c1">-- Assume quantity is an integer </span></span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span> </span></span><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span><span class="o">::</span><span class="nb">TEXT</span> <span class="o">=</span> <span class="s1">&#39;hello&#39;</span><span class="p">;</span> </span></span></code></pre></div> | Index scan, assuming <code>quantity</code> field in <code>orders_view</code> is an integer. In the first query, the quantity is implicitly cast to text. In the second query, the quantity is explicitly cast to text. |
 
 
 Consider that the view has an index on the `quantity` and `price` fields
@@ -614,82 +512,15 @@ CREATE INDEX idx_orders_view_qty_price on orders_view (quantity, price);
 ```
 
 
-
-
-<table>
-<thead>
-<tr>
-<th>Query</th>
-<th>Index usage</th>
-
-</tr>
-</thead>
-<tbody>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query does not include equality conditions on <strong>all</strong> indexed
-fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span>
-</span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="p">(</span><span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">3.00</span><span class="p">);</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup. Query uses <code>OR</code> to combine conditions on <strong>same</strong> field and <code>AND</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span>
-</span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">AND</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Point lookup on the index keys <code>quantity</code> and <code>price</code>, then filter on
-<code>item</code>.
-</td>
-</tr>
-
-<tr>
-<td><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span>
-</span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span>
-</span></span></code></pre></div></td>
-<td>
-Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields.
-</td>
-</tr>
-
-</tbody>
-</table>
-
+| Query | Index Usage |
+| --- | --- |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query does not include equality conditions on <strong>all</strong> indexed fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> <span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="p">(</span><span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">3.00</span><span class="p">);</span> </span></span></code></pre></div> | Point lookup. Query uses <code>OR</code> to combine conditions on <strong>same</strong> field and <code>AND</code> to combine conditions on <strong>different</strong> fields. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">AND</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span> </span></span></code></pre></div> | Point lookup on the index keys <code>quantity</code> and <code>price</code>, then filter on <code>item</code>. |
+| <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mzsql" data-lang="mzsql"><span class="line"><span class="cl"><span class="k">SELECT</span> <span class="o">*</span> <span class="k">FROM</span> <span class="n">orders_view</span> </span></span><span class="line"><span class="cl"><span class="k">WHERE</span> <span class="n">quantity</span> <span class="o">=</span> <span class="mf">10</span> <span class="k">AND</span> <span class="n">price</span> <span class="o">=</span> <span class="mf">2.50</span> <span class="k">OR</span> <span class="n">item</span> <span class="o">=</span> <span class="s1">&#39;cupcake&#39;</span><span class="p">;</span> </span></span></code></pre></div> | Index scan. Query uses <code>OR</code> to combine conditions on <strong>different</strong> fields. |
 
 
 #### Limitations
@@ -700,13 +531,12 @@ of key length and value).
 
 As such, indexes in Materialize currently do not provide optimizations for:
 
-- Range queries; that is queries using <code>&gt;</code>, <code>&gt;=</code>,
-  <code>&lt;</code>, <code>&lt;=</code>, `BETWEEN` clauses (e.g., `WHERE
-  quantity > 10`,  <code>price >= 10 AND price &lt;= 50</code>, and `WHERE quantity
+- Range queries; that is queries using `>`, `>=`,
+  `<`, `<=`, `BETWEEN` clauses (e.g., `WHERE
+  quantity > 10`,  `price >= 10 AND price <= 50`, and `WHERE quantity
   BETWEEN 10 AND 20`).
 
 - `GROUP BY`, `ORDER BY` and `LIMIT` clauses.
-
 
 ### Indexes on views vs. materialized views
 
@@ -717,34 +547,34 @@ the view results in durable storage and can be accessed across clusters, indexes
 on views compute and store view results in memory within a <strong>single</strong> cluster.
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 <p>For example:</p>
 
@@ -791,7 +621,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 
 
@@ -815,7 +644,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 ### Indexes and query optimizations
 
@@ -1245,7 +1073,6 @@ having to perform additional computation.
 > computationally free. However, querying an indexed materialized view within the
 > cluster associated with the index is faster since the results are served from
 > memory rather than from storage.
->
 
 
 
@@ -1265,34 +1092,34 @@ on views compute and store view results in memory within a <strong>single</stron
 
 <p>Some general guidelines for usage patterns include:</p>
 <table>
-<thead>
-<tr>
-<th>Usage Pattern</th>
-<th>General Guideline</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
-<td>View with an <a href="/sql/create-index" >index</a></td>
-</tr>
-<tr>
-<td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
-<td>View</td>
-</tr>
-<tr>
-<td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
-<td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
-</tr>
-<tr>
-<td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
-<td>Materialized view</td>
-</tr>
-<tr>
-<td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
-<td>Materialized view</td>
-</tr>
-</tbody>
+  <thead>
+      <tr>
+          <th>Usage Pattern</th>
+          <th>General Guideline</th>
+      </tr>
+  </thead>
+  <tbody>
+      <tr>
+          <td>View results are accessed from a single cluster only;<br>such as in a 1-cluster or a 2-cluster architecture.</td>
+          <td>View with an <a href="/sql/create-index" >index</a></td>
+      </tr>
+      <tr>
+          <td>View used as a building block for stacked views; i.e., views not used to serve results.</td>
+          <td>View</td>
+      </tr>
+      <tr>
+          <td>View results are accessed across <a href="/concepts/clusters" >clusters</a>;<br>such as in a 3-cluster architecture.</td>
+          <td>Materialized view (in the transform cluster)<br>Index on the materialized view (in the serving cluster)</td>
+      </tr>
+      <tr>
+          <td>Use with a <a href="/serve-results/sink/" >sink</a> or a <a href="/sql/subscribe" ><code>SUBSCRIBE</code></a> operation</td>
+          <td>Materialized view</td>
+      </tr>
+      <tr>
+          <td>Use with <a href="/transform-data/patterns/temporal-filters/" >temporal filters</a></td>
+          <td>Materialized view</td>
+      </tr>
+  </tbody>
 </table>
 
 <p>For example:</p>
@@ -1340,7 +1167,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 
 
@@ -1364,7 +1190,6 @@ results from memory.
 > filters](/transform-data/patterns/temporal-filters/), avoid creating
 > materialized views on a shared cluster used for both compute/transformat
 > operations and serving queries. Use indexed views instead.
->
 
 ## General information
 

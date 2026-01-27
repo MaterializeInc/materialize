@@ -1,9 +1,5 @@
 # SHOW CREATE TYPE
-
 `SHOW CREATE TYPE` returns the DDL statement used to custom create the type.
-
-
-
 `SHOW CREATE TYPE` returns the DDL statement used to create the custom type.
 
 ## Syntax
@@ -35,10 +31,7 @@ SHOW CREATE TYPE point;
 
 ## Privileges
 
-<ul>
-<li><code>USAGE</code> privileges on the schema containing the table.</li>
-</ul>
-
+- `USAGE` privileges on the schema containing the table.
 
 ## Related pages
 

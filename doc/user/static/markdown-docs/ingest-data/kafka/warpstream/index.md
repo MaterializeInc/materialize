@@ -1,9 +1,5 @@
 # WarpStream
-
 How to securely connect WarpStream to Materialize for efficient data streaming.
-
-
-
 [//]: # "TODO(morsapaes) The Kafka guides need to be rewritten for consistency
 with the Postgres ones. We should include spill to disk in the guidance then."
 
@@ -18,8 +14,6 @@ Materialize using [Fly.io](https://fly.io/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 #### Before you begin

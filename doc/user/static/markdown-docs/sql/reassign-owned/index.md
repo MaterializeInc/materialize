@@ -1,14 +1,9 @@
 # REASSIGN OWNED
-
 `REASSIGN OWNED` reassigns the owner of all the objects that are owned by one of the specified roles.
-
-
-
 `REASSIGN OWNED` reassigns the owner of all the objects that are owned by one of the specified roles.
 
 > **Note:** Unlike [PostgreSQL](https://www.postgresql.org/docs/current/sql-drop-owned.html), Materialize reassigns
 > all objects across all databases, including the databases themselves.
->
 
 
 ## Syntax
@@ -36,10 +31,7 @@ REASSIGN OWNED BY joe, george TO mike;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Role membership in <code>old_role</code> and <code>new_role</code>.</li>
-</ul>
-
+- Role membership in `old_role` and `new_role`.
 
 ## Related pages
 

@@ -1,9 +1,5 @@
 # ALTER SCHEMA
-
 `ALTER SCHEMA` change properties of a schema
-
-
-
 Use `ALTER SCHEMA` to:
 - Swap the name of a schema with that of another schema.
 - Rename a schema.
@@ -104,25 +100,13 @@ SELECT * FROM blue.tags;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the schema.</li>
-<li>In addition,
-<ul>
-<li>To swap with another schema:
-<ul>
-<li>Ownership of the other schema</li>
-</ul>
-</li>
-<li>To change owners:
-<ul>
-<li>Role membership in <code>new_owner</code>.</li>
-<li><code>CREATE</code> privileges on the containing database.</li>
-</ul>
-</li>
-</ul>
-</li>
-</ul>
-
+- Ownership of the schema.
+- In addition,
+  - To swap with another schema:
+    - Ownership of the other schema
+  - To change owners:
+    - Role membership in `new_owner`.
+    - `CREATE` privileges on the containing database.
 
 ## See also
 

@@ -1,9 +1,5 @@
 # Integer types
-
 Express signed integers
-
-
-
 ## `smallint` info
 
 Detail | Info

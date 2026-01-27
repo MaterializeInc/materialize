@@ -70,7 +70,6 @@ The architecture consists of the following components:
 
 > **Important:** For Debezium to capture changes, your MongoDB deployment must be configured as a
 > replica set or a sharded cluster.
->
 
 
 Create a user (e.g., `debezium_materialize_user`) with the necessary permissions
@@ -145,7 +144,6 @@ Register the MongoDB connector with the following configuration:
 > **Important:** The `capture.mode` must be `change_streams_update_full`, the default. This
 > forces Debezium to send the entire document state for every change, which allows
 > Materialize to use the `UPSERT` envelope.
->
 
 
 1. Create a `dbz_mongodb_connector.json` file with your connector configuration:
@@ -192,16 +190,13 @@ Register the MongoDB connector with the following configuration:
 >    different BSON types across documents, ensure that same field uses a
 >    consistent BSON type across the collection to avoid schema inference
 >    errors.
->
 >    For example, if the first document has `price: 40`, the registered Avro
 >    schema infers the `price` field type to be `int`. If a subsequent document
 >    has `price: 2.25` (a decimal value), it will cause a schema mismatch error.
 >    To avoid this, explicitly specify the BSON type in your documents using
 >    `NumberDecimal()`, e.g., `price: NumberDecimal("40.00")` and `price:
 >    NumberDecimal("2.25")`.
->
 >    If you cannot enforce a consistent BSON type, you can omit the unwrap.
->
 
 
 2. Register the connector with Kafka Connect:
@@ -274,7 +269,6 @@ Query the data using standard SQL.
   ```
 
   > **Note:** The query includes the Kafka message `id` field as a column in the table.
->
 
 
   ```none
@@ -289,8 +283,6 @@ Query the data using standard SQL.
   > **Tip:** If you did not use the `unwrap` transform, the document is stored as a JSON
 >   string in the `after` field in `mdb_items`. You can create a [parsing
 >   view](/sql/types/jsonb/#parsing) to map the individual document fields to columns instead.
->
->
 
 
 - To query the mdb_orders:
@@ -300,7 +292,6 @@ Query the data using standard SQL.
   ```
 
   > **Note:** The query includes the Kafka message `id` field as a column in the table.
->
 
 
   ```none
@@ -316,8 +307,6 @@ Query the data using standard SQL.
 >   string in the `after` field in `mdb_orders`. You can create a [parsing
 >   view](/sql/types/jsonb/#parsing) to map the individual document fields to
 >   columns instead.
->
->
 
 
 ## Troubleshooting

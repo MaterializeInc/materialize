@@ -1,9 +1,5 @@
 # CREATE CONNECTION
-
 `CREATE CONNECTION` describes how to connect and authenticate to an external system in Materialize
-
-
-
 [//]: # "TODO: This page could be broken up."
 
 A connection describes how to connect and authenticate to an external system you
@@ -18,7 +14,6 @@ Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -66,7 +61,6 @@ CREATE CONNECTION <connection_name> TO AWS (
 > **Warning:** Failing to constrain the external ID in your role trust policy will allow
 > other Materialize customers to assume your role and use AWS privileges you
 > have granted the role!
->
 
 
 When using role assumption-based authentication, you must configure a [trust
@@ -168,8 +162,6 @@ CREATE CONNECTION aws_role_assumption TO AWS (
 **Credentials:**
 > **Warning:** Use of credentials-based authentication is deprecated.  AWS strongly encourages
 > the use of role assumption-based authentication instead.
->
->
 
 
 To create an AWS connection that uses static access key credentials:
@@ -264,7 +256,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 > **Warning:** It is insecure to use the `PLAINTEXT` security protocol unless
 > you are using a [network security connection](#network-security-connections)
 > to tunnel into a private network, as shown below.
->
 
 ```mzsql
 CREATE CONNECTION kafka_connection TO KAFKA (
@@ -297,7 +288,6 @@ With only TLS encryption:
 > **Warning:** It is insecure to use TLS encryption with no authentication unless
 > you are using a [network security connection](#network-security-connections)
 > to tunnel into a private network as shown below.
->
 
 ```mzsql
 CREATE SECRET ca_cert AS '-----BEGIN CERTIFICATE----- ...';
@@ -317,7 +307,6 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 > **Warning:** It is insecure to use the `SASL_PLAINTEXT` security protocol unless
 > you are using a [network security connection](#network-security-connections)
 > to tunnel into a private network, as shown below.
->
 
 
 ```mzsql
@@ -379,7 +368,6 @@ SSH bastion host.
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -392,7 +380,6 @@ a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
 > **Warning:** If your Kafka cluster advertises brokers that are not specified
 > in the `BROKERS` clause, Materialize will attempt to connect to
 > those brokers without any tunneling.
->
 
 
 
@@ -534,7 +521,6 @@ check [this guide](/ops/network-security/privatelink/).
 > **Warning:** If you do not specify a default `SSH TUNNEL` and your Kafka
 > cluster advertises brokers that are not listed in the `BROKERS` clause,
 > Materialize will attempt to connect to those brokers without any tunneling.
->
 
 
 
@@ -695,7 +681,6 @@ you can tunnel the connection through an AWS PrivateLink service (Materialize Cl
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -800,7 +785,6 @@ SSH bastion host.
 **AWS PrivateLink (Materialize Cloud):**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -936,7 +920,6 @@ the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH b
 **AWS PrivateLink:**
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -1047,7 +1030,6 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 ### AWS PrivateLink (Materialize Cloud) {#aws-privatelink}
 
 > **Note:** Connections using AWS PrivateLink is for Materialize Cloud only.
->
 
 
 
@@ -1106,7 +1088,6 @@ see the [AWS PrivateLink documentation](https://docs.aws.amazon.com/vpc/latest/p
 > **Warning:** Do **not** grant access to the root principal for the Materialize AWS account.
 > Doing so will allow any Materialize customer to create a connection to your
 > AWS PrivateLink service.
->
 
 
 #### Accepting connection requests {#aws-privatelink-requests}
@@ -1236,12 +1217,9 @@ completed.
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATE</code> privileges on the containing schema.</li>
-<li><code>USAGE</code> privileges on all connections and secrets used in the connection definition.</li>
-<li><code>USAGE</code> privileges on the schemas that all connections and secrets in the statement are contained in.</li>
-</ul>
-
+- `CREATE` privileges on the containing schema.
+- `USAGE` privileges on all connections and secrets used in the connection definition.
+- `USAGE` privileges on the schemas that all connections and secrets in the statement are contained in.
 
 ## Related pages
 

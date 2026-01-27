@@ -1,16 +1,10 @@
 # Amazon EventBridge
-
 How to stream data from Amazon EventBridge to Materialize using webhooks
-
-
-
 This guide walks through the steps to ingest data from [Amazon EventBridge](https://aws.amazon.com/eventbridge/)
 into Materialize using the [Webhook source](/sql/create-source/webhook/).
 
 > **Tip:** For help getting started with your own data, you can schedule a [free guided
 > trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
->
->
 
 
 ## Before you begin
@@ -25,7 +19,6 @@ Ensure that you have:
 > source (e.g. `quickstart`), **you can skip this step**. For production
 > scenarios, we recommend separating your workloads into multiple clusters for
 > [resource isolation](/sql/create-cluster/#resource-isolation).
->
 
 
 To create a cluster in Materialize, use the [`CREATE CLUSTER` command](/sql/create-cluster):
@@ -90,7 +83,6 @@ system table.
 > **Warning:** Without a `CHECK` statement, **all requests will be accepted**. To prevent bad
 > actors from injecting data into your source, it is **strongly encouraged** that
 > you define a `CHECK` statement with your webhook sources.
->
 
 
 The above webhook source uses [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme).

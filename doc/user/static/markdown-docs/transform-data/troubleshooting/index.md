@@ -1,9 +1,5 @@
 # Troubleshooting
-
 How to troubleshoot common data transformation scenarios where Materialize is not working as expected.
-
-
-
 Once data is flowing into Materialize and you start modeling it in SQL, you
 might run into some snags or unexpected scenarios. This guide collects common
 questions around data transformation to help you troubleshoot your queries.
@@ -205,7 +201,6 @@ accordingly.
 > **Note:** Your query may be running, just slowly. If none of the reasons below detects
 > your issue, jump to [Why is my query slow?](#why-is-my-query-slow) for further
 > guidance.
->
 
 
 ### Stalled source

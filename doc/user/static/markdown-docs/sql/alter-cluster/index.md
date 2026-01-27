@@ -1,9 +1,5 @@
 # ALTER CLUSTER
-
 `ALTER CLUSTER` changes the configuration of a cluster.
-
-
-
 Use `ALTER CLUSTER` to:
 
 - Change configuration of a cluster, such as the `SIZE` or
@@ -98,7 +94,6 @@ ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
 
 
 > **Note:** You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
->
 
 
 
@@ -131,8 +126,6 @@ the `<new_owner_role>`. See also [Required privileges](#required-privileges).
 > **Important:** Information about the `SWAP WITH` operation is provided for completeness.  The
 > `SWAP WITH` operation is used for blue/green deployments. In general, you will
 > not need to manually perform this operation.
->
->
 
 
 To swap the name of this cluster with another cluster:
@@ -160,8 +153,6 @@ ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
 > **Tip:** For help sizing your clusters, navigate to **Materialize Console >**
 > [**Monitoring**](/console/monitoring/)>**Environment Overview**. This page
 > displays cluster resource utilization and sizing advice.
->
->
 
 
 #### Available sizes
@@ -173,7 +164,6 @@ ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
 > Materialize reserves the right to change the capacity at any time. As such, you
 > acknowledge and agree that those values in this table may change at any time,
 > and you should not rely on these values for any capacity planning.
->
 
 
 
@@ -205,9 +195,7 @@ ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
 > M.1 sizes for all new clusters, and recommend migrating existing
 > legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
 > customers during the transition period as we move to deprecate legacy sizes.
->
 > The legacy size information is provided for completeness.
->
 
 
 Valid legacy cc cluster sizes are:
@@ -239,6 +227,8 @@ Clusters of larger sizes can process data faster and handle larger data volumes.
 
 See also:
 
+- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
+
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
 
@@ -253,7 +243,6 @@ system catalog table.
 
 > **Warning:** The values in the `mz_cluster_replica_sizes` table may change at any
 > time. You should not rely on them for any kind of capacity planning.
->
 
 
 #### Downtime
@@ -283,22 +272,11 @@ operation, any other reconfiguration command issued against this cluster will
 fail. Additionally, any connection interruption or statement cancelation will
 cause a rollback — no size change will take effect in that case.
 
-
-  {{__hugo_ctx pid=33}}
 > **Note:** Using `WAIT UNTIL READY` requires that the session remain open: you need to
 > make sure the Console tab remains open or that your `psql` connection remains
 > stable.
->
 > Any interruption will cause a cancellation, no cluster changes will take
 > effect.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 ### Replication factor
 
@@ -318,16 +296,12 @@ available, the cluster can continue to maintain dataflows and serve queries.
 > **Note:** - Each replica incurs cost, calculated as `cluster size *
 >   replication factor` per second. See [Usage &
 >   billing](/administration/billing/) for more details.
->
 > - Increasing the replication factor does **not** increase the cluster's work
 >   capacity. Replicas are exact copies of one another: each replica must do
 >   exactly the same work (i.e., maintain the same dataflows and process the same
 >   queries) as all the other replicas of the cluster.
->
 >   To increase the capacity of a cluster, you must increase its
 >   [size](#resizing).
->
->
 
 
 Materialize automatically assigns names to replicas (e.g., `r1`, `r2`). You can
@@ -350,19 +324,12 @@ When provisioning replicas,
 
 To execute the `ALTER CLUSTER` command, you need:
 
-<ul>
-<li>
-<p>Ownership of the cluster.</p>
-</li>
-<li>
-<p>To rename a cluster, you must also have membership in the <code>&lt;new_owner_role&gt;</code>.</p>
-</li>
-<li>
-<p>To swap names with another cluster, you must also have ownership of the other
-cluster.</p>
-</li>
-</ul>
+- Ownership of the cluster.
 
+- To rename a cluster, you must also have membership in the `<new_owner_role>`.
+
+- To swap names with another cluster, you must also have ownership of the other
+  cluster.
 
 See also:
 
@@ -401,22 +368,11 @@ ALTER CLUSTER c1
 SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
-
-  {{__hugo_ctx pid=33}}
 > **Note:** Using `WAIT UNTIL READY` requires that the session remain open: you need to
 > make sure the Console tab remains open or that your `psql` connection remains
 > stable.
->
 > Any interruption will cause a cancellation, no cluster changes will take
 > effect.
->
->
-
-{{__hugo_ctx/}}
-
-
-
-
 
 Alternatively, you can alter the cluster size immediately, without waiting, by
 running the `ALTER CLUSTER` command:
@@ -450,8 +406,6 @@ scheduled clusters.
 > **Note:** When getting started with Materialize, we recommend using managed clusters. You
 > can convert any unmanaged clusters to managed clusters by following the
 > instructions below.
->
->
 
 
 Alter the `managed` status of a cluster to managed:

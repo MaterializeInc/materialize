@@ -1,9 +1,5 @@
 # DROP CONNECTION
-
 `DROP CONNECTION` removes a connection from Materialize.
-
-
-
 `DROP CONNECTION` removes a connection from Materialize. If there are sources
 depending on the connection, you must explicitly drop them first, or use the
 `CASCADE` option.
@@ -60,11 +56,8 @@ DROP CONNECTION kafka_connection CASCADE;
 
 The privileges required to execute this statement are:
 
-<ul>
-<li>Ownership of the dropped connection.</li>
-<li><code>USAGE</code> privileges on the containing schema.</li>
-</ul>
-
+- Ownership of the dropped connection.
+- `USAGE` privileges on the containing schema.
 
 
 ## Related pages

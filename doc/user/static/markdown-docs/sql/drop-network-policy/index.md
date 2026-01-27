@@ -1,9 +1,5 @@
 # DROP NETWORK POLICY (Cloud)
-
 `DROP NETWORK POLICY` removes an existing network policy from Materialize.
-
-
-
 *Available for Materialize Cloud only*
 
 `DROP NETWORK POLICY` removes an existing network policy from Materialize.
@@ -27,10 +23,7 @@ Syntax element | Description
 
 The privileges required to execute this statement are:
 
-<ul>
-<li><code>CREATENETWORKPOLICY</code> privileges on the system.</li>
-</ul>
-
+- `CREATENETWORKPOLICY` privileges on the system.
 
 ## Related pages
 

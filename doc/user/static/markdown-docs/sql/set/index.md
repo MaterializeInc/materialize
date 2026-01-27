@@ -1,9 +1,5 @@
 # SET
-
 Modify the value of a configuration parameter in the current session.
-
-
-
 `SET` modifies the value of a configuration parameter for the current session.
 By default, values are set for the duration of the current session.
 
@@ -23,8 +19,6 @@ Syntax element                | Description
 `<value>`                 | The value to assign to the parameter.
 **DEFAULT**               | Use the parameter's default value. Equivalent to [`RESET`](../reset).
 
-
-  {{__hugo_ctx pid=35}}
 ### Key configuration parameters
 
 Name                                        | Default value             |  Description                                                          | Modifiable?
@@ -87,11 +81,6 @@ Name                                        | Default value             |  Descr
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
 [Contact support]: /support
-{{__hugo_ctx/}}
-
-
-
-
 
 ### Aliased configuration parameters
 
