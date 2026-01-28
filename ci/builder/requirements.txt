@@ -39,12 +39,9 @@ pdoc==15.0.4
 pg8000==1.31.5
 prettytable==3.17.0
 psutil==7.2.1
-# psycopg 3.2.8 causes Scalability test failures
-psycopg==3.2.7
-psycopg-binary==3.2.7
-# pydantic >= 2.9 causes pdoc 15.0.1 to fail: UserWarning: Error parsing type annotation dict[str, Any] | None for pydantic.main.BaseModel.__pydantic_extra__: 'function' object is not subscriptable
-# See also https://github.com/mitmproxy/pdoc/issues/741
-pydantic==2.8.2
+psycopg==3.3.2
+psycopg-binary==3.3.2
+pydantic==2.12.5
 pyelftools==0.32
 pyjwt==2.10.1
 PyMySQL==1.1.2
@@ -76,9 +73,8 @@ yamllint==1.38.0
 confluent-kafka==2.6.1
 fastavro==1.12.1
 websocket-client==1.9.0
-pyarrow-stubs==19.4
-# macOS x86-64 agent doesn't support pyarrow 20.0 currently, only upgrade once fixed or we get rid of it
-pyarrow==19.0.1
+pyarrow-stubs==20.0.0.20251215
+pyarrow==23.0.0
 minio==7.2.15
 zstandard==0.25.0
 build==1.4.0

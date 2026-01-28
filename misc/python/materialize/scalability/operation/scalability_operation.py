@@ -51,7 +51,7 @@ class SqlOperationWithInput(Operation):
             cursor.execute(self.sql_statement_based_on_input(data).encode("utf8"))
             cursor.fetchall()
         except ProgrammingError as e:
-            assert "the last operation didn't produce a result" in str(e)
+            assert "the last operation didn't produce records" in str(e)
 
         return data
 
