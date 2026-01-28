@@ -13,44 +13,53 @@
 //! implementations across Materialize, including network initialization
 //! and URL parsing utilities.
 
-use std::sync::Mutex;
+use std::sync::OnceLock;
 
 use foundationdb::api::NetworkAutoStop;
 use mz_ore::url::SensitiveUrl;
 
-/// FoundationDB network handle, stored in a Mutex for proper lifecycle management.
-static FDB_NETWORK: Mutex<Option<NetworkAutoStop>> = Mutex::new(None);
+/// FoundationDB network handle.
+static FDB_NETWORK: OnceLock<NetworkAutoStop> = OnceLock::new();
 
 /// Initialize the FoundationDB network.
 ///
 /// This function is safe to call multiple times - only the first call will
 /// actually initialize the network, subsequent calls return immediately.
 pub fn init_network() {
-    let mut guard = FDB_NETWORK.lock().expect("FDB_NETWORK mutex poisoned");
-    if guard.is_none() {
+    FDB_NETWORK.get_or_init(|| {
         // SAFETY: The `foundationdb::boot()` call is unsafe because it must only
         // be called once per process. We use a mutex to ensure this guarantee
         // is upheld - subsequent calls to `init_network()` will see `guard.is_some()`
         // and return early without calling `boot()` again.
-        let network = unsafe { foundationdb::boot() };
-
-        *guard = Some(network);
-    }
+        unsafe { foundationdb::boot() }
+    });
 }
 
 /// Handle exit on process termination.
+///
+/// This function is registered as a destructor to ensure that the FoundationDB
+/// network is _not_ shut down during test teardown. Shutting down the network
+/// here is too late, and we're getting memory corruption issues if we try to do so.
+///
+/// Ideally we'd shut down the network at the end of all tests, but `cargo test`'s
+/// infrastructure doesn't allow to manage state across multiple test cases. At the
+/// same time, FoundationDB's network can only be initialized and shut down once per process.
+///
+/// Instead, we exit the process immediately to avoid any cleanup. We only do this
+/// in test builds and if the network was initialized.
+#[cfg(test)]
 #[ctor::dtor]
 fn shutdown_network() {
-    if let Ok(mut guard) = FDB_NETWORK.lock() {
-        if let Some(network) = guard.take() {
-            // Exit immediately as it is too late to properly shutdown the FDB network.
-            use std::io::Write;
-            std::io::stdout().flush();
-            std::io::stderr().flush();
-            // SAFETY: Called with correct parameters.
-            unsafe { libc::_exit(0) };
-        }
+    if FDB_NETWORK.get().is_none() {
+        // Network was never initialized, nothing to do.
+        return;
     }
+
+    // Exit immediately as it is too late to properly shut down the FDB network.
+    use std::io::Write;
+    std::io::stdout().flush();
+    std::io::stderr().flush();
+    mz_ore::process::exit_thread_safe(0);
 }
 
 /// Configuration parsed from a FoundationDB URL.
