@@ -4501,9 +4501,12 @@ async fn test_double_encoded_json() {
     ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
-        let msg = ws.read().unwrap();
-        let msg = msg.into_text().expect("response should be text");
-        serde_json::from_str(&msg).unwrap()
+        loop {
+            let msg = ws.read().unwrap();
+            if let Message::Text(text) = msg {
+                return serde_json::from_str(&text).unwrap();
+            }
+        }
     };
     let _starting = read_msg();
     let _columns = read_msg();
