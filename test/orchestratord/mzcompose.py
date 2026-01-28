@@ -2784,6 +2784,7 @@ def is_ready_to_manually_promote():
     conditions = data["items"][0].get("status", {}).get("conditions")
     return (
         conditions is not None
+        and len(conditions)
         and conditions[0]["type"] == "UpToDate"
         and conditions[0]["status"] == "Unknown"
         and conditions[0]["reason"] == "ReadyToPromote"
