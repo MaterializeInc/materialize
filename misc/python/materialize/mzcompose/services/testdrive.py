@@ -197,7 +197,7 @@ class Testdrive(Service):
             if external_metadata_store:
                 if metadata_store == "foundationdb":
                     entrypoint.append(
-                        "--persist-consensus-url=foundationdb:?options=--search_path=consensus"
+                        "--persist-consensus-url=foundationdb:?prefix=consensus"
                     )
                     volumes += foundationdb.fdb_cluster_file(
                         metadata_store, external_metadata_store

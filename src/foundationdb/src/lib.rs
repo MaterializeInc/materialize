@@ -56,7 +56,7 @@ fn shutdown_network() {
 /// Configuration parsed from a FoundationDB URL.
 ///
 /// FoundationDB URLs have the format:
-/// `foundationdb:?options=--search_path=<prefix>`
+/// `foundationdb:?prefix=<prefix>`
 ///
 /// The cluster file is determined by FoundationDB's standard discovery mechanism:
 /// 1. The `FDB_CLUSTER_FILE` environment variable
@@ -74,11 +74,11 @@ impl FdbConfig {
     ///
     /// # URL Format
     ///
-    /// The URL format is: `foundationdb:?options=--search_path=<prefix>`
+    /// The URL format is: `foundationdb:?prefix=<prefix>`
     ///
     /// - The scheme must be `foundationdb`
-    /// - The `options` query parameter with `--search_path=<prefix>` specifies
-    ///   the directory prefix to use (similar to PostgreSQL's search_path)
+    /// - The `prefix` query parameter specifies the directory prefix to use,
+    ///   with path components separated by `/`
     ///
     /// The cluster file is NOT specified in the URL. Instead, FoundationDB's
     /// standard discovery mechanism is used (via `FDB_CLUSTER_FILE` env var
@@ -88,22 +88,18 @@ impl FdbConfig {
     ///
     /// ```ignore
     /// // Use default cluster file with a prefix
-    /// let url = "foundationdb:?options=--search_path=my_app/consensus";
+    /// let url = "foundationdb:?prefix=my_app/consensus";
     /// ```
     pub fn parse(url: &SensitiveUrl) -> Result<Self, anyhow::Error> {
         let mut prefix = Vec::new();
 
         for (key, value) in url.query_pairs() {
             match &*key {
-                "options" => {
-                    if let Some(path) = value.strip_prefix("--search_path=") {
-                        prefix = path.split('/').map(|s| s.to_owned()).collect();
-                    } else {
-                        anyhow::bail!("unrecognized FoundationDB URL options parameter: {value}");
-                    }
+                "prefix" => {
+                    prefix = value.split('/').map(|s| s.to_owned()).collect();
                 }
                 key => {
-                    anyhow::bail!("unrecognized FoundationDB URL query parameter: {key}: {value}");
+                    anyhow::bail!("unrecognized FoundationDB URL query parameter: {key}={value}");
                 }
             }
         }
@@ -120,30 +116,23 @@ mod tests {
 
     #[mz_ore::test]
     fn test_parse_url_with_prefix() {
-        let url =
-            SensitiveUrl::from_str("foundationdb:?options=--search_path=my_app/consensus").unwrap();
+        let url = SensitiveUrl::from_str("foundationdb:?prefix=my_app/consensus").unwrap();
         let config = FdbConfig::parse(&url).unwrap();
         assert_eq!(config.prefix, vec!["my_app", "consensus"]);
     }
 
     #[mz_ore::test]
     fn test_parse_url_with_nested_prefix() {
-        let url = SensitiveUrl::from_str("foundationdb:?options=--search_path=a/b/c/d").unwrap();
+        let url = SensitiveUrl::from_str("foundationdb:?prefix=a/b/c/d").unwrap();
         let config = FdbConfig::parse(&url).unwrap();
         assert_eq!(config.prefix, vec!["a", "b", "c", "d"]);
     }
 
     #[mz_ore::test]
-    fn test_parse_url_no_options() {
+    fn test_parse_url_no_prefix() {
         let url = SensitiveUrl::from_str("foundationdb:").unwrap();
         let config = FdbConfig::parse(&url).unwrap();
         assert!(config.prefix.is_empty());
-    }
-
-    #[mz_ore::test]
-    fn test_parse_url_invalid_option() {
-        let url = SensitiveUrl::from_str("foundationdb:?options=--invalid=value").unwrap();
-        assert!(FdbConfig::parse(&url).is_err());
     }
 
     #[mz_ore::test]
