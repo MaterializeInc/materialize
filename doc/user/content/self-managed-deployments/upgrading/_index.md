@@ -269,6 +269,25 @@ kubectl get materialize -n materialize-environment -w
 kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
 
+## Cancelling the Upgrade
+
+You may want to cancel an in-progress rollout if the upgrade has failed. This may be indicated by new pods not being healthy. Before cancelling, verify that the upgrade has not already completed by checking that the deploy generation (found via `status.activeGeneration`) is still the one from before the upgrade. Once an upgrade has already happened, you cannot revert using this method.
+
+To cancel an in-progress rollout and revert to the last completed rollout state, first retrieve the last rollout request ID from your Materialize CR:
+
+```shell
+kubectl get materialize <instance-name> -n materialize-environment -o jsonpath='{.status.lastCompletedRolloutRequest}'
+```
+
+Then, set the `requestRollout` back to this value:
+
+```shell
+kubectl patch materialize <instance-name> \
+  -n materialize-environment \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"<lastCompletedRolloutRequest-value>\"}}"
+```
+
 ## Version Specific Upgrade Notes
 
 ### Upgrading to `v26.1` and later versions
