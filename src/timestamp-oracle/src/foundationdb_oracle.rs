@@ -90,7 +90,7 @@ impl FdbTimestampOracleConfig {
     /// with a valid connection URL.
     pub fn new_for_test() -> Self {
         Self {
-            url: FromStr::from_str("foundationdb:?options=--search_path=test/tsoracle").unwrap(),
+            url: FromStr::from_str("foundationdb:?prefix=test/tsoracle").unwrap(),
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
         }
     }

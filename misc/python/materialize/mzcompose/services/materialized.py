@@ -268,8 +268,8 @@ class Materialized(Service):
                 ]
             elif metadata_store == "foundationdb":
                 command += [
-                    "--persist-consensus-url=foundationdb:?options=--search_path=consensus",
-                    "--timestamp-oracle-url=foundationdb:?options=--search_path=ts_oracle",
+                    "--persist-consensus-url=foundationdb:?prefix=consensus",
+                    "--timestamp-oracle-url=foundationdb:?prefix=ts_oracle",
                 ]
 
         command += [

@@ -474,8 +474,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn fdb_consensus() -> Result<(), ExternalError> {
         let config = FdbConsensusConfig::new(
-            std::str::FromStr::from_str("foundationdb:?options=--search_path=test/consensus")
-                .unwrap(),
+            std::str::FromStr::from_str("foundationdb:?prefix=test/consensus").unwrap(),
         )?;
 
         {
