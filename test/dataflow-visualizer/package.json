@@ -1,0 +1,12 @@
+{
+  "name": "dataflow-visualizer-tests",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.58.0"
+  }
+}
