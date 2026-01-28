@@ -262,6 +262,22 @@ steps:
                 - --other-tag
                 - common-ancestor
 
+      - id: workload-replay
+        label: "Workload Replay (1% initial data)"
+        depends_on: build-x86_64
+        timeout_in_minutes: 240
+        parallelism: 5
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: workload-replay
+              run: benchmark
+              args:
+                - --factor-initial-data=0.01
+                - --compare-against
+                - common-ancestor
+        agents:
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+
   - group: Kafka
     key: kafka
     steps:
