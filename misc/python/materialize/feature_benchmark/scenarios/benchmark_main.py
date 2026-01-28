@@ -1513,7 +1513,7 @@ class IcebergSink(Sink):
   )
   USING AWS CONNECTION aws_conn
   KEY (pk) NOT ENFORCED
-  ENVELOPE UPSERT
+  MODE UPSERT
   WITH (COMMIT INTERVAL '1s');
 
 > SELECT status

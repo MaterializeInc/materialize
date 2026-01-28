@@ -495,7 +495,7 @@ class IcebergSink(DBObject):
     cluster: "Cluster"
     schema: Schema
     base_object: DBObject
-    envelope: str
+    mode: str
     key: str
 
     def __init__(
@@ -511,8 +511,8 @@ class IcebergSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        self.envelope = rng.choice(["DEBEZIUM", "UPSERT"])
-        if self.envelope == "UPSERT" or rng.choice([True, False]):
+        self.mode = rng.choice(["DEBEZIUM", "UPSERT"])
+        if self.mode == "UPSERT" or rng.choice([True, False]):
             key_cols = [
                 column
                 for column in rng.sample(
@@ -535,7 +535,7 @@ class IcebergSink(DBObject):
 
     def create(self, exe: Executor) -> None:
         table_name = f"icesink_topic{self.sink_id}"
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table_name}') USING AWS CONNECTION aws_conn {self.key} ENVELOPE {self.envelope} WITH (COMMIT INTERVAL '1s')"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table_name}') USING AWS CONNECTION aws_conn {self.key} MODE {self.mode} WITH (COMMIT INTERVAL '1s')"
         exe.execute(query)
 
 
