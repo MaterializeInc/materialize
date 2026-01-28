@@ -1,7 +1,3 @@
-node_modules/
 test-results/
 playwright-report/
 package-lock.json
-__pycache__/
-*.pyc
-license_key
