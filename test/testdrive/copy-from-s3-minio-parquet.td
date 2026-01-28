@@ -1,0 +1,114 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for COPY FROM expr for parquet format.
+
+# COPY FROM expressions should immediately succeed or fail on their first runs
+$ set-max-tries max-tries=1
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_copy_from_remote = true;
+
+> CREATE SECRET aws_secret AS '${arg.aws-secret-access-key}'
+
+> CREATE CONNECTION aws_conn
+  TO AWS (
+    ACCESS KEY ID = '${arg.aws-access-key-id}',
+    SECRET ACCESS KEY = SECRET aws_secret,
+    ENDPOINT = '${arg.aws-endpoint}',
+    REGION = 'us-east-1'
+  );
+
+# Create a custom type for a composite type
+> CREATE TYPE record_type AS (name text, age int, avg double precision);
+
+# Prepare the table we want to COPY INTO.
+> CREATE TABLE types (
+  int8_col smallint,
+  uint8_col uint2,
+  int16_col smallint,
+  uint16_col uint2,
+  int32_col int,
+  uint32_col uint4,
+  int64_col bigint,
+  uint64_col uint8,
+  float32_col real,
+  float64_col double precision,
+  bool_col boolean,
+  string_col text,
+  binary_col bytea,
+  date32_col date,
+  timestamp_ms_col timestamp,
+  -- timestampz_ms_col timestamp with time zone, -- not supported
+  time32_col time,
+  list_col bigint list, -- TIL
+  decimal_col decimal,
+  json_col jsonb,
+  record_col record_type,
+  uuid_col uuid
+  );
+
+> COPY INTO types FROM 's3://copyfroms3/parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn);
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=types_url
+
+> COPY INTO types FROM '${types_url}' (FORMAT PARQUET);
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+> TRUNCATE TABLE types;
+> SELECT count(*) FROM types;
+0
+
+
+# gzip Compression.
+
+# bzip2 Compression.
+
+# xz Compression.
+
+# zstd Compression.
+
+# Map and Project.
+
+# Test the AWS Source.
+
+
+# Test glob patterns.
+
+
+# Test explicit file lists.

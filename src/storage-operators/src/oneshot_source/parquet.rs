@@ -76,6 +76,7 @@ impl OneshotFormat for ParquetFormat {
 
         tracing::info!(
             object = object.name(),
+            schema = ?parquet_metadata.file_metadata().schema_descr(),
             row_groups = parquet_metadata.num_row_groups(),
             "splitting Parquet object"
         );
@@ -130,10 +131,12 @@ impl OneshotFormat for ParquetFormat {
 
         let struct_array = StructArray::from(record_batch);
         let reader = mz_arrow_util::reader::ArrowReader::new(&self.desc, struct_array)
+            .inspect_err(|err| tracing::warn!("error: {err:#?}"))
             .map_err(|err| StorageErrorXKind::ParquetError(err.to_string().into()))
             .context("reader")?;
         let rows_read = reader
             .read_all(rows)
+            .inspect_err(|err| tracing::warn!("error: {err:#?}"))
             .map_err(|err| StorageErrorXKind::ParquetError(err.to_string().into()))
             .context("read_all")?;
 
