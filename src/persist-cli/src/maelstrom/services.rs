@@ -166,7 +166,7 @@ impl Consensus for MaelstromConsensus {
         unimplemented!("TODO")
     }
 
-    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, _key: &str, _seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         unimplemented!("TODO")
     }
 }

@@ -226,7 +226,7 @@ impl Consensus for TurmoilConsensus {
         .await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         self.call(ConsensusCommand::Truncate {
             key: key.into(),
             seqno,

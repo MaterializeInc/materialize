@@ -217,10 +217,9 @@ impl FdbConsensus {
             let seqno_space = data_key.pack(&seqno);
             let data = trx.get(&seqno_space, false).await?;
             if let Some(data) = data {
-                let data = unpack::<Vec<u8>>(&data)?;
                 Ok(Some(VersionedData {
                     seqno,
-                    data: Bytes::from(data),
+                    data: Bytes::from_owner(data),
                 }))
             } else {
                 Err(ExternalError::Determinate(
@@ -253,7 +252,7 @@ impl FdbConsensus {
         trx.set(seqno_key.bytes(), &pack(&new.seqno));
 
         let data_seqno_key = data_key.pack(&new.seqno);
-        trx.set(&data_seqno_key, &pack(&new.data.as_ref()));
+        trx.set(&data_seqno_key, new.data.as_ref());
         Ok(CaSResult::Committed)
     }
 
@@ -274,27 +273,27 @@ impl FdbConsensus {
 
         entries.clear();
 
-        loop {
+        let mut done = false;
+
+        while !done {
             let output = trx.get_range(&range, 1, false).await?;
-            entries.reserve(output.len());
-            for key_value in &output {
-                let seqno = data_key.unpack(key_value.key())?;
-                let value: Vec<u8> = unpack(key_value.value())?;
-                entries.push(VersionedData {
-                    seqno,
-                    data: Bytes::from(value),
-                });
-            }
-
             limit = limit.saturating_sub(output.len());
-
             if let Some(last) = output.last()
                 && limit > 0
             {
                 range.begin = KeySelector::first_greater_than(last.key().to_vec());
                 range.limit = Some(limit);
             } else {
-                break;
+                done = true;
+            }
+
+            entries.reserve(output.len());
+            for key_value in output {
+                let seqno = data_key.unpack(key_value.key())?;
+                entries.push(VersionedData {
+                    seqno,
+                    data: Bytes::from(key_value.value().to_vec()),
+                });
             }
         }
         Ok(())
@@ -430,7 +429,7 @@ impl Consensus for FdbConsensus {
         Ok(entries)
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         let seqno_key = self.seqno.subspace(&key);
         let data_key = self.data.subspace(&key);
 
@@ -443,11 +442,7 @@ impl Consensus for FdbConsensus {
                 TransactOption::idempotent(),
             )
             .await?;
-        Ok(0)
-    }
-
-    fn truncate_counts(&self) -> bool {
-        false
+        Ok(None)
     }
 }
 

@@ -190,7 +190,7 @@ seqno=v13 batches=b0,b1,b2 rollups=v9,v10
 # before removing v8 from state
 consensus-truncate to_seqno=v10
 ----
-1
+Some(1)
 
 consensus-scan from_seqno=v2
 ----
