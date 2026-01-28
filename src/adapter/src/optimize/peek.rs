@@ -34,6 +34,7 @@ use tracing::debug_span;
 
 use crate::TimestampContext;
 use crate::catalog::Catalog;
+use crate::coord::infer_sql_type_for_catalog;
 use crate::coord::peek::{PeekDataflowPlan, PeekPlan, create_fast_path_plan};
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
@@ -176,10 +177,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        // we would call infer_sql_type_for_catalog here, but we don't want to bother cloning `expr`.
-        // we explicitly call `backport_nullability_and_keys` below.
-        let mut typ = expr.top_level_typ();
-        let expr = expr.lower(&self.config, Some(&self.metrics))?;
+        let mir_expr = expr.clone().lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
@@ -190,14 +188,14 @@ impl Optimize<HirRelationExpr> for Optimizer {
             Some(&mut self.metrics),
             Some(self.select_id),
         );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
-        typ.backport_nullability_and_keys(&expr.typ());
+        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
-            expr,
+            expr: mir_expr,
             typ,
             df_meta,
             context: Unresolved,

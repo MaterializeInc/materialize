@@ -47,6 +47,7 @@ use mz_transform::reprtypecheck::{
 };
 use timely::progress::Antichain;
 
+use crate::coord::infer_sql_type_for_catalog;
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
 };
@@ -193,10 +194,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        // we would call infer_sql_type_for_catalog here, but we don't want to bother cloning `expr`.
-        // we explicitly call `backport_nullability_and_keys` below.
-        let mut typ = expr.top_level_typ();
-        let expr = expr.lower(&self.config, Some(&self.metrics))?;
+        let mir_expr = expr.clone().lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
@@ -207,13 +205,17 @@ impl Optimize<HirRelationExpr> for Optimizer {
             Some(&mut self.metrics),
             Some(self.view_id),
         );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
-        typ.backport_nullability_and_keys(&expr.typ());
+        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
-        Ok(LocalMirPlan { expr, df_meta, typ })
+        Ok(LocalMirPlan {
+            expr: mir_expr,
+            df_meta,
+            typ,
+        })
     }
 }
 
@@ -247,7 +249,6 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
-        // We may not have a stored HIR SQL type from the plan if we're using a cached plan.
         let mut rel_typ = plan.typ;
         for &i in self.non_null_assertions.iter() {
             rel_typ.column_types[i].nullable = false;
