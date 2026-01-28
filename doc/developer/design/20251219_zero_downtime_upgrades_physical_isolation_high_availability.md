@@ -157,12 +157,11 @@ Implicit in this proposal is that we initially still don't want to support DDL
 during the upgrade window. In addition to all the proposed work, this would
 require two additional pieces of engineering work. The lame-duck approach lets
 us deliver immediate value while building the foundation those pieces will need.
-I expand on this future work below.
 
-The proposed upgrade flow requires a number of changes across different
-components. I will sketch these below, but each of the sub-sections will
-require a small-ish design document of its own or at the very least a thorough
-GitHub issue.
+The proposed upgrade flow and the other initiatives requires a number of
+changes across different components. I will sketch these below, but each of the
+sub-sections will require a small-ish design document of its own or at the very
+least a thorough GitHub issue.
 
 ## Work required for Zero-Downtime Upgrades (lame-duck upgrades)
 
@@ -241,9 +240,20 @@ There are two types of builtin tables:
 We have to audit and find out which is which. For builtin tables that mirror
 catalog state we can use the self-correcting approach that we also use for
 materialized views and for a number of builtin storage-managed collections. For
-others, we have to see if concurrent append-only writers would work.
+others, we have to find other ways to make them work.
 
-One of the thorny tables here is probably storage-usage data.
+The difficult tables/collections will be those that are not derived from
+catalog state. For example:
+- Storage-usage data
+- Current sessions (`mz_sessions`)
+
+One approach that can work: we add a (possibly hidden) column to collections
+that need to be written to concurrently. That column identifies the responsible
+writer. Each writer only touches (adds or removes) rows that it is responsible
+for. We would need to introduce a continual process whereby currently live
+writers can reap data of stale writers. For example a new version would
+eventually want to clean out entries in `mz_sessions` that were written by
+previous versions.
 
 ### Get Builtin Sources Ready for Concurrent Writers
 
@@ -253,8 +263,9 @@ Similar to tables, there are two types:
    and updates the content to match that when needed
 2. Append-only sources
 
-Here again, we have to audit what works with concurrent writers and whether
-append-only sources remain correct.
+Here again, we have to audit what works with concurrent writers and change when
+needed. The same approach that we end up using for tables should work here as
+well.
 
 NOTE: Builtin Sources are also called storage-managed collections because
 writing to them is mediated by the storage controller via async background
