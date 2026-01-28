@@ -4179,6 +4179,9 @@ impl Arbitrary for ReprScalarType {
 /// There is a direct correspondence between `Datum` variants and `ReprScalarType`
 /// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
 /// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
+///
+/// It is important that any new variants for this enum be added to the `Arbitrary` instance
+/// and the `union` method.
 #[derive(
     Clone, Debug, EnumKind, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect,
 )]
@@ -5216,6 +5219,17 @@ mod tests {
             if sql_type1.base_eq(&sql_type2) {
                 assert_eq!(repr_type1, repr_type2);
             }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10000))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn repr_type_self_union(repr_type in any::<ReprScalarType>()) {
+            let union = repr_type.union(&repr_type);
+            assert_ok!(union, "every type should self-union (update ReprScalarType::union to handle this)");
+            assert_eq!(union.unwrap(), repr_type, "every type should self-union to itself");
         }
     }
 
