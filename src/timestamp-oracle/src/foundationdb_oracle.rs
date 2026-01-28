@@ -24,9 +24,12 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use foundationdb::directory::{Directory, DirectoryLayer, DirectoryOutput, DirectorySubspace};
 use foundationdb::tuple::{
-    PackError, PackResult, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack, unpack,
+    PackError, PackResult, Subspace, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack,
+    unpack,
 };
-use foundationdb::{Database, FdbBindingError, FdbError, TransactError, TransactOption};
+use foundationdb::{
+    Database, FdbBindingError, FdbError, TransactError, TransactOption, Transaction,
+};
 use futures_util::future::FutureExt;
 use mz_foundationdb::{FdbConfig, init_network};
 use mz_ore::metrics::MetricsRegistry;
@@ -377,6 +380,119 @@ where
 
         Ok(result)
     }
+
+    async fn write_ts_trx(
+        &self,
+        trx: &Transaction,
+        key: &Subspace,
+        proposed_next_ts: &Timestamp,
+    ) -> Result<Timestamp, FdbTransactError> {
+        // Get current write_ts
+        let current = trx.get(key.bytes(), false).await?;
+        let current_ts: Timestamp = match current {
+            Some(data) => {
+                let ts: PackableTimestamp = unpack(&data)?;
+                ts.0
+            }
+            None => {
+                return Err(FdbTransactError::ExternalError(anyhow!(
+                    "timeline not initialized"
+                )));
+            }
+        };
+
+        // Calculate new timestamp: GREATEST(write_ts+1, proposed_next_ts)
+        let incremented = current_ts.step_forward();
+        let new_ts = std::cmp::max(incremented, *proposed_next_ts);
+
+        // Update write_ts
+        let new_ts_packed = pack(&PackableTimestamp(new_ts));
+        trx.set(key.bytes(), &new_ts_packed);
+
+        Ok::<_, FdbTransactError>(new_ts)
+    }
+
+    async fn peek_write_ts_trx(
+        &self,
+        trx: &Transaction,
+        write_ts_key: &Subspace,
+    ) -> Result<Timestamp, FdbTransactError> {
+        let data = trx.get(write_ts_key.bytes(), false).await?;
+        match data {
+            Some(data) => {
+                let ts: PackableTimestamp = unpack(&data)?;
+                Ok::<_, FdbTransactError>(ts.0)
+            }
+            None => Err(FdbTransactError::ExternalError(anyhow!(
+                "timeline not initialized"
+            ))),
+        }
+    }
+
+    async fn read_ts_trx(
+        &self,
+        trx: &Transaction,
+        read_ts_key: &Subspace,
+    ) -> Result<Timestamp, FdbTransactError> {
+        let data = trx.get(read_ts_key.bytes(), false).await?;
+        match data {
+            Some(data) => {
+                let ts: PackableTimestamp = unpack(&data)?;
+                Ok::<_, FdbTransactError>(ts.0)
+            }
+            None => Err(FdbTransactError::ExternalError(anyhow!(
+                "timeline not initialized"
+            ))),
+        }
+    }
+
+    async fn apply_write_trx(
+        &self,
+        trx: &Transaction,
+        read_ts_key: &Subspace,
+        write_ts_key: &Subspace,
+        write_ts: &Timestamp,
+    ) -> Result<(), FdbTransactError> {
+        // Update read_ts = GREATEST(read_ts, write_ts)
+        let current_read = trx.get(read_ts_key.bytes(), false).await?;
+        let current_read_ts: Timestamp = match current_read {
+            Some(data) => {
+                let ts: PackableTimestamp = unpack(&data)?;
+                ts.0
+            }
+            None => {
+                return Err(FdbTransactError::ExternalError(anyhow!(
+                    "timeline not initialized"
+                )));
+            }
+        };
+
+        if *write_ts > current_read_ts {
+            let new_ts_packed = pack(&PackableTimestamp(*write_ts));
+            trx.set(read_ts_key.bytes(), &new_ts_packed);
+        }
+
+        // Update write_ts = GREATEST(write_ts, write_ts_param)
+        let current_write = trx.get(write_ts_key.bytes(), false).await?;
+        let current_write_ts: Timestamp = match current_write {
+            Some(data) => {
+                let ts: PackableTimestamp = unpack(&data)?;
+                ts.0
+            }
+            None => {
+                return Err(FdbTransactError::ExternalError(anyhow!(
+                    "timeline not initialized"
+                )));
+            }
+        };
+
+        if *write_ts > current_write_ts {
+            let new_ts_packed = pack(&PackableTimestamp(*write_ts));
+            trx.set(write_ts_key.bytes(), &new_ts_packed);
+        }
+
+        Ok::<_, FdbTransactError>(())
+    }
 }
 
 #[async_trait]
@@ -395,34 +511,10 @@ where
         let write_ts: Timestamp = self
             .db
             .transact_boxed(
-                (&write_ts_key, proposed_next_ts),
+                (&write_ts_key, &proposed_next_ts),
                 |trx, (write_ts_key, proposed_next_ts)| {
-                    async move {
-                        // Get current write_ts
-                        let current = trx.get(write_ts_key.bytes(), false).await?;
-                        let current_ts: Timestamp = match current {
-                            Some(data) => {
-                                let ts: PackableTimestamp = unpack(&data)?;
-                                ts.0
-                            }
-                            None => {
-                                return Err(FdbTransactError::ExternalError(anyhow!(
-                                    "timeline not initialized"
-                                )));
-                            }
-                        };
-
-                        // Calculate new timestamp: GREATEST(write_ts+1, proposed_next_ts)
-                        let incremented = current_ts.step_forward();
-                        let new_ts = std::cmp::max(incremented, *proposed_next_ts);
-
-                        // Update write_ts
-                        let new_ts_packed = pack(&PackableTimestamp(new_ts));
-                        trx.set(write_ts_key.bytes(), &new_ts_packed);
-
-                        Ok::<_, FdbTransactError>(new_ts)
-                    }
-                    .boxed()
+                    self.write_ts_trx(trx, write_ts_key, proposed_next_ts)
+                        .boxed()
                 },
                 TransactOption::default(),
             )
@@ -451,21 +543,7 @@ where
             .db
             .transact_boxed(
                 &write_ts_key,
-                |trx, write_ts_key| {
-                    async move {
-                        let data = trx.get(write_ts_key.bytes(), false).await?;
-                        match data {
-                            Some(data) => {
-                                let ts: PackableTimestamp = unpack(&data)?;
-                                Ok::<_, FdbTransactError>(ts.0)
-                            }
-                            None => Err(FdbTransactError::ExternalError(anyhow!(
-                                "timeline not initialized"
-                            ))),
-                        }
-                    }
-                    .boxed()
-                },
+                |trx, write_ts_key| self.peek_write_ts_trx(trx, write_ts_key).boxed(),
                 TransactOption::default(),
             )
             .await
@@ -487,21 +565,7 @@ where
             .db
             .transact_boxed(
                 &read_ts_key,
-                |trx, read_ts_key| {
-                    async move {
-                        let data = trx.get(read_ts_key.bytes(), false).await?;
-                        match data {
-                            Some(data) => {
-                                let ts: PackableTimestamp = unpack(&data)?;
-                                Ok::<_, FdbTransactError>(ts.0)
-                            }
-                            None => Err(FdbTransactError::ExternalError(anyhow!(
-                                "timeline not initialized"
-                            ))),
-                        }
-                    }
-                    .boxed()
-                },
+                |trx, read_ts_key| self.read_ts_trx(trx, read_ts_key).boxed(),
                 TransactOption::default(),
             )
             .await
@@ -528,48 +592,8 @@ where
             .transact_boxed(
                 (&read_ts_key, &write_ts_key, write_ts),
                 |trx, (read_ts_key, write_ts_key, write_ts)| {
-                    async move {
-                        // Update read_ts = GREATEST(read_ts, write_ts)
-                        let current_read = trx.get(read_ts_key.bytes(), false).await?;
-                        let current_read_ts: Timestamp = match current_read {
-                            Some(data) => {
-                                let ts: PackableTimestamp = unpack(&data)?;
-                                ts.0
-                            }
-                            None => {
-                                return Err(FdbTransactError::ExternalError(anyhow!(
-                                    "timeline not initialized"
-                                )));
-                            }
-                        };
-
-                        if *write_ts > current_read_ts {
-                            let new_ts_packed = pack(&PackableTimestamp(*write_ts));
-                            trx.set(read_ts_key.bytes(), &new_ts_packed);
-                        }
-
-                        // Update write_ts = GREATEST(write_ts, write_ts_param)
-                        let current_write = trx.get(write_ts_key.bytes(), false).await?;
-                        let current_write_ts: Timestamp = match current_write {
-                            Some(data) => {
-                                let ts: PackableTimestamp = unpack(&data)?;
-                                ts.0
-                            }
-                            None => {
-                                return Err(FdbTransactError::ExternalError(anyhow!(
-                                    "timeline not initialized"
-                                )));
-                            }
-                        };
-
-                        if *write_ts > current_write_ts {
-                            let new_ts_packed = pack(&PackableTimestamp(*write_ts));
-                            trx.set(write_ts_key.bytes(), &new_ts_packed);
-                        }
-
-                        Ok::<_, FdbTransactError>(())
-                    }
-                    .boxed()
+                    self.apply_write_trx(trx, read_ts_key, write_ts_key, write_ts)
+                        .boxed()
                 },
                 TransactOption::default(),
             )
