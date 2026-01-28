@@ -11,7 +11,10 @@
 
 set -euo pipefail
 
+cd /workdir
+
 echo "Installing npm dependencies..."
+npm cache clean --force 2>/dev/null || true
 npm install
 
 echo "Running Playwright tests..."
