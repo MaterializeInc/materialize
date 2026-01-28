@@ -6637,6 +6637,7 @@ dependencies = [
  "ctor",
  "foundationdb",
  "mz-ore",
+ "tracing",
  "workspace-hack",
 ]
 

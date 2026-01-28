@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use foundationdb::directory::{Directory, DirectoryLayer, DirectoryOutput};
+use foundationdb::directory::{Directory, DirectoryError, DirectoryLayer, DirectoryOutput};
 use foundationdb::tuple::{
     PackError, PackResult, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack, unpack,
 };
@@ -338,12 +338,16 @@ where
         let directory = DirectoryLayer::default();
 
         // List all timeline directories under the prefix
-        let timeline_names: Vec<String> = db
+        let timeline_names = match db
             .run(async |trx, _maybe_committed| Ok(directory.list(&trx, &prefix).await))
             .await?
-            .map_err(|e| anyhow!("directory error: {e:?}"))?;
+        {
+            Err(DirectoryError::PathDoesNotExists) => Vec::new(), // No timelines exist yet
+            Err(e) => return Err(anyhow!("directory error: {e:?}")),
+            Ok(timelines) => timelines,
+        };
 
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(timeline_names.len());
 
         // For each timeline, read the max of read_ts and write_ts
         for timeline_name in timeline_names {
