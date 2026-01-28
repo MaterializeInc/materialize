@@ -706,12 +706,98 @@ impl State {
                 let testdrive_subjects: Vec<_> = subjects
                     .iter()
                     .filter(|s| s.starts_with("testdrive-"))
+                    .cloned()
                     .collect();
 
-                for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(subject).await {
-                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                        Err(e) => errors.push(e.into()),
+                // Build a dependency graph to delete subjects in the correct order.
+                // If subject A references subject B, we must delete A before B.
+                // We build a map of: subject -> set of subjects that reference it (dependents)
+                #[allow(clippy::disallowed_types)]
+                let mut dependents: std::collections::HashMap<
+                    String,
+                    std::collections::HashSet<String>,
+                > = std::collections::HashMap::new();
+                #[allow(clippy::disallowed_types)]
+                let mut references: std::collections::HashMap<String, Vec<String>> =
+                    std::collections::HashMap::new();
+
+                // Initialize all subjects
+                for subject in &testdrive_subjects {
+                    dependents.entry(subject.clone()).or_default();
+                }
+
+                // Fetch references for each subject and build the dependency graph
+                for subject in &testdrive_subjects {
+                    match self.ccsr_client.get_subject_with_references(subject).await {
+                        Ok((_subj, refs)) => {
+                            // Filter to only testdrive subjects
+                            let refs: Vec<_> = refs
+                                .into_iter()
+                                .filter(|r| r.starts_with("testdrive-"))
+                                .collect();
+                            for referenced in &refs {
+                                dependents
+                                    .entry(referenced.clone())
+                                    .or_default()
+                                    .insert(subject.clone());
+                            }
+                            references.insert(subject.clone(), refs);
+                        }
+                        Err(mz_ccsr::GetBySubjectError::SubjectNotFound) => {
+                            // Subject was already deleted, skip it
+                        }
+                        Err(e) => {
+                            errors.push(anyhow::anyhow!(
+                                "failed to get references for subject {}: {}",
+                                subject,
+                                e
+                            ));
+                        }
+                    }
+                }
+
+                // Delete subjects in topological order:
+                // First delete subjects that have no dependents (nothing references them),
+                // then remove them from the dependent sets of other subjects, repeat.
+                #[allow(clippy::disallowed_types)]
+                let mut remaining: std::collections::HashSet<String> =
+                    testdrive_subjects.into_iter().collect();
+
+                while !remaining.is_empty() {
+                    // Find subjects with no dependents (safe to delete)
+                    let deletable: Vec<_> = remaining
+                        .iter()
+                        .filter(|s| dependents.get(*s).map(|d| d.is_empty()).unwrap_or(true))
+                        .cloned()
+                        .collect();
+
+                    if deletable.is_empty() {
+                        // Circular dependency or all remaining have dependents - try deleting anyway
+                        // This handles edge cases where references point to non-testdrive subjects
+                        for subject in &remaining {
+                            match self.ccsr_client.delete_subject(subject).await {
+                                Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                                Err(e) => errors.push(e.into()),
+                            }
+                        }
+                        break;
+                    }
+
+                    for subject in deletable {
+                        match self.ccsr_client.delete_subject(&subject).await {
+                            Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                            Err(e) => errors.push(e.into()),
+                        }
+                        remaining.remove(&subject);
+
+                        // Remove this subject from the dependent sets of subjects it referenced
+                        if let Some(refs) = references.get(&subject) {
+                            for referenced in refs {
+                                if let Some(deps) = dependents.get_mut(referenced) {
+                                    deps.remove(&subject);
+                                }
+                            }
+                        }
                     }
                 }
             }
