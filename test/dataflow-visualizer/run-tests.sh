@@ -11,8 +11,6 @@
 
 set -euo pipefail
 
-cd /workdir/test/dataflow-visualizer
-
 echo "Installing npm dependencies..."
 npm install
 

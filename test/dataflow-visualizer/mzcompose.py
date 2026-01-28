@@ -11,7 +11,6 @@
 E2E browser tests for the dataflow visualizer React components.
 Tests the /memory and /hierarchical-memory endpoints on port 6876.
 """
-
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
@@ -23,7 +22,7 @@ SERVICES = [
         config={
             "image": "mcr.microsoft.com/playwright:v1.58.0-jammy",
             "volumes": [
-                "../../:/workdir",
+                ".:/workdir",
             ],
             "environment": [
                 "MZ_HOST=materialized",
@@ -36,4 +35,4 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     """Run dataflow visualizer E2E tests"""
     c.up("materialized")
-    c.run("playwright", "/workdir/test/dataflow-visualizer/run-tests.sh")
+    c.run("playwright", "/workdir/run-tests.sh")

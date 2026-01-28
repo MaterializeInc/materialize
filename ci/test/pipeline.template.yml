@@ -527,6 +527,18 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: dataflow-visualizer
+    label: "Dataflow Visualizer E2E tests"
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    inputs: [test/dataflow-visualizer]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dataflow-visualizer
+    agents:
+      # Playwright Docker image is x86_64 only
+      queue: hetzner-x86-64-4cpu-8gb
+
   - group: "Debezium tests"
     key: debezium-tests
     steps:
