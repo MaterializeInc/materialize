@@ -402,7 +402,17 @@ which case they use that clusters compute resources.
 Clusters represent compute resources, but by themselves don't have any
 resources. A cluster must be backed by one or more replicas for actual
 computation to happen. Replicas come in multiple sizes, that represent
-different allocations of CPU cores and amount of memory.
+different allocations of CPU cores and amount of memory. Finally, replicas are
+backed by one or more `clusterd` processes/pods, depending on their size.
+
+![clusters and replicas](assets/clusters-and-replicas.png)
+
+Common scenarios are:
+
+- a cluster with no replicas, for saving on resources while not needed
+- a cluster that permanently has multiple replicas, for high availability
+- a cluster that temporarily has multiple replicas, when reconfiguring from one
+  replica size to another replica size without downtime
 
 ### Compute & Storage Controllers
 
