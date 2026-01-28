@@ -584,3 +584,48 @@ Used Indexes:
 Target cluster: mz_catalog_server
 
 EOF
+
+# Regression test for invalid retractions in mz_roles
+# when enable_password_auth changes (database-issues#10042)
+# and roles are created / dropped.
+
+# Enable password auth
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO true;
+----
+COMPLETE 0
+
+# Create a role with an explicit LOGIN attribute
+simple conn=mz_system,user=mz_system
+CREATE ROLE test_retraction_role WITH LOGIN;
+----
+COMPLETE 0
+
+# Verify querying mz_roles does not error
+query TB
+SELECT name, rolcanlogin FROM mz_roles WHERE name = 'test_retraction_role'
+----
+test_retraction_role true
+
+# Disable password auth
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0
+
+# Drop the role
+simple conn=mz_system,user=mz_system
+DROP ROLE test_retraction_role;
+----
+COMPLETE 0
+
+# Query mz_roles. This should NOT cause a retraction error
+query T
+SELECT name FROM mz_roles WHERE name = 'test_retraction_role'
+----
+
+# Reset password auth to off for remaining tests
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth TO false;
+----
+COMPLETE 0
