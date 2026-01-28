@@ -115,7 +115,7 @@ use mz_controller::clusters::{
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
-use mz_expr::{MapFilterProject, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
@@ -136,7 +136,7 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
 use mz_secrets::{SecretsController, SecretsReader};
 use mz_sql::ast::{Raw, Statement};
@@ -144,8 +144,8 @@ use mz_sql::catalog::{CatalogCluster, EnvironmentId};
 use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
-    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, NetworkPolicyRule,
-    OnTimeoutAction, Params, QueryWhen,
+    self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
+    NetworkPolicyRule, OnTimeoutAction, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
@@ -3180,8 +3180,13 @@ impl Coordinator {
                                     );
 
                                     // MIR ⇒ MIR optimization (global)
-                                    let global_mir_plan =
-                                        optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
+                                    // We make sure to use the HIR SQL type (since MIR SQL types may not be coherent).
+                                    let typ = infer_sql_type_for_catalog(
+                                        &mv.raw_expr,
+                                        &mv.optimized_expr.as_ref().clone(),
+                                    );
+                                    let global_mir_plan = optimizer
+                                        .optimize((mv.optimized_expr.as_ref().clone(), typ))?;
                                     let optimized_plan = global_mir_plan.df_desc().clone();
 
                                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
@@ -4797,4 +4802,13 @@ pub(crate) fn validate_ip_with_policy_rules(
     } else {
         Err(NetworkPolicyError::AddressDenied(ip.clone()))
     }
+}
+
+pub(crate) fn infer_sql_type_for_catalog(
+    hir_expr: &HirRelationExpr,
+    mir_expr: &MirRelationExpr,
+) -> SqlRelationType {
+    let mut typ = hir_expr.top_level_typ();
+    typ.backport_nullability_and_keys(&mir_expr.typ());
+    typ
 }

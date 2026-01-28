@@ -34,6 +34,7 @@ use tracing::debug_span;
 
 use crate::TimestampContext;
 use crate::catalog::Catalog;
+use crate::coord::infer_sql_type_for_catalog;
 use crate::coord::peek::{PeekDataflowPlan, PeekPlan, create_fast_path_plan};
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
@@ -138,6 +139,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
+    typ: SqlRelationType,
     df_meta: DataflowMetainfo,
     context: T,
 }
@@ -175,7 +177,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
-        let expr = expr.lower(&self.config, Some(&self.metrics))?;
+        let mir_expr = expr.clone().lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
         let mut df_meta = DataflowMetainfo::default();
@@ -186,13 +188,15 @@ impl Optimize<HirRelationExpr> for Optimizer {
             Some(&mut self.metrics),
             Some(self.select_id),
         );
-        let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
+        let mir_expr = optimize_mir_local(mir_expr, &mut transform_ctx)?.into_inner();
+        let typ = infer_sql_type_for_catalog(&expr, &mir_expr);
 
         self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
-            expr,
+            expr: mir_expr,
+            typ,
             df_meta,
             context: Unresolved,
         })
@@ -210,6 +214,7 @@ impl LocalMirPlan<Unresolved> {
     ) -> LocalMirPlan<Resolved<'_>> {
         LocalMirPlan {
             expr: self.expr,
+            typ: self.typ,
             df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
@@ -228,6 +233,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         let LocalMirPlan {
             expr,
+            typ,
             mut df_meta,
             context:
                 Resolved {
@@ -242,7 +248,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
         // around a maintained arrangement.
-        let typ = expr.typ();
         let key = typ
             .default_key()
             .iter()

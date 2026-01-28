@@ -196,6 +196,29 @@ fn test_bind_params() {
         let val: i32 = client.query_one("SELECT * FROM t", &[]).unwrap().get(0);
         assert_eq!(val, 42);
     }
+
+    // Test that `varchar_to_text` is properly handled (whether eliminated or no).
+    {
+        client.batch_execute("CREATE TABLE v (w varchar)").unwrap();
+        client.query("INSERT INTO v VALUES ($1)", &[&"aa"]).unwrap();
+        let stmt = client
+            .prepare("SELECT w, w::text, w::text::varchar FROM v WHERE w = $1")
+            .unwrap();
+        assert_eq!(stmt.columns().len(), 3);
+        assert_eq!(stmt.columns()[0].type_(), &Type::VARCHAR);
+        assert_eq!(stmt.columns()[1].type_(), &Type::TEXT);
+        assert_eq!(stmt.columns()[2].type_(), &Type::VARCHAR);
+        let row = client.query_one(&stmt, &[&"aa"]).unwrap();
+        assert_eq!(row.get::<_, String>(0), "aa");
+        assert_eq!(row.get::<_, String>(1), "aa");
+        assert_eq!(row.get::<_, String>(2), "aa");
+
+        let stmt = client
+            .prepare_typed("SELECT 'aa'::varchar::text = $1", &[Type::TEXT])
+            .unwrap();
+        let val: bool = client.query_one(&stmt, &[&"aa"]).unwrap().get(0);
+        assert_eq!(val, true);
+    }
 }
 
 #[mz_ore::test]

@@ -1464,6 +1464,15 @@ impl AggregateFunc {
 }
 
 impl HirRelationExpr {
+    /// Gets the SQL type of a self-contained, top-level expression.
+    pub fn top_level_typ(&self) -> SqlRelationType {
+        self.typ(&[], &BTreeMap::new())
+    }
+
+    /// Gets the SQL type of the expression.
+    ///
+    /// `outers` gives types for outer relations.
+    /// `params` gives types for parameters.
     pub fn typ(
         &self,
         outers: &[SqlRelationType],
