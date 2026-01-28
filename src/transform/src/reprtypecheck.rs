@@ -538,7 +538,10 @@ pub fn is_subtype_of(sub: &[ReprColumnType], sup: &[ReprColumnType]) -> bool {
 #[derive(Clone, Debug)]
 pub enum DatumTypeDifference {
     /// Datum was null, but expected a non-null value (i.e., a ReprScalarType)
-    Null,
+    Null {
+        /// The representation scalar type that we expected
+        expected: ReprScalarType,
+    },
     /// Datum's kind doesn't match the expected ReprScalarType
     Mismatch {
         /// The debug rendering of the Datum that we got (we don't store the Datum itself to avoid borrowing issues)
@@ -590,7 +593,9 @@ fn datum_difference_with_column_type(
             // json type checking
             match datum {
                 Datum::Dummy => Ok(()), // allow dummys (unlike is_instance_of)
-                Datum::Null => Err(DatumTypeDifference::Null),
+                Datum::Null => Err(DatumTypeDifference::Null {
+                    expected: ReprScalarType::Jsonb,
+                }),
                 Datum::JsonNull
                 | Datum::False
                 | Datum::True
@@ -622,7 +627,9 @@ fn datum_difference_with_column_type(
             }
             match (datum, scalar_type) {
                 (Datum::Dummy, _) => Ok(()), // allow dummys (unlike is_instance_of)
-                (Datum::Null, _) => Err(DatumTypeDifference::Null),
+                (Datum::Null, _) => Err(DatumTypeDifference::Null {
+                    expected: scalar_type.clone(),
+                }),
                 (Datum::False, ReprScalarType::Bool) => Ok(()),
                 (Datum::False, _) => mismatch(datum, scalar_type),
                 (Datum::True, ReprScalarType::Bool) => Ok(()),
@@ -712,7 +719,13 @@ fn datum_difference_with_column_type(
 
                     for (e, t) in list.iter().zip_eq(fields) {
                         if let Datum::Null = e {
-                            continue;
+                            if t.nullable {
+                                continue;
+                            } else {
+                                return Err(DatumTypeDifference::Null {
+                                    expected: t.scalar_type.clone(),
+                                });
+                            }
                         }
 
                         difference_with_scalar_type(&e, &t.scalar_type)
@@ -1774,7 +1787,13 @@ impl DatumTypeDifference {
         write!(f, "{:indent$}", "")?;
 
         match self {
-            DatumTypeDifference::Null => writeln!(f, "unexpected null")?,
+            DatumTypeDifference::Null { expected } => {
+                let expected = h.humanize_scalar_type_repr(expected, false);
+                writeln!(
+                    f,
+                    "unexpected null, expected representation type {expected}"
+                )?
+            }
             DatumTypeDifference::Mismatch {
                 got_debug,
                 expected,
@@ -2093,5 +2112,27 @@ mod tests {
                 assert_err!(diff);
             }
         }
+    }
+
+    #[mz_ore::test]
+    fn datum_type_difference_github_10039() {
+        let typ = ReprColumnType {
+            scalar_type: ReprScalarType::Record {
+                fields: Box::new([ReprColumnType {
+                    scalar_type: ReprScalarType::UInt32,
+                    nullable: false,
+                }]),
+            },
+            nullable: false,
+        };
+
+        let mut row = mz_repr::Row::default();
+        row.packer()
+            .push_list(std::iter::once(mz_repr::Datum::Null));
+        let datum = row.unpack_first();
+
+        assert!(!datum.is_instance_of(&typ));
+        let diff = datum_difference_with_column_type(&datum, &typ);
+        assert_err!(diff);
     }
 }
