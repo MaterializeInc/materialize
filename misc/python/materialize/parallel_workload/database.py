@@ -511,18 +511,14 @@ class IcebergSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        self.mode = rng.choice(["DEBEZIUM", "UPSERT"])
-        if self.mode == "UPSERT" or rng.choice([True, False]):
-            key_cols = [
-                column
-                for column in rng.sample(
-                    base_object.columns, k=rng.randint(1, len(base_object.columns))
-                )
-            ]
-            key_col_names = [column.name(True) for column in key_cols]
-            self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
-        else:
-            self.key = ""
+        key_cols = [
+            column
+            for column in rng.sample(
+                base_object.columns, k=rng.randint(1, len(base_object.columns))
+            )
+        ]
+        key_col_names = [column.name(True) for column in key_cols]
+        self.key = f"KEY ({', '.join(key_col_names)}) NOT ENFORCED"
         self.rename = 0
 
     def name(self) -> str:
@@ -535,7 +531,7 @@ class IcebergSink(DBObject):
 
     def create(self, exe: Executor) -> None:
         table_name = f"icesink_topic{self.sink_id}"
-        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table_name}') USING AWS CONNECTION aws_conn {self.key} MODE {self.mode} WITH (COMMIT INTERVAL '1s')"
+        query = f"CREATE SINK {self} IN CLUSTER {self.cluster} FROM {self.base_object} INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table_name}') USING AWS CONNECTION aws_conn {self.key} MODE UPSERT WITH (COMMIT INTERVAL '1s')"
         exe.execute(query)
 
 

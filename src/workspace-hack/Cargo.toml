@@ -81,7 +81,7 @@ hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.45.1", features = ["json"] }
-itertools = { version = "0.13.0" }
+itertools = { version = "0.10.5" }
 jiff = { version = "0.2.18", features = ["serde"] }
 libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
@@ -230,7 +230,7 @@ hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.45.1", features = ["json"] }
-itertools = { version = "0.13.0" }
+itertools = { version = "0.10.5" }
 jiff = { version = "0.2.18", features = ["serde"] }
 libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }

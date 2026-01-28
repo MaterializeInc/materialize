@@ -13526,7 +13526,7 @@ dependencies = [
  "hyper-util",
  "idna",
  "insta",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "jiff",
  "libc",
  "libz-sys",
