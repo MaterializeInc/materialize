@@ -1772,6 +1772,152 @@ async fn test_auth_oidc_password_fallback() {
     .await;
 }
 
+/// This test verifies that OIDC authentication correctly respects
+/// runtime changes to the oidc_issuer and oidc_audience system parameters.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_config_switch() {
+    let ca1 = Ca::new_root("test ca 1").unwrap();
+    let (server_cert, server_key) = ca1
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    // Start first OIDC server
+    let encoding_key1 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server1 = OidcMockServer::start(
+        None,
+        encoding_key1,
+        "key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    // Start second OIDC server
+    let encoding_key2 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server2 = OidcMockServer::start(
+        None,
+        encoding_key2,
+        "key-2".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let audience1 = "app-client-1";
+    let audience2 = "app-client-2";
+
+    // Generate tokens from each server
+    let token1 = oidc_server1.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec![audience1.to_string()]),
+            ..Default::default()
+        },
+    );
+    let token2 = oidc_server2.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec![audience2.to_string()]),
+            ..Default::default()
+        },
+    );
+
+    // Start test server configured with first OIDC server
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(oidc_server1.issuer.clone(), Some(audience1.to_string()))
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    let make_tls = || {
+        make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        }))
+    };
+
+    // Verify authentication works with first OIDC server's token
+    println!("Testing: first OIDC server token should succeed");
+    let client1 = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token1)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client1.is_ok(),
+        "Should authenticate with first OIDC server: {:?}",
+        client1.err()
+    );
+
+    // Verify authentication fails with second OIDC server's token (wrong issuer)
+    println!("Testing: second OIDC server token should fail before switch");
+    let client2_before = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token2)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client2_before.is_err(),
+        "Should fail with second OIDC server before switch"
+    );
+
+    // Switch to second OIDC server
+    println!("Switching OIDC configuration to second server");
+    admin_client
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET oidc_issuer = '{}'",
+            oidc_server2.issuer
+        ))
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(&format!("ALTER SYSTEM SET oidc_audience = '{}'", audience2))
+        .await
+        .unwrap();
+
+    // Verify authentication now works with second OIDC server's token
+    println!("Testing: second OIDC server token should succeed after switch");
+    let client2_after = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token2)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client2_after.is_ok(),
+        "Should authenticate with second OIDC server after switch: {:?}",
+        client2_after.err()
+    );
+
+    // Verify authentication now fails with first OIDC server's token
+    println!("Testing: first OIDC server token should fail after switch");
+    let client1_after = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token1)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client1_after.is_err(),
+        "Should fail with first OIDC server after switch"
+    );
+}
+
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`

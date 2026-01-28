@@ -1171,7 +1171,6 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
-            oidc: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,
