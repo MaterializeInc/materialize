@@ -130,6 +130,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     in error_msg_str
                     or "consuming input failed: SSL SYSCALL error: EOF detected"
                     in error_msg_str
+                    or "unexpected eof while reading" in error_msg_str
                     or "consuming input failed: SSL connection has been closed unexpectedly"
                     in error_msg_str
                     or "terminating connection due to idle-in-transaction timeout"

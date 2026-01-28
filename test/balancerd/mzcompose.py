@@ -522,6 +522,7 @@ def workflow_long_query(c: Composition) -> None:
         assert (
             "server closed the connection unexpectedly" in msg
             or "EOF detected" in msg
+            or "unexpected eof while reading" in msg
             or "frame size too big" in msg
         )
     except:
@@ -609,6 +610,7 @@ def workflow_balancerd_restarted(c: Composition) -> None:
         msg = str(e)
         assert (
             "EOF detected" in msg
+            or "unexpected eof while reading" in msg
             or "failed to lookup address information: Name or service not known" in msg
         )
     except:
