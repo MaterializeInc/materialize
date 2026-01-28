@@ -100,12 +100,25 @@ impl FdbConfig {
     /// let url = "foundationdb:?prefix=my_app/consensus";
     /// ```
     pub fn parse(url: &SensitiveUrl) -> Result<Self, anyhow::Error> {
-        let mut prefix = Vec::new();
+        let mut prefix = None;
+
+        let mut legacy_prefix = None;
 
         for (key, value) in url.query_pairs() {
             match &*key {
                 "prefix" => {
-                    prefix = value.split('/').map(|s| s.to_owned()).collect();
+                    prefix = Some(value.split('/').map(|s| s.to_owned()).collect());
+                }
+                "options" => {
+                    tracing::warn!(
+                        "FoundationDB URL 'options' parameter is deprecated; use 'prefix' instead"
+                    );
+                    // Parse a string like `--search_path=<path>` to extract legacy prefix.
+                    if let Some(stripped) = value.strip_prefix("--search_path=") {
+                        legacy_prefix = Some(stripped.split('/').map(|s| s.to_owned()).collect());
+                    } else {
+                        anyhow::bail!("unrecognized FoundationDB URL options parameter: {value}");
+                    }
                 }
                 key => {
                     anyhow::bail!("unrecognized FoundationDB URL query parameter: {key}={value}");
@@ -113,7 +126,15 @@ impl FdbConfig {
             }
         }
 
-        Ok(FdbConfig { prefix })
+        if prefix.is_some() && legacy_prefix.is_some() {
+            anyhow::bail!(
+                "cannot specify both 'prefix' and legacy 'options' parameters in FoundationDB URL"
+            );
+        }
+
+        Ok(FdbConfig {
+            prefix: prefix.or(legacy_prefix).unwrap_or_default(),
+        })
     }
 }
 
