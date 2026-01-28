@@ -1239,7 +1239,7 @@ GROUP BY om.global_id"#));
                     order_by.extend([
                         "max_operator_memory_ratio DESC",
                         "max_operator_records_ratio DESC",
-                        "worker_memory DESC",
+                        "om.worker_memory DESC",
                         "worker_records DESC",
                     ]);
 
@@ -1278,7 +1278,7 @@ GROUP BY pomt.global_id
                         "pg_size_pretty(omt.total_memory) AS total_memory",
                         "omt.total_records AS total_records",
                     ]);
-                    order_by.extend(["total_memory DESC", "total_records DESC"]);
+                    order_by.extend(["omt.total_memory DESC", "total_records DESC"]);
                 }
             }
             ExplainAnalyzeComputationProperty::Cpu => {
