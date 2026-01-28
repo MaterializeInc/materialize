@@ -363,6 +363,18 @@ pub struct ReprColumnType {
     pub nullable: bool,
 }
 
+impl ReprColumnType {
+    pub fn union(&self, col: &ReprColumnType) -> Result<Self, anyhow::Error> {
+        let scalar_type = self.scalar_type.union(&col.scalar_type)?;
+        let nullable = self.nullable || col.nullable;
+
+        Ok(ReprColumnType {
+            scalar_type,
+            nullable,
+        })
+    }
+}
+
 impl From<&SqlColumnType> for ReprColumnType {
     fn from(sql_column_type: &SqlColumnType) -> Self {
         let scalar_type = &sql_column_type.scalar_type;

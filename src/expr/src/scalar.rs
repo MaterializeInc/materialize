@@ -31,7 +31,7 @@ use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
-use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, Row, RowArena, SqlColumnType, SqlScalarType};
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -1969,6 +1969,36 @@ impl MirScalarExpr {
             MirScalarExpr::If { cond: _, then, els } => {
                 let then_type = then.typ(column_types);
                 let else_type = els.typ(column_types);
+                then_type.union(&else_type).unwrap()
+            }
+        }
+    }
+
+    pub fn repr_typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {
+        match self {
+            MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
+            MirScalarExpr::Literal(_, typ) => ReprColumnType::from(typ),
+            MirScalarExpr::CallUnmaterializable(func) => ReprColumnType::from(&func.output_type()),
+            MirScalarExpr::CallUnary { expr, func } => ReprColumnType::from(
+                &func.output_type(SqlColumnType::from_repr(&expr.repr_typ(column_types))),
+            ),
+            MirScalarExpr::CallBinary { expr1, expr2, func } => {
+                ReprColumnType::from(&func.output_type(
+                    SqlColumnType::from_repr(&expr1.repr_typ(column_types)),
+                    SqlColumnType::from_repr(&expr2.repr_typ(column_types)),
+                ))
+            }
+            MirScalarExpr::CallVariadic { exprs, func } => ReprColumnType::from(
+                &func.output_type(
+                    exprs
+                        .iter()
+                        .map(|e| SqlColumnType::from_repr(&e.repr_typ(column_types)))
+                        .collect(),
+                ),
+            ),
+            MirScalarExpr::If { cond: _, then, els } => {
+                let then_type = then.repr_typ(column_types);
+                let else_type = els.repr_typ(column_types);
                 then_type.union(&else_type).unwrap()
             }
         }
