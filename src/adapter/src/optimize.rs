@@ -66,6 +66,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
 use mz_compute_types::plan::Plan;
 use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
@@ -163,6 +164,8 @@ pub struct OptimizerConfig {
     // If set, allow some additional queries down the Persist fast path when we believe
     // the orderings are compatible.
     persist_fast_path_order: bool,
+    // Enable calculating with_snapshot metadata for subscribes.
+    subscribe_snapshot_optimization: bool,
     /// Optimizer feature flags.
     pub features: OptimizerFeatures,
 }
@@ -182,6 +185,7 @@ impl From<&SystemVars> for OptimizerConfig {
             replan: None,
             no_fast_path: false,
             persist_fast_path_order: PERSIST_FAST_PATH_ORDER.get(vars.dyncfgs()),
+            subscribe_snapshot_optimization: SUBSCRIBE_SNAPSHOT_OPTIMIZATION.get(vars.dyncfgs()),
             features: OptimizerFeatures::from(vars),
         }
     }

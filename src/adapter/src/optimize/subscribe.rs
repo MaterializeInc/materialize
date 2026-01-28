@@ -346,8 +346,10 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
             normalize_lets(&mut build.plan.0, &self.config.features)?
         }
 
-        // Determine whether we can elide any snapshots for this subscribe.
-        optimize_dataflow_snapshot(&mut df_desc)?;
+        if self.config.subscribe_snapshot_optimization {
+            // Determine whether we can elide any snapshots for this subscribe.
+            optimize_dataflow_snapshot(&mut df_desc)?;
+        }
 
         // Finalize the dataflow. This includes:
         // - MIR ⇒ LIR lowering
