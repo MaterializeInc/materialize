@@ -391,6 +391,19 @@ Persist is built on two key primitives: `Blob` (a durable key-value store) and
 immutable batches, while consensus maintains a state machine that tracks
 metadata like shard frontiers, active readers/writers, and batch locations.
 
+### Clusters and Replicas
+
+Clusters are containers for certain SQL-level objects. They represent compute
+resources and the objects that they contain are said to "run on them". Objects
+that need to run on a cluster are, among others: indexes, materialized views,
+sources, and sinks. Most queries also have to be executed on a cluster, in
+which case they use that clusters compute resources.
+
+Clusters represent compute resources, but by themselves don't have any
+resources. A cluster must be backed by one or more replicas for actual
+computation to happen. Replicas come in multiple sizes, that represent
+different allocations of CPU cores and amount of memory.
+
 ### Compute & Storage Controllers
 
 The adapter interacts with clusters and storage collections through two main
@@ -419,6 +432,3 @@ Both controllers maintain read and write capabilities for their respective
 resources, coordinate compaction policies, and ensure that data remains
 accessible as long as needed.
 
-### Clusters and Timely Dataflow / Differential Dataflow
-
-TODO!
