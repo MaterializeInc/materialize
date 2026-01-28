@@ -1,0 +1,878 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/10016
+
+
+# Create base tables with many columns
+statement ok
+CREATE TABLE customers (
+    customer_id INTEGER,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    email VARCHAR(200),
+    phone VARCHAR(20),
+    address_line1 VARCHAR(200),
+    address_line2 VARCHAR(200),
+    city VARCHAR(100),
+    state VARCHAR(50),
+    country VARCHAR(100),
+    postal_code VARCHAR(20),
+    date_of_birth DATE,
+    registration_date TIMESTAMP,
+    customer_status VARCHAR(50),
+    credit_limit DECIMAL(15,2),
+    total_lifetime_value DECIMAL(15,2),
+    preferred_contact_method VARCHAR(50),
+    marketing_opt_in BOOLEAN,
+    loyalty_tier VARCHAR(50),
+    loyalty_points INTEGER,
+    last_purchase_date DATE,
+    total_orders INTEGER,
+    average_order_value DECIMAL(15,2),
+    customer_segment VARCHAR(100),
+    referral_source VARCHAR(100),
+    account_manager_id INTEGER
+);
+
+statement ok
+CREATE TABLE orders (
+    order_id INTEGER,
+    customer_id INTEGER,
+    order_date TIMESTAMP,
+    ship_date TIMESTAMP,
+    delivery_date TIMESTAMP,
+    order_status VARCHAR(50),
+    payment_method VARCHAR(50),
+    payment_status VARCHAR(50),
+    subtotal DECIMAL(15,2),
+    tax_amount DECIMAL(15,2),
+    shipping_cost DECIMAL(15,2),
+    discount_amount DECIMAL(15,2),
+    total_amount DECIMAL(15,2),
+    currency_code VARCHAR(10),
+    billing_address_line1 VARCHAR(200),
+    billing_address_line2 VARCHAR(200),
+    billing_city VARCHAR(100),
+    billing_state VARCHAR(50),
+    billing_country VARCHAR(100),
+    billing_postal_code VARCHAR(20),
+    shipping_address_line1 VARCHAR(200),
+    shipping_address_line2 VARCHAR(200),
+    shipping_city VARCHAR(100),
+    shipping_state VARCHAR(50),
+    shipping_country VARCHAR(100),
+    shipping_postal_code VARCHAR(20),
+    tracking_number VARCHAR(100),
+    carrier VARCHAR(100),
+    shipping_method VARCHAR(100),
+    order_source VARCHAR(100),
+    sales_rep_id INTEGER,
+    warehouse_id INTEGER,
+    priority_level VARCHAR(50),
+    gift_message TEXT,
+    special_instructions TEXT
+);
+
+statement ok
+CREATE TABLE products (
+    product_id INTEGER,
+    product_name VARCHAR(200),
+    product_code VARCHAR(100),
+    product_category VARCHAR(100),
+    product_subcategory VARCHAR(100),
+    product_description TEXT,
+    brand VARCHAR(100),
+    manufacturer VARCHAR(100),
+    supplier_id INTEGER,
+    unit_price DECIMAL(15,2),
+    cost_price DECIMAL(15,2),
+    retail_price DECIMAL(15,2),
+    sale_price DECIMAL(15,2),
+    currency_code VARCHAR(10),
+    weight DECIMAL(10,2),
+    weight_unit VARCHAR(20),
+    dimensions_length DECIMAL(10,2),
+    dimensions_width DECIMAL(10,2),
+    dimensions_height DECIMAL(10,2),
+    dimension_unit VARCHAR(20),
+    color VARCHAR(50),
+    size VARCHAR(50),
+    material VARCHAR(100),
+    is_active BOOLEAN,
+    is_featured BOOLEAN,
+    is_on_sale BOOLEAN,
+    stock_status VARCHAR(50),
+    reorder_level INTEGER,
+    reorder_quantity INTEGER,
+    lead_time_days INTEGER,
+    warranty_period INTEGER,
+    product_launch_date DATE,
+    discontinuation_date DATE,
+    rating DECIMAL(3,2),
+    review_count INTEGER
+);
+
+statement ok
+CREATE TABLE inventory (
+    inventory_id INTEGER,
+    product_id INTEGER,
+    warehouse_id INTEGER,
+    quantity_on_hand INTEGER,
+    quantity_reserved INTEGER,
+    quantity_available INTEGER,
+    quantity_on_order INTEGER,
+    quantity_backorder INTEGER,
+    reorder_point INTEGER,
+    maximum_stock_level INTEGER,
+    minimum_stock_level INTEGER,
+    last_stock_check_date TIMESTAMP,
+    last_restock_date TIMESTAMP,
+    location_aisle VARCHAR(50),
+    location_bin VARCHAR(50),
+    location_shelf VARCHAR(50),
+    expiration_date DATE,
+    batch_number VARCHAR(100),
+    lot_number VARCHAR(100),
+    unit_cost DECIMAL(15,2),
+    total_value DECIMAL(15,2),
+    storage_condition VARCHAR(100),
+    handling_requirement VARCHAR(100),
+    safety_stock_level INTEGER,
+    turnover_rate DECIMAL(10,4),
+    days_of_supply INTEGER
+);
+
+statement ok
+CREATE TABLE suppliers (
+    supplier_id INTEGER,
+    supplier_name VARCHAR(200),
+    supplier_code VARCHAR(100),
+    contact_person VARCHAR(100),
+    contact_email VARCHAR(200),
+    contact_phone VARCHAR(20),
+    address_line1 VARCHAR(200),
+    address_line2 VARCHAR(200),
+    city VARCHAR(100),
+    state VARCHAR(50),
+    country VARCHAR(100),
+    postal_code VARCHAR(20),
+    website VARCHAR(200),
+    tax_id VARCHAR(100),
+    payment_terms VARCHAR(100),
+    credit_limit DECIMAL(15,2),
+    supplier_rating DECIMAL(3,2),
+    is_active BOOLEAN,
+    is_preferred BOOLEAN,
+    contract_start_date DATE,
+    contract_end_date DATE,
+    lead_time_days INTEGER,
+    minimum_order_value DECIMAL(15,2),
+    currency_code VARCHAR(10),
+    industry VARCHAR(100),
+    certifications TEXT,
+    notes TEXT
+);
+
+statement ok
+CREATE TABLE employees (
+    employee_id INTEGER,
+    first_name VARCHAR(100),
+    last_name VARCHAR(100),
+    email VARCHAR(200),
+    phone VARCHAR(20),
+    hire_date DATE,
+    termination_date DATE,
+    employee_status VARCHAR(50),
+    job_title VARCHAR(100),
+    department_id INTEGER,
+    manager_id INTEGER,
+    salary DECIMAL(15,2),
+    commission_rate DECIMAL(5,4),
+    employment_type VARCHAR(50),
+    work_location VARCHAR(100),
+    office_number VARCHAR(50),
+    extension VARCHAR(20),
+    emergency_contact_name VARCHAR(100),
+    emergency_contact_phone VARCHAR(20),
+    date_of_birth DATE,
+    social_security_number VARCHAR(20),
+    address_line1 VARCHAR(200),
+    address_line2 VARCHAR(200),
+    city VARCHAR(100),
+    state VARCHAR(50),
+    country VARCHAR(100),
+    postal_code VARCHAR(20),
+    performance_rating DECIMAL(3,2),
+    years_of_service INTEGER,
+    vacation_days_remaining INTEGER,
+    sick_days_used INTEGER
+);
+
+statement ok
+CREATE TABLE departments (
+    department_id INTEGER,
+    department_name VARCHAR(100),
+    department_code VARCHAR(50),
+    description TEXT,
+    manager_id INTEGER,
+    parent_department_id INTEGER,
+    budget DECIMAL(15,2),
+    actual_spending DECIMAL(15,2),
+    headcount INTEGER,
+    location VARCHAR(100),
+    cost_center_code VARCHAR(50),
+    is_active BOOLEAN,
+    established_date DATE
+);
+
+statement ok
+CREATE TABLE sales_regions (
+    region_id INTEGER,
+    region_name VARCHAR(100),
+    region_code VARCHAR(50),
+    country VARCHAR(100),
+    manager_id INTEGER,
+    sales_quota DECIMAL(15,2),
+    actual_sales DECIMAL(15,2),
+    territory_description TEXT,
+    is_active BOOLEAN
+);
+
+# Insert sample data
+
+statement ok
+INSERT INTO customers VALUES
+(1, 'John', 'Smith', 'john.smith@email.com', '555-0101', '123 Main St', 'Apt 4B', 'New York', 'NY', 'USA', '10001', '1985-03-15', '2020-01-15 10:30:00', 'Active', 50000.00, 125000.00, 'Email', TRUE, 'Gold', 15000, '2024-12-01', 45, 2777.78, 'High Value', 'Online Ad', 101),
+(2, 'Jane', 'Doe', 'jane.doe@email.com', '555-0102', '456 Oak Ave', NULL, 'Los Angeles', 'CA', 'USA', '90001', '1990-07-22', '2019-05-20 14:15:00', 'Active', 30000.00, 87500.00, 'Phone', TRUE, 'Silver', 8500, '2024-11-15', 32, 2734.38, 'Medium Value', 'Referral', 102),
+(3, 'Bob', 'Johnson', 'bob.j@email.com', '555-0103', '789 Pine Rd', 'Suite 200', 'Chicago', 'IL', 'USA', '60601', '1978-11-30', '2018-03-10 09:00:00', 'Active', 75000.00, 210000.00, 'Email', FALSE, 'Platinum', 25000, '2024-12-15', 67, 3134.33, 'VIP', 'Direct', 101);
+
+statement ok
+INSERT INTO orders VALUES
+(1001, 1, '2024-11-01 10:30:00', '2024-11-02 14:20:00', '2024-11-05 11:45:00', 'Delivered', 'Credit Card', 'Paid', 2500.00, 200.00, 25.00, 125.00, 2600.00, 'USD', '123 Main St', 'Apt 4B', 'New York', 'NY', 'USA', '10001', '123 Main St', 'Apt 4B', 'New York', 'NY', 'USA', '10001', 'TRK123456', 'UPS', 'Ground', 'Website', 201, 301, 'Standard', NULL, NULL),
+(1002, 2, '2024-11-03 15:45:00', '2024-11-04 10:30:00', '2024-11-07 09:15:00', 'Delivered', 'PayPal', 'Paid', 1800.00, 144.00, 20.00, 90.00, 1874.00, 'USD', '456 Oak Ave', NULL, 'Los Angeles', 'CA', 'USA', '90001', '456 Oak Ave', NULL, 'Los Angeles', 'CA', 'USA', '90001', 'TRK123457', 'FedEx', 'Express', 'Mobile App', 202, 302, 'High', NULL, 'Handle with care'),
+(1003, 3, '2024-11-05 09:20:00', '2024-11-06 11:00:00', '2024-11-08 14:30:00', 'Delivered', 'Wire Transfer', 'Paid', 5200.00, 416.00, 50.00, 260.00, 5406.00, 'USD', '789 Pine Rd', 'Suite 200', 'Chicago', 'IL', 'USA', '60601', '789 Pine Rd', 'Suite 200', 'Chicago', 'IL', 'USA', '60601', 'TRK123458', 'DHL', 'Overnight', 'Phone', 201, 301, 'Urgent', 'Happy Birthday!', 'Call before delivery');
+
+statement ok
+INSERT INTO products VALUES
+(5001, 'Premium Laptop Pro', 'PROD-LP-001', 'Electronics', 'Computers', 'High-performance laptop for professionals', 'TechBrand', 'TechCorp', 7001, 1200.00, 800.00, 1499.99, 1299.99, 'USD', 4.5, 'lbs', 14.0, 9.5, 0.8, 'inches', 'Silver', '15 inch', 'Aluminum', TRUE, TRUE, TRUE, 'In Stock', 10, 20, 14, 365, '2023-01-15', NULL, 4.5, 1250),
+(5002, 'Wireless Mouse Deluxe', 'PROD-MS-002', 'Electronics', 'Accessories', 'Ergonomic wireless mouse', 'TechBrand', 'TechCorp', 7001, 45.00, 25.00, 79.99, 69.99, 'USD', 0.3, 'lbs', 4.5, 2.5, 1.5, 'inches', 'Black', 'Standard', 'Plastic', TRUE, FALSE, TRUE, 'In Stock', 50, 100, 7, 180, '2022-06-01', NULL, 4.2, 850),
+(5003, 'Professional Keyboard', 'PROD-KB-003', 'Electronics', 'Accessories', 'Mechanical keyboard for productivity', 'TechBrand', 'TechCorp', 7001, 120.00, 70.00, 199.99, 179.99, 'USD', 2.2, 'lbs', 17.5, 6.0, 1.2, 'inches', 'Black', 'Full Size', 'Aluminum', TRUE, TRUE, FALSE, 'In Stock', 25, 50, 10, 365, '2023-03-20', NULL, 4.7, 620);
+
+statement ok
+INSERT INTO inventory VALUES
+(9001, 5001, 301, 150, 25, 125, 50, 0, 20, 300, 10, '2024-12-01 08:00:00', '2024-11-25 14:30:00', 'A', '15', '3', NULL, 'BATCH-2024-11', 'LOT-LP-445', 800.00, 120000.00, 'Dry', 'Fragile', 30, 0.85, 45),
+(9002, 5002, 302, 500, 75, 425, 200, 0, 100, 800, 50, '2024-12-01 09:00:00', '2024-11-20 10:15:00', 'B', '08', '12', NULL, 'BATCH-2024-10', 'LOT-MS-892', 25.00, 12500.00, 'Dry', 'Standard', 150, 1.20, 30),
+(9003, 5003, 301, 200, 30, 170, 75, 0, 50, 400, 25, '2024-12-01 10:30:00', '2024-11-28 16:45:00', 'A', '22', '8', NULL, 'BATCH-2024-12', 'LOT-KB-223', 70.00, 14000.00, 'Dry', 'Standard', 75, 0.95, 50);
+
+statement ok
+INSERT INTO suppliers VALUES
+(7001, 'TechSupplier International', 'SUP-001', 'Sarah Williams', 'sarah.w@techsupplier.com', '555-0201', '1000 Industrial Blvd', 'Building C', 'San Francisco', 'CA', 'USA', '94102', 'www.techsupplier.com', 'TAX-12345', 'Net 30', 500000.00, 4.8, TRUE, TRUE, '2020-01-01', '2025-12-31', 21, 10000.00, 'USD', 'Electronics Manufacturing', 'ISO 9001, RoHS', 'Preferred supplier for electronics'),
+(7002, 'Global Components Ltd', 'SUP-002', 'Michael Chen', 'm.chen@globalcomp.com', '555-0202', '2500 Commerce Dr', NULL, 'Seattle', 'WA', 'USA', '98101', 'www.globalcomp.com', 'TAX-67890', 'Net 45', 300000.00, 4.5, TRUE, FALSE, '2019-06-15', '2024-12-31', 28, 5000.00, 'USD', 'Component Distribution', 'ISO 14001', 'Secondary supplier'),
+(7003, 'Premium Parts Corp', 'SUP-003', 'Lisa Anderson', 'l.anderson@premiumparts.com', '555-0203', '3750 Manufacturing Way', 'Unit 12', 'Austin', 'TX', 'USA', '78701', 'www.premiumparts.com', 'TAX-11223', 'Net 60', 750000.00, 4.9, TRUE, TRUE, '2018-03-20', '2026-03-19', 14, 15000.00, 'USD', 'Premium Manufacturing', 'ISO 9001, ISO 14001, OHSAS 18001', 'Best quality, premium pricing');
+
+statement ok
+INSERT INTO employees VALUES
+(101, 'Alice', 'Manager', 'alice.m@company.com', '555-0301', '2015-06-01', NULL, 'Active', 'Sales Manager', 1, NULL, 95000.00, 0.0500, 'Full-Time', 'New York Office', '301', '1001', 'Bob Manager', '555-9001', '1980-04-12', 'XXX-XX-1234', '111 Work St', NULL, 'New York', 'NY', 'USA', '10001', 4.5, 9, 10, 2),
+(102, 'Charlie', 'Leader', 'charlie.l@company.com', '555-0302', '2017-03-15', NULL, 'Active', 'Sales Manager', 1, NULL, 92000.00, 0.0450, 'Full-Time', 'Los Angeles Office', '205', '2005', 'Diana Leader', '555-9002', '1982-08-25', 'XXX-XX-5678', '222 Work Ave', 'Apt 5', 'Los Angeles', 'CA', 'USA', '90001', 4.3, 7, 15, 1),
+(201, 'David', 'Rep', 'david.r@company.com', '555-0303', '2019-09-01', NULL, 'Active', 'Sales Representative', 1, 101, 65000.00, 0.0300, 'Full-Time', 'New York Office', '315', '3015', 'Emily Rep', '555-9003', '1988-11-30', 'XXX-XX-9012', '333 Work Blvd', NULL, 'New York', 'NY', 'USA', '10001', 4.2, 5, 12, 3),
+(202, 'Frank', 'Seller', 'frank.s@company.com', '555-0304', '2020-01-10', NULL, 'Active', 'Sales Representative', 1, 102, 62000.00, 0.0300, 'Full-Time', 'Los Angeles Office', '210', '2010', 'Grace Seller', '555-9004', '1990-02-14', 'XXX-XX-3456', '444 Work Cir', 'Unit B', 'Los Angeles', 'CA', 'USA', '90001', 4.4, 4, 8, 1);
+
+statement ok
+INSERT INTO departments VALUES
+(1, 'Sales', 'SALES-001', 'Sales and customer acquisition department', 101, NULL, 5000000.00, 4200000.00, 25, 'Headquarters', 'CC-001', TRUE, '2010-01-01'),
+(2, 'Marketing', 'MRKT-001', 'Marketing and brand management', NULL, NULL, 2000000.00, 1750000.00, 15, 'Headquarters', 'CC-002', TRUE, '2010-01-01'),
+(3, 'Operations', 'OPS-001', 'Operations and logistics', NULL, NULL, 3500000.00, 3100000.00, 40, 'Warehouse', 'CC-003', TRUE, '2010-01-01');
+
+statement ok
+INSERT INTO sales_regions VALUES
+(1, 'Northeast', 'NE-001', 'USA', 101, 10000000.00, 8750000.00, 'Northeast United States including NY, NJ, PA, CT, MA', TRUE),
+(2, 'West Coast', 'WC-001', 'USA', 102, 12000000.00, 10500000.00, 'West Coast including CA, OR, WA', TRUE),
+(3, 'Midwest', 'MW-001', 'USA', NULL, 8000000.00, 6800000.00, 'Midwest region including IL, MI, OH, IN', TRUE);
+
+
+# Create the complicated view with many CTEs
+statement ok
+CREATE or replace VIEW complicated_business_analytics_view AS
+WITH
+-- CTE 1: Basic customer information
+customer_base AS (
+    SELECT
+        customer_id,
+        first_name,
+        last_name,
+        email,
+        city,
+        state,
+        country,
+        customer_status,
+        credit_limit,
+        total_lifetime_value,
+        loyalty_tier,
+        loyalty_points,
+        customer_segment,
+        account_manager_id
+    FROM customers
+    WHERE customer_status = 'Active'
+),
+-- CTE 2: Customer name concatenation
+customer_names AS (
+    SELECT
+        customer_id,
+        first_name || ' ' || last_name AS full_name,
+        email,
+        city,
+        state,
+        customer_segment
+    FROM customer_base
+),
+-- CTE 3: Order totals by customer
+customer_order_totals AS (
+    SELECT
+        customer_id,
+        COUNT(*) AS order_count,
+        SUM(total_amount) AS total_order_value,
+        AVG(total_amount) AS avg_order_value,
+        MIN(order_date) AS first_order_date,
+        MAX(order_date) AS last_order_date
+    FROM orders
+    WHERE order_status = 'Delivered'
+    GROUP BY customer_id
+),
+-- CTE 4: Order details with dates
+order_details AS (
+    SELECT
+        order_id,
+        customer_id,
+        order_date,
+        ship_date,
+        delivery_date,
+        total_amount,
+        subtotal,
+        tax_amount,
+        shipping_cost,
+        discount_amount,
+        payment_method,
+        order_status
+    FROM orders
+),
+-- CTE 5: Order year extraction
+order_years AS (
+    SELECT
+        order_id,
+        customer_id,
+        EXTRACT(YEAR FROM order_date) AS order_year,
+        EXTRACT(MONTH FROM order_date) AS order_month,
+        total_amount
+    FROM order_details
+),
+-- CTE 6: Product information base
+product_base AS (
+    SELECT
+        product_id,
+        product_name,
+        product_category,
+        product_subcategory,
+        brand,
+        unit_price,
+        cost_price,
+        retail_price,
+        sale_price,
+        is_active,
+        is_featured,
+        rating,
+        review_count
+    FROM products
+    WHERE is_active = TRUE
+),
+-- CTE 7: Product pricing calculations
+product_pricing AS (
+    SELECT
+        product_id,
+        product_name,
+        unit_price,
+        cost_price,
+        retail_price - cost_price AS profit_margin,
+        (retail_price - cost_price) / NULLIF(cost_price, 0) * 100 AS profit_margin_percentage
+    FROM product_base
+),
+-- CTE 8: Product categories
+product_categories AS (
+    SELECT
+        product_id,
+        product_category,
+        product_subcategory,
+        brand,
+        product_category || ' - ' || product_subcategory AS full_category
+    FROM product_base
+),
+-- CTE 9: Inventory levels
+inventory_levels AS (
+    SELECT
+        inventory_id,
+        product_id,
+        warehouse_id,
+        quantity_on_hand,
+        quantity_reserved,
+        quantity_available,
+        reorder_point,
+        total_value
+    FROM inventory
+),
+-- CTE 10: Inventory status
+inventory_status AS (
+    SELECT
+        product_id,
+        warehouse_id,
+        quantity_on_hand,
+        quantity_available,
+        CASE
+            WHEN quantity_on_hand < reorder_point THEN 'Low Stock'
+            WHEN quantity_on_hand = 0 THEN 'Out of Stock'
+            ELSE 'In Stock'
+        END AS stock_status
+    FROM inventory_levels
+),
+-- CTE 11: Total inventory value
+inventory_value AS (
+    SELECT
+        product_id,
+        SUM(total_value) AS total_inventory_value,
+        SUM(quantity_on_hand) AS total_quantity
+    FROM inventory_levels
+    GROUP BY product_id
+),
+-- CTE 12: Supplier information
+supplier_base AS (
+    SELECT
+        supplier_id,
+        supplier_name,
+        contact_person,
+        city,
+        state,
+        country,
+        supplier_rating,
+        is_preferred,
+        lead_time_days
+    FROM suppliers
+    WHERE is_active = TRUE
+),
+-- CTE 13: Supplier performance
+supplier_performance AS (
+    SELECT
+        supplier_id,
+        supplier_name,
+        supplier_rating,
+        CASE
+            WHEN supplier_rating >= 4.5 THEN 'Excellent'
+            WHEN supplier_rating >= 4.0 THEN 'Good'
+            WHEN supplier_rating >= 3.0 THEN 'Average'
+            ELSE 'Poor'
+        END AS performance_category
+    FROM supplier_base
+),
+-- CTE 14: Employee information
+employee_base AS (
+    SELECT
+        employee_id,
+        first_name,
+        last_name,
+        job_title,
+        department_id,
+        manager_id,
+        salary,
+        commission_rate,
+        employee_status
+    FROM employees
+    WHERE employee_status = 'Active'
+),
+-- CTE 15: Employee names
+employee_names AS (
+    SELECT
+        employee_id,
+        first_name || ' ' || last_name AS employee_full_name,
+        job_title,
+        department_id
+    FROM employee_base
+),
+-- CTE 16: Department information
+department_info AS (
+    SELECT
+        department_id,
+        department_name,
+        budget,
+        actual_spending,
+        headcount
+    FROM departments
+    WHERE is_active = TRUE
+),
+-- CTE 17: Department spending
+department_spending AS (
+    SELECT
+        department_id,
+        department_name,
+        budget,
+        actual_spending,
+        budget - actual_spending AS remaining_budget,
+        (actual_spending / NULLIF(budget, 0)) * 100 AS budget_utilization_percentage
+    FROM department_info
+),
+-- CTE 18: Sales region information
+region_base AS (
+    SELECT
+        region_id,
+        region_name,
+        country,
+        sales_quota,
+        actual_sales
+    FROM sales_regions
+    WHERE is_active = TRUE
+),
+-- CTE 19: Region performance
+region_performance AS (
+    SELECT
+        region_id,
+        region_name,
+        sales_quota,
+        actual_sales,
+        actual_sales - sales_quota AS quota_variance,
+        (actual_sales / NULLIF(sales_quota, 0)) * 100 AS quota_attainment_percentage
+    FROM region_base
+),
+-- CTE 20: Join customers with orders
+customer_order_join AS (
+    SELECT
+        cn.customer_id,
+        cn.full_name,
+        cn.email,
+        cn.city,
+        cn.state,
+        cot.order_count,
+        cot.total_order_value,
+        cot.avg_order_value
+    FROM customer_names cn
+    LEFT JOIN customer_order_totals cot ON cn.customer_id = cot.customer_id
+),
+-- CTE 21: Customer value tiers
+customer_value_tiers AS (
+    SELECT
+        customer_id,
+        full_name,
+        total_order_value,
+        CASE
+            WHEN total_order_value >= 10000 THEN 'Tier 1 - VIP'
+            WHEN total_order_value >= 5000 THEN 'Tier 2 - Premium'
+            WHEN total_order_value >= 1000 THEN 'Tier 3 - Standard'
+            ELSE 'Tier 4 - New'
+        END AS value_tier
+    FROM customer_order_join
+),
+-- CTE 22: Product supplier join
+product_supplier_join AS (
+    SELECT
+        pb.product_id,
+        pb.product_name,
+        pb.product_category,
+        sb.supplier_id,
+        sb.supplier_name,
+        sb.supplier_rating
+    FROM product_base pb
+    LEFT JOIN supplier_base sb ON pb.product_id = pb.product_id
+),
+-- CTE 23: Product with inventory
+product_inventory_join AS (
+    SELECT
+        pb.product_id,
+        pb.product_name,
+        pb.product_category,
+        iv.total_inventory_value,
+        iv.total_quantity
+    FROM product_base pb
+    LEFT JOIN inventory_value iv ON pb.product_id = iv.product_id
+),
+-- CTE 24: Employee department join
+employee_department_join AS (
+    SELECT
+        en.employee_id,
+        en.employee_full_name,
+        en.job_title,
+        di.department_name,
+        di.budget
+    FROM employee_names en
+    LEFT JOIN department_info di ON en.department_id = di.department_id
+),
+-- CTE 25: Orders by year
+orders_by_year AS (
+    SELECT
+        order_year,
+        COUNT(*) AS year_order_count,
+        SUM(total_amount) AS year_total_amount
+    FROM order_years
+    GROUP BY order_year
+),
+-- CTE 26: Orders by month
+orders_by_month AS (
+    SELECT
+        order_year,
+        order_month,
+        COUNT(*) AS month_order_count,
+        SUM(total_amount) AS month_total_amount
+    FROM order_years
+    GROUP BY order_year, order_month
+),
+-- CTE 27: Product category totals
+category_totals AS (
+    SELECT
+        product_category,
+        COUNT(*) AS category_product_count,
+        AVG(unit_price) AS avg_category_price
+    FROM product_base
+    GROUP BY product_category
+),
+-- CTE 28: Supplier by country
+supplier_by_country AS (
+    SELECT
+        country,
+        COUNT(*) AS supplier_count,
+        AVG(supplier_rating) AS avg_country_rating
+    FROM supplier_base
+    GROUP BY country
+),
+-- CTE 29: Inventory summary
+inventory_summary AS (
+    SELECT
+        warehouse_id,
+        COUNT(DISTINCT product_id) AS unique_products,
+        SUM(quantity_on_hand) AS total_units,
+        SUM(total_value) AS total_warehouse_value
+    FROM inventory_levels
+    GROUP BY warehouse_id
+),
+-- CTE 30: Customer city aggregation
+customer_city_agg AS (
+    SELECT
+        city,
+        state,
+        COUNT(*) AS customer_count
+    FROM customer_base
+    GROUP BY city, state
+),
+-- CTE 31: High value customers
+high_value_customers AS (
+    SELECT
+        customer_id,
+        full_name,
+        total_order_value
+    FROM customer_order_join
+    WHERE total_order_value > 5000
+),
+-- CTE 32: Featured products
+featured_products AS (
+    SELECT
+        product_id,
+        product_name,
+        product_category,
+        retail_price
+    FROM product_base
+    WHERE is_featured = TRUE
+),
+-- CTE 33: Top rated products
+top_rated_products AS (
+    SELECT
+        product_id,
+        product_name,
+        rating,
+        review_count
+    FROM product_base
+    WHERE rating >= 4.5
+),
+-- CTE 34: Preferred suppliers
+preferred_suppliers AS (
+    SELECT
+        supplier_id,
+        supplier_name,
+        supplier_rating
+    FROM supplier_base
+    WHERE is_preferred = TRUE
+),
+-- CTE 35: Department budget summary
+dept_budget_summary AS (
+    SELECT
+        department_name,
+        budget,
+        actual_spending,
+        remaining_budget
+    FROM department_spending
+),
+-- CTE 36: Sales quota summary
+sales_quota_summary AS (
+    SELECT
+        region_name,
+        sales_quota,
+        actual_sales,
+        quota_attainment_percentage
+    FROM region_performance
+),
+-- CTE 37: Product profit ranking
+product_profit_ranking AS (
+    SELECT
+        product_id,
+        product_name,
+        profit_margin,
+        profit_margin_percentage
+    FROM product_pricing
+    WHERE profit_margin > 0
+),
+-- CTE 38: Customer lifetime calculations
+customer_lifetime_calc AS (
+    SELECT
+        cb.customer_id,
+        cb.total_lifetime_value,
+        cb.loyalty_points,
+        cb.loyalty_points * 0.01 AS loyalty_value_dollars
+    FROM customer_base cb
+),
+-- CTE 39: Order payment method breakdown
+order_payment_breakdown AS (
+    SELECT
+        payment_method,
+        COUNT(*) AS payment_count,
+        SUM(total_amount) AS payment_total
+    FROM order_details
+    GROUP BY payment_method
+),
+-- CTE 40: Order status breakdown
+order_status_breakdown AS (
+    SELECT
+        order_status,
+        COUNT(*) AS status_count
+    FROM order_details
+    GROUP BY order_status
+),
+-- CTE 41: Product brand analysis
+product_brand_analysis AS (
+    SELECT
+        brand,
+        COUNT(*) AS brand_product_count,
+        AVG(rating) AS avg_brand_rating
+    FROM product_base
+    GROUP BY brand
+),
+-- CTE 42: Inventory warehouse distribution
+inventory_warehouse_dist AS (
+    SELECT
+        warehouse_id,
+        product_id,
+        quantity_on_hand
+    FROM inventory_levels
+),
+-- CTE 43: Customer segment distribution
+customer_segment_dist AS (
+    SELECT
+        customer_segment,
+        COUNT(*) AS segment_count
+    FROM customer_base
+    GROUP BY customer_segment
+),
+-- CTE 44: Final comprehensive join
+comprehensive_data AS (
+    SELECT
+        coj.customer_id,
+        coj.full_name AS customer_name,
+        coj.email AS customer_email,
+        coj.city AS customer_city,
+        coj.state AS customer_state,
+        coj.order_count,
+        coj.total_order_value,
+        coj.avg_order_value,
+        cvt.value_tier,
+        clc.loyalty_value_dollars,
+        pb.product_name,
+        pb.product_category,
+        pb.brand,
+        pp.profit_margin,
+        pp.profit_margin_percentage,
+        iv.total_inventory_value,
+        iv.total_quantity AS total_inventory_quantity,
+        sp.supplier_name,
+        sp.performance_category AS supplier_performance,
+        edj.employee_full_name AS account_manager_name,
+        edj.department_name,
+        dbs.budget_utilization_percentage AS dept_budget_utilization
+    FROM customer_order_join coj
+    LEFT JOIN customer_value_tiers cvt ON coj.customer_id = cvt.customer_id
+    LEFT JOIN customer_lifetime_calc clc ON coj.customer_id = clc.customer_id
+    LEFT JOIN customer_base cb ON coj.customer_id = cb.customer_id
+    LEFT JOIN employee_base eb ON cb.account_manager_id = eb.employee_id
+    LEFT JOIN employee_department_join edj ON eb.employee_id = edj.employee_id
+    LEFT JOIN department_spending dbs ON edj.department_name = dbs.department_name
+    LEFT JOIN product_base pb ON 1=1
+    LEFT JOIN product_pricing pp ON pb.product_id = pp.product_id
+    LEFT JOIN inventory_value iv ON pb.product_id = iv.product_id
+    LEFT JOIN supplier_base sb ON pb.product_id = pb.product_id
+    LEFT JOIN supplier_performance sp ON sb.supplier_id = sp.supplier_id
+)
+-- Final SELECT statement
+SELECT
+    customer_id,
+    customer_name,
+    customer_email,
+    customer_city,
+    customer_state,
+    order_count,
+    ROUND(total_order_value, 2) AS total_order_value,
+    ROUND(avg_order_value, 2) AS avg_order_value,
+    value_tier,
+    ROUND(loyalty_value_dollars, 2) AS loyalty_value_dollars,
+    product_name,
+    product_category,
+    brand,
+    ROUND(profit_margin, 2) AS profit_margin,
+    ROUND(profit_margin_percentage, 2) AS profit_margin_percentage,
+    ROUND(total_inventory_value, 2) AS total_inventory_value,
+    total_inventory_quantity,
+    supplier_name,
+    supplier_performance,
+    account_manager_name,
+    department_name,
+    ROUND(dept_budget_utilization, 2) AS dept_budget_utilization
+FROM comprehensive_data;
+
+query ITTTTIIITITTTIIIITTTTI
+select * from complicated_business_analytics_view;
+----
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  Premium␠Parts␠Corp  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  Premium␠Parts␠Corp  Excellent  Alice␠Manager  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  Global␠Components␠Ltd  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  Global␠Components␠Ltd  Excellent  Alice␠Manager  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  Premium␠Parts␠Corp  Excellent  Alice␠Manager  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  Premium␠Parts␠Corp  Excellent  Charlie␠Leader  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  Premium␠Parts␠Corp  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  Premium␠Parts␠Corp  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  Premium␠Parts␠Corp  Excellent  Alice␠Manager  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  TechSupplier␠International  Excellent  Alice␠Manager  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  Global␠Components␠Ltd  Excellent  Alice␠Manager  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  Global␠Components␠Ltd  Excellent  Charlie␠Leader  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  Global␠Components␠Ltd  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  TechSupplier␠International  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  Global␠Components␠Ltd  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  Global␠Components␠Ltd  Excellent  Alice␠Manager  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  Premium␠Parts␠Corp  Excellent  Charlie␠Leader  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  Premium␠Parts␠Corp  Excellent  Charlie␠Leader  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  TechSupplier␠International  Excellent  Alice␠Manager  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Premium␠Laptop␠Pro  Electronics  TechBrand  700  88  120000  150  TechSupplier␠International  Excellent  Charlie␠Leader  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  Global␠Components␠Ltd  Excellent  Charlie␠Leader  Sales  84
+3  Bob␠Johnson  bob.j@email.com  Chicago  IL  1  5406  5406  Tier␠2␠-␠Premium  250  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  TechSupplier␠International  Excellent  Alice␠Manager  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  TechSupplier␠International  Excellent  Alice␠Manager  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  Global␠Components␠Ltd  Excellent  Charlie␠Leader  Sales  84
+1  John␠Smith  john.smith@email.com  New␠York  NY  1  2600  2600  Tier␠3␠-␠Standard  150  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  TechSupplier␠International  Excellent  Alice␠Manager  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Professional␠Keyboard  Electronics  TechBrand  130  186  14000  200  TechSupplier␠International  Excellent  Charlie␠Leader  Sales  84
+2  Jane␠Doe  jane.doe@email.com  Los␠Angeles  CA  1  1874  1874  Tier␠3␠-␠Standard  85  Wireless␠Mouse␠Deluxe  Electronics  TechBrand  55  220  12500  500  TechSupplier␠International  Excellent  Charlie␠Leader  Sales  84
