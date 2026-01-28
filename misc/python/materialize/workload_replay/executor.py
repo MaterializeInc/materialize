@@ -233,6 +233,7 @@ def test(
 def benchmark(
     c: Composition,
     file: pathlib.Path,
+    workload: dict,
     compare_against: str,
     factor_initial_data: float,
     factor_ingestions: float,
@@ -246,8 +247,6 @@ def benchmark(
     """Run a benchmark comparing two versions of Materialize."""
     import random
 
-    import yaml
-
     services = [
         "materialized",
         "postgres",
@@ -260,8 +259,10 @@ def benchmark(
         "testdrive",
     ]
 
-    with open(file) as f:
-        workload = yaml.load(f, Loader=yaml.CSafeLoader)
+    # When scale_data is false, use 100% initial data
+    settings = workload.get("settings", {})
+    if not settings.get("scale_data", True):
+        factor_initial_data = 1.0
 
     print_workload_stats(file, workload)
 

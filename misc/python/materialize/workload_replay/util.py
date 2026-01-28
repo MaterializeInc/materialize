@@ -211,10 +211,12 @@ def update_captured_workloads_repo() -> None:
     else:
         path.mkdir(exist_ok=True)
         if ui.env_is_truthy("CI"):
-            github_token = (
-                os.getenv("GITHUB_TOKEN")
-                or os.environ["GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"]
-            )
+            github_token = os.environ.get(
+                "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN"
+            ) or os.getenv("GITHUB_TOKEN")
+            assert (
+                github_token
+            ), "GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN or GITHUB_TOKEN must be set in CI"
             subprocess.run(
                 [
                     "git",

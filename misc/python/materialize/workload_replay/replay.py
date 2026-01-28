@@ -65,7 +65,7 @@ def run_query(
         try:
             sql, params = pg_params_to_psycopg(query["sql"], query["params"])
             # TODO: Better replacements for <REDACTED>, but requires parsing the SQL, figuring out the column name, object name, looking up the data type, etc.
-            sql = sql.replace("'<REDACTED'>", "NULL")
+            sql = sql.replace("'<REDACTED>'", "NULL")
 
             start_time = time.time()
 

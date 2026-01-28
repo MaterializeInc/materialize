@@ -137,6 +137,7 @@ bin/mzcompose --find workload-replay run stats [files]
 | `--run-ingestions` | Run continuous ingestions | true |
 | `--run-queries` | Run continuous queries | true |
 | `--compare-against` | Materialize version to compare against (benchmark only) | none |
+| `--skip-without-data-scale` | Skip workloads that have `scale_data: false` in their settings (benchmark only) | false |
 
 **Examples:**
 ```bash
@@ -218,6 +219,9 @@ clusters:
   <cluster_name>:
     create_sql: "CREATE CLUSTER ..."
     managed: true
+
+settings:
+  scale_data: true  # When false, --factor-initial-data is ignored (uses 100%)
 
 queries:
   - sql: "SELECT * FROM ..."

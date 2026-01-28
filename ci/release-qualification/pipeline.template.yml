@@ -198,7 +198,7 @@ steps:
         label: "Long Workload Replay (10% initial data)"
         depends_on: build-x86_64
         timeout_in_minutes: 1200
-        parallelism: 5
+        parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
               composition: workload-replay
@@ -208,6 +208,7 @@ steps:
                 - --runtime=3600
                 - --compare-against
                 - common-ancestor
+                - --skip-without-data-scale
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
 

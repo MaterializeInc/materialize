@@ -401,7 +401,7 @@ def compare_table(
             )
         )
 
-    if "initial_data" in stats_old:
+    if "initial_data" in stats_old and stats_old["initial_data"]["time"] > 10:
         old_avg_cpu_initial_data, old_avg_mem_initial_data = (
             average_cpu_mem_for_container(
                 stats_old["initial_data"]["docker"], "materialized"

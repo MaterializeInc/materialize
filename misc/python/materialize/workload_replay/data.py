@@ -93,6 +93,7 @@ def create_initial_data_requiring_mz(
                                     for col in data_columns
                                 ]
                                 copy.write_row(row)
+                created_data = True
 
             for name, source in items["sources"].items():
                 if source["type"] == "webhook":

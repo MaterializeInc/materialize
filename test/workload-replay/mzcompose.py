@@ -8,8 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """
-Simulates workloads captured via `bin/mz-workload-capture` in a local run using
-Docker Compose.
+Simulates workloads captured via `bin/mz-workload-capture` in a local run using Docker Compose.
 """
 
 from __future__ import annotations
@@ -160,12 +159,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def run(file: pathlib.Path) -> None:
         with open(file) as f:
             workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        # When scale_data is false, use 100% initial data
+        settings = workload.get("settings", {})
+        factor_initial_data = args.factor_initial_data
+        if not settings.get("scale_data", True):
+            factor_initial_data = 1.0
         print_workload_stats(file, workload)
         test(
             c,
             workload,
             file,
-            args.factor_initial_data,
+            factor_initial_data,
             args.factor_ingestions,
             args.factor_queries,
             args.runtime,
@@ -240,13 +244,30 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=False,
         help="Run the initial data creation before creating sources in Materialize (except for webhooks)",
     )
+    parser.add_argument(
+        "--skip-without-data-scale",
+        action="store_true",
+        default=False,
+        help="Skip workloads that have scale_data: false in their settings",
+    )
     args = parser.parse_args()
 
     print(f"-- Random seed is {args.seed}")
     update_captured_workloads_repo()
 
+    all_paths = get_paths(args.files)
+    workloads: dict[pathlib.Path, dict] = {}
+    for path in all_paths:
+        with open(path) as f:
+            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        settings = workload.get("settings", {})
+        if not settings.get("scale_data", True) and args.skip_without_data_scale:
+            print(f"-- Skipping {path} (scale_data: false)")
+            continue
+        workloads[path] = workload
+
     files: list[pathlib.Path] = buildkite.shard_list(
-        get_paths(args.files),
+        list(workloads.keys()),
         lambda file: str(file),
     )
     c.test_parts(
@@ -254,6 +275,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         lambda file: benchmark(
             c,
             file,
+            workloads[file],
             args.compare_against,
             args.factor_initial_data,
             args.factor_ingestions,
