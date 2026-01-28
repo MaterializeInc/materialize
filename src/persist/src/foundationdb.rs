@@ -33,7 +33,7 @@ use foundationdb::{
     Transaction,
 };
 use futures_util::future::FutureExt;
-use mz_foundationdb::{FdbConfig, init_network};
+use mz_foundationdb::FdbConfig;
 use mz_ore::url::SensitiveUrl;
 
 use crate::error::Error;
@@ -161,7 +161,7 @@ impl FdbConsensus {
         let fdb_config =
             FdbConfig::parse(&config.url).map_err(|e| ExternalError::Determinate(e.into()))?;
 
-        let _ = init_network();
+        mz_foundationdb::init_network();
 
         let db = Database::new(None)?;
         let directory = DirectoryLayer::default();

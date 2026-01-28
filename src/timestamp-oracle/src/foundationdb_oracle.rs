@@ -13,8 +13,8 @@
 //!
 //! We store the timestamp data in a subspace at the configured path. Each timeline
 //! maps to a subspace with the following structure:
-//! * `./read_ts/<timeline> -> <timestamp>`
-//! * `./write_ts/<timeline> -> <timestamp>`
+//! * `./<timeline>/read_ts -> <timestamp>`
+//! * `./<timeline>/write_ts -> <timestamp>`
 
 use std::io::Write;
 use std::str::FromStr;
@@ -22,16 +22,15 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use foundationdb::directory::{Directory, DirectoryLayer, DirectoryOutput, DirectorySubspace};
+use foundationdb::directory::{Directory, DirectoryLayer, DirectoryOutput};
 use foundationdb::tuple::{
-    PackError, PackResult, Subspace, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack,
-    unpack,
+    PackError, PackResult, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack, unpack,
 };
 use foundationdb::{
     Database, FdbBindingError, FdbError, TransactError, TransactOption, Transaction,
 };
 use futures_util::future::FutureExt;
-use mz_foundationdb::{FdbConfig, init_network};
+use mz_foundationdb::FdbConfig;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_repr::Timestamp;
@@ -41,18 +40,17 @@ use crate::metrics::Metrics;
 use crate::{GenericNowFn, TimestampOracle, WriteTimestamp};
 
 /// A [`TimestampOracle`] backed by FoundationDB.
-pub struct FdbTimestampOracle<N>
-where
-    N: GenericNowFn<Timestamp>,
-{
+pub struct FdbTimestampOracle<N> {
     timeline: String,
     next: N,
-    read_ts_subspace: DirectorySubspace,
-    write_ts_subspace: DirectorySubspace,
-    db: Database,
+    db: Arc<Database>,
     /// A read-only timestamp oracle is NOT allowed to do operations that change
     /// the backing FoundationDB state.
     read_only: bool,
+    /// read_ts key for this timeline
+    read_ts_key: Vec<u8>,
+    /// write_ts key for this timeline
+    write_ts_key: Vec<u8>,
 }
 
 impl<N> std::fmt::Debug for FdbTimestampOracle<N>
@@ -63,9 +61,9 @@ where
         f.debug_struct("FdbTimestampOracle")
             .field("timeline", &self.timeline)
             .field("next", &self.next)
-            .field("read_ts_subspace", &self.read_ts_subspace)
-            .field("write_ts_subspace", &self.write_ts_subspace)
             .field("read_only", &self.read_only)
+            .field("read_ts_key", &self.read_ts_key)
+            .field("write_ts_key", &self.write_ts_key)
             .finish_non_exhaustive()
     }
 }
@@ -163,6 +161,7 @@ impl TransactError for FdbTransactError {
 }
 
 /// Wrapper to implement TuplePack/TupleUnpack for Timestamp.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct PackableTimestamp(Timestamp);
 
 impl TuplePack for PackableTimestamp {
@@ -178,6 +177,81 @@ impl TuplePack for PackableTimestamp {
 impl<'de> TupleUnpack<'de> for PackableTimestamp {
     fn unpack(input: &'de [u8], tuple_depth: TupleDepth) -> PackResult<(&'de [u8], Self)> {
         u64::unpack(input, tuple_depth).map(|(rem, v)| (rem, PackableTimestamp(Timestamp::from(v))))
+    }
+}
+
+impl<N: Sync> FdbTimestampOracle<N> {
+    async fn open_inner(
+        timeline: String,
+        next: N,
+        read_only: bool,
+        db: Arc<Database>,
+        prefix: Vec<String>,
+        directory: DirectoryLayer,
+    ) -> Result<FdbTimestampOracle<N>, anyhow::Error> {
+        // Create a subspace for this timeline at <prefix>/<timeline>
+        let timeline_path: Vec<_> = prefix
+            .into_iter()
+            .chain(std::iter::once(timeline.clone()))
+            .collect();
+
+        let timeline_subspace = db
+            .run(async |trx, _maybe_committed| {
+                Ok(directory
+                    .create_or_open(&trx, &timeline_path, None, None)
+                    .await)
+            })
+            .await?
+            .map_err(|e| anyhow!("directory error: {e:?}"))?;
+
+        let timeline_subspace = match timeline_subspace {
+            DirectoryOutput::DirectorySubspace(subspace) => subspace,
+            DirectoryOutput::DirectoryPartition(_partition) => {
+                return Err(anyhow!("timestamp oracle timeline cannot be a partition"));
+            }
+        };
+
+        let read_ts_key = timeline_subspace.pack(&"read_ts");
+        let write_ts_key = timeline_subspace.pack(&"write_ts");
+
+        Ok(Self {
+            timeline,
+            next,
+            read_ts_key,
+            write_ts_key,
+            db,
+            read_only,
+        })
+    }
+
+    async fn max_ts(&self) -> Result<Option<PackableTimestamp>, anyhow::Error> {
+        let max_ts = self
+            .db
+            .transact_boxed(
+                &(),
+                |trx, ()| self.max_rs_trx(trx).boxed(),
+                TransactOption::default(),
+            )
+            .await?;
+        Ok(max_ts)
+    }
+
+    async fn max_rs_trx(
+        &self,
+        trx: &Transaction,
+    ) -> Result<Option<PackableTimestamp>, FdbTransactError> {
+        let read_data = trx.get(&self.read_ts_key, false).await?;
+        let write_data = trx.get(&self.write_ts_key, false).await?;
+
+        let read_ts: Option<PackableTimestamp> =
+            read_data.map(|data| unpack(&data).expect("must unpack"));
+
+        let write_ts: Option<PackableTimestamp> =
+            write_data.map(|data| unpack(&data).expect("must unpack"));
+
+        let max_ts = std::cmp::max(read_ts, write_ts);
+
+        Ok::<_, FdbTransactError>(max_ts)
     }
 }
 
@@ -199,83 +273,40 @@ where
 
         let fdb_config = FdbConfig::parse(&config.url)?;
 
-        let _ = init_network();
+        mz_foundationdb::init_network();
 
-        let db = Database::new(None)?;
+        let db = Arc::new(Database::new(None)?);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
 
-        // Create subspaces for read_ts and write_ts
-        let read_ts_path: Vec<_> = prefix
-            .iter()
-            .cloned()
-            .chain(std::iter::once("read_ts".to_owned()))
-            .collect();
-
-        let read_ts_subspace = db
-            .run(async |trx, _maybe_committed| {
-                Ok(directory
-                    .create_or_open(&trx, &read_ts_path, None, None)
-                    .await)
-            })
-            .await?
-            .map_err(|e| anyhow!("directory error: {e:?}"))?;
-
-        let read_ts_subspace = match read_ts_subspace {
-            DirectoryOutput::DirectorySubspace(subspace) => subspace,
-            DirectoryOutput::DirectoryPartition(_partition) => {
-                return Err(anyhow!("timestamp oracle read_ts cannot be a partition"));
-            }
-        };
-
-        let write_ts_path: Vec<_> = prefix
-            .into_iter()
-            .chain(std::iter::once("write_ts".to_owned()))
-            .collect();
-
-        let write_ts_subspace = db
-            .run(async |trx, _maybe_committed| {
-                Ok(directory
-                    .create_or_open(&trx, &write_ts_path, None, None)
-                    .await)
-            })
-            .await?
-            .map_err(|e| anyhow!("directory error: {e:?}"))?;
-
-        let write_ts_subspace = match write_ts_subspace {
-            DirectoryOutput::DirectorySubspace(subspace) => subspace,
-            DirectoryOutput::DirectoryPartition(_partition) => {
-                return Err(anyhow!("timestamp oracle write_ts cannot be a partition"));
-            }
-        };
-
-        let oracle = FdbTimestampOracle {
-            timeline: timeline.clone(),
-            next: next.clone(),
-            read_ts_subspace,
-            write_ts_subspace,
-            db,
-            read_only,
-        };
+        let oracle = Self::open_inner(timeline, next, read_only, db, prefix, directory).await?;
 
         // Initialize the timestamps for this timeline if they don't exist.
-        let read_ts_key = oracle.read_ts_subspace.subspace(&timeline);
-        let write_ts_key = oracle.write_ts_subspace.subspace(&timeline);
+        oracle.initialize(initially).await?;
+
+        Ok(oracle)
+    }
+
+    /// Initialize the timestamps for this timeline if they don't exist.
+    ///
+    /// Both `read_ts` and `write_ts` are set to `initially` if they do not already exist.
+    async fn initialize(&self, initially: Timestamp) -> Result<(), FdbBindingError> {
+        // Initialize the timestamps for this timeline if they don't exist.
+        // Keys are stored as <timeline_subspace>/read_ts and <timeline_subspace>/write_ts
         let initially_packed = pack(&PackableTimestamp(initially));
 
-        oracle
-            .db
+        self.db
             .run(async |trx, _maybe_committed| {
                 // Check if read_ts exists, if not initialize it
-                let existing_read = trx.get(read_ts_key.bytes(), false).await?;
+                let existing_read = trx.get(&self.read_ts_key, false).await?;
                 if existing_read.is_none() {
-                    trx.set(read_ts_key.bytes(), &initially_packed);
+                    trx.set(&self.read_ts_key, &initially_packed);
                 }
 
                 // Check if write_ts exists, if not initialize it
-                let existing_write = trx.get(write_ts_key.bytes(), false).await?;
+                let existing_write = trx.get(&self.write_ts_key, false).await?;
                 if existing_write.is_none() {
-                    trx.set(write_ts_key.bytes(), &initially_packed);
+                    trx.set(&self.write_ts_key, &initially_packed);
                 }
 
                 Ok(())
@@ -283,11 +314,11 @@ where
             .await?;
 
         // Forward timestamps to what we're given from outside.
-        if !read_only {
-            TimestampOracle::apply_write(&oracle, initially).await;
+        if !self.read_only {
+            self.apply_write(initially).await;
         }
 
-        Ok(oracle)
+        Ok(())
     }
 
     /// Returns a `Vec` of all known timelines along with their current greatest
@@ -300,83 +331,36 @@ where
     ) -> Result<Vec<(String, Timestamp)>, anyhow::Error> {
         let fdb_config = FdbConfig::parse(&config.url)?;
 
-        let _ = init_network();
+        mz_foundationdb::init_network();
 
-        let db = Database::new(None)?;
+        let db = Arc::new(Database::new(None)?);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
 
-        // Try to open the subspaces - if they don't exist, return empty
-        let read_ts_path: Vec<_> = prefix
-            .iter()
-            .cloned()
-            .chain(std::iter::once("read_ts".to_owned()))
-            .collect();
-
-        let read_ts_subspace = match db
-            .run(async |trx, _maybe_committed| Ok(directory.open(&trx, &read_ts_path, None).await))
+        // List all timeline directories under the prefix
+        let timeline_names: Vec<String> = db
+            .run(async |trx, _maybe_committed| Ok(directory.list(&trx, &prefix).await))
             .await?
-        {
-            Ok(DirectoryOutput::DirectorySubspace(subspace)) => subspace,
-            _ => return Ok(Vec::new()),
-        };
+            .map_err(|e| anyhow!("directory error: {e:?}"))?;
 
-        let write_ts_path: Vec<_> = prefix
-            .into_iter()
-            .chain(std::iter::once("write_ts".to_owned()))
-            .collect();
+        let mut result = Vec::new();
 
-        let write_ts_subspace = match db
-            .run(async |trx, _maybe_committed| Ok(directory.open(&trx, &write_ts_path, None).await))
-            .await?
-        {
-            Ok(DirectoryOutput::DirectorySubspace(subspace)) => subspace,
-            _ => return Ok(Vec::new()),
-        };
-
-        // Scan all timelines and get max(read_ts, write_ts)
-        let result: Vec<(String, Timestamp)> = db
-            .transact_boxed(
-                (&read_ts_subspace, &write_ts_subspace),
-                |trx, (read_ts_subspace, write_ts_subspace)| {
-                    async move {
-                        let mut timelines = std::collections::BTreeMap::new();
-
-                        // Scan read_ts
-                        let read_range = foundationdb::RangeOption::from(read_ts_subspace.range());
-                        let read_values = trx.get_range(&read_range, 1, false).await?;
-                        for kv in read_values {
-                            let timeline: String = read_ts_subspace
-                                .unpack(kv.key())
-                                .map_err(FdbBindingError::PackError)?;
-                            let ts: PackableTimestamp = unpack(kv.value())?;
-                            timelines.insert(timeline, ts.0);
-                        }
-
-                        // Scan write_ts and take max
-                        let write_range =
-                            foundationdb::RangeOption::from(write_ts_subspace.range());
-                        let write_values = trx.get_range(&write_range, 1, false).await?;
-                        for kv in write_values {
-                            let timeline: String = write_ts_subspace
-                                .unpack(kv.key())
-                                .map_err(FdbBindingError::PackError)?;
-                            let ts: PackableTimestamp = unpack(kv.value())?;
-                            let existing = timelines
-                                .get_mut(&timeline)
-                                .expect("timeline write_ts missing");
-                            if ts.0 > *existing {
-                                *existing = ts.0;
-                            }
-                        }
-
-                        Ok::<_, FdbTransactError>(timelines.into_iter().collect::<Vec<_>>())
-                    }
-                    .boxed()
-                },
-                TransactOption::default(),
+        // For each timeline, read the max of read_ts and write_ts
+        for timeline_name in timeline_names {
+            let oracle = FdbTimestampOracle::<()>::open_inner(
+                timeline_name.clone(),
+                (),
+                true,
+                Arc::clone(&db),
+                prefix.clone(),
+                directory.clone(),
             )
             .await?;
+
+            if let Some(ts) = oracle.max_ts().await? {
+                result.push((timeline_name, ts.0));
+            }
+        }
 
         Ok(result)
     }
@@ -384,16 +368,12 @@ where
     async fn write_ts_trx(
         &self,
         trx: &Transaction,
-        key: &Subspace,
-        proposed_next_ts: &Timestamp,
+        proposed_next_ts: Timestamp,
     ) -> Result<Timestamp, FdbTransactError> {
         // Get current write_ts
-        let current = trx.get(key.bytes(), false).await?;
-        let current_ts: Timestamp = match current {
-            Some(data) => {
-                let ts: PackableTimestamp = unpack(&data)?;
-                ts.0
-            }
+        let current = trx.get(&self.write_ts_key, false).await?;
+        let current_ts: PackableTimestamp = match current {
+            Some(data) => unpack(&data)?,
             None => {
                 return Err(FdbTransactError::ExternalError(anyhow!(
                     "timeline not initialized"
@@ -402,64 +382,41 @@ where
         };
 
         // Calculate new timestamp: GREATEST(write_ts+1, proposed_next_ts)
-        let incremented = current_ts.step_forward();
-        let new_ts = std::cmp::max(incremented, *proposed_next_ts);
+        let incremented = current_ts.0.step_forward();
+        let new_ts = std::cmp::max(incremented, proposed_next_ts);
 
         // Update write_ts
         let new_ts_packed = pack(&PackableTimestamp(new_ts));
-        trx.set(key.bytes(), &new_ts_packed);
+        trx.set(&self.write_ts_key, &new_ts_packed);
 
-        Ok::<_, FdbTransactError>(new_ts)
+        Ok(new_ts)
     }
 
     async fn peek_write_ts_trx(
         &self,
         trx: &Transaction,
-        write_ts_key: &Subspace,
-    ) -> Result<Timestamp, FdbTransactError> {
-        let data = trx.get(write_ts_key.bytes(), false).await?;
-        match data {
-            Some(data) => {
-                let ts: PackableTimestamp = unpack(&data)?;
-                Ok::<_, FdbTransactError>(ts.0)
-            }
-            None => Err(FdbTransactError::ExternalError(anyhow!(
-                "timeline not initialized"
-            ))),
-        }
+    ) -> Result<Option<PackableTimestamp>, FdbTransactError> {
+        let data = trx.get(&self.write_ts_key, false).await?;
+        Ok(data.map(|data| unpack(&data)).transpose()?)
     }
 
     async fn read_ts_trx(
         &self,
         trx: &Transaction,
-        read_ts_key: &Subspace,
-    ) -> Result<Timestamp, FdbTransactError> {
-        let data = trx.get(read_ts_key.bytes(), false).await?;
-        match data {
-            Some(data) => {
-                let ts: PackableTimestamp = unpack(&data)?;
-                Ok::<_, FdbTransactError>(ts.0)
-            }
-            None => Err(FdbTransactError::ExternalError(anyhow!(
-                "timeline not initialized"
-            ))),
-        }
+    ) -> Result<Option<PackableTimestamp>, FdbTransactError> {
+        let data = trx.get(&self.read_ts_key, false).await?;
+        Ok(data.map(|data| unpack(&data)).transpose()?)
     }
 
     async fn apply_write_trx(
         &self,
         trx: &Transaction,
-        read_ts_key: &Subspace,
-        write_ts_key: &Subspace,
-        write_ts: &Timestamp,
+        write_ts: Timestamp,
     ) -> Result<(), FdbTransactError> {
         // Update read_ts = GREATEST(read_ts, write_ts)
-        let current_read = trx.get(read_ts_key.bytes(), false).await?;
-        let current_read_ts: Timestamp = match current_read {
-            Some(data) => {
-                let ts: PackableTimestamp = unpack(&data)?;
-                ts.0
-            }
+        let current_read = trx.get(&self.read_ts_key, false).await?;
+        let current_read_ts: PackableTimestamp = match current_read {
+            Some(data) => unpack(&data)?,
             None => {
                 return Err(FdbTransactError::ExternalError(anyhow!(
                     "timeline not initialized"
@@ -467,18 +424,15 @@ where
             }
         };
 
-        if *write_ts > current_read_ts {
-            let new_ts_packed = pack(&PackableTimestamp(*write_ts));
-            trx.set(read_ts_key.bytes(), &new_ts_packed);
+        if write_ts > current_read_ts.0 {
+            let new_ts_packed = pack(&PackableTimestamp(write_ts));
+            trx.set(&self.read_ts_key, &new_ts_packed);
         }
 
         // Update write_ts = GREATEST(write_ts, write_ts_param)
-        let current_write = trx.get(write_ts_key.bytes(), false).await?;
-        let current_write_ts: Timestamp = match current_write {
-            Some(data) => {
-                let ts: PackableTimestamp = unpack(&data)?;
-                ts.0
-            }
+        let current_write = trx.get(&self.write_ts_key, false).await?;
+        let current_write_ts: PackableTimestamp = match current_write {
+            Some(data) => unpack(&data)?,
             None => {
                 return Err(FdbTransactError::ExternalError(anyhow!(
                     "timeline not initialized"
@@ -486,9 +440,9 @@ where
             }
         };
 
-        if *write_ts > current_write_ts {
-            let new_ts_packed = pack(&PackableTimestamp(*write_ts));
-            trx.set(write_ts_key.bytes(), &new_ts_packed);
+        if write_ts > current_write_ts.0 {
+            let new_ts_packed = pack(&PackableTimestamp(write_ts));
+            trx.set(&self.write_ts_key, &new_ts_packed);
         }
 
         Ok::<_, FdbTransactError>(())
@@ -506,16 +460,12 @@ where
         }
 
         let proposed_next_ts = self.next.now();
-        let write_ts_key = self.write_ts_subspace.subspace(&self.timeline);
 
         let write_ts: Timestamp = self
             .db
             .transact_boxed(
-                (&write_ts_key, &proposed_next_ts),
-                |trx, (write_ts_key, proposed_next_ts)| {
-                    self.write_ts_trx(trx, write_ts_key, proposed_next_ts)
-                        .boxed()
-                },
+                &proposed_next_ts,
+                |trx, proposed_next_ts| self.write_ts_trx(trx, **proposed_next_ts).boxed(),
                 TransactOption::default(),
             )
             .await
@@ -537,17 +487,17 @@ where
     }
 
     async fn peek_write_ts(&self) -> Timestamp {
-        let write_ts_key = self.write_ts_subspace.subspace(&self.timeline);
-
-        let write_ts: Timestamp = self
+        let write_ts = self
             .db
             .transact_boxed(
-                &write_ts_key,
-                |trx, write_ts_key| self.peek_write_ts_trx(trx, write_ts_key).boxed(),
+                &(),
+                |trx, ()| self.peek_write_ts_trx(trx).boxed(),
                 TransactOption::default(),
             )
             .await
-            .expect("peek_write_ts transaction failed");
+            .expect("peek_write_ts transaction failed")
+            .expect("timeline not initialized")
+            .0;
 
         debug!(
             timeline = ?self.timeline,
@@ -559,17 +509,17 @@ where
     }
 
     async fn read_ts(&self) -> Timestamp {
-        let read_ts_key = self.read_ts_subspace.subspace(&self.timeline);
-
-        let read_ts: Timestamp = self
+        let read_ts = self
             .db
             .transact_boxed(
-                &read_ts_key,
-                |trx, read_ts_key| self.read_ts_trx(trx, read_ts_key).boxed(),
+                &(),
+                |trx, ()| self.read_ts_trx(trx).boxed(),
                 TransactOption::default(),
             )
             .await
-            .expect("read_ts transaction failed");
+            .expect("read_ts transaction failed")
+            .expect("timeline not initialized")
+            .0;
 
         debug!(
             timeline = ?self.timeline,
@@ -585,16 +535,10 @@ where
             panic!("attempting apply_write in read-only mode");
         }
 
-        let read_ts_key = self.read_ts_subspace.subspace(&self.timeline);
-        let write_ts_key = self.write_ts_subspace.subspace(&self.timeline);
-
         self.db
             .transact_boxed(
-                (&read_ts_key, &write_ts_key, write_ts),
-                |trx, (read_ts_key, write_ts_key, write_ts)| {
-                    self.apply_write_trx(trx, read_ts_key, write_ts_key, write_ts)
-                        .boxed()
-                },
+                &write_ts,
+                |trx, write_ts| self.apply_write_trx(trx, **write_ts).boxed(),
                 TransactOption::default(),
             )
             .await
