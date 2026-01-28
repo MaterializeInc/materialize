@@ -182,6 +182,36 @@ class Executor:
                             self.cur.connection.rollback()
                         else:
                             self.cur.execute(query.encode())
+                    except ValueError as e:
+                        # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9725 is fixed
+                        # Debug logging for "too many values to unpack" error
+                        # This happens when psycopg receives multiple result sets unexpectedly
+                        thread_name = threading.current_thread().getName()
+                        debug_info = [
+                            f"ValueError in execute: {e}",
+                            f"Query: {query}",
+                            f"Connection status: {self.cur.connection.info.status}",
+                            f"Connection transaction_status: {self.cur.connection.info.transaction_status}",
+                            f"Autocommit: {self.cur.connection.autocommit}",
+                            f"Cursor status: {self.cur.statusmessage}",
+                            f"Cursor pgresult status: {self.cur.pgresult.status if self.cur.pgresult else 'None'}",
+                        ]
+                        # Try to get more info about pending results
+                        try:
+                            pgconn = self.cur.connection.pgconn
+                            debug_info.append(f"pgconn status: {pgconn.status}")
+                            debug_info.append(
+                                f"pgconn transaction_status: {pgconn.transaction_status}"
+                            )
+                            debug_info.append(
+                                f"pgconn pipeline_status: {pgconn.pipeline_status}"
+                            )
+                        except Exception as debug_e:
+                            debug_info.append(f"Could not get pgconn info: {debug_e}")
+                        debug_msg = "\n  ".join(debug_info)
+                        self.log(f"[DEBUG] {debug_msg}")
+                        print(f"[{thread_name}] [DEBUG] {debug_msg}", flush=True)
+                        raise QueryError(str(e), query)
                     except Exception as e:
                         raise QueryError(str(e), query)
 
