@@ -6614,7 +6614,6 @@ dependencies = [
  "anyhow",
  "ctor",
  "foundationdb",
- "libc",
  "mz-ore",
  "workspace-hack",
 ]

@@ -11,11 +11,13 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.100"
-ctor = "0.6.3"
 foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
-libc = "0.2.180"
-mz-ore = { path = "../ore", default-features = false, features = ["test"]}
+mz-ore = { path = "../ore", default-features = false}
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+ctor = "0.6.3"
+mz-ore = { path = "../ore", default-features = false, features = ["test", "process"]}
 
 [features]
 default = ["workspace-hack"]
