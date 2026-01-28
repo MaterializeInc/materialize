@@ -18,12 +18,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use domain::resolv::StubResolver;
 use futures::StreamExt;
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
-    SniResolver,
+    BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
+    FronteggResolver, SniResolver,
 };
 use mz_environmentd::test_util::{self, Ca, make_pg_tls};
 use mz_frontegg_auth::{
@@ -143,17 +142,17 @@ async fn test_balancer() {
 
     let resolvers = vec![
         (
-            Resolver::Static(envd_server.sql_local_addr().to_string()),
+            BalancerResolver::Static(envd_server.sql_local_addr().to_string()),
             CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
-            Resolver::MultiTenant(
+            BalancerResolver::MultiTenant(
+                mz_balancerd::TenantDnsResolver::new(),
                 FronteggResolver {
                     auth: frontegg_auth,
                     addr_template: envd_server.sql_local_addr().to_string(),
                 },
                 Some(SniResolver {
-                    resolver: StubResolver::new(),
                     template: envd_server.sql_local_addr().ip().to_string(),
                     port: envd_server.sql_local_addr().port(),
                 }),
@@ -179,7 +178,7 @@ async fn test_balancer() {
     for (resolver, cancellation_resolver) in resolvers {
         let (mut reload_tx, reload_rx) = futures::channel::mpsc::channel(1);
         let ticker = Box::pin(reload_rx);
-        let is_multi_tenant_resolver = matches!(resolver, Resolver::MultiTenant(_, _));
+        let is_multi_tenant_resolver = matches!(resolver, BalancerResolver::MultiTenant(_, _, _));
         let balancer_cfg = BalancerConfig::new(
             &BUILD_INFO,
             SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
