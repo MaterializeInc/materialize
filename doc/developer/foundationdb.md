@@ -30,14 +30,17 @@ We map the consensus structure to the following schema in FoundationDB:
 
 * Looking up the latest sequence number for a key:
     ```
-    ./seqno/<key> -> <sequence_number>
+    ./data/<key> -> <sequence_number>
     ```
-  The `seqno` directory contains entries for each key, mapping to their latest sequence number.
-* Looking up data for a key and a sequence number:
+* Looking up data by key and sequence number:
     ```
     ./data/<key>/<sequence_number> -> <value>
     ```
-  The `data` directory contains entries for each key and sequence number pair, mapping to the corresponding value.
+    The `data` directory contains entries for each key and sequence number pair, mapping to the corresponding value.
+* The `keys` directory contains entries for each key to simplify listing all keys:
+    ```
+    ./keys/<key> -> []
+    ```
 
 ### Timestamp Oracle
 
@@ -46,14 +49,14 @@ We map the timestamp oracle structure to the following schema in FoundationDB:
 
 * Looking up the read timestamp for a timeline:
     ```
-    ./read_ts/<timeline> -> <timestamp>
+    ./<timeline>/read_ts -> <timestamp>
     ```
-  The `read_ts` directory contains entries for each timeline, mapping to their read timestamps.
+    For each timeline, the `read_ts` entry maps to the latest read timestamp.
 * Looking up the write timestamp for a timeline:
     ```
-    ./write_ts/<timeline> -> <timestamp>
+    ./<timeline>/write_ts -> <timestamp>
     ```
-  The `write_ts` directory contains entries for each timeline, mapping to their write timestamps.
+    For each timeline, the `write_ts` entry maps to the latest write timestamp.
 
 ## Running tests against FoundationDB
 
