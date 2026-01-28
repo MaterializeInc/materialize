@@ -73,11 +73,16 @@ pub async fn run_publish(
             .get_subject_latest(&reference)
             .await
             .with_context(|| format!("fetching reference {}", reference))?;
-        // Extract the fully qualified Avro type name from the schema.
-        // The Schema Registry reference `name` field should be the type name
-        // (e.g., "com.example.Address"), not the subject name.
-        let type_name = extract_avro_fullname(&subject.schema.raw)
-            .with_context(|| format!("extracting type name from reference schema {}", reference))?;
+        let type_name = match schema_type {
+            // Extract the fully qualified Avro type name from the schema.
+            // The Schema Registry reference `name` field should be the type name
+            // (e.g., "com.example.Address"), not the subject name.
+            SchemaType::Avro => extract_avro_fullname(&subject.schema.raw).with_context(|| {
+                format!("extracting type name from reference schema {}", reference)
+            })?,
+            SchemaType::Protobuf | SchemaType::Json => subject.name,
+        };
+
         references.push(SchemaReference {
             name: type_name,
             subject: reference.to_string(),
