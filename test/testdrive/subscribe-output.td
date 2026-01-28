@@ -462,3 +462,17 @@ DELETE FROM t4 WHERE b = 'bar'
 <TIMESTAMP> delete 30a7947e-4b38-46a4-b7c2-602ba62ce20b 1 bar <null>
 
 > COMMIT;
+
+> CREATE TABLE t5 (f1 TEXT);
+> INSERT INTO t5 SELECT generate_series::text from generate_series(0, 100);
+
+> BEGIN;
+> DECLARE c5 CURSOR FOR SUBSCRIBE t5 WITH (SNAPSHOT = false);
+
+> FETCH ALL c5 WITH (TIMEOUT = '0s');
+
+$ postgres-execute connection=mz_system
+INSERT INTO t5 VALUES ('wow!');
+
+> FETCH 1 c5;
+<TIMESTAMP> 1 wow!

@@ -82,7 +82,7 @@ The table is printed periodically as new rows arrive so that the information is 
 
 # Available scenarios
 
-The `test/feature-benchmark/scenarios.py` file contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
+The `misc/python/materialize/feature_benchmark/scenarios` directory contains the definitive list of scenarios. Scenarios follow a hierarchical structure.
 
 The default scenarios derive from the `Scenario` class, those that take longer to execute derive from the `ScenarioBig` class.
 
