@@ -9,10 +9,11 @@
 
 //! Implementation of [Consensus] backed by FoundationDB.
 //!
-//! We're storing the consensus data in a subspace at `/mz/consensus`. Each key maps to a subspace
+//! We're storing the consensus data in a subspace. Each key maps to a subspace
 //! with the following structure:
-//! * `./seqno/<key> -> <seqno>`
-//! * `./data/<key>/<seqno> -> <data>`
+//! * `./keys/<key> -> ()` to track existing keys.
+//! * `./data/<key> -> <seqno>` mapping to the latest seqno for the key.
+//! * `./data/<key>/<seqno> -> <data>` mapping seqnos to data blobs.
 
 use std::io::Write;
 
@@ -72,8 +73,8 @@ impl FdbConsensusConfig {
 
 /// Implementation of [Consensus] over a Foundation database.
 pub struct FdbConsensus {
-    /// Subspace for sequence numbers.
-    seqno: DirectorySubspace,
+    /// Subspace for data.
+    keys: DirectorySubspace,
     /// Subspace for data.
     data: DirectorySubspace,
     /// The FoundationDB database handle.
@@ -148,7 +149,7 @@ impl<'de> TupleUnpack<'de> for SeqNo {
 impl std::fmt::Debug for FdbConsensus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FdbConsensus")
-            .field("seqno", &self.seqno)
+            .field("keys", &self.keys)
             .field("data", &self.data)
             .finish_non_exhaustive()
     }
@@ -164,69 +165,58 @@ impl FdbConsensus {
 
         let db = Database::new(None)?;
         let directory = DirectoryLayer::default();
-        let path: Vec<_> = fdb_config
+        let keys_path: Vec<_> = fdb_config
             .prefix
             .iter()
             .cloned()
-            .chain(std::iter::once("seqno".to_owned()))
+            .chain(std::iter::once("keys".to_owned()))
             .collect();
-        let seqno = db
-            .run(async |trx, _maybe_commited| {
-                Ok(directory.create_or_open(&trx, &path, None, None).await)
-            })
-            .await??;
-        let seqno = match seqno {
-            DirectoryOutput::DirectorySubspace(subspace) => subspace,
-            DirectoryOutput::DirectoryPartition(_partition) => {
-                return Err(ExternalError::from(anyhow!(
-                    "consensus seqno cannot be a partition"
-                )));
-            }
-        };
-        let path: Vec<_> = fdb_config
+        let keys = Self::open_directory(&db, &directory, &keys_path).await?;
+        let data_path: Vec<_> = fdb_config
             .prefix
             .into_iter()
             .chain(std::iter::once("data".to_owned()))
             .collect();
-        let data = db
+        let data = Self::open_directory(&db, &directory, &data_path).await?;
+        Ok(FdbConsensus { keys, data, db })
+    }
+
+    /// Opens (or creates) a directory at the specified path. Errors if the
+    /// directory is a partition, or cannot be opened for another reason..
+    async fn open_directory(
+        db: &Database,
+        directory: &DirectoryLayer,
+        path: &[String],
+    ) -> Result<DirectorySubspace, ExternalError> {
+        let directory = db
             .run(async |trx, _maybe_commited| {
-                Ok(directory.create_or_open(&trx, &path, None, None).await)
+                Ok(directory.create_or_open(&trx, path, None, None).await)
             })
             .await??;
-        let data = match data {
-            DirectoryOutput::DirectorySubspace(subspace) => subspace,
-            DirectoryOutput::DirectoryPartition(_partition) => {
-                return Err(ExternalError::from(anyhow!(
-                    "consensus data cannot be a partition"
-                )));
-            }
-        };
-        Ok(FdbConsensus { seqno, data, db })
+        match directory {
+            DirectoryOutput::DirectorySubspace(subspace) => Ok(subspace),
+            DirectoryOutput::DirectoryPartition(_partition) => Err(ExternalError::from(anyhow!(
+                "consensus data cannot be a partition"
+            ))),
+        }
     }
 
     async fn head_trx(
         &self,
         trx: &Transaction,
-        seqno_key: &Subspace,
         data_key: &Subspace,
     ) -> Result<Option<VersionedData>, FdbTransactError> {
-        let seqno = trx.get(seqno_key.bytes(), false).await?;
-        if let Some(seqno) = &seqno {
-            let seqno: SeqNo = unpack(seqno)?;
-
-            let seqno_space = data_key.pack(&seqno);
-            let data = trx.get(&seqno_space, false).await?;
-            if let Some(data) = data {
-                Ok(Some(VersionedData {
-                    seqno,
-                    data: Bytes::from_owner(data),
-                }))
-            } else {
-                Err(ExternalError::Determinate(
-                    anyhow!("inconsistent state: seqno present without data").into(),
-                )
-                .into())
-            }
+        let mut range = RangeOption::from(data_key).rev();
+        range.limit = Some(1);
+        range.mode = foundationdb::options::StreamingMode::Exact;
+        // Allow snapshot reads as we don't need the latest data for head, just some recent data.
+        let values = trx.get_range(&range, 1, true).await?;
+        if let Some(kv) = values.first() {
+            let seqno = data_key.unpack(kv.key())?;
+            Ok(Some(VersionedData {
+                seqno,
+                data: Bytes::from(kv.value().to_vec()),
+            }))
         } else {
             Ok(None)
         }
@@ -234,13 +224,13 @@ impl FdbConsensus {
     async fn compare_and_set_trx(
         &self,
         trx: &Transaction,
-        seqno_key: &Subspace,
         data_key: &Subspace,
         expected: &Option<SeqNo>,
         new: &VersionedData,
+        key: &str,
     ) -> Result<CaSResult, FdbTransactError> {
         let seqno = trx
-            .get(seqno_key.bytes(), false)
+            .get(data_key.bytes(), false)
             .await?
             .map(|data| unpack(&data))
             .transpose()?;
@@ -249,7 +239,13 @@ impl FdbConsensus {
             return Ok(CaSResult::ExpectationMismatch);
         }
 
-        trx.set(seqno_key.bytes(), &pack(&new.seqno));
+        trx.set(data_key.bytes(), &pack(&new.seqno));
+
+        if expected.is_none() {
+            // If expected is `None`, it's a new key which we need to register in the keys directory.
+            let key = self.keys.pack(&key);
+            trx.set(&key, &[]);
+        }
 
         let data_seqno_key = data_key.pack(&new.seqno);
         trx.set(&data_seqno_key, new.data.as_ref());
@@ -264,48 +260,42 @@ impl FdbConsensus {
         limit: &usize,
         entries: &mut Vec<VersionedData>,
     ) -> Result<(), FdbTransactError> {
-        let mut limit = *limit;
         let seqno_start = data_key.pack(&from);
         let seqno_end = data_key.pack(&SeqNo::maximum());
 
         let mut range = RangeOption::from(seqno_start..=seqno_end);
-        range.limit = Some(limit);
+        range.limit = Some(*limit);
 
         entries.clear();
 
-        let mut done = false;
-
-        while !done {
+        loop {
             let output = trx.get_range(&range, 1, false).await?;
-            limit = limit.saturating_sub(output.len());
-            if let Some(last) = output.last()
-                && limit > 0
-            {
-                range.begin = KeySelector::first_greater_than(last.key().to_vec());
-                range.limit = Some(limit);
-            } else {
-                done = true;
-            }
-
             entries.reserve(output.len());
-            for key_value in output {
+            for key_value in &output {
                 let seqno = data_key.unpack(key_value.key())?;
                 entries.push(VersionedData {
                     seqno,
                     data: Bytes::from(key_value.value().to_vec()),
                 });
             }
+
+            if let Some(next_range) = range.next_range(&output) {
+                range = next_range;
+            } else {
+                break;
+            }
         }
         Ok(())
     }
+
+    // TODO: The current implementation doesn't clean up `keys` when removing the last seqno.
     async fn truncate_trx(
         &self,
         trx: &Transaction,
-        seqno_key: &Subspace,
         data_key: &Subspace,
         until: &SeqNo,
     ) -> Result<(), FdbTransactError> {
-        let seqno = trx.get(seqno_key.bytes(), false).await?;
+        let seqno = trx.get(data_key.bytes(), false).await?;
         if let Some(seqno) = &seqno {
             let current_seqno: SeqNo = unpack(seqno)?;
             if current_seqno < *until {
@@ -332,12 +322,12 @@ impl Consensus for FdbConsensus {
             let keys: Vec<String> = self
                 .db
                 .run(async |trx, _maybe_commited| {
-                    let mut range = RangeOption::from(self.seqno.range());
+                    let mut range = RangeOption::from(self.keys.range());
                     let mut keys = Vec::new();
                     loop {
                         let values = trx.get_range(&range, 1, false).await?;
                         for value in &values {
-                            let key: String = self.seqno.unpack(value.key()).map_err(FdbBindingError::PackError)?;
+                            let key: String = self.keys.unpack(value.key()).map_err(FdbBindingError::PackError)?;
                             keys.push(key);
                         }
                         if let Some(last) = values.last() {
@@ -356,14 +346,13 @@ impl Consensus for FdbConsensus {
     }
 
     async fn head(&self, key: &str) -> Result<Option<VersionedData>, ExternalError> {
-        let seqno_key = self.seqno.subspace(&key);
         let data_key = self.data.subspace(&key);
 
         let ok = self
             .db
             .transact_boxed(
-                (&seqno_key, &data_key),
-                |trx, (seqno_key, data_key)| self.head_trx(trx, seqno_key, data_key).boxed(),
+                &data_key,
+                |trx, data_key| self.head_trx(trx, data_key).boxed(),
                 TransactOption::default(),
             )
             .await?;
@@ -390,15 +379,14 @@ impl Consensus for FdbConsensus {
             )));
         }
 
-        let seqno_key = self.seqno.subspace(&key);
         let data_key = self.data.subspace(&key);
 
         let ok = self
             .db
             .transact_boxed(
-                (expected, &new),
-                |trx, (expected, new)| {
-                    self.compare_and_set_trx(trx, &seqno_key, &data_key, expected, new)
+                (expected, &new, &*key),
+                |trx, (expected, new, key)| {
+                    self.compare_and_set_trx(trx, &data_key, expected, new, key)
                         .boxed()
                 },
                 TransactOption::default(),
@@ -430,15 +418,12 @@ impl Consensus for FdbConsensus {
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
-        let seqno_key = self.seqno.subspace(&key);
         let data_key = self.data.subspace(&key);
 
         self.db
             .transact_boxed(
-                (&seqno_key, &data_key, seqno),
-                |trx, (seqno_key, data_key, seqno)| {
-                    self.truncate_trx(trx, seqno_key, data_key, seqno).boxed()
-                },
+                (&data_key, seqno),
+                |trx, (data_key, seqno)| self.truncate_trx(trx, data_key, seqno).boxed(),
                 TransactOption::idempotent(),
             )
             .await?;
@@ -462,7 +447,7 @@ mod tests {
         consensus
             .db
             .run(async |trx, _maybe_commited| {
-                consensus.seqno.remove(&trx, &[]).await?;
+                consensus.keys.remove(&trx, &[]).await?;
                 consensus.data.remove(&trx, &[]).await?;
                 Ok(())
             })
