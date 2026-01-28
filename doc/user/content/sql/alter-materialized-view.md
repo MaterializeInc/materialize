@@ -14,7 +14,7 @@ Use `ALTER MATERIALIZED VIEW` to:
 
 {{< if-released "v26.10" >}}
 
-- Apply a replacement materialized view. *Public preview*.
+- Replace a materialized view. *Public preview*.
 
 {{< /if-released >}}
 
@@ -53,27 +53,102 @@ To reset the retention history to the default for a materialized view:
 
 {{< /tab >}}
 {{< if-released "v26.10" >}}
-{{< tab "Apply replacement" >}}
+{{< tab "Replace materialized view" >}}
 
-### Apply replacement
+### Replace materialized view
 
 {{< public-preview />}}
 
-To apply a replacement materialized view:
+To replace an existing materialized view in-place with a replacement
+materialized view:
 
 {{% include-syntax file="examples/alter_materialized_view" example="syntax-apply-replacement" %}}
 
-This operation replaces the definition of the target materialized view with the definition of the replacement, and drops the replacement at the same time.
+{{< tip >}}
+Applying the replacement after it is hydrated avoids downtime.
+{{< /tip >}}
 
 {{< /tab >}}
 {{< /if-released >}}
 {{< /tabs >}}
 
+{{< if-released "v26.10" >}}
+
+## Details
+
+### Replacing a materialized view
+
+{{< public-preview />}}
+
+{{% include-headless
+"headless/replacement-views/replacement-view-target-restrictions" %}}
+
+{{% include-headless
+"/headless/replacement-views/apply-replacement-command-details" %}}
+
+{{< tip >}}
+Applying the replacement after it is hydrated avoids downtime.
+{{< /tip >}}
+
+#### Use case
+
+{{< note >}}
+{{% include-headless
+"/headless/replacement-views/replacement-view-target-restrictions" %}}
+{{< /note >}}
+
+{{% include-headless "/headless/replacement-views/associated-commands-blurb/"
+%}}
+
+#### CPU and memory considerations
+
+{{% include-headless
+"/headless/replacement-views/cpu-memory-considerations" %}}
+
+#### Restrictions and limitations
+
+{{% include-headless
+"headless/replacement-views/apply-replacement-txn-restrictions" %}}
+
+{{< /if-released >}}
+
 ## Privileges
 
 The privileges required to execute this statement are:
 
-{{% include-headless "/headless/sql-command-privileges/alter-materialized-view" %}}
+{{% include-headless "/headless/sql-command-privileges/alter-materialized-view"
+%}}
+
+{{< if-released "v26.10" >}}
+## Examples
+
+### Replace a materialized view
+
+{{< public-preview />}}
+
+{{% include-headless
+"headless/replacement-views/replacement-view-target-restrictions" %}}
+
+#### Prerequisite
+
+{{% include-example file="examples/create_materialized_view"
+example="example-create-replacement-materialized-view" %}}
+
+The replacement view hydrates in the background.
+
+#### Apply the replacement
+
+{{% include-example file="examples/alter_materialized_view"
+example="example-apply-replacement" %}}
+
+{{% include-headless
+"/headless/replacement-views/apply-replacement-command-details" %}}
+
+See also: 
+- [Replace materialized views
+  guide](/transform-data/updating-materialized-views/replace-materialized-view/)
+
+{{< /if-released >}}
 
 ## Related pages
 
