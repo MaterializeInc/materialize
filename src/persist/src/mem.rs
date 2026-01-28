@@ -310,7 +310,7 @@ impl Consensus for MemConsensus {
         Self::scan_store(&store, key, from, limit)
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         // Yield to maximize our chances for getting interesting orderings.
         let () = yield_now().await;
         let current = self.head(key).await?;
@@ -330,7 +330,7 @@ impl Consensus for MemConsensus {
             deleted += count_before - values.len();
         }
 
-        Ok(deleted)
+        Ok(Some(deleted))
     }
 }
 

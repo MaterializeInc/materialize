@@ -359,14 +359,12 @@ where
                                 .unpack(kv.key())
                                 .map_err(FdbBindingError::PackError)?;
                             let ts: PackableTimestamp = unpack(kv.value())?;
-                            timelines
-                                .entry(timeline)
-                                .and_modify(|existing| {
-                                    if ts.0 > *existing {
-                                        *existing = ts.0;
-                                    }
-                                })
-                                .or_insert(ts.0);
+                            let existing = timelines
+                                .get_mut(&timeline)
+                                .expect("timeline write_ts missing");
+                            if ts.0 > *existing {
+                                *existing = ts.0;
+                            }
                         }
 
                         Ok::<_, FdbTransactError>(timelines.into_iter().collect::<Vec<_>>())
