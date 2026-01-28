@@ -142,7 +142,7 @@ ALTER TABLE remove_column DROP COLUMN f2;
 INSERT INTO remove_column VALUES (3);
 
 ! select * from remove_column;
-contains:incompatible schema change
+contains:Incompatible schema change
 
 
 #

@@ -285,8 +285,10 @@ $ sql-server-execute name=sql-server
 ALTER TABLE alter_table_supported DROP COLUMN f3;
 INSERT INTO alter_table_supported (f1, f2) VALUES (3, 3);
 
-! SELECT * from alter_table_supported;
-contains:Incompatible schema change
+> SELECT * from alter_table_supported;
+1 1
+2 2
+3 3
 
 $ sql-server-execute name=sql-server
 ALTER TABLE alter_table_supported DROP COLUMN f2;
