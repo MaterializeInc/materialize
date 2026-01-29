@@ -54,7 +54,7 @@ contains:failed to decode Row
 ! COPY INTO t1_single_col FROM '${1_csv_url}' (FORMAT CSV);
 contains:wrong number of columns
 
-# disabled as MZ panics database-issues#9886
+# Cannot perform this COPY because column c is NOT NULL, has no default value, and is not being copied into.
 ! COPY INTO t1_not_null (a, b) FROM '${1_csv_url}' (FORMAT CSV);
 contains:is NOT NULL but is not specified in the COPY statement and has no DEFAULT value
 
