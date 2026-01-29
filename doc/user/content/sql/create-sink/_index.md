@@ -55,6 +55,15 @@ By default, the message key is encoded using the same format as the message valu
 
 For details, see [CREATE Sink: Kafka/Redpanda](/sql/create-sink/kafka/).
 {{< /tab >}}
+
+{{< tab "Iceberg" >}}
+
+{{< public-preview />}}
+
+{{% include-example file="examples/create_sink_iceberg" example="syntax" %}}
+
+For details, see [CREATE Sink: Iceberg](/sql/create-sink/iceberg/).
+{{< /tab >}}
 {{< /tabs >}}
 
 ## Best practices
