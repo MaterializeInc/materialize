@@ -772,6 +772,14 @@ impl<'a> ColumnSpecs<'a> {
                 nullable: true,
                 ..ResultSpec::nothing()
             },
+            Ok(Datum::Float64(a)) if a.is_nan() => ResultSpec {
+                values: Values::All,
+                ..ResultSpec::nothing()
+            },
+            Ok(Datum::Float32(a)) if a.is_nan() => ResultSpec {
+                values: Values::All,
+                ..ResultSpec::nothing()
+            },
             Ok(d) => ResultSpec {
                 values: Values::just(self.arena.make_datum(|packer| packer.push(d))),
                 ..ResultSpec::nothing()
@@ -1754,6 +1762,45 @@ mod tests {
         assert!(!range_out.may_contain(Datum::True));
         assert!(range_out.may_contain(Datum::False));
         assert!(range_out.may_contain(Datum::Null));
+    }
+
+    #[mz_ore::test]
+    fn test_nan() {
+        let arena = RowArena::new();
+
+        // (#0 / +Inf) = 0
+        let expr = MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq,
+            expr1: Box::new(MirScalarExpr::CallBinary {
+                func: BinaryFunc::DivFloat64,
+                expr1: Box::new(MirScalarExpr::column(0)),
+                expr2: Box::new(MirScalarExpr::literal_ok(
+                    Datum::Float64(f64::INFINITY.into()),
+                    ScalarType::Float64,
+                )),
+            }),
+            expr2: Box::new(MirScalarExpr::literal_ok(
+                Datum::Float64(0.0.into()),
+                ScalarType::Float64,
+            )),
+        };
+
+        let relation = RelationType::new(vec![ScalarType::Float64.nullable(false)]);
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(
+            0,
+            ResultSpec::value_between(
+                Datum::Float64(f64::NEG_INFINITY.into()),
+                Datum::Float64(f64::INFINITY.into()),
+            )
+            .union(ResultSpec::null()),
+        );
+
+        let range_out = interpreter.expr(&expr).range;
+        assert!(!range_out.may_fail());
+        assert!(range_out.may_contain(Datum::True));
+        assert!(range_out.may_contain(Datum::False));
+        assert!(!range_out.may_contain(Datum::Null));
     }
 
     #[mz_ore::test]
