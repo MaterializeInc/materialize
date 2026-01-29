@@ -1126,6 +1126,7 @@ mod tests {
                     },
                     typ: SqlRelationType::empty(),
                     monotonic: Default::default(),
+                    with_snapshot: true,
                 };
                 (id, import)
             })

@@ -139,3 +139,75 @@ class SubscribeParallelKafka(SubscribeParallel):
             123
             """
         )
+
+
+class SubscribeNoSnapshotTable(Scenario):
+    """Feature benchmarks related to SUBSCRIBE without a snapshot"""
+
+    SCALE = 7  # Controls the size of the snapshot we skip over.
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+             $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
+
+             > DROP TABLE IF EXISTS s1;
+             > CREATE TABLE s1 (f1 TEXT) WITH (RETAIN HISTORY FOR '1hr');
+             > INSERT INTO s1 SELECT generate_series::text from generate_series(1, {self.n()});
+
+             $ set-from-sql var=mz_now
+             SELECT mz_now()::text;
+
+             > INSERT INTO s1 VALUES ('wow!');
+               /* A */
+
+             > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+             > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${{mz_now}};
+             > FETCH 1 c1 WITH (TIMEOUT = '10s');
+             <TIMESTAMP> 1 wow!
+             > COMMIT;
+
+             > SELECT 1
+               /* B */
+             1
+            """
+        )
+
+
+class SubscribeNoSnapshotIndex(Scenario):
+    """Feature benchmarks related to SUBSCRIBE without a snapshot"""
+
+    SCALE = 7  # Controls the size of the snapshot we skip over.
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(
+            f"""
+             $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
+
+             $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+             ALTER SYSTEM SET enable_index_options = true
+
+             > DROP TABLE IF EXISTS s1;
+             > CREATE TABLE s1 (f1 TEXT);
+             > CREATE DEFAULT INDEX ON s1 WITH (RETAIN HISTORY FOR '1hr');
+             > INSERT INTO s1 SELECT generate_series::text from generate_series(1, {self.n()});
+             > SELECT COUNT(*) FROM s1;
+             {self.n()}
+
+             $ set-from-sql var=mz_now
+             SELECT mz_now()::text;
+
+             > INSERT INTO s1 VALUES ('wow!');
+               /* A */
+
+             > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+             > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${{mz_now}};
+             > FETCH 1 c1 WITH (TIMEOUT = '10s');
+             <TIMESTAMP> 1 wow!
+             > COMMIT;
+
+             > SELECT 1
+               /* B */
+             1
+            """
+        )

@@ -790,6 +790,7 @@ mod tests {
                 },
                 typ: SqlRelationType::empty(),
                 monotonic: false,
+                with_snapshot: true,
             },
         )]);
         global_mir.index_imports = index_imports.clone();

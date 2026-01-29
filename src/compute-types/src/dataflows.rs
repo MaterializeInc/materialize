@@ -142,6 +142,7 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
                 desc,
                 typ,
                 monotonic,
+                with_snapshot: true,
             },
         );
     }
@@ -599,6 +600,8 @@ pub struct IndexImport {
     pub typ: SqlRelationType,
     /// Whether the index will supply monotonic data.
     pub monotonic: bool,
+    /// Whether this import must include the snapshot data.
+    pub with_snapshot: bool,
 }
 
 /// Information about an imported source, and how it will be used by the dataflow.
