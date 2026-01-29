@@ -18,6 +18,7 @@ import base64
 import decimal
 import json
 import logging
+import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,8 +33,8 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field
-
 from .config import Config, load_config
+from .tui import DataProductsTUI
 
 logger = logging.getLogger("mcp_materialize_agents")
 
@@ -95,7 +96,7 @@ INSTRUCTIONS = (
 class DataProduct(BaseModel):
     name: str = Field(
         description=(
-            "Fully qualified name of the data product with double quotes "
+            "Fully qualified name of the data product"
             '(e.g. \'"database"."schema"."view_name"\'). '
             "Use this exact name when querying."
         )
@@ -119,7 +120,7 @@ class DataProduct(BaseModel):
 class FullDataProduct(BaseModel):
     name: str = Field(
         description=(
-            "Fully qualified name with double quotes "
+            "Fully qualified name."
             '(e.g. \'"database"."schema"."view_name"\'). '
             "Use this exact name in queries."
         )
@@ -136,7 +137,7 @@ class FullDataProduct(BaseModel):
             "for this data product."
         )
     )
-    schema: dict[str, Any] = Field(
+    data_product_schema: dict[str, Any] = Field(
         description=(
             "Complete JSON schema showing all available fields, their data "
             "types, and descriptions. Use this to understand what data you "
@@ -145,12 +146,39 @@ class FullDataProduct(BaseModel):
     )
 
 
-async def run():
-    cfg = load_config()
-    logging.basicConfig(
-        level=cfg.log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+async def list_data_products(cfg: Config):
+    """List available data products and output in specified format."""
+    async with create_client(cfg) as mz:
+        async with mz.connection() as conn:
+            await conn.set_autocommit(True)
+            async with conn.cursor(row_factory=dict_row) as cur:
+                # Get environment and user info
+                env_info = None
+                if cfg.output_format == "tui":
+                    await cur.execute(
+                        "SELECT"
+                        "   mz_environment_id() AS env,"
+                        "   current_role AS role;"
+                    )
+                    env_info = await cur.fetchone()
+
+                await cur.execute(TOOL_QUERY)
+                data_products = []
+                async for row in cur:
+                    data_products.append(row)
+
+                if cfg.output_format == "json":
+                    print(json.dumps(data_products, indent=2))
+                else:
+                    if not data_products:
+                        print("No data products found.")
+                        return
+
+                    app = DataProductsTUI(data_products, env_info)
+                    await app.run_async()
+
+
+async def run(cfg):
     async with create_client(cfg) as mz:
         server = FastMCP(
             "mcp_materialize", instructions=INSTRUCTIONS, host=cfg.host, port=cfg.port
@@ -208,7 +236,7 @@ async def run():
                             name=row["object_name"],
                             description=row["description"],
                             cluster=row["cluster"],
-                            schema=row["schema"],
+                            data_product_schema=row["schema"],
                         )
                 raise ValueError("Unknown data product name")
 
@@ -298,11 +326,23 @@ def json_serial(obj):
 
 def main():
     """Synchronous wrapper for the async main function."""
+    cfg = load_config()
+    logging.basicConfig(
+        level=cfg.log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
     try:
-        logger.info("Starting Materialize MCP Server...")
-        asyncio.run(run())
+        if cfg.command == "list":
+            asyncio.run(list_data_products(cfg))
+        else:
+            logger.info("Starting Materialize MCP Server...")
+            asyncio.run(run(cfg))
     except KeyboardInterrupt:
         logger.info("Shutting down …")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

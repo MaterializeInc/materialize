@@ -29,6 +29,7 @@ dependencies = [
     "psycopg-pool>=3.2.6",
     "psycopg[binary]>=3.2.6",
     "pydantic>=2.0.0",
+    "textual>=1.0.0",
 ]
 
 [project.scripts]
