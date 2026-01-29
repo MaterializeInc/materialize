@@ -55,8 +55,8 @@ contains:failed to decode Row
 contains:wrong number of columns
 
 # disabled as MZ panics database-issues#9886
-# ! COPY INTO t1_not_null FROM '${1_csv_url}' (FORMAT CSV);
-# contains:some error that's not a panic
+! COPY INTO t1_not_null (a, b) FROM '${1_csv_url}' (FORMAT CSV);
+contains:is NOT NULL but is not specified in the COPY statement and has no DEFAULT value
 
 > COPY INTO t1_fun_house (z, y) FROM '${1_csv_url}' (FORMAT CSV);
 > SELECT * from t1_fun_house;

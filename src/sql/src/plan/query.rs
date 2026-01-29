@@ -548,8 +548,18 @@ pub fn plan_copy_item(
             if let Some(src_idx) = maybe_src_idx {
                 project_keys.push(src_idx);
             } else {
-                // If one a column from the table does not exist in the source data, then a default
+                // If a column from the table does not exist in the source data, then a default
                 // value will get appended to the end of the input Row from the source data.
+                //
+                // However, if the column is NOT NULL (not nullable) and has no explicit default (meaning the
+                // implicit default is NULL), we should reject this COPY statement as it would
+                // always fail at runtime due to a NOT NULL constraint violation.
+                if !col_type.nullable && matches!(&col_default, Expr::Value(Value::Null)) {
+                    sql_bail!(
+                        "column {} is NOT NULL but is not specified in the COPY statement and has no DEFAULT value",
+                        col_name.quoted()
+                    );
+                }
                 let hir = plan_default_expr(scx, &col_default, &col_type.scalar_type)?;
                 let mir = hir.lower_uncorrelated(scx.catalog.system_vars())?;
                 project_keys.push(source_column_names.len() + default_exprs.len());
