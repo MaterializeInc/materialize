@@ -41,7 +41,7 @@ use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_assert_no_log};
+use mz_ore::{instrument, soft_assert_no_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -63,7 +63,7 @@ use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
-use crate::util::index_sql;
+use crate::util::{index_sql, sort_topological};
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
 /// [`CatalogState`] maintains denormalized state for certain catalog objects. Updating an object
@@ -2089,66 +2089,15 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     fn sort_items_topological(items: &mut Vec<(mz_catalog::durable::Item, Timestamp, StateDiff)>) {
         tracing::debug!(?items, "sorting items by dependencies");
 
-        let all_item_ids: BTreeSet<_> = items.iter().map(|item| item.0.id).collect();
-
-        // For each item, the update that contains it.
-        let mut updates_by_id =
-            BTreeMap::<CatalogItemId, (mz_catalog::durable::Item, Timestamp, StateDiff)>::new();
-        // For each item, the number of unprocessed dependencies.
-        let mut in_degree = BTreeMap::<CatalogItemId, usize>::new();
-        // For each item, the IDs of items depending on it.
-        let mut dependents = BTreeMap::<CatalogItemId, Vec<CatalogItemId>>::new();
-        // Items that have no unprocessed dependencies.
-        let mut ready = Vec::new();
-
-        // Build the graph.
-        for (item, ts, diff) in items.drain(..) {
-            let id = item.id;
-            let statement = mz_sql::parse::parse(&item.create_sql)
+        let key_fn = |item: &(mz_catalog::durable::Item, _, _)| item.0.id;
+        let dependencies_fn = |item: &(mz_catalog::durable::Item, _, _)| {
+            let statement = mz_sql::parse::parse(&item.0.create_sql)
                 .expect("valid create_sql")
                 .into_element()
                 .ast;
-
-            let mut dependencies = mz_sql::names::dependencies(&statement)
-                .expect("failed to find dependencies of item");
-            // Remove any dependencies not contained in `items`.
-            // As a defensive measure, also remove any self-references.
-            dependencies.retain(|dep| all_item_ids.contains(dep) && *dep != id);
-
-            let prev = updates_by_id.insert(id, (item, ts, diff));
-            assert_none!(prev);
-
-            in_degree.insert(id, dependencies.len());
-
-            for dep_id in &dependencies {
-                dependents.entry(*dep_id).or_default().push(id);
-            }
-
-            if dependencies.is_empty() {
-                ready.push(id);
-            }
-        }
-
-        // Process items in topological order, pushing back into the provided Vec.
-        while let Some(id) = ready.pop() {
-            let update = updates_by_id.remove(&id).expect("must exist");
-            items.push(update);
-
-            if let Some(depts) = dependents.get(&id) {
-                for dept_id in depts {
-                    let deg = in_degree.get_mut(dept_id).expect("must exist");
-                    *deg -= 1;
-                    if *deg == 0 {
-                        ready.push(*dept_id);
-                    }
-                }
-            }
-        }
-
-        // Cycle detection: if we didn't process all items, there's a cycle.
-        if !updates_by_id.is_empty() {
-            panic!("programming error, cycle in item dependencies");
-        }
+            mz_sql::names::dependencies(&statement).expect("failed to find dependencies of item")
+        };
+        sort_topological(items, key_fn, dependencies_fn);
     }
 
     /// Sort item updates by dependency.

@@ -52,7 +52,7 @@ ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Colu
 ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21)]]  2
 ArrangeBy[[Column(0),␠Column(1)]]  1
 ArrangeBy[[Column(0),␠Column(3)]]  1
-ArrangeBy[[Column(0)]]  36
+ArrangeBy[[Column(0)]]  34
 ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(7,␠"attnotnull"),␠Column(8,␠"atthasdef"),␠Column(9,␠"attidentity"),␠Column(10,␠"attgenerated"),␠Column(11,␠"attisdropped"),␠Column(12,␠"attcollation"),␠Column(13,␠"database_name"),␠Column(14,␠"pg_type_database_name")]]  1
 ArrangeBy[[Column(0,␠"attrelid"),␠Column(1,␠"attname"),␠Column(2,␠"atttypid"),␠Column(3,␠"attlen"),␠Column(4,␠"attnum"),␠Column(5,␠"atttypmod"),␠Column(7,␠"attnotnull"),␠Column(8,␠"atthasdef"),␠Column(9,␠"attidentity"),␠Column(10,␠"attgenerated"),␠Column(11,␠"attisdropped"),␠Column(12,␠"attcollation"),␠Column(13,␠"database_name"),␠Column(14,␠"pg_type_database_name")]]-errors  1
 ArrangeBy[[Column(0,␠"cluster")]]  1
@@ -68,14 +68,14 @@ ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]  3
 ArrangeBy[[Column(0,␠"id"),␠Column(1,␠"replica_id")]]-errors  3
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"id")]]  1
 ArrangeBy[[Column(0,␠"id"),␠Column(2,␠"position")]]  1
-ArrangeBy[[Column(0,␠"id")]]  87
+ArrangeBy[[Column(0,␠"id")]]  53
 ArrangeBy[[Column(0,␠"id")]]-errors  17
 ArrangeBy[[Column(0,␠"index_id")]]  1
 ArrangeBy[[Column(0,␠"name")]]  3
 ArrangeBy[[Column(0,␠"name")]]-errors  3
 ArrangeBy[[Column(0,␠"object_id"),␠Column(1,␠"replica_id")]]  2
 ArrangeBy[[Column(0,␠"object_id"),␠Column(1,␠"replica_id")]]-errors  1
-ArrangeBy[[Column(0,␠"object_id")]]  9
+ArrangeBy[[Column(0,␠"object_id")]]  6
 ArrangeBy[[Column(0,␠"object_id")]]-errors  5
 ArrangeBy[[Column(0,␠"objoid"),␠Column(1,␠"classoid"),␠Column(2,␠"objsubid"),␠Column(3,␠"description"),␠Column(4,␠"oid_database_name"),␠Column(5,␠"class_database_name")]]  1
 ArrangeBy[[Column(0,␠"objoid"),␠Column(1,␠"classoid"),␠Column(2,␠"objsubid"),␠Column(3,␠"description"),␠Column(4,␠"oid_database_name"),␠Column(5,␠"class_database_name")]]-errors  1
@@ -85,7 +85,7 @@ ArrangeBy[[Column(0,␠"oid")]]  3
 ArrangeBy[[Column(0,␠"oid")]]-errors  1
 ArrangeBy[[Column(0,␠"replica_id"),␠Column(3,␠"bucket_start")]]  5
 ArrangeBy[[Column(0,␠"replica_id"),␠Column(4,␠"bucket_start")]]  1
-ArrangeBy[[Column(0,␠"replica_id")]]  12
+ArrangeBy[[Column(0,␠"replica_id")]]  10
 ArrangeBy[[Column(0,␠"replica_id")]]-errors  5
 ArrangeBy[[Column(0,␠"role_oid")]]  1
 ArrangeBy[[Column(0,␠"schema_id")]]  6
@@ -103,7 +103,6 @@ ArrangeBy[[Column(1),␠Column(0)]]  1
 ArrangeBy[[Column(1)]]  2
 ArrangeBy[[Column(1,␠"cluster_id"),␠Column(2,␠"cluster_name")]]  1
 ArrangeBy[[Column(1,␠"cluster_id")]]  3
-ArrangeBy[[Column(1,␠"database_id")]]  1
 ArrangeBy[[Column(1,␠"dependency_id")]]  1
 ArrangeBy[[Column(1,␠"dependency_id")]]-errors  1
 ArrangeBy[[Column(1,␠"element_id")]]  2
@@ -116,7 +115,6 @@ ArrangeBy[[Column(1,␠"nspname")]]  1
 ArrangeBy[[Column(1,␠"nspname")]]-errors  1
 ArrangeBy[[Column(1,␠"oid")]]  1
 ArrangeBy[[Column(1,␠"on_id"),␠Column(3,␠"on_position")]]  1
-ArrangeBy[[Column(1,␠"on_id")]]  1
 ArrangeBy[[Column(1,␠"prepared_statement_id")]]  1
 ArrangeBy[[Column(1,␠"referenced_object_id")]]  2
 ArrangeBy[[Column(1,␠"relname")]]  1
@@ -143,7 +141,7 @@ ArrangeBy[[Column(2,␠"database_id")]]-errors  1
 ArrangeBy[[Column(2,␠"id")]]  1
 ArrangeBy[[Column(2,␠"name")]]  1
 ArrangeBy[[Column(2,␠"name")]]-errors  1
-ArrangeBy[[Column(2,␠"on_id")]]  6
+ArrangeBy[[Column(2,␠"on_id")]]  2
 ArrangeBy[[Column(2,␠"owner_id")]]  1
 ArrangeBy[[Column(2,␠"schema_id")]]  8
 ArrangeBy[[Column(2,␠"schema_id")]]-errors  5
@@ -171,7 +169,7 @@ ArrangeBy[[]]  11
 Arranged␠DistinctBy  55
 Arranged␠MinsMaxesHierarchical␠input  14
 Arranged␠ReduceInaccumulable  3
-Arranged␠TopK␠input  111
+Arranged␠TopK␠input  95
 Distinct␠recursive␠err  3
 DistinctBy  55
 DistinctByErrorCheck  55
@@ -181,5 +179,5 @@ ReduceInaccumulable␠Error␠Check  3
 ReduceMinsMaxes  3
 ReduceMinsMaxes␠Error␠Check  1
 Reduced␠Fallibly␠MinsMaxesHierarchical  14
-Reduced␠TopK␠input  111
+Reduced␠TopK␠input  95
 Threshold␠local  10

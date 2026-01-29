@@ -203,7 +203,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
 };
-use crate::util::{ClientTransmitter, ResultExt};
+use crate::util::{ClientTransmitter, ResultExt, sort_topological};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
 
@@ -2036,9 +2036,16 @@ impl Coordinator {
         // buffers.
         self.controller.start_compute_introspection_sink();
 
+        let sorting_start = Instant::now();
+        info!("startup: coordinator init: bootstrap: sorting catalog entries");
+        let entries = self.bootstrap_sort_catalog_entries();
+        info!(
+            "startup: coordinator init: bootstrap: sorting catalog entries complete in {:?}",
+            sorting_start.elapsed()
+        );
+
         let optimize_dataflows_start = Instant::now();
         info!("startup: coordinator init: bootstrap: optimize dataflow plans beginning");
-        let entries: Vec<_> = self.catalog().entries().cloned().collect();
         let uncached_global_exps = self.bootstrap_dataflow_plans(&entries, cached_global_exprs)?;
         info!(
             "startup: coordinator init: bootstrap: optimize dataflow plans complete in {:?}",
@@ -3028,6 +3035,39 @@ impl Coordinator {
             .create_collections(self.catalog.state().storage_metadata(), None, collections)
             .await
             .unwrap_or_terminate("cannot fail to create collections");
+    }
+
+    /// Returns the current list of catalog entries, sorted into an appropriate order for
+    /// bootstrapping.
+    ///
+    /// The returned entries are in dependency order. Indexes are sorted immediately after the
+    /// objects they index, to ensure that all dependants of these indexed objects can make use of
+    /// the respective indexes.
+    fn bootstrap_sort_catalog_entries(&self) -> Vec<CatalogEntry> {
+        let mut indexes_on = BTreeMap::<_, Vec<_>>::new();
+        let mut non_indexes = Vec::new();
+        for entry in self.catalog().entries().cloned() {
+            if let Some(index) = entry.index() {
+                indexes_on.entry(index.on).or_default().push(entry);
+            } else {
+                non_indexes.push(entry);
+            }
+        }
+
+        let key_fn = |entry: &CatalogEntry| entry.id;
+        let dependencies_fn = |entry: &CatalogEntry| entry.uses();
+        sort_topological(&mut non_indexes, key_fn, dependencies_fn);
+
+        let mut result = Vec::new();
+        for entry in non_indexes {
+            let gid = entry.latest_global_id();
+            result.push(entry);
+            if let Some(mut indexes) = indexes_on.remove(&gid) {
+                result.append(&mut indexes);
+            }
+        }
+
+        result
     }
 
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the

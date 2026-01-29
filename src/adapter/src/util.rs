@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
 use itertools::Itertools;
@@ -16,7 +17,7 @@ use mz_compute_client::controller::error::{
 };
 use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{exit, soft_assert_no_log};
+use mz_ore::{assert_none, exit, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, SqlScalarType};
 use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
@@ -475,4 +476,70 @@ pub fn verify_datum_desc(
     }
 
     Ok(())
+}
+
+/// Sort items in dependency order using topological sort.
+///
+/// # Panics
+///
+/// Panics if `key_fn` produces non-unique keys for the provided `items`.
+/// Panics if there is a dependency cycle among the provided `items`.
+pub fn sort_topological<T, K, FK, FD>(items: &mut Vec<T>, key_fn: FK, dependencies_fn: FD)
+where
+    T: Debug,
+    K: Debug + Copy + Ord,
+    FK: Fn(&T) -> K,
+    FD: Fn(&T) -> BTreeSet<K>,
+{
+    let mut items_by_key = BTreeMap::new();
+    for item in items.drain(..) {
+        let key = key_fn(&item);
+        let prev = items_by_key.insert(key, item);
+        assert_none!(prev);
+    }
+
+    // For each item, the number of unprocessed dependencies.
+    let mut in_degree = BTreeMap::<K, usize>::new();
+    // For each item, the keys of items depending on it.
+    let mut dependents = BTreeMap::<K, Vec<K>>::new();
+    // Items that have no unprocessed dependencies.
+    let mut ready = Vec::<K>::new();
+
+    // Build the graph.
+    for (&key, item) in &items_by_key {
+        let mut dependencies = dependencies_fn(item);
+        // Remove any dependencies not contained in `items`, as well as self-references.
+        dependencies.retain(|dep| items_by_key.contains_key(dep) && *dep != key);
+
+        in_degree.insert(key, dependencies.len());
+
+        for dep in &dependencies {
+            dependents.entry(*dep).or_default().push(key);
+        }
+
+        if dependencies.is_empty() {
+            ready.push(key);
+        }
+    }
+
+    // Process items in topological order, pushing back into the input Vec.
+    while let Some(id) = ready.pop() {
+        let item = items_by_key.remove(&id).expect("must exist");
+        items.push(item);
+
+        if let Some(depts) = dependents.get(&id) {
+            for dept in depts {
+                let deg = in_degree.get_mut(dept).expect("must exist");
+                *deg -= 1;
+                if *deg == 0 {
+                    ready.push(*dept);
+                }
+            }
+        }
+    }
+
+    // Cycle detection: if we didn't process all items, there's a cycle.
+    if !items_by_key.is_empty() {
+        panic!("dependency cycle: {items_by_key:?}");
+    }
 }
