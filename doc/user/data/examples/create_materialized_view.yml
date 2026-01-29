@@ -89,7 +89,9 @@
         A name for the replacement materialized view.
     - name: "`<target_name>`"
       description: |
-        The name of the existing materialized view to be replaced.
+        The name of the existing materialized view to be replaced. The
+        replacement materialized view can only be applied to this
+        materialized view.
     - name: "`IN CLUSTER <cluster_name>`"
       description: |
         The cluster to maintain this replacement materialized view. If not
@@ -99,5 +101,43 @@
         Same options as `CREATE MATERIALIZED VIEW`.
     - name: "`<select_stmt>`"
       description: |
-        The [`SELECT` statement](/sql/select) for the replacement. Must produce
-        the same schema as the target materialized view.
+        The [`SELECT` statement](/sql/select) for the replacement view. The
+        statement must produce the same output schema as the target materialized
+        view; i.e., column names, column types, column order, nullability, and
+        keys must all match.
+
+- name: "example-create-materialized-view"
+  description: |
+    The following example creates a `winning_bids` materialized view:
+  code: |
+    CREATE MATERIALIZED VIEW winning_bids AS
+    SELECT DISTINCT ON (a.id) b.*, a.item, a.seller
+    FROM auctions AS a
+    JOIN bids AS b
+      ON a.id = b.auction_id
+    WHERE b.bid_time < a.end_time
+      AND mz_now() >= a.end_time
+    ORDER BY a.id,
+      b.amount DESC,
+      b.bid_time,
+      b.buyer;
+
+- name: "example-create-replacement-materialized-view"
+  description: |
+    The following example creates a replacement materialized view
+    `winning_bids_replacement` for the `winning_bids` materialized view. The
+    replacement view specifies a different filter `mz_now() > a.end_time` than
+    the existing view `mz_now() >= a.end_time`.
+  code: |
+    CREATE REPLACEMENT MATERIALIZED VIEW winning_bids_replacement
+    FOR winning_bids AS
+    SELECT DISTINCT ON (a.id) b.*, a.item, a.seller
+    FROM auctions AS a
+    JOIN bids AS b
+      ON a.id = b.auction_id
+    WHERE b.bid_time < a.end_time
+      AND mz_now() > a.end_time
+    ORDER BY a.id,
+      b.amount DESC,
+      b.bid_time,
+      b.buyer;

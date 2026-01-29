@@ -46,11 +46,21 @@
 
 - name: "syntax-apply-replacement"
   code: |
-    ALTER MATERIALIZED VIEW <name> APPLY REPLACEMENT <replacement_name>;
+    ALTER MATERIALIZED VIEW <name> APPLY REPLACEMENT <replacement_view>;
   syntax_elements:
     - name: "`<name>`"
       description: |
         The name of the materialized view to replace.
-    - name: "`<replacement_name>`"
+    - name: "`<replacement_view>`"
       description: |
-        The name of a replacement materialized view created with [`CREATE REPLACEMENT MATERIALIZED VIEW`](/sql/create-materialized-view).
+        The name of a replacement materialized view specifically created for
+        the target materialized view. See [`CREATE REPLACEMENT MATERIALIZED VIEW
+        <replacement_view>...FOR <name>...`](/sql/create-materialized-view).
+
+- name: "example-apply-replacement"
+  description: |
+    Assume the `winning_bids_replacement` is hydrated (to avoid downtime after replacement). The following example replaces the `winning_bids` materialized view with
+    `winning_bids_replacement`:
+  code: |
+    ALTER MATERIALIZED VIEW winning_bids
+    APPLY REPLACEMENT winning_bids_replacement;

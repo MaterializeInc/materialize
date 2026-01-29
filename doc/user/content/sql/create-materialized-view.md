@@ -7,11 +7,34 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE MATERIALIZED VIEW` defines a view that maintains [fresh results](/concepts/reaction-time) by persisting them in durable storage and incrementally updating them as new data arrives.
+Use `CREATE MATERIALIZED VIEW` to:
 
-Materialized views are particularly useful when you need **cross-cluster access** to results or want to sink data to external systems like [Kafka](/sql/create-sink). When you create a materialized view, you specify a [cluster](/concepts/clusters/) responsible for maintaining it, but the results can be **queried from any cluster**. This allows you to separate the compute resources used for view maintenance from those used for serving queries.
+- Create a materialized view that maintains [fresh
+  results](/concepts/reaction-time) by persisting them in durable storage and
+  incrementally updating them as new data arrives.
 
-If you do not need durability or cross-cluster sharing, and you are primarily interested in fast query performance within a single cluster, you may prefer to [create a view and index it](/concepts/views/#views). In Materialize, [indexes on views](/concepts/indexes/) also maintain results incrementally, but store them in memory, scoped to the cluster where the index was created. This approach offers lower latency for direct querying within that cluster.
+{{< if-released "v26.10" >}}
+
+- Create a replacement for an existing materialized view that can be applied in
+  place with [`ALTER MATERIALIZED VIEW ... APPLY
+  REPLACEMENT`](/sql/alter-materialized-view/).
+
+{{< /if-released >}}
+
+Materialized views are particularly useful when you need **cross-cluster
+access** to results or want to sink data to external systems like
+[Kafka](/sql/create-sink). When you create a materialized view, a
+[cluster](/concepts/clusters/), responsible for maintaining the view, is
+associated with it, but the results can be **queried from any cluster**. This
+allows you to separate the compute resources used for view maintenance from
+those used for serving queries.
+
+If you do not need durability or cross-cluster sharing, and you are primarily
+interested in fast query performance within a single cluster, you may prefer to
+[create a view and index it](/concepts/views/#views). In Materialize, [indexes
+on views](/concepts/indexes/) also maintain results incrementally, but store
+them in memory, scoped to the cluster where the index was created. This approach
+offers lower latency for direct querying within that cluster.
 
 ## Syntax
 
@@ -32,24 +55,26 @@ If you do not need durability or cross-cluster sharing, and you are primarily in
 
 {{< public-preview />}}
 
-Create a replacement for an existing materialized view that can be applied without recreating downstream objects.
-See [Replacement materialized views](#replacement-materialized-views).
+Create a replacement materialized view for an existing materialized view.
 
 {{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
 
-{{< /tab >}}
+The created replacement materialized view starts hydrating immediately. The
+replacement can later be applied in place. For more information, see [Creating
+replacement materialized views](#creating-replacement-materialized-views).
 
+{{< /tab >}}
 {{< /if-released >}}
 {{< /tabs >}}
 
 ## Details
 
-### Usage patterns
+### Usage pattern
 
 {{% include-from-yaml data="index_view_details" name="table-usage-pattern-intro" %}}
 {{% include-from-yaml data="index_view_details" name="table-usage-pattern" %}}
 
-### Indexes
+### Indexing materialized views
 
 Although you can query a materialized view directly, these queries will be
 issued against Materialize's storage layer. This is expected to be fast, but
@@ -269,52 +294,33 @@ JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
 
 {{< if-released "v26.10" >}}
-### Replacement materialized views
+### Creating replacement materialized views
 
 {{< public-preview />}}
 
-Materialize supports a two-step process for replacing materialized views
-in-place, i.e., without recreating downstream objects:
+{{% include-headless
+"/headless/replacement-views/replacement-view-syntax-details/" %}}
 
-1. **Create a replacement**: Use `CREATE REPLACEMENT MATERIALIZED VIEW` to
-   define a new materialized view that will replace an existing one. The
-   replacement materialized view begins hydrating immediately.
+#### Use case
 
-2. **Apply the replacement**: Once the replacement is ready, use [`ALTER
-   MATERIALIZED VIEW ... APPLY REPLACEMENT`](/sql/alter-materialized-view) to
-   apply it. This updates the target view's definition and drops the
-   replacement.
+{{% include-headless "/headless/replacement-views/associated-commands-blurb/"
+%}}
 
-This approach allows you to:
+#### Query performance of replacement views
 
-- **Preserve downstream objects**: Dependent views, materialized views,
-  indexes, and sinks remain intact and do not need to be recreated.
-- **Avoid downtime**: The replacement materialized view hydrates in the
-  background while the original continues computing results.
-- **Validate before applying**: You can verify the replacement produces correct
-  results and has the expected performance characteristics before committing to
-  the change.
+You can query a replacement materialized view to validate its results before
+replacing. However, queries against replacement materialized views are slower
+and more computationally expensive than queries against regular materialized
+views. This is because the replacement is treated like a
+[view](/sql/create-view), and its results are re-computed as part of the query
+execution.
 
-#### Restrictions
+#### Restrictions and limitations
 
-- The replacement must have the same schema as the target materialized view:
-  column names, column types, nullability, and keys must all match.
+{{% include-headless
+"/headless/replacement-views/replacement-view-target-restrictions" %}}
 
-#### Performance
-
-You can query a replacement materialized view directly using `SELECT` to
-validate its results. However, these queries will be slower and more
-computationally expensive than queries against regular materialized views
-because the staged data is not available for direct reading until the
-replacement is applied.
-Instead, the replacement is treated like a [view](/sql/create-view), which
-means its query is inlined into the `SELECT` query and its results are
-re-computed as part of computing the `SELECT` query.
-
-When the replacement is applied to a materialized view, the materialized view
-emits a diff representing the changes between the old and new output. All
-downstream objects must process this diff, which may cause temporary CPU and
-memory spikes depending on the size of the changes.
+{{% include-headless "/headless/replacement-views/replacement-view-index-restrictions" %}}
 
 {{< /if-released >}}
 
@@ -322,15 +328,7 @@ memory spikes depending on the size of the changes.
 
 ### Creating a materialized view
 
-```mzsql
-CREATE MATERIALIZED VIEW winning_bids AS
-SELECT auction_id,
-       bid_id,
-       item,
-       amount
-FROM highest_bid_per_auction
-WHERE end_time < mz_now();
-```
+{{% include-example file="examples/create_materialized_view" example="example-create-materialized-view" %}}
 
 ### Using non-null assertions
 
@@ -368,6 +366,27 @@ AS SELECT ... FROM ...;
 [//]: # "TODO(morsapaes) Add more elaborate examples with \timing that show
 things like querying materialized views from different clusters, indexed vs.
 non-indexed, and so on."
+
+{{< if-released "v26.10" >}}
+### Creating a replacement materialized view
+
+{{< public-preview />}}
+
+{{% include-headless
+"/headless/replacement-views/replacement-view-syntax-details" %}}
+
+{{% include-example file="examples/create_materialized_view"
+example="example-create-replacement-materialized-view" %}}
+
+To replace the existing view with its replacement, see [`ALTER MATERIALIZED
+VIEW`](../alter-materialized-view).
+
+See also:
+
+- [Replace materialized views guide
+](/transform-data/updating-materialized-views/replace-materialized-view/).
+
+{{< /if-released >}}
 
 ## Privileges
 
