@@ -4196,7 +4196,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=375a44a45bff#375a44a45bff3a6df88e23867bdc24626a50cf62"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=f23586f12eea#f23586f12eea8ff7e9fae87aa324829bc1d45086"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -4252,7 +4252,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=375a44a45bff#375a44a45bff3a6df88e23867bdc24626a50cf62"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=f23586f12eea#f23586f12eea8ff7e9fae87aa324829bc1d45086"
 dependencies = [
  "async-trait",
  "aws-credential-types",

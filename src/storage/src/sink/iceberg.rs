@@ -76,11 +76,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
-use arrow::array::Int32Array;
-use arrow::datatypes::{DataType, Field};
-use arrow::{
-    array::RecordBatch, datatypes::Schema as ArrowSchema, datatypes::SchemaRef as ArrowSchemaRef,
-};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
@@ -111,7 +108,7 @@ use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use itertools::Itertools;
-use mz_arrow_util::builder::ArrowBuilder;
+use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -175,27 +172,65 @@ type DeltaWriterType = DeltaWriter<
 >;
 
 /// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
-/// Parquet metadata for schema evolution tracking.
-/// TODO: Support nested data types with proper field IDs.
+/// Parquet metadata for schema evolution tracking. Field IDs are assigned
+/// recursively to all nested fields (structs, lists, maps) using a depth-first,
+/// pre-order traversal.
 fn add_field_ids_to_arrow_schema(schema: ArrowSchema) -> ArrowSchema {
+    let mut next_field_id = 1i32;
     let fields: Vec<Field> = schema
         .fields()
         .iter()
-        .enumerate()
-        .map(|(i, field)| {
-            let mut metadata = field.metadata().clone();
-            metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), (i + 1).to_string());
-            Field::new(field.name(), field.data_type().clone(), field.is_nullable())
-                .with_metadata(metadata)
-        })
+        .map(|field| add_field_ids_recursive(field, &mut next_field_id))
         .collect();
-
     ArrowSchema::new(fields).with_metadata(schema.metadata().clone())
+}
+
+/// Recursively add field IDs to a field and all its nested children.
+fn add_field_ids_recursive(field: &Field, next_id: &mut i32) -> Field {
+    let current_id = *next_id;
+    *next_id += 1;
+
+    let mut metadata = field.metadata().clone();
+    metadata.insert(
+        PARQUET_FIELD_ID_META_KEY.to_string(),
+        current_id.to_string(),
+    );
+
+    let new_data_type = add_field_ids_to_datatype(field.data_type(), next_id);
+
+    Field::new(field.name(), new_data_type, field.is_nullable()).with_metadata(metadata)
+}
+
+/// Add field IDs to nested fields within a DataType.
+fn add_field_ids_to_datatype(data_type: &DataType, next_id: &mut i32) -> DataType {
+    match data_type {
+        DataType::Struct(fields) => {
+            let new_fields: Vec<Field> = fields
+                .iter()
+                .map(|f| add_field_ids_recursive(f, next_id))
+                .collect();
+            DataType::Struct(new_fields.into())
+        }
+        DataType::List(element_field) => {
+            let new_element = add_field_ids_recursive(element_field, next_id);
+            DataType::List(Arc::new(new_element))
+        }
+        DataType::LargeList(element_field) => {
+            let new_element = add_field_ids_recursive(element_field, next_id);
+            DataType::LargeList(Arc::new(new_element))
+        }
+        DataType::Map(entries_field, sorted) => {
+            let new_entries = add_field_ids_recursive(entries_field, next_id);
+            DataType::Map(Arc::new(new_entries), *sorted)
+        }
+        _ => data_type.clone(),
+    }
 }
 
 /// Merge Materialize extension metadata into Iceberg's Arrow schema.
 /// This uses Iceberg's data types (e.g. Utf8) and field IDs while preserving
 /// Materialize's extension names for ArrowBuilder compatibility.
+/// Handles nested types (structs, lists, maps) recursively.
 fn merge_materialize_metadata_into_iceberg_schema(
     materialize_arrow_schema: &ArrowSchema,
     iceberg_schema: &Schema,
@@ -219,25 +254,109 @@ fn merge_materialize_metadata_into_iceberg_schema(
                     )
                 })?;
 
-            // Start with Iceberg field's metadata (which includes field IDs)
-            let mut metadata = iceberg_field.metadata().clone();
-
-            // Add Materialize extension name
-            if let Some(extension_name) = mz_field.metadata().get("ARROW:extension:name") {
-                metadata.insert("ARROW:extension:name".to_string(), extension_name.clone());
-            }
-
-            // Use Iceberg's data type and field ID, but add Materialize extension metadata
-            Ok(Field::new(
-                iceberg_field.name(),
-                iceberg_field.data_type().clone(),
-                iceberg_field.is_nullable(),
-            )
-            .with_metadata(metadata))
+            merge_field_metadata_recursive(iceberg_field, Some(mz_field))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     Ok(ArrowSchema::new(fields).with_metadata(iceberg_arrow_schema.metadata().clone()))
+}
+
+/// Recursively merge Materialize extension metadata into an Iceberg field.
+fn merge_field_metadata_recursive(
+    iceberg_field: &Field,
+    mz_field: Option<&Field>,
+) -> anyhow::Result<Field> {
+    // Start with Iceberg field's metadata (which includes field IDs)
+    let mut metadata = iceberg_field.metadata().clone();
+
+    // Add Materialize extension name if available
+    if let Some(mz_f) = mz_field {
+        if let Some(extension_name) = mz_f.metadata().get(ARROW_EXTENSION_NAME_KEY) {
+            metadata.insert(ARROW_EXTENSION_NAME_KEY.to_string(), extension_name.clone());
+        }
+    }
+
+    // Recursively process nested types
+    let new_data_type = match iceberg_field.data_type() {
+        DataType::Struct(iceberg_fields) => {
+            let mz_struct_fields = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::Struct(fields) => Some(fields),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has Struct, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+
+            let new_fields: Vec<Field> = iceberg_fields
+                .iter()
+                .map(|iceberg_inner| {
+                    let mz_inner = mz_struct_fields.and_then(|fields| {
+                        fields.iter().find(|f| f.name() == iceberg_inner.name())
+                    });
+                    merge_field_metadata_recursive(iceberg_inner, mz_inner.map(|f| f.as_ref()))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+
+            DataType::Struct(new_fields.into())
+        }
+        DataType::List(iceberg_element) => {
+            let mz_element = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::List(element) => Some(element.as_ref()),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has List, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+            let new_element = merge_field_metadata_recursive(iceberg_element, mz_element)?;
+            DataType::List(Arc::new(new_element))
+        }
+        DataType::LargeList(iceberg_element) => {
+            let mz_element = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::LargeList(element) => Some(element.as_ref()),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has LargeList, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+            let new_element = merge_field_metadata_recursive(iceberg_element, mz_element)?;
+            DataType::LargeList(Arc::new(new_element))
+        }
+        DataType::Map(iceberg_entries, sorted) => {
+            let mz_entries = match mz_field {
+                Some(f) => match f.data_type() {
+                    DataType::Map(entries, _) => Some(entries.as_ref()),
+                    other => anyhow::bail!(
+                        "Type mismatch for field '{}': Iceberg schema has Map, but Materialize schema has {:?}",
+                        iceberg_field.name(),
+                        other
+                    ),
+                },
+                None => None,
+            };
+            let new_entries = merge_field_metadata_recursive(iceberg_entries, mz_entries)?;
+            DataType::Map(Arc::new(new_entries), *sorted)
+        }
+        other => other.clone(),
+    };
+
+    Ok(Field::new(
+        iceberg_field.name(),
+        new_data_type,
+        iceberg_field.is_nullable(),
+    )
+    .with_metadata(metadata))
 }
 
 async fn reload_table(
@@ -389,8 +508,8 @@ fn relation_desc_to_iceberg_schema(
 
 /// Build a new Arrow schema by adding an __op column to the existing schema.
 fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
-    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-    fields.push(Field::new("__op", DataType::Int32, false));
+    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+    fields.push(Arc::new(Field::new("__op", DataType::Int32, false)));
     ArrowSchema::new(fields)
 }
 
@@ -428,8 +547,7 @@ fn row_to_recordbatch(
         .to_record_batch()
         .context("Failed to create record batch")?;
 
-    let mut columns = Vec::with_capacity(batch.columns().len() + 1);
-    columns.extend_from_slice(batch.columns());
+    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
     let op_column = Arc::new(Int32Array::from(op_values));
     columns.push(op_column);
 
@@ -799,6 +917,9 @@ where
             let table_metadata = table.metadata().clone();
             let current_schema = Arc::clone(table_metadata.current_schema());
 
+            // Merge Materialize extension metadata into the Iceberg schema.
+            // We need extension metadata for ArrowBuilder to work correctly (it uses
+            // extension names to know how to handle different types like records vs arrays).
             let arrow_schema = Arc::new(
                 merge_materialize_metadata_into_iceberg_schema(
                     materialize_arrow_schema.as_ref(),
@@ -807,6 +928,7 @@ where
                 .context("Failed to merge Materialize metadata into Iceberg schema")?,
             );
 
+            // Build schema_with_op by adding the __op column used by DeltaWriter.
             let schema_with_op = Arc::new(build_schema_with_op_column(&arrow_schema));
 
             // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
@@ -849,7 +971,9 @@ where
                 let data_parquet_writer = ParquetWriterBuilder::new(
                     writer_properties.clone(),
                     Arc::clone(&current_schema),
-                );
+                )
+                .with_arrow_schema(Arc::clone(&arrow_schema))
+                .context("Arrow schema validation failed")?;
                 let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
                     data_parquet_writer,
                     Arc::clone(&current_schema),
