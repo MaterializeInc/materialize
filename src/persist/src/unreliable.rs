@@ -223,7 +223,7 @@ impl Consensus for UnreliableConsensus {
             .await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         self.handle
             .run_op("truncate", || self.consensus.truncate(key, seqno))
             .await

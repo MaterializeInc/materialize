@@ -16,6 +16,7 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import tempfile
 from argparse import Namespace
 from typing import Any, Literal
 
@@ -24,17 +25,18 @@ from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.clusterd import Clusterd
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.postgres import (
-    CockroachOrPostgresMetadata,
-    Postgres,
-)
+from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.rustc_flags import Sanitizer
 from materialize.util import PropagatingThread
 from materialize.xcompile import Arch, target
+
+FDB_PORT = 40108
 
 SERVICES = [
     Zookeeper(),
@@ -51,6 +53,12 @@ SERVICES = [
     SchemaRegistry(),
     Postgres(),
     CockroachOrPostgresMetadata(),
+    FoundationDB(
+        # We need the same port inside and outside because FDB validates
+        # that the advertised port matches the connection port.
+        ports=[f"{FDB_PORT}:{FDB_PORT}"],
+        allow_host_ports=True,
+    ),
     Minio(
         # We need a stable port exposed to the host since we can't pass any arguments
         # to the .pt files used in the tests.
@@ -97,6 +105,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "schema-registry",
         "postgres",
         c.metadata_store(),
+        "foundationdb",
         "minio",
         "azurite",
     )
@@ -108,6 +117,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     metadata_backend_url = (
         f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
     )
+
+    # Create FDB cluster file for tests running on the host
+    fdb_cluster_file = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".cluster", delete=False
+    )
+    fdb_cluster_file.write(f"docker:docker@127.0.0.1:{FDB_PORT}")
+    fdb_cluster_file.close()
 
     env = dict(
         os.environ,
@@ -121,6 +137,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         MZ_S3_UPLOADER_TEST_S3_BUCKET="mz-test-1d-lifecycle-delete",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=metadata_backend_url,
+        FDB_CLUSTER_FILE=fdb_cluster_file.name,
     )
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")

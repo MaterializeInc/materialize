@@ -493,7 +493,7 @@ impl Consensus for PostgresConsensus {
         Ok(results)
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         static CRDB_TRUNCATE_QUERY: &str = "
         DELETE FROM consensus
         WHERE shard = $1 AND sequence_number < $2 AND
@@ -568,7 +568,7 @@ impl Consensus for PostgresConsensus {
             }
         }
 
-        Ok(usize::cast_from(result))
+        Ok(Some(usize::cast_from(result)))
     }
 }
 

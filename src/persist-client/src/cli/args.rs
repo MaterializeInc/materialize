@@ -275,9 +275,9 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
         self.store.scan(key, from, limit).await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         warn!("ignoring truncate({key}) in read-only mode (to seqno {seqno})");
         self.ignoring_write();
-        Ok(0)
+        Ok(None)
     }
 }

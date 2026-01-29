@@ -26,13 +26,13 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
-from materialize.mzcompose.services.mysql import MySql
-from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import (
+from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
     CockroachOrPostgresMetadata,
 )
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.source_table_migration import (

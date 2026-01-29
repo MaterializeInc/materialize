@@ -311,7 +311,7 @@ impl Coordinator {
         let mut update_controller_config = false;
         let mut update_compute_config = false;
         let mut update_storage_config = false;
-        let mut update_pg_timestamp_oracle_config = false;
+        let mut update_timestamp_oracle_config = false;
         let mut update_metrics_retention = false;
         let mut update_secrets_caching_config = false;
         let mut update_cluster_scheduling_config = false;
@@ -364,8 +364,7 @@ impl Coordinator {
                         .state()
                         .system_config()
                         .is_storage_config_var(name);
-                    update_pg_timestamp_oracle_config |=
-                        vars::is_pg_timestamp_oracle_config_var(name);
+                    update_timestamp_oracle_config |= vars::is_timestamp_oracle_config_var(name);
                     update_metrics_retention |= name == vars::METRICS_RETENTION.name();
                     update_secrets_caching_config |= vars::is_secrets_caching_var(name);
                     update_cluster_scheduling_config |= vars::is_cluster_scheduling_var(name);
@@ -379,7 +378,7 @@ impl Coordinator {
                     update_controller_config = true;
                     update_compute_config = true;
                     update_storage_config = true;
-                    update_pg_timestamp_oracle_config = true;
+                    update_timestamp_oracle_config = true;
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
@@ -516,8 +515,8 @@ impl Coordinator {
             if update_storage_config {
                 self.update_storage_config();
             }
-            if update_pg_timestamp_oracle_config {
-                self.update_pg_timestamp_oracle_config();
+            if update_timestamp_oracle_config {
+                self.update_timestamp_oracle_config();
             }
             if update_metrics_retention {
                 self.update_metrics_retention();
@@ -883,10 +882,10 @@ impl Coordinator {
         self.controller.storage.update_parameters(config_params);
     }
 
-    fn update_pg_timestamp_oracle_config(&self) {
-        let config_params = flags::pg_timstamp_oracle_config(self.catalog().system_config());
-        if let Some(config) = self.pg_timestamp_oracle_config.as_ref() {
-            config_params.apply(config)
+    fn update_timestamp_oracle_config(&self) {
+        let config_params = flags::timstamp_oracle_config(self.catalog().system_config());
+        if let Some(config) = self.timestamp_oracle_config.as_ref() {
+            config.apply_parameters(config_params)
         }
     }
 

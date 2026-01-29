@@ -2283,9 +2283,9 @@ fn is_upsert_rocksdb_config_var(name: &str) -> bool {
         || name == upsert_rocksdb::UPSERT_ROCKSDB_SHRINK_ALLOCATED_BUFFERS_BY_RATIO.name()
 }
 
-/// Returns whether the named variable is a Postgres/CRDB timestamp oracle
+/// Returns whether the named variable is a (Postgres/CRDB) timestamp oracle
 /// configuration parameter.
-pub fn is_pg_timestamp_oracle_config_var(name: &str) -> bool {
+pub fn is_timestamp_oracle_config_var(name: &str) -> bool {
     name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_SIZE.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_MAX_WAIT.name()
         || name == PG_TIMESTAMP_ORACLE_CONNECTION_POOL_TTL.name()

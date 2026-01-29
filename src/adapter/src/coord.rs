@@ -160,10 +160,7 @@ use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::sinks::{S3SinkFormat, StorageSinkDesc};
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
-use mz_timestamp_oracle::WriteTimestamp;
-use mz_timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
+use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
@@ -1849,10 +1846,9 @@ pub struct Coordinator {
     /// Limit for how many concurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
 
-    /// Optional config for the Postgres-backed timestamp oracle. This is
-    /// _required_ when `postgres` is configured using the `timestamp_oracle`
-    /// system variable.
-    pg_timestamp_oracle_config: Option<PostgresTimestampOracleConfig>,
+    /// Optional config for the timestamp oracle. This is _required_ when
+    /// a timestamp oracle backend is configured.
+    timestamp_oracle_config: Option<TimestampOracleConfig>,
 
     /// Periodically asks cluster scheduling policies to make their decisions.
     check_cluster_scheduling_policies_interval: Interval,
@@ -4140,10 +4136,11 @@ pub fn serve(
         let oracle_init_start = Instant::now();
         info!("startup: coordinator init: timestamp oracle init beginning");
 
-        let pg_timestamp_oracle_config = timestamp_oracle_url
-            .map(|pg_url| PostgresTimestampOracleConfig::new(&pg_url, &metrics_registry));
+        let timestamp_oracle_config = timestamp_oracle_url
+            .map(|url| TimestampOracleConfig::from_url(&url, &metrics_registry))
+            .transpose()?;
         let mut initial_timestamps =
-            get_initial_oracle_timestamps(&pg_timestamp_oracle_config).await?;
+            get_initial_oracle_timestamps(&timestamp_oracle_config).await?;
 
         // Insert an entry for the `EpochMilliseconds` timeline if one doesn't exist,
         // which will ensure that the timeline is initialized since it's required
@@ -4157,7 +4154,7 @@ pub fn serve(
                 &timeline,
                 initial_timestamp,
                 now.clone(),
-                pg_timestamp_oracle_config.clone(),
+                timestamp_oracle_config.clone(),
                 &mut timestamp_oracles,
                 read_only_controllers,
             )
@@ -4319,12 +4316,14 @@ pub fn serve(
                 exclude_collections: new_builtin_collections.into_iter().collect(),
             });
 
-        if let Some(config) = pg_timestamp_oracle_config.as_ref() {
+        if let Some(TimestampOracleConfig::Postgres(pg_config)) =
+            timestamp_oracle_config.as_ref()
+        {
             // Apply settings from system vars as early as possible because some
             // of them are locked in right when an oracle is first opened!
             let pg_timestamp_oracle_params =
-                flags::pg_timstamp_oracle_config(catalog.system_config());
-            pg_timestamp_oracle_params.apply(config);
+                flags::timstamp_oracle_config(catalog.system_config());
+            pg_timestamp_oracle_params.apply(pg_config);
         }
 
         // Register a callback so whenever the MAX_CONNECTIONS or SUPERUSER_RESERVED_CONNECTIONS
@@ -4429,7 +4428,7 @@ pub fn serve(
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
-                    pg_timestamp_oracle_config,
+                    timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
                     cluster_scheduling_decisions: BTreeMap::new(),
                     caught_up_check_interval: clusters_caught_up_check_interval,
@@ -4533,27 +4532,25 @@ pub fn serve(
 // window (which is the only point where we should switch oracle
 // implementations).
 async fn get_initial_oracle_timestamps(
-    pg_timestamp_oracle_config: &Option<PostgresTimestampOracleConfig>,
+    timestamp_oracle_config: &Option<TimestampOracleConfig>,
 ) -> Result<BTreeMap<Timeline, Timestamp>, AdapterError> {
     let mut initial_timestamps = BTreeMap::new();
 
-    if let Some(pg_timestamp_oracle_config) = pg_timestamp_oracle_config {
-        let postgres_oracle_timestamps =
-            PostgresTimestampOracle::<NowFn>::get_all_timelines(pg_timestamp_oracle_config.clone())
-                .await?;
+    if let Some(config) = timestamp_oracle_config {
+        let oracle_timestamps = config.get_all_timelines().await?;
 
         let debug_msg = || {
-            postgres_oracle_timestamps
+            oracle_timestamps
                 .iter()
                 .map(|(timeline, ts)| format!("{:?} -> {}", timeline, ts))
                 .join(", ")
         };
         info!(
-            "current timestamps from the postgres-backed timestamp oracle: {}",
+            "current timestamps from the timestamp oracle: {}",
             debug_msg()
         );
 
-        for (timeline, ts) in postgres_oracle_timestamps {
+        for (timeline, ts) in oracle_timestamps {
             let entry = initial_timestamps
                 .entry(Timeline::from_str(&timeline).expect("could not parse timeline"));
 
@@ -4562,7 +4559,7 @@ async fn get_initial_oracle_timestamps(
                 .or_insert(ts);
         }
     } else {
-        info!("no postgres url for postgres-backed timestamp oracle configured!");
+        info!("no timestamp oracle configured!");
     };
 
     let debug_msg = || {

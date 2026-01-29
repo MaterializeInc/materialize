@@ -83,6 +83,11 @@ impl SeqNo {
     pub fn minimum() -> Self {
         SeqNo(0)
     }
+
+    /// A maximum value.
+    pub fn maximum() -> Self {
+        SeqNo(u64::MAX)
+    }
 }
 
 impl RustType<u64> for SeqNo {
@@ -112,6 +117,12 @@ impl std::fmt::Display for Determinate {
 impl std::error::Error for Determinate {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.inner.source()
+    }
+}
+
+impl From<anyhow::Error> for Determinate {
+    fn from(inner: anyhow::Error) -> Self {
+        Self::new(inner)
     }
 }
 
@@ -425,10 +436,10 @@ pub trait Consensus: std::fmt::Debug + Send + Sync {
     /// Deletes all historical versions of the data stored at `key` that are <
     /// `seqno`, iff `seqno` <= the current sequence number.
     ///
-    /// Returns the number of versions deleted on success. Returns an error if
+    /// Returns the number of versions deleted or `None` on success. Returns an error if
     /// `seqno` is greater than the current sequence number, or if there is no
     /// data at this key.
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError>;
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError>;
 }
 
 #[async_trait]
@@ -483,7 +494,7 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
         .await
     }
 
-    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
+    async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<Option<usize>, ExternalError> {
         let backing = self.clone_backing();
         let key = key.to_owned();
         mz_ore::task::spawn(
@@ -625,7 +636,7 @@ pub mod tests {
 
     use anyhow::anyhow;
     use futures_util::TryStreamExt;
-    use mz_ore::assert_err;
+    use mz_ore::{assert_err, assert_ok};
     use uuid::Uuid;
 
     use crate::location::Blob;
@@ -895,8 +906,8 @@ pub mod tests {
 
         // Can truncate data with an upper bound <= head, even if there is no data in the
         // range [0, upper).
-        assert_eq!(consensus.truncate(&key, SeqNo(0)).await, Ok(0));
-        assert_eq!(consensus.truncate(&key, SeqNo(5)).await, Ok(0));
+        assert_ok!(consensus.truncate(&key, SeqNo(0)).await);
+        assert_ok!(consensus.truncate(&key, SeqNo(5)).await);
 
         // Cannot truncate data with an upper bound > head.
         assert_err!(consensus.truncate(&key, SeqNo(6)).await);
@@ -1012,7 +1023,7 @@ pub mod tests {
         );
 
         // Can remove the previous write with the appropriate truncation.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(1));
+        assert_ok!(consensus.truncate(&key, SeqNo(6)).await);
 
         // Verify that the old write is indeed deleted.
         assert_eq!(
@@ -1022,7 +1033,7 @@ pub mod tests {
 
         // Truncate is idempotent and can be repeated. The return value
         // indicates we didn't do any work though.
-        assert_eq!(consensus.truncate(&key, SeqNo(6)).await, Ok(0));
+        assert_ok!(consensus.truncate(&key, SeqNo(6)).await);
 
         // Make sure entries under different keys don't clash.
         let other_key = Uuid::new_v4().to_string();
@@ -1079,7 +1090,7 @@ pub mod tests {
             consensus.compare_and_set(&key, Some(SeqNo(11)), v12).await,
             Ok(CaSResult::Committed),
         );
-        assert_eq!(consensus.truncate(&key, SeqNo(12)).await, Ok(2));
+        assert_ok!(consensus.truncate(&key, SeqNo(12)).await);
 
         // Sequence numbers used within Consensus have to be within [0, i64::MAX].
 

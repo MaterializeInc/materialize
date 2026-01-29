@@ -23,10 +23,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
-use mz_timestamp_oracle::postgres_oracle::{
-    PostgresTimestampOracle, PostgresTimestampOracleConfig,
-};
-use mz_timestamp_oracle::{self, TimestampOracle, WriteTimestamp};
+use mz_timestamp_oracle::{self, TimestampOracle, TimestampOracleConfig, WriteTimestamp};
 use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{Instrument, debug, error, info};
 
@@ -197,7 +194,7 @@ impl Coordinator {
             timeline,
             Timestamp::minimum(),
             self.catalog().config().now.clone(),
-            self.pg_timestamp_oracle_config.clone(),
+            self.timestamp_oracle_config.clone(),
             &mut self.global_timelines,
             self.read_only_controllers,
         )
@@ -211,15 +208,12 @@ impl Coordinator {
         timeline: &'a Timeline,
         initially: Timestamp,
         now: NowFn,
-        pg_oracle_config: Option<PostgresTimestampOracleConfig>,
+        oracle_config: Option<TimestampOracleConfig>,
         global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
         read_only: bool,
     ) -> &'a mut TimelineState<Timestamp> {
         if !global_timelines.contains_key(timeline) {
-            info!(
-                "opening a new CRDB/postgres TimestampOracle for timeline {:?}",
-                timeline,
-            );
+            info!("opening a new TimestampOracle for timeline {:?}", timeline,);
 
             let now_fn = if timeline == &Timeline::EpochMilliseconds {
                 now
@@ -235,23 +229,15 @@ impl Coordinator {
                 NowFn::from(|| Timestamp::minimum().into())
             };
 
-            let pg_oracle_config = pg_oracle_config.expect(
-                        "missing --timestamp-oracle-url even though the crdb-backed timestamp oracle was configured");
-
-            let batching_metrics = Arc::clone(&pg_oracle_config.metrics);
-
-            let pg_oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> = Arc::new(
-                PostgresTimestampOracle::open(
-                    pg_oracle_config,
-                    timeline.to_string(),
-                    initially,
-                    now_fn,
-                    read_only,
-                )
-                .await,
+            let oracle_config = oracle_config.expect(
+                "missing --timestamp-oracle-url even though the timestamp oracle was configured",
             );
 
-            let batching_oracle = BatchingTimestampOracle::new(batching_metrics, pg_oracle);
+            let oracle = oracle_config
+                .open(timeline.to_string(), initially, now_fn, read_only)
+                .await;
+
+            let batching_oracle = BatchingTimestampOracle::new(oracle_config.metrics(), oracle);
 
             let oracle: Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync> =
                 Arc::new(batching_oracle);

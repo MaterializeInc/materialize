@@ -1608,7 +1608,7 @@ pub mod datadriven {
             .truncate(&datadriven.shard_id.to_string(), to)
             .await
             .expect("valid truncation");
-        Ok(format!("{}\n", removed))
+        Ok(format!("{:?}\n", removed))
     }
 
     pub async fn blob_scan_batches(
