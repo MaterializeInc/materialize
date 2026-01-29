@@ -27,6 +27,8 @@ from materialize.data_ingest.data_type import (
     MzTimestamp,
     Numeric,
     Numeric383,
+    Record,
+    RecordList,
     RecordSize,
     Text,
     TextTextMap,
@@ -74,13 +76,22 @@ for dt in DATA_TYPES:
     if dt != Bytea:
         FUNC_OPS[Text] += [FuncOp("cast({} as text)", [dt])]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb, Text):
+    if dt not in (
+        IntList,
+        RecordList,
+        Record,
+        IntArray,
+        TextTextMap,
+        Bytea,
+        Jsonb,
+        Text,
+    ):
         FUNC_OPS[Text] += [
             FuncOp("{} || {}", [dt, Text]),
             FuncOp("{} || {}", [Text, dt]),
         ]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb):
+    if dt not in (IntList, RecordList, Record, IntArray, TextTextMap, Bytea, Jsonb):
         FUNC_OPS[Boolean] += [
             FuncOp("{} > {}", [dt, dt]),
             FuncOp("{} < {}", [dt, dt]),
@@ -182,6 +193,10 @@ FUNC_OPS[Boolean] += [
     FuncOp("mz_is_superuser()", [], unsupported=ExprKind.MATERIALIZABLE),
 ]
 
+FUNC_OPS[Record] += [FuncOp("row{}", [Int])]
+
+FUNC_OPS[RecordList] += [FuncOp("list[{}]", [Record])]
+
 FUNC_OPS[Text] += [
     FuncOp("lower{}", [Text]),
     FuncOp("upper{}", [Text]),
@@ -213,6 +228,7 @@ FUNC_OPS[Int] += [
     FuncOp("char_length{}", [Text]),
     FuncOp("map_length{}", [TextTextMap]),
     FuncOp("list_length{}", [IntList]),
+    FuncOp("list_length{}", [RecordList]),
     FuncOp("mz_version_num()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("pg_backend_pid()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("{} - {}", [Date, Date]),
