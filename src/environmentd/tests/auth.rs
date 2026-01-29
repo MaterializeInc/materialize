@@ -38,6 +38,7 @@ use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_auth::password::Password;
+use mz_authenticator::{GenericOidcAuthenticator, OidcConfig};
 use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -47,6 +48,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
+use mz_oidc_mock::{GenerateJwtOptions, OidcMockServer};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
@@ -117,6 +119,7 @@ enum TestCase<'a> {
         user_reported_by_system: &'a str,
         password: Option<Cow<'a, str>>,
         ssl_mode: SslMode,
+        options: Option<&'a str>,
         configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
         assert: Assert<
             // A non-retrying, raw error.
@@ -166,21 +169,26 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 user_reported_by_system,
                 password,
                 ssl_mode,
+                options,
                 configure,
                 assert,
             } => {
                 println!(
-                    "pgwire user={} password={:?} ssl_mode={:?}",
-                    user_to_auth_as, password, ssl_mode
+                    "pgwire user={} password={:?} ssl_mode={:?} options={:?}",
+                    user_to_auth_as, password, ssl_mode, options
                 );
 
                 let tls = make_pg_tls(configure);
                 let password = password.as_ref().unwrap_or(&Cow::Borrowed(""));
-                let conn_config = server
+                let mut conn_config = server
                     .connect()
                     .ssl_mode(*ssl_mode)
                     .user(user_to_auth_as)
                     .password(password);
+
+                if let Some(opts) = options {
+                    conn_config = conn_config.options(opts);
+                }
 
                 match assert {
                     Assert::Success => {
@@ -859,6 +867,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -876,6 +885,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -907,6 +917,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(format!("mzp_{}", URL_SAFE.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -921,6 +932,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(format!("mzp_{}", URL_SAFE_NO_PAD.encode(buf))))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -935,6 +947,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     Some(Cow::Owned(password.clone()))
                 },
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -953,6 +966,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -976,6 +990,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "materialize",
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -999,6 +1014,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed("bad password")),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1022,6 +1038,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Owned(format!("mznope_{client_id}{secret}"))),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1048,6 +1065,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1118,6 +1136,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1148,6 +1167,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
@@ -1160,6 +1180,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1196,6 +1217,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: Some(Cow::Borrowed(frontegg_service_system_user_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1233,6 +1255,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1269,6 +1292,510 @@ async fn test_auth_base_require_tls_frontegg() {
     .await;
 }
 
+/// Tests OIDC authentication with TLS required.
+///
+/// This test verifies that users can authenticate using OIDC tokens
+/// over TLS connections
+#[allow(clippy::unit_arg)]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_base_require_tls_oidc() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
+        oidc_issuer: oidc_server.issuer.clone(),
+        oidc_audience: None,
+    })
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let jwt_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+    let expired_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            exp: Some(0),
+            ..Default::default()
+        },
+    );
+    let wrong_user_token = oidc_server.generate_jwt(
+        "other@example.com",
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+    let wrong_issuer_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            issuer: Some("https://wrong-issuer.com"),
+            ..Default::default()
+        },
+    );
+
+    let oidc_bearer = Authorization::bearer(&jwt_token).unwrap();
+    let oidc_header_bearer = make_header(oidc_bearer);
+    let oidc_header_basic = make_header(Authorization::basic(oidc_user, &jwt_token));
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(&oidc_auth)
+        .start()
+        .await;
+
+    run_tests(
+        "TlsMode::Require, OIDC",
+        &server,
+        &[
+            // TLS with valid JWT should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // HTTP with Bearer auth should succeed.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_bearer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // HTTP with basic username/password should succeed.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTPS,
+                headers: &oidc_header_basic,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with bearer token should succeed.
+            TestCase::Ws {
+                auth: &WebSocketAuth::Bearer {
+                    token: jwt_token.clone(),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Ws with basic username/password should succeed.
+            TestCase::Ws {
+                auth: &WebSocketAuth::Basic {
+                    user: oidc_user.to_string(),
+                    password: Password(jwt_token.clone()),
+                    options: BTreeMap::default(),
+                },
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // No TLS should fail when server requires it.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&jwt_token)),
+                ssl_mode: SslMode::Disable,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(
+                        *err.code(),
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION
+                    );
+                    assert_eq!(err.message(), "TLS encryption is required");
+                })),
+            },
+            // HTTP without TLS should be rejected.
+            TestCase::Http {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                scheme: Scheme::HTTP,
+                headers: &oidc_header_bearer,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: assert_http_rejected(),
+            },
+            // Invalid JWT should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed("invalid-jwt-token")),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // Expired JWT should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&expired_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // JWT for wrong user should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_user_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // JWT with wrong issuer should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_issuer_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC audience validation.
+///
+/// This test verifies that when an audience is configured, only JWTs with
+/// matching `aud` claims are accepted.
+#[allow(clippy::unit_arg)]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_oidc_audience_validation() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let expected_audience = "my-app-client-id";
+    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
+        oidc_issuer: oidc_server.issuer.clone(),
+        oidc_audience: Some(expected_audience.to_string()),
+    })
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    // Token with correct audience
+    let valid_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec![expected_audience.to_string()]),
+            ..Default::default()
+        },
+    );
+    // Token with correct audience among multiple audiences
+    let valid_multi_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec!["other-app".to_string(), expected_audience.to_string()]),
+            ..Default::default()
+        },
+    );
+    // Token with wrong audience
+    let wrong_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec!["wrong-app".to_string()]),
+            ..Default::default()
+        },
+    );
+    // Token with no audience
+    let no_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(&oidc_auth)
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Audience Validation",
+        &server,
+        &[
+            // JWT with correct audience should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&valid_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // JWT with correct audience among multiple audiences should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&valid_multi_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // JWT with wrong audience should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&wrong_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+            // JWT with no audience should fail when audience is required.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&no_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC where we don't validate the audience claim.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_auth_oidc_audience_optional() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
+        oidc_issuer: oidc_server.issuer.clone(),
+        oidc_audience: None,
+    })
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    // Token with no audience
+    let no_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    // Token with any audience
+    let valid_aud_token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec!["my-app-client-id".to_string()]),
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(&oidc_auth)
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC no audience validation",
+        &server,
+        &[
+            // JWT with no audience should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&no_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // JWT with any audience should succeed.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&valid_aud_token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+}
+
+/// Tests OIDC password fallback.
+///
+/// This test verifies that when oidc_auth_enabled is false or not set,
+/// the OIDC authenticator falls back to password authentication.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_password_fallback() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
+        oidc_issuer: oidc_server.issuer.clone(),
+        oidc_audience: None,
+    })
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let user_password = "secure_password";
+
+    let server = test_util::TestHarness::default()
+        .with_oidc_auth(&oidc_auth)
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .with_password_auth(Password("mz_system_password".to_owned()))
+        .start()
+        .await;
+
+    let admin_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(&format!(
+            "CREATE ROLE \"{}\" LOGIN PASSWORD '{}'",
+            oidc_user, user_password
+        ))
+        .await
+        .unwrap();
+
+    run_tests(
+        "OIDC Password Fallback (oidc_auth_enabled=false or not set)",
+        &server,
+        &[
+            // Password auth should work (oidc_auth_enabled not set, defaults to false)
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(user_password)),
+                ssl_mode: SslMode::Prefer,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Explicitly set to false
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(user_password)),
+                ssl_mode: SslMode::Prefer,
+                options: Some("--oidc_auth_enabled=false"),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            // Invalid password should fail
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed("wrong_password")),
+                ssl_mode: SslMode::Prefer,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
@@ -1287,6 +1814,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
@@ -1304,6 +1832,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Success,
             },
@@ -1313,6 +1842,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
@@ -1341,6 +1871,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
@@ -1388,6 +1919,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1415,6 +1947,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Disable,
+                options: None,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
@@ -1438,6 +1971,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1447,6 +1981,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Success,
             },
@@ -1464,6 +1999,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 password: None,
                 ssl_mode: SslMode::Prefer,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
@@ -1504,6 +2040,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
@@ -1573,6 +2110,7 @@ async fn test_auth_intermediate_ca() {
                 user_reported_by_system: "materialize",
                 password: None,
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Success,
             },
@@ -1709,6 +2247,7 @@ async fn test_auth_admin_non_superuser() {
                 user_reported_by_system: frontegg_user,
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(false),
             },
@@ -1854,6 +2393,7 @@ async fn test_auth_admin_superuser() {
                 user_reported_by_system: admin_frontegg_user,
                 password: Some(Cow::Borrowed(admin_frontegg_password)),
                 ssl_mode: SslMode::Require,
+                options: None,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::SuccessSuperuserCheck(true),
             },

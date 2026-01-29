@@ -86,7 +86,7 @@ pub enum Command {
     },
 
     AuthenticatePassword {
-        tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
         role_name: String,
         password: Option<Password>,
     },
@@ -372,12 +372,20 @@ pub struct Response<T> {
     pub otel_ctx: OpenTelemetryContext,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SuperuserAttribute(pub Option<bool>);
+
 /// The response to [`Client::startup`](crate::Client::startup).
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct StartupResponse {
     /// RoleId for the user.
     pub role_id: RoleId,
+    /// The role's superuser attribute in the Catalog.
+    /// This attribute is None for Cloud. Cloud is able
+    /// to derive the role's superuser status from
+    /// external_metadata_rx.
+    pub superuser_attribute: SuperuserAttribute,
     /// A future that completes when all necessary Builtin Table writes have completed.
     #[derivative(Debug = "ignore")]
     pub write_notify: BuiltinTableAppendNotify,
@@ -396,16 +404,6 @@ pub struct StartupResponse {
     pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
-/// The response to [`Client::authenticate`](crate::Client::authenticate).
-#[derive(Derivative)]
-#[derivative(Debug)]
-pub struct AuthResponse {
-    /// RoleId for the user.
-    pub role_id: RoleId,
-    /// If the user is a superuser.
-    pub superuser: bool,
-}
-
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct SASLChallengeResponse {
@@ -419,7 +417,6 @@ pub struct SASLChallengeResponse {
 #[derivative(Debug)]
 pub struct SASLVerifyProofResponse {
     pub verifier: String,
-    pub auth_resp: AuthResponse,
 }
 
 // Facile implementation for `StartupResponse`, which does not use the `allowed`

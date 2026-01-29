@@ -51,12 +51,6 @@ spec:
     # Note: Not all JWT providers support .well-known/openid-configuration,
     # so use jwks directly if the provider doesn't support it.
     jwksFetchFromIssuer: true
-    # The OAuth 2.0 token endpoint where Materialize will request new access
-    # tokens using a refresh token (https://www.rfc-editor.org/rfc/rfc6749.html#section-6).
-    # Requires `grant_type` of `refresh_token` in the client.
-    # Optional. If not provided, sessions will expire when the access token expires
-    # and refresh tokens in the password field will be ignored.
-    tokenEndpoint: https://dev-123456.okta.com/oauth2/default/v1/token
 ```
 
 Where in environmentd, it’ll look like so:
@@ -82,9 +76,13 @@ When a user first logs in with a valid token, we create a role for them if one d
 
 ### Solution proposal: The user should be disabled from logging in when a user is removed from the upstream IDP. However, the database level role should still exist.
 
+When doing pgwire Oidc authentication, we can accept a cleartext password that is the access token. The OIDC authenticator will do JWT authentication on the access token. If the token is expired, the session will not be established. We will not do any invalidation on the session if the session has already been authenticated/established, but the token is expired. Eventually, the token will expire and the user will not be able to authenticate a new session. This creates a tradeoff between security and developer experience, but is acceptable since organizations will have supplemental methods of deprovisioning users outside of the database. This accomplishes disabling a user from logging in, but the database role still existing.
+
+**Alternative: Use a refresh token flow to invalidate active sessions**
+
 When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. This would require users to have their IdP client generate `refresh` tokens. For token expiration checking, in a task, we'll repeatedly wait for `(expiration - now) * 0.8` and see if it's less than a minute. This is also how we check token expiration in the Frontegg authenticator. We'll also implement a config variable to turn off this mechanism and have it default to true.
 
-By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on removal of a user from an IDP. When admins remove a user from an IDP, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
+This approach would enhance security by ensuring that sessions are invalidated once the access token expires. However, it would also introduce additional complexity and degrade the developer experience, as it would require users to configure refresh tokens in their IdP. Additionally, some IdPs may impose rate limits on token refresh operations. By opting for a simpler design, we minimize potential incompatibilities with various IdPs.
 
 **Alternative: Use SASL Authentication using the OAUTHBEARER mechanism rather than a cleartext password**
 
@@ -124,12 +122,8 @@ An MVP of what this might look like exists here: [https://github.com/Materialize
 ### Tests:
 
 - Successful login (e2e mzcompose)
-- Invalidating the session on access token expiration and no refresh token (Rust unit test)
-- A token should successfully refresh if the access token and refresh token are valid (Rust unit test)
 - Session should error if access token is invalid (Rust unit test)
-- Session should error if refresh token is invalid (Rust unit test)
 - A user shouldn't be able to login as another user (Rust unit test)
-- Removing a user from the upstream IDP should invalidate the refresh token (e2e mzcompose)
 - Platform-check simple login check (platform-check framework)
 - JWTs should only be accepted when a valid JWK is set (we do not want to accept JWTs that are not signed with a real, cryptographically sound key)
 

@@ -5580,6 +5580,7 @@ dependencies = [
  "base64 0.22.1",
  "itertools 0.14.0",
  "mz-ore",
+ "mz-repr",
  "openssl",
  "proptest",
  "proptest-derive",
@@ -5592,9 +5593,17 @@ dependencies = [
 name = "mz-authenticator"
 version = "0.1.0"
 dependencies = [
+ "jsonwebtoken",
  "mz-adapter",
+ "mz-auth",
  "mz-frontegg-auth",
+ "mz-ore",
+ "reqwest",
  "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
  "workspace-hack",
 ]
 
@@ -6327,6 +6336,7 @@ dependencies = [
  "mz-license-keys",
  "mz-metrics",
  "mz-npm",
+ "mz-oidc-mock",
  "mz-orchestrator",
  "mz-orchestrator-kubernetes",
  "mz-orchestrator-process",
@@ -6566,6 +6576,7 @@ dependencies = [
  "futures",
  "jsonwebtoken",
  "lru 0.16.3",
+ "mz-auth",
  "mz-ore",
  "mz-repr",
  "prometheus",
@@ -6876,6 +6887,26 @@ dependencies = [
  "sha2",
  "tar",
  "walkdir",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-oidc-mock"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "jsonwebtoken",
+ "mz-authenticator",
+ "mz-ore",
+ "openssl",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
  "workspace-hack",
 ]
 

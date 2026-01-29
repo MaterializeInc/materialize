@@ -210,8 +210,6 @@ pub struct SessionConfig {
     /// An optional receiver that the session will periodically check for
     /// updates to a user's external metadata.
     pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
-    /// The metadata of the user associated with the session.
-    pub internal_user_metadata: Option<InternalUserMetadata>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -299,7 +297,6 @@ impl<T: TimestampManipulation> Session<T> {
                 user: SYSTEM_USER.name.clone(),
                 client_ip: None,
                 external_metadata_rx: None,
-                internal_user_metadata: None,
                 helm_chart_version: None,
             },
             metrics,
@@ -316,7 +313,6 @@ impl<T: TimestampManipulation> Session<T> {
             user,
             client_ip,
             mut external_metadata_rx,
-            internal_user_metadata,
             helm_chart_version,
         }: SessionConfig,
         metrics: SessionMetrics,
@@ -325,7 +321,7 @@ impl<T: TimestampManipulation> Session<T> {
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user);
         let user = User {
             name: user,
-            internal_metadata: internal_user_metadata,
+            internal_metadata: None,
             external_metadata: external_metadata_rx
                 .as_mut()
                 .map(|rx| rx.borrow_and_update().clone()),
@@ -869,6 +865,11 @@ impl<T: TimestampManipulation> Session<T> {
         // the sending side of this watch channel.
         let metadata = rx.borrow_and_update().clone();
         self.vars.set_external_user_metadata(metadata);
+    }
+
+    /// Applies the internal user metadata to the session.
+    pub fn apply_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
+        self.vars.set_internal_user_metadata(metadata);
     }
 
     /// Initializes the session's role metadata.
