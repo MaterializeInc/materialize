@@ -12,155 +12,147 @@
 const hpccWasm = window['@hpcc-js/wasm'];
 
 async function query(sql) {
-  const response = await fetch('/api/sql', {
-    method: 'POST',
-    body: JSON.stringify({ query: sql }),
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw `request failed: ${response.status} ${response.statusText}: ${text}`;
-  }
-  const data = await response.json();
-  return data;
+    const response = await fetch('/api/sql', {
+        method: 'POST',
+        body: JSON.stringify({query: sql}),
+        headers: {'Content-Type': 'application/json'},
+    });
+    if (!response.ok) {
+        const text = await response.text();
+        throw `request failed: ${response.status} ${response.statusText}: ${text}`;
+    }
+    const data = await response.json();
+    return data;
 }
 
 function formatNameForQuery(name) {
-  return `'${name.replace('\'', '\'\'')}'`;
+    return `'${name.replace('\'', '\'\'')}'`;
 }
 
-const { useState, useEffect } = React;
+const {useState, useEffect} = React;
 
 function ClusterReplicaView() {
-  const [currentClusterName, setCurrentClusterName] = useState(null);
-  const [currentReplicaName, setCurrentReplicaName] = useState(null);
-  const [sqlResponse, setSqlResponse] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+    const [currentClusterName, setCurrentClusterName] = useState(null);
+    const [currentReplicaName, setCurrentReplicaName] = useState(null);
+    const [sqlResponse, setSqlResponse] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
 
-  const queryClusterReplicas = `
-    SELECT
-      clusters.name AS cluster_name, replicas.name AS replica_name
-    FROM
-      mz_catalog.mz_cluster_replicas replicas
-      LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
-    ORDER BY cluster_name ASC, replica_name ASC
-  `;
 
-  useEffect(() => {
-    const search = new URLSearchParams(location.search);
-    const clusterName = search.get('cluster_name');
-    const replicaName = search.get('replica_name');
-    if (clusterName) {
-      setCurrentClusterName(clusterName);
-    }
-    if (replicaName) {
-      setCurrentReplicaName(replicaName);
-    }
-
-    query(queryClusterReplicas)
-      .then((data) => {
-        const results = data.results[0].rows;
-        setSqlResponse(results);
-        if (!replicaName && results.length > 0) {
-          if(results.some(
-            result => ('default' == result[0]) && ('r1' == result[1]))) {
-            setCurrentClusterName('default');
-            setCurrentReplicaName('r1');
-          } else {
-            setCurrentClusterName(results[0][0]);
-            setCurrentReplicaName(results[0][1]);
-          }
+    useEffect(() => {
+        const search = new URLSearchParams(location.search);
+        const clusterName = search.get('cluster_name');
+        const replicaName = search.get('replica_name');
+        if (clusterName) {
+            setCurrentClusterName(clusterName);
         }
-        setLoading(false);
-      })
-      .catch((error) => {
-        setError(error);
-        setLoading(false);
-      });
-  }, []);
+        if (replicaName) {
+            setCurrentReplicaName(replicaName);
+        }
 
-  useEffect(() => {
-    if (!currentReplicaName) return;
-    const params = new URLSearchParams(location.search);
-    params.set('cluster_name', currentClusterName);
-    params.set('replica_name', currentReplicaName);
-    window.history.replaceState({}, '', `${location.pathname}?${params}`);
-  }, [currentClusterName, currentReplicaName]);
+        query(queryClusterReplicas)
+            .then((data) => {
+                const results = data.results[0].rows;
+                setSqlResponse(results);
+                if (!replicaName && results.length > 0) {
+                    if (results.some(
+                        result => ('default' == result[0]) && ('r1' == result[1]))) {
+                        setCurrentClusterName('default');
+                        setCurrentReplicaName('r1');
+                    } else {
+                        setCurrentClusterName(results[0][0]);
+                        setCurrentReplicaName(results[0][1]);
+                    }
+                }
+                setLoading(false);
+            })
+            .catch((error) => {
+                setError(error);
+                setLoading(false);
+            });
+    }, []);
 
-  return (
-    <div>
-      {loading ? (
-        <div>Loading...</div>
-      ) : error ? (
-        <div>error: {error}</div>
-      ) : (
+    useEffect(() => {
+        if (!currentReplicaName) return;
+        const params = new URLSearchParams(location.search);
+        params.set('cluster_name', currentClusterName);
+        params.set('replica_name', currentReplicaName);
+        window.history.replaceState({}, '', `${location.pathname}?${params}`);
+    }, [currentClusterName, currentReplicaName]);
+
+    return (
         <div>
-          <label htmlFor="cluster_replica">Cluster Replica </label>
-          <select
-            id="cluster_replica"
-            name="cluster_replica"
-            onChange={(event) => {
-              const clusterReplicaJson = event.target.value;
-              const clusterReplica = JSON.parse(clusterReplicaJson);
-              setCurrentClusterName(clusterReplica[0]);
-              setCurrentReplicaName(clusterReplica[1]);
-            }}
-            defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
-          >
-            {sqlResponse.map((v) => (
-              <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
-                {`${v[0]}.${v[1]}`}
-              </option>
-            ))}
-          </select>
-          <Views clusterName={currentClusterName} replicaName={currentReplicaName} />
+            {loading ? (
+                <div>Loading...</div>
+            ) : error ? (
+                <div>error: {error}</div>
+            ) : (
+                <div>
+                    <label htmlFor="cluster_replica">Cluster Replica </label>
+                    <select
+                        id="cluster_replica"
+                        name="cluster_replica"
+                        onChange={(event) => {
+                            const clusterReplicaJson = event.target.value;
+                            const clusterReplica = JSON.parse(clusterReplicaJson);
+                            setCurrentClusterName(clusterReplica[0]);
+                            setCurrentReplicaName(clusterReplica[1]);
+                        }}
+                        defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
+                    >
+                        {sqlResponse.map((v) => (
+                            <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
+                                {`${v[0]}.${v[1]}`}
+                            </option>
+                        ))}
+                    </select>
+                    <Views clusterName={currentClusterName} replicaName={currentReplicaName}/>
+                </div>
+            )}
         </div>
-      )}
-    </div>
-  );
+    );
 }
 
 function Views(props) {
-  const [currentDataflow, setCurrentDataflow] = useState(null);
-  const [includeSystemCatalog, setIncludeSystemCatalog] = useState(false);
-  const [records, setRecords] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+    const [currentDataflow, setCurrentDataflow] = useState(null);
+    const [includeSystemCatalog, setIncludeSystemCatalog] = useState(false);
+    const [records, setRecords] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
 
-  useEffect(() => {
-    const search = new URLSearchParams(location.search);
-    const dataflow = search.get('dataflow');
-    if (dataflow) {
-      setCurrentDataflow(dataflow);
-    }
-    setIncludeSystemCatalog(search.get('system_catalog') === 'true');
-  }, []);
+    useEffect(() => {
+        const search = new URLSearchParams(location.search);
+        const dataflow = search.get('dataflow');
+        if (dataflow) {
+            setCurrentDataflow(dataflow);
+        }
+        setIncludeSystemCatalog(search.get('system_catalog') === 'true');
+    }, []);
 
-  useEffect(() => {
-    setCurrentDataflow(null);
-  }, [props]);
+    useEffect(() => {
+        setCurrentDataflow(null);
+    }, [props]);
 
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (currentDataflow) {
-      params.set('dataflow', currentDataflow);
-    } else {
-      params.delete('dataflow');
-    }
-    window.history.replaceState({}, '', `${location.pathname}?${params}`);
-  }, [currentDataflow]);
+    useEffect(() => {
+        const params = new URLSearchParams(location.search);
+        if (currentDataflow) {
+            params.set('dataflow', currentDataflow);
+        } else {
+            params.delete('dataflow');
+        }
+        window.history.replaceState({}, '', `${location.pathname}?${params}`);
+    }, [currentDataflow]);
 
-  const whereFragment = includeSystemCatalog ? `` : `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
+    const whereFragment = includeSystemCatalog ? `` : `WHERE name NOT LIKE 'Dataflow: mz_catalog.%'`;
 
-  useEffect(() => {
-    setLoading(true);
-    setError(false);
+    useEffect(() => {
+        setLoading(true);
+        setError(false);
 
-    const load = async () => {
-      const {
-        results: [_set_cluster, _set_replica, records_table],
-      } = await query(`
+        const load = async () => {
+            const {
+                results: [_set_cluster, _set_replica, records_table],
+            } = await query(`
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
@@ -172,110 +164,112 @@ function Views(props) {
           records DESC
       `);
 
-      setRecords(records_table.rows);
-      setLoading(false);
-    };
-    load().catch((error) => {
-      setError(error);
-      setLoading(false);
-    });
-  }, [props, includeSystemCatalog]);
+            setRecords(records_table.rows);
+            setLoading(false);
+        };
+        load().catch((error) => {
+            setError(error);
+            setLoading(false);
+        });
+    }, [props, includeSystemCatalog]);
 
-  return (
-    <div>
-      <div>
-        <input
-          type="checkbox"
-          id="include_system_catalog"
-          name="include_system_catalog"
-          onChange={(event) => {
-            const params = new URLSearchParams(location.search);
-            if (event.target.checked) {
-              params.set('system_catalog', 'true');
-            } else {
-              params.delete('system_catalog');
-            }
-            window.history.replaceState({}, '', `${location.pathname}?${params}`);
-
-            setIncludeSystemCatalog(event.target.checked === true);
-          }}
-          checked={includeSystemCatalog}
-        />
-        <label htmlFor="include_system_catalog">Include system catalog</label>
-      </div>
-      {loading ? (
-        <div>Loading...</div>
-      ) : error ? (
-        <div>error: {error}</div>
-      ) : (
+    return (
         <div>
-          <table class="dataflows">
-            <thead>
-              <tr>
-                <th>dataflow id</th>
-                <th>index name</th>
-                <th>batches</th>
-                <th>records</th>
-                <th>size [KiB]</th>
-                <th>capacity [KiB]</th>
-                <th>allocations</th>
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((v) => (
-                <tr key={v[1]}>
-                  <td>{v[0]}</td>
-                  <td>
-                    <button
-                      onClick={() => { setCurrentDataflow(v[0]); }}
-                    >
-                      +
-                    </button>
-                    {v[1]}
-                  </td>
-                  <td>{v[2]}</td>
-                  <td>{v[3]}</td>
-                  <td>{Math.round(v[4]/1024)}</td>
-                  <td>{Math.round(v[5]/1024)}</td>
-                  <td>{v[6]}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div>{currentDataflow ?
-            <View
-              dataflowId={currentDataflow}
-              clusterName={props.clusterName}
-              replicaName={props.replicaName} /> :
-            null}</div>
+            <div>
+                <input
+                    type="checkbox"
+                    id="include_system_catalog"
+                    name="include_system_catalog"
+                    onChange={(event) => {
+                        const params = new URLSearchParams(location.search);
+                        if (event.target.checked) {
+                            params.set('system_catalog', 'true');
+                        } else {
+                            params.delete('system_catalog');
+                        }
+                        window.history.replaceState({}, '', `${location.pathname}?${params}`);
+
+                        setIncludeSystemCatalog(event.target.checked === true);
+                    }}
+                    checked={includeSystemCatalog}
+                />
+                <label htmlFor="include_system_catalog">Include system catalog</label>
+            </div>
+            {loading ? (
+                <div>Loading...</div>
+            ) : error ? (
+                <div>error: {error}</div>
+            ) : (
+                <div>
+                    <table class="dataflows">
+                        <thead>
+                        <tr>
+                            <th>dataflow id</th>
+                            <th>index name</th>
+                            <th>batches</th>
+                            <th>records</th>
+                            <th>size [KiB]</th>
+                            <th>capacity [KiB]</th>
+                            <th>allocations</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {records.map((v) => (
+                            <tr key={v[1]}>
+                                <td>{v[0]}</td>
+                                <td>
+                                    <button
+                                        onClick={() => {
+                                            setCurrentDataflow(v[0]);
+                                        }}
+                                    >
+                                        +
+                                    </button>
+                                    {v[1]}
+                                </td>
+                                <td>{v[2]}</td>
+                                <td>{v[3]}</td>
+                                <td>{Math.round(v[4] / 1024)}</td>
+                                <td>{Math.round(v[5] / 1024)}</td>
+                                <td>{v[6]}</td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+                    <div>{currentDataflow ?
+                        <View
+                            dataflowId={currentDataflow}
+                            clusterName={props.clusterName}
+                            replicaName={props.replicaName}/> :
+                        null}</div>
+                </div>
+            )}
         </div>
-      )}
-    </div>
-  );
+    );
 }
 
 function View(props) {
-  const [stats, setStats] = useState(null);
-  const [addrs, setAddrs] = useState(null);
-  const [records, setRecords] = useState(null);
-  const [opers, setOpers] = useState(null);
-  const [chans, setChans] = useState(null);
-  const [elapsed, setElapsed] = useState(null);
-  const [view, setView] = useState(null);
-  const [graph, setGraph] = useState(null);
-  const [dot, setDot] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+    const [stats, setStats] = useState(null);
+    const [addrs, setAddrs] = useState(null);
+    const [records, setRecords] = useState(null);
+    const [opers, setOpers] = useState(null);
+    const [chans, setChans] = useState(null);
+    const [elapsed, setElapsed] = useState(null);
+    const [view, setView] = useState(null);
+    const [graph, setGraph] = useState(null);
+    const [dot, setDot] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(false);
 
-  useEffect(() => {
-    setLoading(true);
-    setError(false);
-    setGraph(null);
+    useEffect(() => {
+        setLoading(true);
+        setError(false);
+        setGraph(null);
 
-    const load = async () => {
-      const {
-        results: [_set_cluster, _set_replica, stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
-      } = await query(`
+        const load = async () => {
+            const {
+                results: [_set_cluster, _set_replica, stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
+            } = await query(`
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
         SELECT
@@ -349,296 +343,285 @@ function View(props) {
         WHERE
           dataflow_id = ${props.dataflowId};
       `);
-      if (stats_table.rows.length !== 1) {
-        throw `unknown dataflow id ${props.dataflowId}`;
-      }
-      const stats_row = stats_table.rows[0];
-      const stats = {
-        name: stats_row[0],
-        batches: stats_row[1],
-        records: stats_row[2],
-        size: stats_row[3],
-      };
-      setStats(stats);
+            if (stats_table.rows.length !== 1) {
+                throw `unknown dataflow id ${props.dataflowId}`;
+            }
+            const stats_row = stats_table.rows[0];
+            const stats = {
+                name: stats_row[0],
+                batches: stats_row[1],
+                records: stats_row[2],
+                size: stats_row[3],
+            };
+            setStats(stats);
 
-      // Map from id to address (array). {320: [11], 321: [11, 1]}.
-      const addrs = {};
-      addr_table.rows.forEach(([id, address]) => {
-        if (!addrs[id]) {
-          addrs[id] = address;
+            // Map from id to address (array). {320: [11], 321: [11, 1]}.
+            const addrs = {};
+            addr_table.rows.forEach(([id, address]) => {
+                if (!addrs[id]) {
+                    addrs[id] = address;
+                }
+            });
+            setAddrs(addrs);
+
+            // Map from id to operator name. {320: 'name'}.
+            const opers = Object.fromEntries(oper_table.rows);
+            setOpers(opers);
+
+            // {id: [source, target]}.
+            const chans = Object.fromEntries(
+                chan_table.rows.map(([id, source, target, sent, batch_sent]) => [id, [source, target, sent, batch_sent]])
+            );
+            setChans(chans);
+
+            const records = Object.fromEntries(
+                records_table.rows.map(([id, records, size]) => [id, [records, size]])
+            )
+            setRecords(records);
+
+            setElapsed(Object.fromEntries(elapsed_table.rows));
+
+            try {
+                const view = await getCreateView(stats.name);
+                setView(view);
+            } catch (error) {
+                console.debug('could not get create view:', error);
+                setView(null);
+            }
+
+            setLoading(false);
+        };
+        load().catch((error) => {
+            setError(error);
+            setLoading(false);
+        });
+    }, [props]);
+
+    useEffect(() => {
+        if (loading || error) {
+            return;
         }
-      });
-      setAddrs(addrs);
 
-      // Map from id to operator name. {320: 'name'}.
-      const opers = Object.fromEntries(oper_table.rows);
-      setOpers(opers);
-
-      // {id: [source, target]}.
-      const chans = Object.fromEntries(
-        chan_table.rows.map(([id, source, target, sent, batch_sent]) => [id, [source, target, sent, batch_sent]])
-      );
-      setChans(chans);
-
-      const records = Object.fromEntries(
-        records_table.rows.map(([id, records, size]) => [id, [records, size]])
-      )
-      setRecords(records);
-
-      setElapsed(Object.fromEntries(elapsed_table.rows));
-
-      try {
-        const view = await getCreateView(stats.name);
-        setView(view);
-      } catch (error) {
-        console.debug('could not get create view:', error);
-        setView(null);
-      }
-
-      setLoading(false);
-    };
-    load().catch((error) => {
-      setError(error);
-      setLoading(false);
-    });
-  }, [props]);
-
-  useEffect(() => {
-    if (loading || error) {
-      return;
-    }
-
-    // Create a map from address to id.
-    const lookup = Object.fromEntries(
-      Object.entries(addrs).map(([id, addr]) => [addrStr(addr), id])
-    );
-    const max_record_count = Math.max.apply(
-      Math,
-      Object.values(records).map(([records, size]) => records)
-    );
-    const scopes = {};
-    // Find all the scopes.
-    Object.entries(opers).forEach(([id, name]) => {
-      if (name.startsWith('Region')) {
-        scopes[addrStr(addrs[id])] = [];
-      }
-    });
-    // Populate scopes.
-    Object.keys(opers).forEach((id) => {
-      const addr = addrs[id];
-      addr.pop();
-      const str = addrStr(addr);
-      if (str in scopes) {
-        scopes[str].push(id);
-      }
-    });
-    const clusters = Object.entries(scopes).map(([addr, ids]) => {
-      const scope_id = lookup[addr];
-      const sg = [`subgraph "cluster_${addr}" {`];
-      //sg.push(`label="${opers[scope_id]} (id: ${scope_id})"`);
-      sg.push(`_${scope_id};`);
-      ids.forEach((id) => {
-        sg.push(`_${id};`);
-      });
-      sg.push('}');
-      return sg.join('\n');
-    });
-    const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
-      if (!(id in addrs)) {
-        return `// ${id} not in addrs`;
-      }
-      const from = makeAddrStr(addrs, id, source);
-      const to = makeAddrStr(addrs, id, target);
-      const from_id = lookup[from];
-      const to_id = lookup[to];
-      if (from_id === undefined) {
-        return `// ${from} or not in lookup`;
-      }
-      if (to_id === undefined) {
-        return `// ${to} or not in lookup`;
-      }
-      return sent == null
-        ? `_${from_id} -> _${to_id} [style="dashed"];`
-        : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
-    });
-    const oper_labels = Object.entries(opers).map(([id, name]) => {
-      if (!addrs[id].length) {
-        return '';
-      }
-      const notes = [`id: ${id}`];
-      let style = '';
-      if (id in records && records[id][0] > 0) {
-        const record_count = records[id][0];
-        const size = Math.ceil(records[id][1]/1024);
-        // Any operator that can have records will have a red border (even if it
-        // currently has 0 records). The fill color is a deeper red based on how many
-        // records this operator has compared to the operator with the most records.
-        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xa0) : 0;
-        const alpha = pct.toString(16).padStart(2, '0');
-        notes.push(`${record_count} rows, ${size} KiB`);
-        style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
-      }
-      // Only display elapsed time if it's more than 1s.
-      if (id in elapsed && elapsed[id] > 1e9) {
-        notes.push(`${dispNs(elapsed[id])} elapsed`);
-      }
-      const maxLen = 40;
-      if (name.length > maxLen + 3) {
-        name = name.slice(0, maxLen) + '...';
-      }
-      return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
-    });
-    oper_labels.unshift('');
-    clusters.unshift('');
-    edges.unshift('');
-    const dot = `digraph {
+        // Create a map from address to id.
+        const lookup = Object.fromEntries(
+            Object.entries(addrs).map(([id, addr]) => [addrStr(addr), id])
+        );
+        const max_record_count = Math.max.apply(
+            Math,
+            Object.values(records).map(([records, size]) => records)
+        );
+        const scopes = {};
+        // Find all the scopes.
+        Object.entries(opers).forEach(([id, name]) => {
+            if (name.startsWith('Region')) {
+                scopes[addrStr(addrs[id])] = [];
+            }
+        });
+        // Populate scopes.
+        Object.keys(opers).forEach((id) => {
+            const addr = addrs[id];
+            addr.pop();
+            const str = addrStr(addr);
+            if (str in scopes) {
+                scopes[str].push(id);
+            }
+        });
+        const clusters = Object.entries(scopes).map(([addr, ids]) => {
+            const scope_id = lookup[addr];
+            const sg = [`subgraph "cluster_${addr}" {`];
+            //sg.push(`label="${opers[scope_id]} (id: ${scope_id})"`);
+            sg.push(`_${scope_id};`);
+            ids.forEach((id) => {
+                sg.push(`_${id};`);
+            });
+            sg.push('}');
+            return sg.join('\n');
+        });
+        const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
+            if (!(id in addrs)) {
+                return `// ${id} not in addrs`;
+            }
+            const from = makeAddrStr(addrs, id, source);
+            const to = makeAddrStr(addrs, id, target);
+            const from_id = lookup[from];
+            const to_id = lookup[to];
+            if (from_id === undefined) {
+                return `// ${from} or not in lookup`;
+            }
+            if (to_id === undefined) {
+                return `// ${to} or not in lookup`;
+            }
+            return sent == null
+                ? `_${from_id} -> _${to_id} [style="dashed"];`
+                : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
+        });
+        const oper_labels = Object.entries(opers).map(([id, name]) => {
+            if (!addrs[id].length) {
+                return '';
+            }
+            const notes = [`id: ${id}`];
+            let style = '';
+            if (id in records && records[id][0] > 0) {
+                const record_count = records[id][0];
+                const size = Math.ceil(records[id][1] / 1024);
+                // Any operator that can have records will have a red border (even if it
+                // currently has 0 records). The fill color is a deeper red based on how many
+                // records this operator has compared to the operator with the most records.
+                const pct = record_count ? Math.floor((record_count / max_record_count) * 0xa0) : 0;
+                const alpha = pct.toString(16).padStart(2, '0');
+                notes.push(`${record_count} rows, ${size} KiB`);
+                style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
+            }
+            // Only display elapsed time if it's more than 1s.
+            if (id in elapsed && elapsed[id] > 1e9) {
+                notes.push(`${dispNs(elapsed[id])} elapsed`);
+            }
+            const maxLen = 40;
+            if (name.length > maxLen + 3) {
+                name = name.slice(0, maxLen) + '...';
+            }
+            return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
+        });
+        oper_labels.unshift('');
+        clusters.unshift('');
+        edges.unshift('');
+        const dot = `digraph {
       ${clusters.join('\n')}
       ${edges.join('\n')}
       ${oper_labels.join('\n')}
     }`;
-    console.debug(dot);
-    setDot(dot);
-    hpccWasm.graphviz.layout(dot, 'svg', 'dot').then(setGraph);
-  }, [loading]);
+        console.debug(dot);
+        setDot(dot);
+        hpccWasm.graphviz.layout(dot, 'svg', 'dot').then(setGraph);
+    }, [loading]);
 
-  let viewText = null;
-  if (view) {
-    viewText = (
-      <div style={{ margin: '1em' }}>
-        View: {view.name}
-        <div style={{ padding: '.5em', backgroundColor: '#f5f5f5' }}>{view.create}</div>
-      </div>
-    );
-  }
-
-  let dotLink = null;
-  if (dot) {
-    const link = new URL('https://materialize.com/memory-visualization/');
-    // Pass information as a JSON object to allow for easily extending this in
-    // the future. The hash is used instead of search because it reduces privacy
-    // concerns and avoids server-side URL size limits.
-    let data = { dot: dot };
+    let viewText = null;
     if (view) {
-      data.view = view;
+        viewText = (
+            <div style={{margin: '1em'}}>
+                View: {view.name}
+                <div style={{padding: '.5em', backgroundColor: '#f5f5f5'}}>{view.create}</div>
+            </div>
+        );
     }
-    data = JSON.stringify(data);
-    // Compress data and encode as base64 so it's URL-safe.
-    data = pako.deflate(data, { to: 'string' });
-    link.hash = btoa(data);
-    dotLink = <a href={link}>share</a>;
-  }
 
-  return (
-    <div style={{ marginTop: '2em' }}>
-      {loading ? (
-        <div>Loading...</div>
-      ) : error ? (
-        <div>error: {error}</div>
-      ) : (
-        <div>
-          <h3>
-            Name: {stats.name}, dataflow_id: {props.dataflowId}, records: {stats.records}
-          </h3>
-          {dotLink}
-          {viewText}
-          <div dangerouslySetInnerHTML={{ __html: graph }}></div>
+    let dotLink = null;
+    if (dot) {
+        const link = new URL('https://materialize.com/memory-visualization/');
+        // Pass information as a JSON object to allow for easily extending this in
+        // the future. The hash is used instead of search because it reduces privacy
+        // concerns and avoids server-side URL size limits.
+        let data = {dot: dot};
+        if (view) {
+            data.view = view;
+        }
+        data = JSON.stringify(data);
+        // Compress data and encode as base64 so it's URL-safe.
+        data = pako.deflate(data, {to: 'string'});
+        link.hash = btoa(data);
+        dotLink = <a href={link}>share</a>;
+    }
+
+    return (
+        <div style={{marginTop: '2em'}}>
+            {loading ? (
+                <div>Loading...</div>
+            ) : error ? (
+                <div>error: {error}</div>
+            ) : (
+                <div>
+                    <h3>
+                        Name: {stats.name}, dataflow_id: {props.dataflowId}, records: {stats.records}
+                    </h3>
+                    {dotLink}
+                    {viewText}
+                    <div dangerouslySetInnerHTML={{__html: graph}}></div>
+                </div>
+            )}
         </div>
-      )}
-    </div>
-  );
+    );
 }
 
 async function getCreateView(dataflow_name) {
-  // dataflow_name is the full name of the dataflow operator. It is generally
-  // of the form "Dataflow: <database>.<schema>.<index name>". We will use a
-  // regex to parse these out and use them to get the fully qualified view name
-  // which we will use with SHOW CREATE VIEW to show the SQL that created this
-  // dataflow.
-  //
-  // There are known problems with this method. It doesn't know anything about
-  // SQL parsing or escaping, assumes the dataflow operator's name is of a very
-  // specific shape, and assumes a CREATE VIEW statement made an index which made
-  // this dataflow. So we assume that problems can happen at any level here and
-  // will cleanly bail if anything doesn't exactly match what we want. In that
-  // case we will not show the SQL. This is intended to be good enough for most
-  // users for now.
-  const match = dataflow_name.match(/^Dataflow: (.*)\.(.*)\.(.*)$/);
-  if (!match) {
-    throw 'unknown dataflow name pattern';
-  }
-  const view_name_table = await query(`
-    SELECT
-      d.name AS database, s.schema, s.view
-    FROM
-      mz_catalog.mz_databases AS d
-      JOIN (
-          SELECT
-            s.database_id, s.name AS schema, v.view
-          FROM
-            mz_catalog.mz_schemas AS s
-            JOIN (
-                SELECT
-                  name AS view, schema_id
-                FROM
-                  mz_catalog.mz_views
-                WHERE
-                  id
-                  = (
-                      SELECT
-                        DISTINCT idx.on_id
-                      FROM
-                        mz_catalog.mz_databases AS db,
-                        mz_catalog.mz_schemas AS sc,
-                        mz_catalog.mz_indexes AS idx
-                      WHERE
-                        db.name = '${match[1]}'
-                        AND sc.name = '${match[2]}'
-                        AND idx.name = '${match[3]}'
-                    )
-              )
-                AS v ON s.id = v.schema_id
-        )
-          AS s ON d.id = s.database_id;
-  `);
-  if (view_name_table.rows.length !== 1) {
-    throw 'could not determine view';
-  }
-  const name = view_name_table.rows[0];
-  const create_table = await query(`SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`);
-  return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
+    // dataflow_name is the full name of the dataflow operator. It is generally
+    // of the form "Dataflow: <database>.<schema>.<index name>". We will use a
+    // regex to parse these out and use them to get the fully qualified view name
+    // which we will use with SHOW CREATE VIEW to show the SQL that created this
+    // dataflow.
+    //
+    // There are known problems with this method. It doesn't know anything about
+    // SQL parsing or escaping, assumes the dataflow operator's name is of a very
+    // specific shape, and assumes a CREATE VIEW statement made an index which made
+    // this dataflow. So we assume that problems can happen at any level here and
+    // will cleanly bail if anything doesn't exactly match what we want. In that
+    // case we will not show the SQL. This is intended to be good enough for most
+    // users for now.
+    const match = dataflow_name.match(/^Dataflow: (.*)\.(.*)\.(.*)$/);
+    if (!match) {
+        throw 'unknown dataflow name pattern';
+    }
+    const view_name_table = await query(`
+        SELECT d.name AS database,
+               s.schema,
+               s.view
+        FROM mz_catalog.mz_databases AS d
+                 JOIN (SELECT s.database_id,
+                              s.name AS schema,
+                              v.view
+                       FROM mz_catalog.mz_schemas AS s
+                                JOIN (SELECT name AS view,
+                                             schema_id
+                                      FROM mz_catalog.mz_views
+                                      WHERE id
+                                                = (SELECT DISTINCT idx.on_id
+                                                   FROM mz_catalog.mz_databases AS db,
+                                                        mz_catalog.mz_schemas AS sc,
+                                                        mz_catalog.mz_indexes AS idx
+                                                   WHERE db.name = '${match[1]}'
+                                                     AND sc.name = '${match[2]}'
+                                                     AND idx.name = '${match[3]}'))
+                           AS v ON s.id = v.schema_id)
+            AS s ON d.id = s.database_id;
+    `);
+    if (view_name_table.rows.length !== 1) {
+        throw 'could not determine view';
+    }
+    const name = view_name_table.rows[0];
+    const create_table = await query(`SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`);
+    return {name: create_table.rows[0][0], create: create_table.rows[0][1]};
 }
 
 function makeAddrStr(addrs, id, other) {
-  let addr = addrs[id].slice();
-  // The 0 source or target should not append itself to the address.
-  if (other !== "0") {
-    addr.push(other);
-  }
-  return addrStr(addr);
+    let addr = addrs[id].slice();
+    // The 0 source or target should not append itself to the address.
+    if (other !== "0") {
+        addr.push(other);
+    }
+    return addrStr(addr);
 }
 
 function addrStr(addr) {
-  return addr.join(', ');
+    return addr.join(', ');
 }
 
 // dispNs displays ns nanoseconds in a human-readable string.
 function dispNs(ns) {
-  const timeTable = [
-    [60, 's'],
-    [60, 'm'],
-    [60, 'h'],
-  ];
-  const parts = [];
-  let v = ns / 1e9;
-  timeTable.forEach(([div, disp], idx) => {
-    const part = Math.floor(v % div);
-    if (part >= 1 || idx === 0) {
-      parts.unshift(`${part}${disp}`);
-    }
-    v = Math.floor(v / div);
-  });
-  return parts.join('');
+    const timeTable = [
+        [60, 's'],
+        [60, 'm'],
+        [60, 'h'],
+    ];
+    const parts = [];
+    let v = ns / 1e9;
+    timeTable.forEach(([div, disp], idx) => {
+        const part = Math.floor(v % div);
+        if (part >= 1 || idx === 0) {
+            parts.unshift(`${part}${disp}`);
+        }
+        v = Math.floor(v / div);
+    });
+    return parts.join('');
 }
 
 const content = document.getElementById('content');
-ReactDOM.render(<ClusterReplicaView />, content);
+ReactDOM.render(<ClusterReplicaView/>, content);
