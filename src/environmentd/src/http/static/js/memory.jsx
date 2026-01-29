@@ -256,11 +256,8 @@ function Views(props) {
 
 function View(props) {
   const [stats, setStats] = useState(null);
-  const [addrs, setAddrs] = useState(null);
-  const [records, setRecords] = useState(null);
-  const [opers, setOpers] = useState(null);
-  const [chans, setChans] = useState(null);
-  const [elapsed, setElapsed] = useState(null);
+  const [operators, setOperators] = useState(null);
+  const [channels, setChannels] = useState(null);
   const [view, setView] = useState(null);
   const [graph, setGraph] = useState(null);
   const [dot, setDot] = useState(null);
@@ -273,11 +270,19 @@ function View(props) {
     setGraph(null);
 
     const load = async () => {
+      // Use mz_dataflow_operator_parents for hierarchy - much cleaner than computing from addresses.
+      // The query computes:
+      // 1. All operators in the dataflow with their parent_id
+      // 2. Which operators are scopes (have children)
+      // 3. Memory and elapsed time stats
+      // 4. All addresses (operators + channels) for edge lookups
       const {
-        results: [_set_cluster, _set_replica, stats_table, addr_table, oper_table, chan_table, elapsed_table, records_table],
+        results: [_set_cluster, _set_replica, stats_table, operators_table, addresses_table, channels_table],
       } = await query(`
         SET cluster = ${formatNameForQuery(props.clusterName)};
         SET cluster_replica = ${formatNameForQuery(props.replicaName)};
+
+        -- Dataflow stats
         SELECT
           name, batches, records, size
         FROM
@@ -285,70 +290,59 @@ function View(props) {
         WHERE
           id = ${props.dataflowId};
 
-        -- 1) Find the address id's value for this dataflow (innermost subselect).
-        -- 2) Find all address ids whose first slot value is that (second innermost subselect).
-        -- 3) Find all address values in that set (top select).
+        -- All operators with parent relationships, scope detection, and stats
+        WITH dataflow_operators AS (
+            SELECT
+                o.id,
+                o.name,
+                p.parent_id,
+                a.address
+            FROM mz_introspection.mz_dataflow_operators o
+            LEFT JOIN mz_introspection.mz_dataflow_operator_parents p ON o.id = p.id
+            JOIN mz_introspection.mz_dataflow_addresses a ON o.id = a.id
+            WHERE a.address[1] = ${props.dataflowId}
+        ),
+        scope_ids AS (
+            SELECT DISTINCT parent_id as id FROM dataflow_operators WHERE parent_id IS NOT NULL
+        )
         SELECT
-          id, address
-        FROM
-          mz_introspection.mz_dataflow_addresses
-        WHERE
-          address[1] = ${props.dataflowId};
+            o.id,
+            o.name,
+            o.parent_id,
+            o.address,
+            CASE WHEN s.id IS NOT NULL THEN true ELSE false END as is_scope,
+            r.records,
+            r.size,
+            e.elapsed_ns
+        FROM dataflow_operators o
+        LEFT JOIN scope_ids s ON o.id = s.id
+        LEFT JOIN mz_introspection.mz_records_per_dataflow_operator r ON o.id = r.id
+        LEFT JOIN mz_introspection.mz_scheduling_elapsed e ON o.id = e.id
+        ORDER BY o.id;
 
-        SELECT
-          id, name
-        FROM
-          mz_introspection.mz_dataflow_operators
-        WHERE
-          id
-          IN (
-              SELECT
-                id
-              FROM
-                mz_introspection.mz_dataflow_addresses
-              WHERE
-                address[1] = ${props.dataflowId}
-            );
+        -- All addresses in the dataflow (for channel edge lookups)
+        SELECT id, address
+        FROM mz_introspection.mz_dataflow_addresses
+        WHERE address[1] = ${props.dataflowId};
 
+        -- Channel edges with message counts and ports (for tracing through region boundaries)
         SELECT
-          channels.id, channels.from_index, channels.to_index, counts.sent, counts.batch_sent
-        FROM
-          mz_introspection.mz_dataflow_channels AS channels
-          LEFT JOIN mz_introspection.mz_message_counts AS counts
-              ON channels.id = counts.channel_id
-        WHERE
-          channels.id
-          IN (
-              SELECT
-                id
-              FROM
-                mz_introspection.mz_dataflow_addresses
-              WHERE
-                address[1] = ${props.dataflowId}
-            );
-
-        SELECT
-          id, elapsed_ns
-        FROM
-          mz_introspection.mz_scheduling_elapsed
-        WHERE
-          id
-          IN (
-              SELECT
-                id
-              FROM
-                mz_introspection.mz_dataflow_addresses
-              WHERE
-                address[1] = ${props.dataflowId}
-            );
-
-        SELECT
-          id, records, size
-        FROM
-          mz_introspection.mz_records_per_dataflow_operator
-        WHERE
-          dataflow_id = ${props.dataflowId};
+            channels.id,
+            channels.from_index,
+            channels.to_index,
+            channels.from_port,
+            channels.to_port,
+            counts.sent,
+            counts.batch_sent
+        FROM mz_introspection.mz_dataflow_channels AS channels
+        LEFT JOIN mz_introspection.mz_message_counts AS counts
+            ON channels.id = counts.channel_id
+        WHERE channels.id IN (
+            SELECT id FROM mz_introspection.mz_dataflow_addresses
+            WHERE address[1] = ${props.dataflowId}
+        );
       `);
+
       if (stats_table.rows.length !== 1) {
         throw `unknown dataflow id ${props.dataflowId}`;
       }
@@ -361,31 +355,26 @@ function View(props) {
       };
       setStats(stats);
 
-      // Map from id to address (array). {320: [11], 321: [11, 1]}.
-      const addrs = {};
-      addr_table.rows.forEach(([id, address]) => {
-        if (!addrs[id]) {
-          addrs[id] = address;
+      // Build operators map: id -> {name, parent_id, address, is_scope, records, size, elapsed_ns}
+      const operators = {};
+      operators_table.rows.forEach(([id, name, parent_id, address, is_scope, records, size, elapsed_ns]) => {
+        operators[id] = { name, parent_id, address, is_scope, records, size, elapsed_ns };
+      });
+      setOperators(operators);
+
+      // Build addresses map: id -> address (for both operators and channels)
+      const addresses = {};
+      addresses_table.rows.forEach(([id, address]) => {
+        if (!addresses[id]) {
+          addresses[id] = address;
         }
       });
-      setAddrs(addrs);
 
-      // Map from id to operator name. {320: 'name'}.
-      const opers = Object.fromEntries(oper_table.rows);
-      setOpers(opers);
-
-      // {id: [source, target]}.
-      const chans = Object.fromEntries(
-        chan_table.rows.map(([id, source, target, sent, batch_sent]) => [id, [source, target, sent, batch_sent]])
-      );
-      setChans(chans);
-
-      const records = Object.fromEntries(
-        records_table.rows.map(([id, records, size]) => [id, [records, size]])
-      )
-      setRecords(records);
-
-      setElapsed(Object.fromEntries(elapsed_table.rows));
+      // Build channels list with ports for tracing through region boundaries
+      const channels = channels_table.rows.map(([id, from_index, to_index, from_port, to_port, sent, batch_sent]) => ({
+        id, from_index, to_index, from_port, to_port, sent, batch_sent, address: addresses[id]
+      }));
+      setChannels(channels);
 
       try {
         const view = await getCreateView(stats.name);
@@ -404,102 +393,233 @@ function View(props) {
   }, [props]);
 
   useEffect(() => {
-    if (loading || error) {
+    if (loading || error || !operators || !channels) {
       return;
     }
 
-    // Create a map from address to id.
-    const lookup = Object.fromEntries(
-      Object.entries(addrs).map(([id, addr]) => [addrStr(addr), id])
+    const max_record_count = Math.max(
+      1, // Avoid division by zero
+      ...Object.values(operators).map(op => op.records || 0)
     );
-    const max_record_count = Math.max.apply(
-      Math,
-      Object.values(records).map(([records, size]) => records)
-    );
-    const scopes = {};
-    // Find all the scopes.
-    Object.entries(opers).forEach(([id, name]) => {
-      if (name.startsWith('Region')) {
-        scopes[addrStr(addrs[id])] = [];
+
+    // Build address-to-id lookup map (for operators only)
+    const addrToId = {};
+    Object.entries(operators).forEach(([id, op]) => {
+      if (op.address) {
+        addrToId[op.address.join(',')] = id;
       }
     });
-    // Populate scopes.
-    Object.keys(opers).forEach((id) => {
-      const addr = addrs[id];
-      addr.pop();
-      const str = addrStr(addr);
-      if (str in scopes) {
-        scopes[str].push(id);
+
+    // Helper to compute address string for a channel endpoint
+    function makeAddrStr(channelAddr, index) {
+      if (!channelAddr) {
+        return null;
+      }
+      const addr = channelAddr.slice();
+      if (index !== "0") {
+        addr.push(index);
+      }
+      return addr.join(',');
+    }
+
+    // Track boundary ports that are used (for creating virtual port nodes)
+    const boundaryPorts = {};
+    channels.forEach(({ address, from_index, to_index, from_port, to_port }) => {
+      if (!address) return;
+      const addrStr = address.join(',');
+
+      if (from_index === "0") {
+        boundaryPorts[`${addrStr},in,${from_port}`] = true;
+      }
+      if (to_index === "0") {
+        boundaryPorts[`${addrStr},out,${to_port}`] = true;
+      }
+      if (to_index !== "0") {
+        const targetAddr = makeAddrStr(address, to_index);
+        const targetOp = operators[addrToId[targetAddr]];
+        if (targetOp && targetOp.is_scope) {
+          boundaryPorts[`${targetAddr},in,${to_port}`] = true;
+        }
+      }
+      if (from_index !== "0") {
+        const sourceAddr = makeAddrStr(address, from_index);
+        const sourceOp = operators[addrToId[sourceAddr]];
+        if (sourceOp && sourceOp.is_scope) {
+          boundaryPorts[`${sourceAddr},out,${from_port}`] = true;
+        }
       }
     });
-    const clusters = Object.entries(scopes).map(([addr, ids]) => {
-      const scope_id = lookup[addr];
-      const sg = [`subgraph "cluster_${addr}" {`];
-      //sg.push(`label="${opers[scope_id]} (id: ${scope_id})"`);
-      sg.push(`_${scope_id};`);
-      ids.forEach((id) => {
-        sg.push(`_${id};`);
+
+    // Get port nodes for a given scope
+    function getPortNodes(scope_id) {
+      const scope = operators[scope_id];
+      if (!scope || !scope.address) return [];
+      const addrStr = scope.address.join(',');
+      const ports = [];
+      Object.keys(boundaryPorts).forEach(key => {
+        if (key.startsWith(`${addrStr},`)) {
+          const [, direction, port] = key.split(/,(in|out),/);
+          const nodeId = `port_${addrStr.replace(/,/g, '_')}_${direction}_${port}`;
+          ports.push(nodeId);
+        }
       });
-      sg.push('}');
-      return sg.join('\n');
-    });
-    const edges = Object.entries(chans).map(([id, [source, target, sent, batch_sent]]) => {
-      if (!(id in addrs)) {
-        return `// ${id} not in addrs`;
+      return ports;
+    }
+
+    // Build nested subgraphs based on parent_id relationships.
+    function buildCluster(scope_id) {
+      const scope = operators[scope_id];
+      if (!scope || !scope.is_scope) {
+        return null;
       }
-      const from = makeAddrStr(addrs, id, source);
-      const to = makeAddrStr(addrs, id, target);
-      const from_id = lookup[from];
-      const to_id = lookup[to];
-      if (from_id === undefined) {
-        return `// ${from} or not in lookup`;
+
+      const children = Object.entries(operators)
+        .filter(([_, op]) => String(op.parent_id) === String(scope_id))
+        .map(([id, op]) => ({ id, ...op }));
+
+      const lines = [`subgraph "cluster_${scope_id}" {`];
+      lines.push(`label="${escapeDotLabel(scope.name)}"`);
+      lines.push(`style=rounded`);
+
+      // Add the scope operator itself
+      lines.push(`_${scope_id};`);
+
+      // Add boundary port nodes for this scope
+      const portNodes = getPortNodes(scope_id);
+      portNodes.forEach(nodeId => lines.push(`${nodeId};`));
+
+      // Add all children
+      children.forEach(child => {
+        if (child.is_scope) {
+          const nested = buildCluster(child.id);
+          if (nested) {
+            lines.push(nested);
+          }
+        } else {
+          lines.push(`_${child.id};`);
+        }
+      });
+
+      lines.push('}');
+      return lines.join('\n');
+    }
+
+    // Build all top-level clusters (operators whose parent is the dataflow root or has no parent in our set)
+    const dataflowRoot = Object.entries(operators).find(([_, op]) => op.parent_id === null);
+    const clusters = [];
+    if (dataflowRoot) {
+      const [rootId] = dataflowRoot;
+      // Find all direct children of the root
+      Object.entries(operators)
+        .filter(([_, op]) => String(op.parent_id) === String(rootId) && op.is_scope)
+        .forEach(([id]) => {
+          const cluster = buildCluster(id);
+          if (cluster) {
+            clusters.push(cluster);
+          }
+        });
+    }
+
+    // Build edges using boundary port nodes for region crossings
+    const edges = channels.map(({ id, from_index, to_index, from_port, to_port, sent, batch_sent, address }) => {
+      if (!address) {
+        return `// channel ${id} skipped (no address)`;
       }
-      if (to_id === undefined) {
-        return `// ${to} or not in lookup`;
+
+      const addrStr = address.join(',');
+      let from_node, to_node;
+
+      // Determine source
+      if (from_index === "0") {
+        // Reading from region input port
+        from_node = `port_${addrStr.replace(/,/g, '_')}_in_${from_port}`;
+      } else {
+        const fromAddr = makeAddrStr(address, from_index);
+        const fromOp = operators[addrToId[fromAddr]];
+        if (fromOp && fromOp.is_scope) {
+          // Reading from child scope's output port
+          from_node = `port_${fromAddr.replace(/,/g, '_')}_out_${from_port}`;
+        } else if (addrToId[fromAddr] !== undefined) {
+          from_node = `_${addrToId[fromAddr]}`;
+        } else {
+          return `// channel ${id} skipped (source not found: ${fromAddr})`;
+        }
       }
+
+      // Determine destination
+      if (to_index === "0") {
+        // Writing to region output port
+        to_node = `port_${addrStr.replace(/,/g, '_')}_out_${to_port}`;
+      } else {
+        const toAddr = makeAddrStr(address, to_index);
+        const toOp = operators[addrToId[toAddr]];
+        if (toOp && toOp.is_scope) {
+          // Writing to child scope's input port
+          to_node = `port_${toAddr.replace(/,/g, '_')}_in_${to_port}`;
+        } else if (addrToId[toAddr] !== undefined) {
+          to_node = `_${addrToId[toAddr]}`;
+        } else {
+          return `// channel ${id} skipped (dest not found: ${toAddr})`;
+        }
+      }
+
       return sent == null
-        ? `_${from_id} -> _${to_id} [style="dashed"];`
-        : `_${from_id} -> _${to_id} [label="sent ${sent} (${batch_sent})"];`;
+        ? `${from_node} -> ${to_node} [style="dashed"];`
+        : `${from_node} -> ${to_node} [label="sent ${sent} (${batch_sent})"];`;
     });
-    const oper_labels = Object.entries(opers).map(([id, name]) => {
-      if (!addrs[id].length) {
+
+    // Generate boundary port node labels
+    const portLabels = Object.keys(boundaryPorts).map(key => {
+      const [addr, direction, port] = key.split(/,(in|out),/);
+      const nodeId = `port_${addr.replace(/,/g, '_')}_${direction}_${port}`;
+      const label = direction === 'in' ? `▶ ${port}` : `${port} ▶`;
+      const color = direction === 'in' ? '#90EE90' : '#FFB6C1';
+      return `${nodeId} [label="${label}",shape=circle,style=filled,fillcolor="${color}",width=0.3,height=0.3,fontsize=10];`;
+    });
+
+    // Build node labels
+    const oper_labels = Object.entries(operators).map(([id, op]) => {
+      if (op.address && op.address.length === 0) {
         return '';
       }
-      const notes = [`id: ${id}`];
+      const notes = [`id: ${id}, addr: [${op.address ? op.address.join(',') : ''}]`];
       let style = '';
-      if (id in records && records[id][0] > 0) {
-        const record_count = records[id][0];
-        const size = Math.ceil(records[id][1]/1024);
-        // Any operator that can have records will have a red border (even if it
-        // currently has 0 records). The fill color is a deeper red based on how many
-        // records this operator has compared to the operator with the most records.
-        const pct = record_count ? Math.floor((record_count / max_record_count) * 0xa0) : 0;
+      if (op.records && op.records > 0) {
+        const record_count = op.records;
+        const size = Math.ceil((op.size || 0) / 1024);
+        const pct = Math.floor((record_count / max_record_count) * 0xa0);
         const alpha = pct.toString(16).padStart(2, '0');
         notes.push(`${record_count} rows, ${size} KiB`);
         style = `,style=filled,color=red,fillcolor="#ff0000${alpha}"`;
       }
-      // Only display elapsed time if it's more than 1s.
-      if (id in elapsed && elapsed[id] > 1e9) {
-        notes.push(`${dispNs(elapsed[id])} elapsed`);
+      if (op.elapsed_ns && op.elapsed_ns > 1e9) {
+        notes.push(`${dispNs(op.elapsed_ns)} elapsed`);
       }
+      let name = op.name;
       const maxLen = 40;
       if (name.length > maxLen + 3) {
         name = name.slice(0, maxLen) + '...';
       }
-      return `_${id} [label="${name}\n${notes.join(', ')}"${style},shape=box]`;
+      const shape = op.is_scope ? 'house' : 'box';
+      return `_${id} [label="${escapeDotLabel(name)}\n${notes.join(', ')}"${style},shape=${shape}]`;
     });
-    oper_labels.unshift('');
+
     clusters.unshift('');
     edges.unshift('');
+    oper_labels.unshift('');
+    portLabels.unshift('');
+
     const dot = `digraph {
+      rankdir=TB
       ${clusters.join('\n')}
       ${edges.join('\n')}
       ${oper_labels.join('\n')}
+      ${portLabels.join('\n')}
     }`;
     console.debug(dot);
     setDot(dot);
     hpccWasm.graphviz.layout(dot, 'svg', 'dot').then(setGraph);
-  }, [loading]);
+  }, [loading, operators, channels]);
 
   let viewText = null;
   if (view) {
@@ -510,6 +630,9 @@ function View(props) {
       </div>
     );
   }
+
+  // Check if output=dot parameter is set to return raw DOT
+  const outputDot = new URLSearchParams(location.search).get('output') === 'dot';
 
   let dotLink = null;
   if (dot) {
@@ -526,6 +649,22 @@ function View(props) {
     data = pako.deflate(data, { to: 'string' });
     link.hash = btoa(data);
     dotLink = <a href={link}>share</a>;
+  }
+
+  // If output=dot, just return the raw DOT text
+  if (outputDot && dot) {
+    return (
+      <pre style={{
+        whiteSpace: 'pre-wrap',
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        backgroundColor: '#f5f5f5',
+        padding: '1em',
+        overflow: 'auto'
+      }}>
+        {dot}
+      </pre>
+    );
   }
 
   return (
@@ -608,17 +747,9 @@ async function getCreateView(dataflow_name) {
   return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
 }
 
-function makeAddrStr(addrs, id, other) {
-  let addr = addrs[id].slice();
-  // The 0 source or target should not append itself to the address.
-  if (other !== "0") {
-    addr.push(other);
-  }
-  return addrStr(addr);
-}
-
-function addrStr(addr) {
-  return addr.join(', ');
+// Escape special characters in DOT labels
+function escapeDotLabel(str) {
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 // dispNs displays ns nanoseconds in a human-readable string.
