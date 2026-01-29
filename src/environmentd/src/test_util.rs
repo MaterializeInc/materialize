@@ -362,6 +362,68 @@ impl TestHarness {
         self
     }
 
+    pub fn with_oidc_auth(mut self, issuer: String, audience: Option<String>) -> Self {
+        let enable_tls = self.tls.is_some();
+        self.listeners_config = ListenersConfig {
+            sql: btreemap! {
+                "external".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::Oidc,
+                    allowed_roles: AllowedRoles::Normal,
+                    enable_tls,
+                },
+                "internal".to_owned() => SqlListenerConfig {
+                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                    authenticator_kind: AuthenticatorKind::None,
+                    allowed_roles: AllowedRoles::NormalAndInternal,
+                    enable_tls: false,
+                },
+            },
+            http: btreemap! {
+                "external".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::Oidc,
+                        allowed_roles: AllowedRoles::Normal,
+                        enable_tls,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: false,
+                        metrics: false,
+                        profiling: false,
+                    },
+                },
+                "internal".to_owned() => HttpListenerConfig {
+                    base: BaseListenerConfig {
+                        addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+                        authenticator_kind: AuthenticatorKind::None,
+                        allowed_roles: AllowedRoles::NormalAndInternal,
+                        enable_tls: false,
+                    },
+                    routes: HttpRoutesEnabled{
+                        base: true,
+                        webhook: true,
+                        internal: true,
+                        metrics: true,
+                        profiling: true,
+                    },
+                },
+            },
+        };
+
+        self.system_parameter_defaults
+            .insert("oidc_issuer".to_string(), issuer);
+
+        if let Some(audience) = audience {
+            self.system_parameter_defaults
+                .insert("oidc_audience".to_string(), audience);
+        }
+
+        self
+    }
+
     pub fn with_password_auth(mut self, mz_system_password: Password) -> Self {
         self.external_login_password_mz_system = Some(mz_system_password);
         let enable_tls = self.tls.is_some();

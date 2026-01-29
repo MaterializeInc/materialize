@@ -21,7 +21,7 @@ use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,
+    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -29,6 +29,7 @@ use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
+use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_authenticator::Authenticator;
 use mz_ore::cast::CastFrom;
@@ -41,7 +42,6 @@ use mz_pgwire_common::{
     ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
     VERSIONS,
 };
-use mz_repr::user::InternalUserMetadata;
 use mz_repr::{
     CatalogItemId, ColumnIndex, Datum, RelationDesc, RowArena, RowIterator, RowRef,
     SqlRelationType, SqlScalarType,
@@ -160,6 +160,11 @@ where
     }
 
     let user = params.remove("user").unwrap_or_else(String::new);
+    let options = parse_options(params.get("options").unwrap_or(&String::new()));
+
+    // If oidc_auth_enabled exists as an option, return its value and filter it from
+    // the remaining options.
+    let (oidc_auth_enabled, options) = extract_oidc_auth_enabled_from_options(options);
 
     // TODO move this somewhere it can be shared with HTTP
     let is_internal_user = INTERNAL_USER_NAMES.contains(&user);
@@ -183,52 +188,28 @@ where
 
     let (mut session, expired) = match authenticator {
         Authenticator::Frontegg(frontegg) => {
-            conn.send(BackendMessage::AuthenticationCleartextPassword)
-                .await?;
-            conn.flush().await?;
-            let password = match conn.recv().await? {
-                Some(FrontendMessage::RawAuthentication(data)) => {
-                    match decode_password(Cursor::new(&data)).ok() {
-                        Some(FrontendMessage::Password { password }) => password,
-                        _ => {
-                            return conn
-                                .send(ErrorResponse::fatal(
-                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                                    "expected Password message",
-                                ))
-                                .await;
-                        }
-                    }
-                }
-                _ => {
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            "expected Password message",
-                        ))
-                        .await;
+            let password = match request_cleartext_password(conn).await {
+                Ok(password) => password,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
                 }
             };
 
             let auth_response = frontegg.authenticate(&user, &password).await;
             match auth_response {
-                Ok(mut auth_session) => {
-                    // Create a session based on the auth session.
-                    //
-                    // In particular, it's important that the username come from the
-                    // auth session, as Frontegg may return an email address with
-                    // different casing than the user supplied via the pgwire
-                    // username field. We want to use the Frontegg casing as
-                    // canonical.
-                    let session = adapter_client.new_session(SessionConfig {
-                        conn_id: conn.conn_id().clone(),
-                        uuid: conn_uuid,
-                        user: auth_session.user().into(),
-                        client_ip: conn.peer_addr().clone(),
-                        external_metadata_rx: Some(auth_session.external_metadata_rx()),
-                        internal_user_metadata: None,
-                        helm_chart_version,
-                    });
+                Ok((mut auth_session, authenticated)) => {
+                    let session = adapter_client.new_session(
+                        SessionConfig {
+                            conn_id: conn.conn_id().clone(),
+                            uuid: conn_uuid,
+                            user: auth_session.user().into(),
+                            client_ip: conn.peer_addr().clone(),
+                            external_metadata_rx: Some(auth_session.external_metadata_rx()),
+                            helm_chart_version,
+                        },
+                        authenticated,
+                    );
                     let expired = async move { auth_session.expired().await };
                     (session, expired.left_future())
                 }
@@ -243,59 +224,85 @@ where
                 }
             }
         }
-        Authenticator::Password(adapter_client) => {
-            conn.send(BackendMessage::AuthenticationCleartextPassword)
-                .await?;
-            conn.flush().await?;
-            let password = match conn.recv().await? {
-                Some(FrontendMessage::RawAuthentication(data)) => {
-                    match decode_password(Cursor::new(&data)).ok() {
-                        Some(FrontendMessage::Password { password }) => Password(password),
-                        _ => {
-                            return conn
-                                .send(ErrorResponse::fatal(
-                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                                    "expected Password message",
-                                ))
-                                .await;
-                        }
+        Authenticator::Oidc {
+            oidc,
+            password: password_client,
+        } => {
+            if oidc_auth_enabled {
+                // OIDC authentication: JWT sent as password in cleartext flow
+                let jwt = match request_cleartext_password(conn).await {
+                    Ok(password) => password,
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
+                };
+                let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
+                match auth_response {
+                    Ok((claims, authenticated)) => {
+                        let session = adapter_client.new_session(
+                            SessionConfig {
+                                conn_id: conn.conn_id().clone(),
+                                uuid: conn_uuid,
+                                user: claims.username().into(),
+                                client_ip: conn.peer_addr().clone(),
+                                external_metadata_rx: None,
+                                helm_chart_version,
+                            },
+                            authenticated,
+                        );
+                        // No invalidation of the auth session once authenticated,
+                        // so auth session lasts indefinitely.
+                        (session, pending().right_future())
+                    }
+                    Err(err) => {
+                        warn!(?err, "pgwire connection failed authentication");
+                        return conn
+                            .send(ErrorResponse::fatal(
+                                SqlState::INVALID_PASSWORD,
+                                "invalid password",
+                            ))
+                            .await;
                     }
                 }
-                _ => {
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            "expected Password message",
-                        ))
-                        .await;
+            } else {
+                // Fallback to password authentication if oidc auth is not enabled
+                // through options.
+                match authenticate_with_password(
+                    conn,
+                    &password_client,
+                    user,
+                    conn_uuid,
+                    helm_chart_version,
+                )
+                .await
+                {
+                    Ok(session) => (session, pending().right_future()),
+                    Err(PasswordRequestError::IoError(e)) => return Err(e),
+                    Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                        return conn.send(e).await;
+                    }
                 }
-            };
-            let auth_response = match adapter_client.authenticate(&user, &password).await {
-                Ok(resp) => resp,
-                Err(err) => {
-                    warn!(?err, "pgwire connection failed authentication");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::INVALID_PASSWORD,
-                            "invalid password",
-                        ))
-                        .await;
-                }
-            };
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
+            }
+        }
+        Authenticator::Password(adapter_client) => {
+            let session = match authenticate_with_password(
+                conn,
+                &adapter_client,
                 user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                internal_user_metadata: Some(InternalUserMetadata {
-                    superuser: auth_response.superuser,
-                }),
+                conn_uuid,
                 helm_chart_version,
-            });
+            )
+            .await
+            {
+                Ok(session) => session,
+                Err(PasswordRequestError::IoError(e)) => return Err(e),
+                Err(PasswordRequestError::InvalidPasswordError(e)) => {
+                    return conn.send(e).await;
+                }
+            };
             // No frontegg check, so auth session lasts indefinitely.
-            let auth_session = pending().right_future();
-            (session, auth_session)
+            (session, pending().right_future())
         }
         Authenticator::Sasl(adapter_client) => {
             // Start the handshake
@@ -395,7 +402,7 @@ where
                 }
             };
 
-            let auth_resp = match conn.recv().await? {
+            let authenticated = match conn.recv().await? {
                 Some(FrontendMessage::RawAuthentication(data)) => {
                     match decode_sasl_response(Cursor::new(&data)).ok() {
                         Some(FrontendMessage::SASLResponse(response)) => {
@@ -422,18 +429,18 @@ where
                                 )
                                 .await
                             {
-                                Ok(resp) => {
+                                Ok((proof_response, authenticated)) => {
                                     conn.send(BackendMessage::AuthenticationSASLFinal(
                                         SASLServerFinalMessage {
                                             kind: SASLServerFinalMessageKinds::Verifier(
-                                                resp.verifier,
+                                                proof_response.verifier,
                                             ),
                                             extensions: vec![],
                                         },
                                     ))
                                     .await?;
                                     conn.flush().await?;
-                                    resp.auth_resp
+                                    authenticated
                                 }
                                 Err(_) => {
                                     return conn
@@ -465,31 +472,34 @@ where
                 }
             };
 
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                internal_user_metadata: Some(InternalUserMetadata {
-                    superuser: auth_resp.superuser,
-                }),
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                },
+                authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)
         }
+
         Authenticator::None => {
-            let session = adapter_client.new_session(SessionConfig {
-                conn_id: conn.conn_id().clone(),
-                uuid: conn_uuid,
-                user,
-                client_ip: conn.peer_addr().clone(),
-                external_metadata_rx: None,
-                internal_user_metadata: None,
-                helm_chart_version,
-            });
+            let session = adapter_client.new_session(
+                SessionConfig {
+                    conn_id: conn.conn_id().clone(),
+                    uuid: conn_uuid,
+                    user,
+                    client_ip: conn.peer_addr().clone(),
+                    external_metadata_rx: None,
+                    helm_chart_version,
+                },
+                Authenticated,
+            );
             // No frontegg check, so auth session lasts indefinitely.
             let auth_session = pending().right_future();
             (session, auth_session)
@@ -499,7 +509,7 @@ where
     let system_vars = adapter_client.get_system_vars().await;
     for (name, value) in params {
         let settings = match name.as_str() {
-            "options" => match parse_options(&value) {
+            "options" => match &options {
                 Ok(opts) => opts,
                 Err(()) => {
                     session.add_notice(AdapterNotice::BadStartupSetting {
@@ -509,7 +519,7 @@ where
                     continue;
                 }
             },
-            _ => vec![(name, value)],
+            _ => &vec![(name, value)],
         };
         for (key, val) in settings {
             const LOCAL: bool = false;
@@ -517,13 +527,12 @@ where
             // (silently ignore errors on set), but erroring the connection
             // might be the better behavior. We maybe need to support more
             // options sent by psql and drivers before we can safely do this.
-            if let Err(err) =
-                session
-                    .vars_mut()
-                    .set(&system_vars, &key, VarInput::Flat(&val), LOCAL)
+            if let Err(err) = session
+                .vars_mut()
+                .set(&system_vars, key, VarInput::Flat(val), LOCAL)
             {
                 session.add_notice(AdapterNotice::BadStartupSetting {
-                    name: key,
+                    name: key.clone(),
                     reason: err.to_string(),
                 });
             }
@@ -599,6 +608,31 @@ where
             conn.flush().await
         }
     }
+}
+
+/// Gets `oidc_auth_enabled` from options if it exists.
+/// Returns options with oidc_auth_enabled extracted
+/// and the oidc_auth_enabled value.
+fn extract_oidc_auth_enabled_from_options(
+    options: Result<Vec<(String, String)>, ()>,
+) -> (bool, Result<Vec<(String, String)>, ()>) {
+    let options = match options {
+        Ok(opts) => opts,
+        Err(_) => return (false, options),
+    };
+
+    let mut new_options = Vec::new();
+    let mut oidc_auth_enabled = false;
+
+    for (k, v) in options {
+        if k == "oidc_auth_enabled" {
+            oidc_auth_enabled = v.parse::<bool>().unwrap_or(false);
+        } else {
+            new_options.push((k, v));
+        }
+    }
+
+    (oidc_auth_enabled, Ok(new_options))
 }
 
 /// Returns (name, value) session settings pairs from an options value.
@@ -680,6 +714,90 @@ fn split_options(value: &str) -> Vec<String> {
         strs.push(current);
     }
     strs
+}
+
+enum PasswordRequestError {
+    InvalidPasswordError(ErrorResponse),
+    IoError(io::Error),
+}
+
+impl From<io::Error> for PasswordRequestError {
+    fn from(e: io::Error) -> Self {
+        PasswordRequestError::IoError(e)
+    }
+}
+
+/// Requests a cleartext password from a connection and returns it if it is valid.
+/// Sends an error response in the connection and returns None if the password
+/// is not valid.
+async fn request_cleartext_password<A>(
+    conn: &mut FramedConn<A>,
+) -> Result<String, PasswordRequestError>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    conn.send(BackendMessage::AuthenticationCleartextPassword)
+        .await?;
+    conn.flush().await?;
+
+    if let Some(message) = conn.recv().await? {
+        if let FrontendMessage::RawAuthentication(data) = message {
+            if let Some(FrontendMessage::Password { password }) =
+                decode_password(Cursor::new(&data)).ok()
+            {
+                return Ok(password);
+            }
+        }
+    }
+
+    Err(PasswordRequestError::InvalidPasswordError(
+        ErrorResponse::fatal(
+            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+            "expected Password message",
+        ),
+    ))
+}
+
+/// Helper for password-based authentication using AdapterClient
+/// and returns an authenticated session.
+async fn authenticate_with_password<A>(
+    conn: &mut FramedConn<A>,
+    adapter_client: &mz_adapter::Client,
+    user: String,
+    conn_uuid: Uuid,
+    helm_chart_version: Option<String>,
+) -> Result<Session, PasswordRequestError>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    let password = match request_cleartext_password(conn).await {
+        Ok(password) => Password(password),
+        Err(e) => return Err(e),
+    };
+
+    let authenticated = match adapter_client.authenticate(&user, &password).await {
+        Ok(authenticated) => authenticated,
+        Err(err) => {
+            warn!(?err, "pgwire connection failed authentication");
+            return Err(PasswordRequestError::InvalidPasswordError(
+                ErrorResponse::fatal(SqlState::INVALID_PASSWORD, "invalid password"),
+            ));
+        }
+    };
+
+    let session = adapter_client.new_session(
+        SessionConfig {
+            conn_id: conn.conn_id().clone(),
+            uuid: conn_uuid,
+            user,
+            client_ip: conn.peer_addr().clone(),
+            external_metadata_rx: None,
+            helm_chart_version,
+        },
+        authenticated,
+    );
+
+    Ok(session)
 }
 
 #[derive(Debug)]
@@ -2995,6 +3113,86 @@ mod test {
         for test in tests {
             let got = split_options(test.input);
             assert_eq!(got, test.expect, "input: {}", test.input);
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_extract_oidc_auth_enabled_from_options() {
+        struct TestCase {
+            input: Result<Vec<(&'static str, &'static str)>, ()>,
+            expect_enabled: bool,
+            expect_options: Result<Vec<(&'static str, &'static str)>, ()>,
+        }
+        let tests = vec![
+            // Empty options
+            TestCase {
+                input: Ok(vec![]),
+                expect_enabled: false,
+                expect_options: Ok(vec![]),
+            },
+            // Error input passthrough
+            TestCase {
+                input: Err(()),
+                expect_enabled: false,
+                expect_options: Err(()),
+            },
+            // oidc_auth_enabled=true
+            TestCase {
+                input: Ok(vec![("oidc_auth_enabled", "true")]),
+                expect_enabled: true,
+                expect_options: Ok(vec![]),
+            },
+            // oidc_auth_enabled=false
+            TestCase {
+                input: Ok(vec![("oidc_auth_enabled", "false")]),
+                expect_enabled: false,
+                expect_options: Ok(vec![]),
+            },
+            // Invalid oidc_auth_enabled value defaults to false
+            TestCase {
+                input: Ok(vec![("oidc_auth_enabled", "invalid")]),
+                expect_enabled: false,
+                expect_options: Ok(vec![]),
+            },
+            // No oidc_auth_enabled, other options preserved
+            TestCase {
+                input: Ok(vec![("key1", "val1"), ("key2", "val2")]),
+                expect_enabled: false,
+                expect_options: Ok(vec![("key1", "val1"), ("key2", "val2")]),
+            },
+            // Mixed: oidc_auth_enabled with other options
+            TestCase {
+                input: Ok(vec![
+                    ("key1", "val1"),
+                    ("oidc_auth_enabled", "true"),
+                    ("key2", "val2"),
+                ]),
+                expect_enabled: true,
+                expect_options: Ok(vec![("key1", "val1"), ("key2", "val2")]),
+            },
+        ];
+        for test in tests {
+            let input = test.input.map(|r| {
+                r.into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            });
+            let (got_enabled, got_options) = extract_oidc_auth_enabled_from_options(input.clone());
+            let expect_options = test.expect_options.map(|r| {
+                r.into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect()
+            });
+            assert_eq!(
+                got_enabled, test.expect_enabled,
+                "enabled mismatch for input: {:?}",
+                input
+            );
+            assert_eq!(
+                got_options, expect_options,
+                "options mismatch for input: {:?}",
+                input
+            );
         }
     }
 }

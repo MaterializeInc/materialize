@@ -41,7 +41,7 @@ maplit = "1.0.2"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
-mz-auth = { path = "../auth" }
+mz-auth = { path = "../auth", default-features = false }
 mz-authenticator = { path = "../authenticator" }
 mz-aws-secrets-controller = { path = "../aws-secrets-controller" }
 mz-build-info = { path = "../build-info" }
@@ -55,6 +55,7 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-frontegg-mock = { path = "../frontegg-mock", optional = true }
+mz-oidc-mock = { path = "../oidc-mock", default-features = false, optional = true }
 mz-http-util = { path = "../http-util" }
 mz-interchange = { path = "../interchange" }
 mz-license-keys = { path = "../license-keys" }
@@ -184,6 +185,7 @@ test = [
     "postgres-openssl",
     "mz-tracing",
     "mz-frontegg-mock",
+    "mz-oidc-mock",
     "tracing-capture",
     "mz-orchestrator-tracing/capture",
 ]

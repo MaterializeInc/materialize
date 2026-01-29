@@ -36,7 +36,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
-use mz_authenticator::Authenticator;
+use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -280,6 +280,10 @@ impl Listener<SqlListenerConfig> {
             ),
             AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
             AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client.clone()),
+            AuthenticatorKind::Oidc => Authenticator::Oidc {
+                oidc: GenericOidcAuthenticator::new(adapter_client.clone()),
+                password: adapter_client.clone(),
+            },
             AuthenticatorKind::None => Authenticator::None,
         };
 
@@ -380,11 +384,13 @@ impl Listeners {
         let authenticator_frontegg_rx = authenticator_frontegg_rx.shared();
         let (authenticator_password_tx, authenticator_password_rx) = oneshot::channel();
         let authenticator_password_rx = authenticator_password_rx.shared();
+        let (authenticator_oidc_tx, authenticator_oidc_rx) = oneshot::channel();
+        let authenticator_oidc_rx = authenticator_oidc_rx.shared();
         let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
         let authenticator_none_rx = authenticator_none_rx.shared();
 
         // We can only send the Frontegg and None variants immediately.
-        // The Password variant requires an adapter client.
+        // The Password and Oidc variants require an adapter client.
         if let Some(frontegg) = &config.frontegg {
             authenticator_frontegg_tx
                 .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
@@ -406,6 +412,7 @@ impl Listeners {
                 AuthenticatorKind::Frontegg => authenticator_frontegg_rx.clone(),
                 AuthenticatorKind::Password => authenticator_password_rx.clone(),
                 AuthenticatorKind::Sasl => authenticator_password_rx.clone(),
+                AuthenticatorKind::Oidc => authenticator_oidc_rx.clone(),
                 AuthenticatorKind::None => authenticator_none_rx.clone(),
             };
             let source: &'static str = Box::leak(name.clone().into_boxed_str());
@@ -809,6 +816,12 @@ impl Listeners {
         // Send adapter client to the HTTP servers.
         authenticator_password_tx
             .send(Arc::new(Authenticator::Password(adapter_client.clone())))
+            .expect("rx known to be live");
+        authenticator_oidc_tx
+            .send(Arc::new(Authenticator::Oidc {
+                oidc: GenericOidcAuthenticator::new(adapter_client.clone()),
+                password: adapter_client.clone(),
+            }))
             .expect("rx known to be live");
         adapter_client_tx
             .send(adapter_client.clone())
