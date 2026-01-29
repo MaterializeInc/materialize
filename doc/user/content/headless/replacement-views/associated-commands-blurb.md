@@ -13,7 +13,9 @@ it hydrates, and then apply the replacement. This allows you to:
   background while the original continues computing results.
 - **Validate before applying**: You can verify that the replacement view is
   hydrated and produces the expected results before applying the replacement.
-  See [Query performance](#query-performance) for details.
+  See [Query
+  performance](/sql/create-materialized-view/#query-performance-of-replacement-views)
+  for details.
 
 For a detailed guide on using [`CREATE REPLACEMENT MATERIALIZED
 VIEW`](/sql/create-materialized-view/) with [`ALTER MATERIALIZED VIEW ... APPLY

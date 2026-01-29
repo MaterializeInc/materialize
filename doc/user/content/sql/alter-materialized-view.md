@@ -144,7 +144,7 @@ example="example-apply-replacement" %}}
 {{% include-headless
 "/headless/replacement-views/apply-replacement-command-details" %}}
 
-See also: 
+See also:
 - [Replace materialized views
   guide](/transform-data/updating-materialized-views/replace-materialized-view/)
 
