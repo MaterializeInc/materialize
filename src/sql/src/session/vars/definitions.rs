@@ -1388,6 +1388,34 @@ pub static MAX_CONNECTIONS: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static PGWIRE_CONNECTION_RATE_LIMIT: VarDefinition = VarDefinition::new(
+    "pgwire_connection_rate_limit",
+    value!(u32; 0),
+    "The maximum number of new pgwire connections per second globally. 0 disables rate limiting (Materialize).",
+    false,
+);
+
+pub static PGWIRE_CONNECTION_RATE_LIMIT_BURST: VarDefinition = VarDefinition::new(
+    "pgwire_connection_rate_limit_burst",
+    value!(u32; 0),
+    "The burst size for the global pgwire connection rate limit. 0 uses the rate limit value as burst size (Materialize).",
+    false,
+);
+
+pub static PGWIRE_CONNECTION_RATE_LIMIT_PER_IP: VarDefinition = VarDefinition::new(
+    "pgwire_connection_rate_limit_per_ip",
+    value!(u32; 0),
+    "The maximum number of new pgwire connections per second per IP address. Uses MZ_FORWARDED_FOR_KEY if available. 0 disables rate limiting (Materialize).",
+    false,
+);
+
+pub static PGWIRE_CONNECTION_RATE_LIMIT_PER_IP_BURST: VarDefinition = VarDefinition::new(
+    "pgwire_connection_rate_limit_per_ip_burst",
+    value!(u32; 0),
+    "The burst size for the per-IP pgwire connection rate limit. 0 uses the rate limit value as burst size (Materialize).",
+    false,
+);
+
 pub static SUPERUSER_RESERVED_CONNECTIONS: VarDefinition = VarDefinition::new(
     "superuser_reserved_connections",
     value!(u32; 3),
