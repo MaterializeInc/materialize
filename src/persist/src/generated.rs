@@ -12,5 +12,5 @@
 #![allow(missing_docs)]
 
 pub mod persist {
-    include!(concat!(env!("OUT_DIR"), "/mz_persist.gen.persist.rs"));
+    include!(concat!(env!("OUT_DIR"), "/mz_persist.r#gen.persist.rs"));
 }

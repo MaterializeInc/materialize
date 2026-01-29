@@ -24,10 +24,6 @@ skip = [
     # transitively depends on. They just released v2.0 which not all crates have
     # migrated to yet.
     { name = "syn", version = "1.0.107" },
-    # `tokio` depends on a newer version of socket2, we are okay with _temporarily_
-    # allowing these duplicate dependencies until the rest of the ecosystem catches
-    # up.
-    { name = "socket2", version = "0.4.9" },
     # held back by thrift 0.17.0 depended on by parquet 51.0.0
     { name = "ordered-float", version = "2.10.1" },
     { name = "ordered-float", version = "4.6.0" },
@@ -77,9 +73,6 @@ skip = [
     { name = "hyper-tls", version = "0.5.0" },
 
     { name = "hyper-timeout", version = "0.4.1" },
-
-    { name = "tungstenite", version = "0.24.0" },
-    { name = "tokio-tungstenite", version = "0.24.0" },
 
     { name = "memmap2", version = "0.5.4" },
 
@@ -136,8 +129,6 @@ skip = [
     { name = "phf_shared", version = "0.11.3" },
     { name = "phf_generator", version = "0.11.2" },
     { name = "phf_codegen", version = "0.11.3" },
-    # multer
-    { name = "spin", version = "0.9.8" },
     # insta
     { name = "console", version = "0.15.11" },
     # duckdb
@@ -240,6 +231,7 @@ wrappers = [
 name = "unicase"
 wrappers = [
     "mime_guess",
+    "pulldown-cmark",
 ]
 
 # We shouldn't manually vendor `protoc`, instead rely on it through `mz-build-tools`.

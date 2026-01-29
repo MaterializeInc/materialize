@@ -26,12 +26,13 @@
 //!    across thread or task boundaries within a process.
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 use std::io;
 use std::io::IsTerminal;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 #[cfg(feature = "tokio-console")]
@@ -40,11 +41,13 @@ use derivative::Derivative;
 use http::HeaderMap;
 use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
-use opentelemetry::global::Error;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;
 use opentelemetry::{KeyValue, global};
+use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::runtime::Tokio;
+use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use opentelemetry_sdk::{Resource, trace};
 use prometheus::IntCounter;
 use tonic::metadata::MetadataMap;
@@ -65,6 +68,7 @@ use crate::metric;
 use crate::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use crate::netio::SocketAddr;
+use crate::now::{EpochMillis, NowFn, SYSTEM_TIME};
 
 /// Application tracing configuration.
 ///
@@ -348,7 +352,15 @@ where
         }
         filter
     });
-    let stderr_log_layer = stderr_log_layer.with_filter(stderr_log_filter);
+    // Add rate limiting for OpenTelemetry internal logs to prevent log spam
+    // when there are issues with the OpenTelemetry pipeline (e.g., channel full,
+    // connection errors). This only affects logs from "opentelemetry*" targets.
+    let otel_rate_limit_filter = OpenTelemetryRateLimitingFilter::new(Duration::from_secs(
+        OPENTELEMETRY_RATE_LIMIT_BACKOFF_SECS,
+    ));
+    let stderr_log_layer = stderr_log_layer
+        .with_filter(stderr_log_filter)
+        .with_filter(otel_rate_limit_filter);
     let stderr_log_reloader = Arc::new(move |mut filter: EnvFilter, defaults: Vec<Directive>| {
         for directive in &defaults {
             filter = filter.add_directive(directive.clone());
@@ -364,9 +376,7 @@ where
         // with the timeout configured according to:
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
         let channel = Endpoint::from_shared(otel_config.endpoint)?
-            .timeout(Duration::from_secs(
-                opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT,
-            ))
+            .timeout(opentelemetry_otlp::OTEL_EXPORTER_OTLP_TIMEOUT_DEFAULT)
             // TODO(guswynn): investigate if this should be non-lazy.
             .connect_with_connector_lazy({
                 let mut http = HttpConnector::new();
@@ -382,10 +392,11 @@ where
                     ),
                 ))
             });
-        let exporter = opentelemetry_otlp::new_exporter()
-            .tonic()
+        let exporter = opentelemetry_otlp::SpanExporter::builder()
+            .with_tonic()
             .with_channel(channel)
-            .with_metadata(MetadataMap::from_headers(otel_config.headers));
+            .with_metadata(MetadataMap::from_headers(otel_config.headers))
+            .build()?;
         let batch_config = opentelemetry_sdk::trace::BatchConfigBuilder::default()
             .with_max_queue_size(otel_config.max_batch_queue_size)
             .with_max_export_batch_size(otel_config.max_export_batch_size)
@@ -393,68 +404,26 @@ where
             .with_scheduled_delay(otel_config.batch_scheduled_delay)
             .with_max_export_timeout(otel_config.max_export_timeout)
             .build();
-        let tracer = opentelemetry_otlp::new_pipeline()
-            .tracing()
-            .with_trace_config(
-                trace::Config::default().with_resource(
-                    // The latter resources win, so if the user specifies
-                    // `service.name` in the configuration, it will override the
-                    // `service.name` value we configure here.
-                    Resource::new([KeyValue::new(
-                        "service.name",
-                        config.service_name.to_string(),
-                    )])
-                    .merge(&otel_config.resource),
-                ),
-            )
-            .with_exporter(exporter)
+        let batch_span_processor = BatchSpanProcessor::builder(exporter, Tokio)
             .with_batch_config(batch_config)
-            .install_batch(opentelemetry_sdk::runtime::Tokio)
-            .unwrap()
+            .build();
+        let tracer = trace::SdkTracerProvider::builder()
+            .with_resource(
+                Resource::builder()
+                    .with_service_name(config.service_name.to_string())
+                    .with_attributes(
+                        otel_config
+                            .resource
+                            .iter()
+                            .map(|(k, v)| KeyValue::new(k.clone(), v.clone())),
+                        // TODO handle schema url?
+                    )
+                    .build(),
+            )
+            .with_span_processor(batch_span_processor)
+            .with_max_events_per_span(2048)
+            .build()
             .tracer(config.service_name);
-
-        // Create our own error handler to:
-        //   1. Rate limit the number of error logs. By default the OTel library will emit
-        //      an enormous number of duplicate logs if any errors occur, one per batch
-        //      send attempt, until the error is resolved.
-        //   2. Log the errors via our tracing layer, so they are formatted consistently
-        //      with the rest of our logs, rather than the direct `eprintln` used by the
-        //      OTel library.
-        const OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS: u64 = 30;
-        let last_log_in_epoch_seconds = AtomicU64::default();
-        opentelemetry::global::set_error_handler(move |err| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Failed to get duration since Unix epoch")
-                .as_secs();
-            let last_log = last_log_in_epoch_seconds.load(Ordering::SeqCst);
-
-            if now.saturating_sub(last_log) >= OPENTELEMETRY_ERROR_MSG_BACKOFF_SECONDS {
-                if last_log_in_epoch_seconds
-                    .compare_exchange_weak(last_log, now, Ordering::Relaxed, Ordering::Relaxed)
-                    .is_err()
-                {
-                    return;
-                }
-                use crate::error::ErrorExt;
-                match err {
-                    Error::Trace(err) => {
-                        warn!("OpenTelemetry error: {}", err.display_with_causes());
-                    }
-                    // TODO(guswynn): turn off the metrics feature?
-                    Error::Metric(err) => {
-                        warn!("OpenTelemetry error: {}", err.display_with_causes());
-                    }
-                    Error::Other(err) => {
-                        warn!("OpenTelemetry error: {}", err);
-                    }
-                    _ => {
-                        warn!("unknown OpenTelemetry error");
-                    }
-                }
-            }
-        })
-        .expect("valid error handler");
 
         let (filter, filter_handle) = reload::Layer::new({
             let mut filter = otel_config.filter;
@@ -470,7 +439,6 @@ where
             // logged to a Span, once this max is passed, old events will get dropped
             //
             // TODO(parker-timmerman|guswynn): make this configurable with LaunchDarkly
-            .max_events_per_span(2048)
             .with_tracer(tracer)
             .and_then(metrics_layer)
             // WARNING, ENTERING SPOOKY ZONE 2.0
@@ -706,19 +674,17 @@ impl OpenTelemetryContext {
     /// to create a context, then the current thread's `Context` is used
     /// defaulting to the default `Context`.
     pub fn attach_as_parent(&self) {
-        let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
-        tracing::Span::current().set_parent(parent_cx);
+        self.attach_as_parent_to(&tracing::Span::current())
     }
 
     /// Attaches this `Context` to the given [`tracing`] Span, as its parent.
-    /// as its parent.
     ///
     /// If there is not enough information in this `OpenTelemetryContext`
     /// to create a context, then the current thread's `Context` is used
     /// defaulting to the default `Context`.
     pub fn attach_as_parent_to(&self, span: &Span) {
         let parent_cx = global::get_text_map_propagator(|prop| prop.extract(self));
-        span.set_parent(parent_cx);
+        let _ = span.set_parent(parent_cx);
     }
 
     /// Obtains a `Context` from the current [`tracing`] span.
@@ -785,6 +751,130 @@ impl MetricsLayer {
 impl<S: tracing::Subscriber> Layer<S> for MetricsLayer {
     fn on_close(&self, _id: tracing::span::Id, _ctx: tracing_subscriber::layer::Context<'_, S>) {
         self.on_close.inc()
+    }
+}
+
+/// The target prefix for OpenTelemetry internal logs.
+/// OpenTelemetry crates emit logs with targets like "opentelemetry", "opentelemetry_sdk",
+/// "opentelemetry_otlp", etc.
+const OPENTELEMETRY_TARGET_PREFIX: &str = "opentelemetry";
+
+/// Default backoff duration for rate-limiting OpenTelemetry internal logs.
+const OPENTELEMETRY_RATE_LIMIT_BACKOFF_SECS: u64 = 30;
+
+/// A rate-limiting filter that throttles OpenTelemetry internal log messages.
+///
+/// OpenTelemetry can emit a large number of duplicate error messages (e.g., when
+/// the batch processor channel is full or when there are connection issues).
+/// This filter rate-limits these messages to avoid log spam while still ensuring
+/// the errors are visible.
+///
+/// Only logs from OpenTelemetry targets (those starting with "opentelemetry") are
+/// rate-limited. All other logs pass through unchanged.
+#[derive(Debug)]
+pub struct OpenTelemetryRateLimitingFilter {
+    /// How long to suppress duplicate messages from OpenTelemetry.
+    backoff_duration: Duration,
+    /// Tracks the last time each unique message key was logged.
+    /// The key is a hash of (target, message format string).
+    last_logged: Mutex<BTreeMap<u64, EpochMillis>>,
+    /// Counter for the number of suppressed messages.
+    suppressed_count: AtomicU64,
+    /// Function to get the current time (helps with testing).
+    now_fn: NowFn,
+}
+
+impl OpenTelemetryRateLimitingFilter {
+    /// Creates a new rate-limiting filter with the specified backoff duration.
+    ///
+    /// Messages from OpenTelemetry targets will be suppressed if they occur
+    /// more frequently than once per `backoff_duration`.
+    pub fn new(backoff_duration: Duration) -> Self {
+        Self {
+            backoff_duration,
+            last_logged: Mutex::new(BTreeMap::new()),
+            suppressed_count: AtomicU64::new(0),
+            now_fn: SYSTEM_TIME.clone(),
+        }
+    }
+
+    /// Sets a custom time function for testing purposes.
+    #[cfg(test)]
+    fn with_now_fn(mut self, now_fn: NowFn) -> Self {
+        self.now_fn = now_fn;
+        self
+    }
+
+    /// Computes a hash key for the given event metadata.
+    fn compute_key(metadata: &tracing::Metadata<'_>) -> u64 {
+        let mut hasher = std::hash::DefaultHasher::new();
+        metadata.target().hash(&mut hasher);
+        metadata.name().hash(&mut hasher);
+        // Include the file and line if available for more precise deduplication
+        if let Some(file) = metadata.file() {
+            file.hash(&mut hasher);
+        }
+        if let Some(line) = metadata.line() {
+            line.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    /// Returns true if the event should be logged (not rate-limited).
+    fn should_log(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        // Only rate-limit OpenTelemetry internal logs
+        if !metadata.target().starts_with(OPENTELEMETRY_TARGET_PREFIX) {
+            return true;
+        }
+
+        let key = Self::compute_key(metadata);
+        let now = (self.now_fn)();
+
+        let mut last_logged = self.last_logged.lock().unwrap();
+
+        if let Some(last_time) = last_logged.get(&key) {
+            if Duration::from_millis(now - last_time) < self.backoff_duration {
+                self.suppressed_count.fetch_add(1, Ordering::Relaxed);
+                return false;
+            }
+        }
+
+        last_logged.insert(key, now);
+
+        // Periodically clean up old entries to prevent unbounded growth
+        // Keep entries that are still within the backoff window
+        if last_logged.len() > 1000 {
+            last_logged
+                .retain(|_, time| Duration::from_millis(now - *time) < self.backoff_duration);
+        }
+
+        true
+    }
+
+    /// Returns the number of messages that have been suppressed.
+    pub fn suppressed_count(&self) -> u64 {
+        self.suppressed_count.load(Ordering::Relaxed)
+    }
+}
+
+impl<S> tracing_subscriber::layer::Filter<S> for OpenTelemetryRateLimitingFilter
+where
+    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn enabled(
+        &self,
+        metadata: &tracing::Metadata<'_>,
+        _ctx: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        self.should_log(metadata)
+    }
+
+    fn event_enabled(
+        &self,
+        event: &Event<'_>,
+        _ctx: &tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        self.should_log(event.metadata())
     }
 }
 
@@ -855,5 +945,71 @@ mod tests {
         // if we had a proper EnvFilter::would_match impl, this assertion should
         // be Level::TRACE
         assert_eq!(super::crate_level(&filter, "abc::def"), Level::INFO);
+    }
+
+    #[crate::test]
+    fn otel_rate_limiting_filter_backoff() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Duration;
+        use tracing::Callsite;
+
+        use crate::now::NowFn;
+
+        // Create a controllable time source
+        let current_time = Arc::new(AtomicU64::new(0));
+        let time_for_closure = Arc::clone(&current_time);
+        let now_fn: NowFn = NowFn::from(move || time_for_closure.load(Ordering::SeqCst));
+
+        let filter = super::OpenTelemetryRateLimitingFilter::new(Duration::from_millis(100))
+            .with_now_fn(now_fn);
+
+        // Test that key computation is stable
+        static OTEL_CALLSITE: tracing::callsite::DefaultCallsite =
+            tracing::callsite::DefaultCallsite::new(&tracing::Metadata::new(
+                "test_event",
+                "opentelemetry_sdk::trace",
+                Level::WARN,
+                Some(file!()),
+                Some(line!()),
+                Some(module_path!()),
+                tracing::field::FieldSet::new(&[], tracing::callsite::Identifier(&OTEL_CALLSITE)),
+                tracing::metadata::Kind::EVENT,
+            ));
+        let otel_meta = OTEL_CALLSITE.metadata();
+
+        static OTHER_CALLSITE: tracing::callsite::DefaultCallsite =
+            tracing::callsite::DefaultCallsite::new(&tracing::Metadata::new(
+                "test_event",
+                "my_app::module",
+                Level::WARN,
+                Some(file!()),
+                Some(line!()),
+                Some(module_path!()),
+                tracing::field::FieldSet::new(&[], tracing::callsite::Identifier(&OTHER_CALLSITE)),
+                tracing::metadata::Kind::EVENT,
+            ));
+        let other_meta = OTHER_CALLSITE.metadata();
+
+        // Non-OpenTelemetry events should always pass through
+        assert!(filter.should_log(other_meta));
+        assert!(filter.should_log(other_meta));
+        assert!(filter.should_log(other_meta));
+        assert_eq!(filter.suppressed_count(), 0);
+
+        // First OpenTelemetry event should pass through
+        assert!(filter.should_log(otel_meta));
+        assert_eq!(filter.suppressed_count(), 0);
+
+        // Subsequent OpenTelemetry events within backoff should be suppressed
+        current_time.store(50, Ordering::SeqCst); // 50ms later, still within 100ms backoff
+        assert!(!filter.should_log(otel_meta));
+        assert!(!filter.should_log(otel_meta));
+        assert_eq!(filter.suppressed_count(), 2);
+
+        // After backoff, event should pass through again
+        current_time.store(150, Ordering::SeqCst); // 150ms later, past 100ms backoff
+        assert!(filter.should_log(otel_meta));
+        assert_eq!(filter.suppressed_count(), 2);
     }
 }

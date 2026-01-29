@@ -81,16 +81,16 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 # For the `tracing` feature
 http = { version = "1.4.0", optional = true }
 tracing = { version = "0.1.44", optional = true }
-tracing-opentelemetry = { version = "0.25.0", optional = true }
-tonic = { version = "0.12.1", features = ["transport"], optional = true }
+tracing-opentelemetry = { version = "0.32.1", optional = true }
+tonic = { version = "0.14.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.1", optional = true }
 native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
 hyper-util = { version = "0.1.19", optional = true }
-opentelemetry = { version = "0.24.0", features = ["trace"], optional = true }
-opentelemetry-otlp = { version = "0.17.0", optional = true }
-opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"], optional = true }
-console-subscriber = { version = "0.4.1", optional = true }
+opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"], optional = true }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
+console-subscriber = { version = "0.5.0", optional = true }
 sentry-tracing = { version = "0.38.1", optional = true }
 turmoil = { version = "0.7.0", optional = true }
 yansi = { version = "1.0.1", optional = true }

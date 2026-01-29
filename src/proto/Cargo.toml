@@ -20,7 +20,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["proptest", "t
 num = "0.4.3"
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 regex = "1.12.2"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
@@ -34,7 +34,7 @@ chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
+prost-build = "0.14.3"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

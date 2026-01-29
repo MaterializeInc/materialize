@@ -294,12 +294,16 @@ impl TracingCliArgs {
                     max_concurrent_exports: self.opentelemetry_max_concurrent_exports,
                     batch_scheduled_delay: self.opentelemetry_sched_delay,
                     max_export_timeout: self.opentelemetry_max_export_timeout,
-                    resource: Resource::new(
-                        self.opentelemetry_resource
-                            .iter()
-                            .cloned()
-                            .map(|kv| KeyValue::new(kv.key, kv.value)),
-                    ),
+                    resource: {
+                        Resource::builder()
+                            .with_attributes(
+                                self.opentelemetry_resource
+                                    .iter()
+                                    .cloned()
+                                    .map(|kv| KeyValue::new(kv.key, kv.value)),
+                            )
+                            .build()
+                    },
                 }
             }),
             #[cfg(feature = "tokio-console")]

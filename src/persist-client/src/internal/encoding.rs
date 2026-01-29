@@ -112,7 +112,7 @@ pub struct LazyProto<T> {
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T: Message + Default> Debug for LazyProto<T> {
+impl<T: Message + Default + Debug> Debug for LazyProto<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.decode() {
             Ok(proto) => Debug::fmt(&proto, f),

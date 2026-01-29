@@ -31,7 +31,7 @@ mysql_async = { version = "0.36.1", default-features = false, features = [
     "minimal",
     "tracing",
 ] }
-prost = { version = "0.13.5", features = ["no-recursion-limit"] }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 fancy-regex = "0.16.2"
@@ -46,7 +46,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
+prost-build = "0.14.3"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
