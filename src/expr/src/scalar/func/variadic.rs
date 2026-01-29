@@ -23,7 +23,7 @@ use md5::Md5;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_pgtz::timezone::TimezoneSpec;
-use mz_repr::adt::array::ArrayDimension;
+use mz_repr::adt::array::{ArrayDimension, ArrayDimensions, InvalidArrayError};
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
 use mz_repr::adt::system::Oid;
@@ -79,19 +79,44 @@ pub fn and<'a>(
 /// the SQL type system, rather than checked here at runtime.)
 ///
 /// If all input arrays are zero-dimensional arrays, then the output is a zero-
-/// dimensional array. Otherwise the lower bound of the additional dimension is
+/// dimensional array. Otherwise, the lower bound of the additional dimension is
 /// one and the length of the new dimension is equal to `datums.len()`.
+///
+/// Null elements are allowed and considered to be zero-dimensional arrays.
 fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    // Per PostgreSQL, if all input arrays are zero dimensional, so is the
-    // output.
-    if datums.iter().all(|d| d.unwrap_array().dims().is_empty()) {
-        let dims = &[];
-        let datums = &[];
-        let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(dims, datums))?;
-        return Ok(datum);
+    let mut dim: Option<ArrayDimensions> = None;
+    for datum in datums {
+        let actual_dims = match datum {
+            Datum::Null => ArrayDimensions::default(),
+            Datum::Array(arr) => arr.dims(),
+            d => panic!("unexpected datum {d}"),
+        };
+        if let Some(expected) = &dim {
+            if actual_dims.ndims() != expected.ndims() {
+                let actual = actual_dims.ndims().into();
+                let expected = expected.ndims().into();
+                // All input arrays must have the same dimensionality.
+                return Err(InvalidArrayError::WrongCardinality { actual, expected }.into());
+            }
+            if let Some((e, a)) = expected
+                .into_iter()
+                .zip_eq(actual_dims.into_iter())
+                .find(|(e, a)| e != a)
+            {
+                let actual = a.length;
+                let expected = e.length;
+                // All input arrays must have the same dimensionality.
+                return Err(InvalidArrayError::WrongCardinality { actual, expected }.into());
+            }
+        }
+        dim = Some(actual_dims);
+    }
+    // Per PostgreSQL, if all input arrays are zero dimensional, so is the output.
+    if dim.as_ref().map_or(true, ArrayDimensions::is_empty) {
+        return Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&[], &[]))?);
     }
 
     let mut dims = vec![ArrayDimension {
