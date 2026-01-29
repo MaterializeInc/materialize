@@ -11,6 +11,9 @@
 E2E browser tests for the dataflow visualizer React components.
 Tests the /memory and /hierarchical-memory endpoints on port 6876.
 """
+from pathlib import Path
+
+from materialize.buildkite import is_in_buildkite, upload_artifact
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
@@ -35,4 +38,10 @@ SERVICES = [
 def workflow_default(c: Composition) -> None:
     """Run dataflow visualizer E2E tests"""
     c.up("materialized")
-    c.run("playwright", "/workdir/run-tests.sh")
+    try:
+        c.run("playwright", "/workdir/run-tests.sh")
+    finally:
+        # Upload Playwright traces if they exist (created on test failure)
+        traces_path = Path("playwright-traces.tar.gz")
+        if traces_path.exists() and is_in_buildkite():
+            upload_artifact(traces_path)
