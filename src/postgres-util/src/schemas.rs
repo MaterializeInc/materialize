@@ -11,12 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::anyhow;
 use tokio_postgres::Client;
 use tokio_postgres::types::Oid;
 
-use crate::PostgresError;
 use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, PostgresTableDesc};
+use crate::{PostgresError, simple_query_opt};
 
 pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
     Ok(client
@@ -30,6 +29,22 @@ pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, Pos
             PostgresSchemaDesc { oid, name, owner }
         })
         .collect::<Vec<_>>())
+}
+
+/// Get the major version of the PostgreSQL server.
+pub async fn get_pg_major_version(client: &Client) -> Result<u32, PostgresError> {
+    // server_version_num is an integer like 140005 for version 14.5
+    let query = "SHOW server_version_num";
+    let row = simple_query_opt(client, query).await?;
+    let version_num: u32 = row
+        .and_then(|r| r.get("server_version_num").map(|s| s.parse().ok()))
+        .flatten()
+        .ok_or_else(|| {
+            PostgresError::Generic(anyhow::anyhow!("failed to get PostgreSQL version"))
+        })?;
+    // server_version_num format: XXYYZZ where XX is major, YY is minor, ZZ is patch
+    // For PG >= 10, it's XXXYYZZ (3 digit major)
+    Ok(version_num / 10000)
 }
 
 /// Fetches table schema information from an upstream Postgres source for tables
@@ -49,12 +64,7 @@ pub async fn publication_info(
     publication: &str,
     oids: Option<&[Oid]>,
 ) -> Result<BTreeMap<Oid, PostgresTableDesc>, PostgresError> {
-    let server_version_num = client
-        .query_one("SHOW server_version_num", &[])
-        .await?
-        .get::<_, &str>("server_version_num")
-        .parse::<i32>()
-        .map_err(|e| PostgresError::Generic(anyhow!("unable to parse server_version_num: {e}")))?;
+    let server_major_version = get_pg_major_version(client).await?;
 
     client
         .query(
@@ -102,7 +112,7 @@ pub async fn publication_info(
     // The Postgres replication protocol does not support GENERATED columns
     // so we exclude them from this query. But not all Postgres-like
     // databases have the `pg_attribute.attgenerated` column.
-    let attgenerated = if server_version_num >= 120000 {
+    let attgenerated = if server_major_version >= 12 {
         "a.attgenerated = ''"
     } else {
         "true"
@@ -159,7 +169,7 @@ pub async fn publication_info(
     // PG 15 adds UNIQUE NULLS NOT DISTINCT, which would let us use `UNIQUE` constraints over
     // nullable columns as keys; i.e. aligns a PG index's NULL handling with an arrangement's
     // keys. For more info, see https://www.postgresql.org/about/featurematrix/detail/392/
-    let nulls_not_distinct = if server_version_num >= 150000 {
+    let nulls_not_distinct = if server_major_version >= 15 {
         "pg_index.indnullsnotdistinct"
     } else {
         "false"
