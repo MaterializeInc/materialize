@@ -364,8 +364,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             reader_id,
             schemas,
-            reader_state.since,
-            heartbeat_ts,
+            reader_state,
         )
         .await;
 
@@ -920,7 +919,6 @@ impl PersistClient {
 #[cfg(test)]
 mod tests {
     use std::future::Future;
-    use std::mem;
     use std::pin::Pin;
     use std::task::Context;
     use std::time::Duration;
@@ -2007,14 +2005,12 @@ mod tests {
             .expect("client construction failed")
             .expect_open::<(), (), u64, i64>(ShardId::new())
             .await;
-        let mut read_unexpired_state = read
+        let read_unexpired_state = read
             .unexpired_state
             .take()
             .expect("handle should have unexpired state");
         read.expire().await;
-        for read_heartbeat_task in mem::take(&mut read_unexpired_state._heartbeat_tasks) {
-            let () = read_heartbeat_task.await;
-        }
+        read_unexpired_state.heartbeat_task.await
     }
 
     /// Verify that shard finalization works with empty shards, shards that have

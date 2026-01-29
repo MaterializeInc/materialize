@@ -7196,6 +7196,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
+ "rand 0.9.2",
  "semver",
  "serde",
  "serde_json",

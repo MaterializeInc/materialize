@@ -10,24 +10,23 @@
 //! Read capabilities and handles
 
 use async_stream::stream;
-use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use differential_dataflow::Hashable;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
+use mz_ore::cast::CastLossy;
 use mz_ore::halt;
 use mz_ore::instrument;
-use mz_ore::now::EpochMillis;
-use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
+use mz_ore::task::JoinHandle;
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
 use mz_persist_types::{Codec, Codec64};
@@ -36,8 +35,7 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tokio::runtime::Handle;
-use tracing::{Instrument, debug_span, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::batch::BLOB_TARGET_SIZE;
@@ -45,10 +43,10 @@ use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
 use crate::fetch::FetchConfig;
 use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
-use crate::internal::machine::{ExpireFn, Machine};
+use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::state::{BatchPart, HollowBatch};
-use crate::internal::watch::StateWatch;
+use crate::internal::state::{HollowBatch, LeasedReaderState};
+use crate::internal::watch::{AwaitableState, StateWatch};
 use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
 use crate::stats::{SnapshotPartStats, SnapshotPartsStats, SnapshotStats};
@@ -201,12 +199,10 @@ where
 {
     /// Politely expires this subscribe, releasing its lease.
     ///
-    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// There is a best-effort impl in Drop to expire the
     /// [`ReadHandle`] held by the subscribe that wasn't explicitly expired
     /// with this method. When possible, explicit expiry is still preferred
-    /// because the Drop one is best effort and is dependant on a tokio
-    /// [Handle] being available in the TLC at the time of drop (which is a bit
-    /// subtle). Also, explicit expiry allows for control over when it happens.
+    /// because it also ensures that the background task is complete.
     pub async fn expire(mut self) {
         let _ = self.snapshot.take(); // Drop all leased parts.
         self.listen.expire().await;
@@ -228,8 +224,6 @@ pub enum ListenEvent<T, D> {
 #[derive(Debug)]
 pub struct Listen<K: Codec, V: Codec, T, D> {
     handle: ReadHandle<K, V, T, D>,
-    watch: StateWatch<K, V, T, D>,
-
     as_of: Antichain<T>,
     since: Antichain<T>,
     frontier: Antichain<T>,
@@ -258,11 +252,8 @@ where
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
-
-        let watch = handle.machine.applier.watch();
         Ok(Listen {
             handle,
-            watch,
             since,
             frontier: as_of.clone(),
             as_of,
@@ -290,7 +281,7 @@ where
             let min_elapsed = self.handle.heartbeat_duration();
             let next_batch = self.handle.machine.next_listen_batch(
                 &self.frontier,
-                &mut self.watch,
+                &mut self.handle.watch,
                 Some(&self.handle.reader_id),
                 retry,
             );
@@ -490,14 +481,66 @@ where
 
     /// Politely expires this listen, releasing its lease.
     ///
-    /// There is a best-effort impl in Drop for [`ReadHandle`] to expire the
+    /// There is a best-effort impl in to expire the
     /// [`ReadHandle`] held by the listen that wasn't explicitly expired with
     /// this method. When possible, explicit expiry is still preferred because
-    /// the Drop one is best effort and is dependant on a tokio [Handle] being
-    /// available in the TLC at the time of drop (which is a bit subtle). Also,
-    /// explicit expiry allows for control over when it happens.
+    /// it also ensures that the background task is complete.
     pub async fn expire(self) {
         self.handle.expire().await
+    }
+}
+
+/// The state for read holds shared between the heartbeat task and the main client,
+/// including the since frontier and the seqno hold.
+#[derive(Debug)]
+pub(crate) struct ReadHolds<T> {
+    /// The frontier we should hold the time-based lease back to.
+    held_since: Antichain<T>,
+    /// The since hold we've actually committed to state. Should always be <=
+    /// the since hold.
+    applied_since: Antichain<T>,
+    /// The largest seqno we've observed in the state.
+    recent_seqno: SeqNo,
+    /// The set of active leases. We hold back the seqno to the minimum lease or
+    /// the recent_seqno, whichever is earlier.
+    leases: BTreeMap<SeqNo, Lease>,
+    /// True iff this state is expired.
+    expired: bool,
+    /// Used to trigger the background task to heartbeat state, instead of waiting for
+    /// the next tick.
+    request_sync: bool,
+}
+
+impl<T> ReadHolds<T>
+where
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+{
+    pub fn downgrade_since(&mut self, since: &Antichain<T>) {
+        self.held_since.join_assign(since);
+    }
+
+    pub fn observe_seqno(&mut self, seqno: SeqNo) {
+        self.recent_seqno = seqno.max(self.recent_seqno);
+    }
+
+    pub fn lease_seqno(&mut self) -> Lease {
+        let seqno = self.recent_seqno;
+        let lease = self
+            .leases
+            .entry(seqno)
+            .or_insert_with(|| Lease::new(seqno));
+        lease.clone()
+    }
+
+    pub fn outstanding_seqno(&mut self) -> SeqNo {
+        while let Some(first) = self.leases.first_entry() {
+            if first.get().count() <= 1 {
+                first.remove();
+            } else {
+                return *first.key();
+            }
+        }
+        self.recent_seqno
     }
 }
 
@@ -528,13 +571,14 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob>,
+    watch: StateWatch<K, V, T, D>,
+
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
 
     since: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
-    pub(crate) leased_seqnos: BTreeMap<SeqNo, Lease>,
+    pub(crate) hold_state: AwaitableState<ReadHolds<T>>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
@@ -553,6 +597,7 @@ where
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
 {
+    #[allow(clippy::unused_async)]
     pub(crate) async fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
@@ -561,32 +606,151 @@ where
         blob: Arc<dyn Blob>,
         reader_id: LeasedReaderId,
         read_schemas: Schemas<K, V>,
-        since: Antichain<T>,
-        last_heartbeat: EpochMillis,
+        state: LeasedReaderState<T>,
     ) -> Self {
         let schema_cache = machine.applier.schema_cache();
-        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
+        let hold_state = AwaitableState::new(ReadHolds {
+            held_since: state.since.clone(),
+            applied_since: state.since.clone(),
+            recent_seqno: state.seqno,
+            leases: Default::default(),
+            expired: false,
+            request_sync: false,
+        });
         ReadHandle {
             cfg,
             metrics: Arc::clone(&metrics),
             machine: machine.clone(),
             gc: gc.clone(),
             blob,
+            watch: machine.applier.watch(),
             reader_id: reader_id.clone(),
             read_schemas,
             schema_cache,
-            since,
-            last_heartbeat,
-            leased_seqnos: BTreeMap::new(),
+            since: state.since,
+            hold_state: hold_state.clone(),
             unexpired_state: Some(UnexpiredReadHandleState {
-                expire_fn,
-                _heartbeat_tasks: machine
-                    .start_reader_heartbeat_tasks(reader_id, gc)
-                    .await
-                    .into_iter()
-                    .map(JoinHandle::abort_on_drop)
-                    .collect(),
+                heartbeat_task: Self::start_reader_heartbeat_task(
+                    machine, reader_id, gc, hold_state,
+                ),
             }),
+        }
+    }
+
+    fn start_reader_heartbeat_task(
+        machine: Machine<K, V, T, D>,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+        leased_seqnos: AwaitableState<ReadHolds<T>>,
+    ) -> JoinHandle<()> {
+        let metrics = Arc::clone(&machine.applier.metrics);
+        let name = format!(
+            "persist::heartbeat_read({},{})",
+            machine.shard_id(),
+            reader_id
+        );
+        mz_ore::task::spawn(|| name, {
+            metrics.tasks.heartbeat_read.instrument_task(async move {
+                Self::reader_heartbeat_task(machine, reader_id, gc, leased_seqnos).await
+            })
+        })
+    }
+
+    async fn reader_heartbeat_task(
+        machine: Machine<K, V, T, D>,
+        reader_id: LeasedReaderId,
+        gc: GarbageCollector<K, V, T, D>,
+        leased_seqnos: AwaitableState<ReadHolds<T>>,
+    ) {
+        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 4;
+        // Jitter the first tick to avoid a thundering herd when many readers are started around
+        // the same instant, like during deploys.
+        let jitter: f64 = f64::cast_lossy(reader_id.hashed()) / f64::cast_lossy(u64::MAX);
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + sleep_duration.mul_f64(jitter),
+            sleep_duration,
+        );
+        let mut held_since = leased_seqnos.read(|s| s.held_since.clone());
+        loop {
+            let before_sleep = Instant::now();
+            let _woke_by_tick = tokio::select! {
+                _tick = interval.tick() => {
+                    true
+                }
+                _whatever = leased_seqnos.wait_while(|s| !s.request_sync) => {
+                    false
+                }
+            };
+
+            let elapsed_since_before_sleeping = before_sleep.elapsed();
+            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) went {}s between heartbeats",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_before_sleeping.as_secs_f64()
+                );
+            }
+
+            let before_heartbeat = Instant::now();
+            let heartbeat_ms = (machine.applier.cfg.now)();
+            let current_seqno = machine.seqno();
+            let result = leased_seqnos.modify(|s| {
+                if s.expired {
+                    Err(())
+                } else {
+                    s.observe_seqno(current_seqno);
+                    s.request_sync = false;
+                    held_since.join_assign(&s.held_since);
+                    Ok(s.outstanding_seqno())
+                }
+            });
+            let actual_since = match result {
+                Ok(held_seqno) => {
+                    let (seqno, actual_since, maintenance) = machine
+                        .downgrade_since(&reader_id, held_seqno, &held_since, heartbeat_ms)
+                        .await;
+                    leased_seqnos.modify(|s| {
+                        s.applied_since.clone_from(&actual_since.0);
+                        s.observe_seqno(seqno)
+                    });
+                    maintenance.start_performing(&machine, &gc);
+                    actual_since
+                }
+                Err(()) => {
+                    let (seqno, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                    leased_seqnos.modify(|s| s.observe_seqno(seqno));
+                    maintenance.start_performing(&machine, &gc);
+                    break;
+                }
+            };
+
+            let elapsed_since_heartbeat = before_heartbeat.elapsed();
+            if elapsed_since_heartbeat > Duration::from_secs(60) {
+                warn!(
+                    "reader ({}) of shard ({}) heartbeat call took {}s",
+                    reader_id,
+                    machine.shard_id(),
+                    elapsed_since_heartbeat.as_secs_f64(),
+                );
+            }
+
+            if PartialOrder::less_than(&held_since, &actual_since.0) {
+                // If the read handle was intentionally expired, this task
+                // *should* be aborted before it observes the expiration. So if
+                // we get here, this task somehow failed to keep the read lease
+                // alive. Warn loudly, because there's now a live read handle to
+                // an expired shard that will panic if used, but don't panic,
+                // just in case there is some edge case that results in this
+                // task observing the intentional expiration of a read handle.
+                warn!(
+                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
+                     while read handle is live",
+                    reader_id,
+                    machine.shard_id(),
+                );
+                return;
+            }
         }
     }
 
@@ -602,15 +766,13 @@ where
         &self.since
     }
 
-    fn outstanding_seqno(&mut self) -> Option<SeqNo> {
-        while let Some(first) = self.leased_seqnos.first_entry() {
-            if first.get().count() <= 1 {
-                first.remove();
-            } else {
-                return Some(*first.key());
-            }
-        }
-        None
+    #[cfg(test)]
+    fn outstanding_seqno(&self) -> SeqNo {
+        let current_seqno = self.machine.seqno();
+        self.hold_state.modify(|s| {
+            s.observe_seqno(current_seqno);
+            s.outstanding_seqno()
+        })
     }
 
     /// Forwards the since frontier of this handle, giving up the ability to
@@ -619,47 +781,16 @@ where
     /// This may trigger (asynchronous) compaction and consolidation in the
     /// system. A `new_since` of the empty antichain "finishes" this shard,
     /// promising that no more data will ever be read by this handle.
-    ///
-    /// This also acts as a heartbeat for the reader lease (including if called
-    /// with `new_since` equal to something like `self.since()` or the minimum
-    /// timestamp, making the call a no-op).
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
-        let outstanding_seqno = self.outstanding_seqno();
-
-        let heartbeat_ts = (self.cfg.now)();
-        let (_seqno, current_reader_since, maintenance) = self
-            .machine
-            .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
+        self.since = new_since.clone();
+        self.hold_state.modify(|s| {
+            s.downgrade_since(new_since);
+            s.request_sync = true;
+        });
+        self.hold_state
+            .wait_while(|s| PartialOrder::less_than(&s.applied_since, new_since))
             .await;
-
-        // Debugging for database-issues#4590.
-        if let Some(outstanding_seqno) = outstanding_seqno {
-            let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
-            // We get just over 1 seqno-per-second on average for a shard in
-            // prod, so this is about an hour.
-            const SEQNOS_HELD_THRESHOLD: u64 = 60 * 60;
-            if seqnos_held >= SEQNOS_HELD_THRESHOLD {
-                tracing::info!(
-                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}. bt: {:?}",
-                    self.machine.shard_id(),
-                    self.reader_id,
-                    outstanding_seqno,
-                    _seqno,
-                    self.leased_seqnos.keys().take(10).collect::<Vec<_>>(),
-                    // The Debug impl of backtrace is less aesthetic, but will put the trace
-                    // on a single line and play more nicely with our Honeycomb quota
-                    Backtrace::force_capture(),
-                );
-            }
-        }
-
-        self.since = current_reader_since.0;
-        // A heartbeat is just any downgrade_since traffic, so update the
-        // internal rate limiter here to play nicely with `maybe_heartbeat`.
-        self.last_heartbeat = heartbeat_ts;
-        maintenance.start_performing(&self.machine, &self.gc);
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -748,23 +879,6 @@ where
         Ok(Subscribe::new(snapshot_parts, listen))
     }
 
-    fn lease_batch_part(
-        &mut self,
-        desc: Description<T>,
-        part: BatchPart<T>,
-        filter: FetchBatchFilter<T>,
-    ) -> LeasedBatchPart<T> {
-        LeasedBatchPart {
-            metrics: Arc::clone(&self.metrics),
-            shard_id: self.machine.shard_id(),
-            filter,
-            desc,
-            part,
-            lease: self.lease_seqno(),
-            filter_pushdown_audit: false,
-        }
-    }
-
     fn lease_batch_parts(
         &mut self,
         batch: HollowBatch<T>,
@@ -774,8 +888,17 @@ where
             let blob = Arc::clone(&self.blob);
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
+            let lease = self.lease_seqno().await;
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
-                yield self.lease_batch_part(desc.clone(), part.expect("leased part").into_owned(), filter.clone())
+                yield LeasedBatchPart {
+                    metrics: Arc::clone(&self.metrics),
+                    shard_id: self.machine.shard_id(),
+                    filter: filter.clone(),
+                    desc: desc.clone(),
+                    part: part.expect("leased part").into_owned(),
+                    lease: lease.clone(),
+                    filter_pushdown_audit: false,
+                }
             }
         }
     }
@@ -783,13 +906,18 @@ where
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
     /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
     /// collected until its lease has been returned.
-    fn lease_seqno(&mut self) -> Lease {
-        let seqno = self.machine.seqno();
-        let lease = self
-            .leased_seqnos
-            .entry(seqno)
-            .or_insert_with(|| Lease::new(seqno));
-        lease.clone()
+    async fn lease_seqno(&mut self) -> Lease {
+        let current_seqno = self.machine.seqno();
+        let lease = self.hold_state.modify(|s| {
+            s.observe_seqno(current_seqno);
+            s.lease_seqno()
+        });
+        // The seqno we've leased may be the seqno observed by our heartbeat task, which could be
+        // ahead of the last state we saw. Ensure we only observe states in the future of our hold.
+        // (Since these are backed by the same state in the same process, this should all be pretty
+        // fast.)
+        self.watch.wait_for_seqno_ge(lease.seqno()).await;
+        lease
     }
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
@@ -822,8 +950,7 @@ where
             Arc::clone(&self.blob),
             new_reader_id,
             self.read_schemas.clone(),
-            reader_state.since,
-            heartbeat_ts,
+            reader_state,
         )
         .await;
         new_reader
@@ -835,49 +962,31 @@ where
 
     /// A rate-limited version of [Self::downgrade_since].
     ///
-    /// This is an internally rate limited helper, designed to allow users to
-    /// call it as frequently as they like. Call this or [Self::downgrade_since],
-    /// on some interval that is "frequent" compared to the read lease duration.
+    /// Users can call this as frequently as they wish; changes will be periodically
+    /// flushed to state by the heartbeat task.
+    #[allow(clippy::unused_async)]
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        let min_elapsed = self.heartbeat_duration();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since).await;
-        }
+        self.since = new_since.clone();
+        self.hold_state.modify(|s| {
+            s.downgrade_since(new_since);
+        });
     }
 
     /// Politely expires this reader, releasing its lease.
     ///
     /// There is a best-effort impl in Drop to expire a reader that wasn't
     /// explictly expired with this method. When possible, explicit expiry is
-    /// still preferred because the Drop one is best effort and is dependant on
-    /// a tokio [Handle] being available in the TLC at the time of drop (which
-    /// is a bit subtle). Also, explicit expiry allows for control over when it
-    /// happens.
+    /// still preferred because it also ensures that the background task is complete.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        // We drop the unexpired state before expiring the reader to ensure the
-        // heartbeat tasks can never observe the expired state. This doesn't
-        // matter for correctness, but avoids confusing log output if the
-        // heartbeat task were to discover that its lease has been expired.
+        self.hold_state.modify(|s| {
+            s.expired = true;
+            s.request_sync = true;
+        });
         let Some(unexpired_state) = self.unexpired_state.take() else {
             return;
         };
-        unexpired_state.expire_fn.0().await;
-    }
-
-    fn expire_fn(
-        machine: Machine<K, V, T, D>,
-        gc: GarbageCollector<K, V, T, D>,
-        reader_id: LeasedReaderId,
-    ) -> ExpireFn {
-        ExpireFn(Box::new(move || {
-            Box::pin(async move {
-                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
-                maintenance.start_performing(&machine, &gc);
-            })
-        }))
+        unexpired_state.heartbeat_task.await;
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -893,8 +1002,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
-    expire_fn: ExpireFn,
-    pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
+    pub(crate) heartbeat_task: JoinHandle<()>,
 }
 
 /// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
@@ -1022,7 +1130,7 @@ where
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
-        let lease = self.lease_seqno();
+        let lease = self.lease_seqno().await;
 
         Self::read_batches_consolidated(
             &self.cfg,
@@ -1235,34 +1343,10 @@ where
 
 impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
     fn drop(&mut self) {
-        // We drop the unexpired state before expiring the reader to ensure the
-        // heartbeat tasks can never observe the expired state. This doesn't
-        // matter for correctness, but avoids confusing log output if the
-        // heartbeat task were to discover that its lease has been expired.
-        let Some(unexpired_state) = self.unexpired_state.take() else {
-            return;
-        };
-
-        let handle = match Handle::try_current() {
-            Ok(x) => x,
-            Err(_) => {
-                warn!(
-                    "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
-                    self.reader_id
-                );
-                return;
-            }
-        };
-        // Spawn a best-effort task to expire this read handle. It's fine if
-        // this doesn't run to completion, we'd just have to wait out the lease
-        // before the shard-global since is unblocked.
-        //
-        // Intentionally create the span outside the task to set the parent.
-        let expire_span = debug_span!("drop::expire");
-        handle.spawn_named(
-            || format!("ReadHandle::expire ({})", self.reader_id),
-            unexpired_state.expire_fn.0().instrument(expire_span),
-        );
+        self.hold_state.modify(|s| {
+            s.expired = true;
+            s.request_sync = true;
+        });
     }
 }
 
@@ -1453,8 +1537,16 @@ mod tests {
             .await
             .expect("cannot serve requested as_of");
 
-        // Determine sequence number at outset.
-        let original_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
+        // Determine the sequence number held by our subscribe.
+        let original_seqno_since = subscribe.listen.handle.outstanding_seqno();
+        if let Some(snapshot) = &subscribe.snapshot {
+            for part in snapshot {
+                assert!(
+                    part.lease.seqno() >= original_seqno_since,
+                    "our seqno hold must cover all parts"
+                );
+            }
+        }
 
         let mut parts = vec![];
 
@@ -1544,7 +1636,7 @@ mod tests {
 
             // We should expect the SeqNo to be downgraded if this part's SeqNo
             // is no longer leased to any other parts, either.
-            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > Some(part_seqno);
+            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > part_seqno;
 
             let new_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
             if expect_downgrade {
