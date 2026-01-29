@@ -126,6 +126,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
+    # TODO(def-) Remove when https://github.com/rust-lang/rust/issues/148581 is fixed
+    target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
+    spawn.runv(["rm", "-rf", target_dir])
+    os.makedirs(target_dir, exist_ok=True)
+
     # Don't upload an out of date junit xml when the build fails
     junit_path = (
         os.getenv("CARGO_TARGET_DIR", "target") + "/nextest/ci/junit_cargo-test.xml"
