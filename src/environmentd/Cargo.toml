@@ -83,7 +83,7 @@ num_cpus = "1.17.0"
 openssl = { version = "0.10.75", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.24.0", features = ["trace"] }
-opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 pin-project = "1.1.10"
 postgres = { version = "0.19.12", optional = true }
 postgres-openssl = { version = "0.5.2", optional = true }
