@@ -1027,50 +1027,21 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             return Err(ApplyMergeResult::NotAppliedNoMatch);
         }
 
-        let runs: Vec<_> = original
+        let mut result = HollowBatch::empty(replacement.desc.clone());
+
+        let runs = original
             .runs()
             .filter(|(meta, _)| {
                 !run_ids.contains(&meta.id.expect("id should be present at this point"))
             })
-            .chain(replacement.runs())
-            .collect();
+            .chain(replacement.runs());
 
-        let len = runs.iter().filter_map(|(meta, _)| meta.len).sum::<usize>();
+        for (meta, parts) in runs {
+            result.push_run(meta.clone(), parts.iter().cloned());
+            result.len += meta.len.unwrap_or(0);
+        }
 
-        let run_meta = runs
-            .iter()
-            .map(|(meta, _)| *meta)
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let parts = runs
-            .iter()
-            .flat_map(|(_, parts)| *parts)
-            .cloned()
-            .collect::<Vec<_>>();
-
-        let run_splits = {
-            let mut splits = Vec::with_capacity(run_meta.len().saturating_sub(1));
-            let mut pointer = 0;
-            for (i, (_, parts)) in runs.into_iter().enumerate() {
-                if parts.is_empty() {
-                    continue;
-                }
-                if i < run_meta.len() - 1 {
-                    splits.push(pointer + parts.len());
-                }
-                pointer += parts.len();
-            }
-            splits
-        };
-
-        Ok(HollowBatch::new(
-            replacement.desc.clone(),
-            parts,
-            len,
-            run_meta,
-            run_splits,
-        ))
+        Ok(result)
     }
 
     fn maybe_replace_checked<D>(
