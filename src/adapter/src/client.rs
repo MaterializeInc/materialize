@@ -21,6 +21,7 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
+use mz_auth::Authenticated;
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
@@ -33,6 +34,7 @@ use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_repr::user::InternalUserMetadata;
 use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
@@ -51,8 +53,8 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
-    SASLChallengeResponse, SASLVerifyProofResponse,
+    CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
+    SASLVerifyProofResponse, SuperuserAttribute,
 };
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
@@ -148,27 +150,30 @@ impl Client {
     /// Creates a new session associated with this client for the given user.
     ///
     /// It is the caller's responsibility to have authenticated the user.
-    pub fn new_session(&self, config: SessionConfig) -> Session {
+    /// We pass in an Authenticated marker as a guardrail to ensure the
+    /// user has authenticated with an authenticator before creating a session.
+    pub fn new_session(&self, config: SessionConfig, _authenticated: Authenticated) -> Session {
         // We use the system clock to determine when a session connected to Materialize. This is not
         // intended to be 100% accurate and correct, so we don't burden the timestamp oracle with
         // generating a more correct timestamp.
         Session::new(self.build_info, config, self.metrics().session_metrics())
     }
 
-    /// Preforms an authentication check for the given user.
+    /// Verifies the provided user's password against the
+    /// stored credentials in the catalog.
     pub async fn authenticate(
         &self,
         user: &String,
         password: &Password,
-    ) -> Result<AuthResponse, AdapterError> {
+    ) -> Result<Authenticated, AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticatePassword {
             role_name: user.to_string(),
             password: Some(password.clone()),
             tx,
         });
-        let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        rx.await.expect("sender dropped")?;
+        Ok(Authenticated)
     }
 
     pub async fn generate_sasl_challenge(
@@ -192,7 +197,7 @@ impl Client {
         proof: &String,
         nonce: &String,
         mock_hash: &String,
-    ) -> Result<SASLVerifyProofResponse, AdapterError> {
+    ) -> Result<(SASLVerifyProofResponse, Authenticated), AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::AuthenticateVerifySASLProof {
             role_name: user.to_string(),
@@ -202,7 +207,7 @@ impl Client {
             tx,
         });
         let response = rx.await.expect("sender dropped")?;
-        Ok(response)
+        Ok((response, Authenticated))
     }
 
     /// Upgrades this client to a session client.
@@ -265,6 +270,7 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            superuser_attribute,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -287,6 +293,13 @@ impl Client {
         };
 
         let session = client.session();
+
+        // Apply the superuser attribute to the session's user if
+        // it exists.
+        if let SuperuserAttribute(Some(superuser)) = superuser_attribute {
+            session.apply_internal_user_metadata(InternalUserMetadata { superuser });
+        }
+
         session.initialize_role_metadata(role_id);
         let vars_mut = session.vars_mut();
         for (name, val) in session_defaults {
@@ -438,15 +451,17 @@ Issue a SQL query to get started. Need help?
     ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
-        let session = self.new_session(SessionConfig {
-            conn_id,
-            uuid: Uuid::new_v4(),
-            user: SUPPORT_USER.name.clone(),
-            client_ip: None,
-            external_metadata_rx: None,
-            internal_user_metadata: None,
-            helm_chart_version: None,
-        });
+        let session = self.new_session(
+            SessionConfig {
+                conn_id,
+                uuid: Uuid::new_v4(),
+                user: SUPPORT_USER.name.clone(),
+                client_ip: None,
+                external_metadata_rx: None,
+                helm_chart_version: None,
+            },
+            Authenticated,
+        );
         let mut session_client = self.startup(session).await?;
 
         // Parse the SQL statement.

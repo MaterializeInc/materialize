@@ -36,7 +36,7 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
 use mz_auth::password::Password;
-use mz_authenticator::Authenticator;
+use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -106,6 +106,8 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
     /// Frontegg JWT authentication configuration.
     pub frontegg: Option<FronteggAuthenticator>,
+    /// OIDC JWT authentication configuration.
+    pub oidc: Option<GenericOidcAuthenticator>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -261,6 +263,7 @@ impl Listener<SqlListenerConfig> {
         active_connection_counter: ConnectionCounter,
         tls_reloading_context: Option<ReloadingSslContext>,
         frontegg: Option<FronteggAuthenticator>,
+        oidc: Option<GenericOidcAuthenticator>,
         adapter_client: AdapterClient,
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
@@ -280,6 +283,9 @@ impl Listener<SqlListenerConfig> {
             ),
             AuthenticatorKind::Password => Authenticator::Password(adapter_client.clone()),
             AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client.clone()),
+            AuthenticatorKind::Oidc => Authenticator::Oidc(
+                oidc.expect("OIDC config is required with AuthenticatorKind::Oidc"),
+            ),
             AuthenticatorKind::None => Authenticator::None,
         };
 
@@ -380,14 +386,21 @@ impl Listeners {
         let authenticator_frontegg_rx = authenticator_frontegg_rx.shared();
         let (authenticator_password_tx, authenticator_password_rx) = oneshot::channel();
         let authenticator_password_rx = authenticator_password_rx.shared();
+        let (authenticator_oidc_tx, authenticator_oidc_rx) = oneshot::channel();
+        let authenticator_oidc_rx = authenticator_oidc_rx.shared();
         let (authenticator_none_tx, authenticator_none_rx) = oneshot::channel();
         let authenticator_none_rx = authenticator_none_rx.shared();
 
-        // We can only send the Frontegg and None variants immediately.
+        // We can only send the Frontegg, OIDC, and None variants immediately.
         // The Password variant requires an adapter client.
         if let Some(frontegg) = &config.frontegg {
             authenticator_frontegg_tx
                 .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
+                .expect("rx known to be live");
+        }
+        if let Some(oidc) = &config.oidc {
+            authenticator_oidc_tx
+                .send(Arc::new(Authenticator::Oidc(oidc.clone())))
                 .expect("rx known to be live");
         }
         authenticator_none_tx
@@ -406,6 +419,7 @@ impl Listeners {
                 AuthenticatorKind::Frontegg => authenticator_frontegg_rx.clone(),
                 AuthenticatorKind::Password => authenticator_password_rx.clone(),
                 AuthenticatorKind::Sasl => authenticator_password_rx.clone(),
+                AuthenticatorKind::Oidc => authenticator_oidc_rx.clone(),
                 AuthenticatorKind::None => authenticator_none_rx.clone(),
             };
             let source: &'static str = Box::leak(name.clone().into_boxed_str());
@@ -827,6 +841,7 @@ impl Listeners {
                         active_connection_counter.clone(),
                         tls_reloading_context.clone(),
                         config.frontegg.clone(),
+                        config.oidc.clone(),
                         adapter_client.clone(),
                         metrics.clone(),
                         config.helm_chart_version.clone(),

@@ -85,7 +85,7 @@ use mz_persist_client::cfg::{
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
-use mz_repr::user::ExternalUserMetadata;
+use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use thiserror::Error;
@@ -843,6 +843,11 @@ impl SessionVars {
     pub fn max_query_result_size(&self) -> u64 {
         self.expect_value::<ByteSize>(&MAX_QUERY_RESULT_SIZE)
             .as_bytes()
+    }
+
+    /// Sets the internal metadata associated with the user.
+    pub fn set_internal_user_metadata(&mut self, metadata: InternalUserMetadata) {
+        self.user.internal_metadata = Some(metadata);
     }
 
     /// Sets the external metadata associated with the user.

@@ -1394,7 +1394,7 @@ impl Resolver {
 
                         let auth_response = auth.authenticate(user, &password).await;
                         let auth_session = match auth_response {
-                            Ok(auth_session) => auth_session,
+                            Ok((auth_session, _)) => auth_session,
                             Err(e) => {
                                 warn!("pgwire connection failed authentication: {}", e);
                                 // TODO: fix error codes.
