@@ -362,6 +362,21 @@ pub enum DefiniteError {
     CastError(#[source] EvalError),
     #[error("unexpected binary data in replication stream")]
     UnexpectedBinaryData,
+    #[error(
+        "timeline history mismatch: expected={expected_timeline}:{expected_lsn:?} actual={actual_timeline:?}:{actual_lsn:?}"
+    )]
+    TimelineHistoryMismatch {
+        expected_timeline: u64,
+        expected_lsn: Option<u64>,
+        actual_timeline: Option<u64>,
+        actual_lsn: Option<u64>,
+    },
+    #[error("lsn {lsn} resolves to different timelines: expected={expected} actual={actual:?}")]
+    TimelineLsnMismatch {
+        lsn: u64,
+        expected: u64,
+        actual: Option<u64>,
+    },
 }
 
 impl From<DefiniteError> for DataflowError {
@@ -383,6 +398,10 @@ impl From<DefiniteError> for DataflowError {
                 DefiniteError::InvalidUTF8(_) => SourceErrorDetails::Other(m),
                 DefiniteError::CastError(_) => SourceErrorDetails::Other(m),
                 DefiniteError::UnexpectedBinaryData => SourceErrorDetails::Other(m),
+                DefiniteError::TimelineHistoryMismatch { .. } => {
+                    SourceErrorDetails::Initialization(m)
+                }
+                DefiniteError::TimelineLsnMismatch { .. } => SourceErrorDetails::Initialization(m),
             },
         }))
     }

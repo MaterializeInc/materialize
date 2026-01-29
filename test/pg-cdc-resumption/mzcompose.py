@@ -405,4 +405,4 @@ def backup_restore_pg(c: Composition) -> None:
     c.run_testdrive_files("verify-postgres-select.td")
 
     # Check state of the postgres source
-    c.run_testdrive_files("verify-source-failed.td")
+    c.run_testdrive_files("verify-source-is-awesome.td")
