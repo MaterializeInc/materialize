@@ -65,7 +65,7 @@ use timely::progress::frontier::Antichain;
 use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
-use tracing::{Level, debug, error, info, span, warn};
+use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -414,7 +414,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_update_configuration(&mut self, params: ComputeParameters) {
-        info!("Applying configuration update: {params:?}");
+        debug!("Applying configuration update: {params:?}");
 
         let ComputeParameters {
             workload_class,
@@ -828,9 +828,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                     let peek_persist_stash_available =
                         self.compute_state.peek_stash_persist_location.is_some();
                     if !peek_persist_stash_available && enabled {
-                        tracing::error!(
-                            "missing peek_stash_persist_location but peek stash is enabled"
-                        );
+                        error!("missing peek_stash_persist_location but peek stash is enabled");
                     }
                     enabled && peek_persist_stash_available
                 };
@@ -921,7 +919,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                         .metrics
                         .stashed_peek_seconds
                         .observe(duration.as_secs_f64());
-                    tracing::trace!(?stashing_peek.peek, ?duration, "finished stashing peek response in persist");
+                    trace!(?stashing_peek.peek, ?duration, "finished stashing peek response in persist");
 
                     Some(response)
                 } else {
@@ -1321,7 +1319,7 @@ impl PersistPeek {
                 }
 
                 let count: usize = d.try_into().map_err(|_| {
-                    tracing::error!(
+                    error!(
                         shard = %metadata.data_shard, diff = d, ?row,
                         "persist peek encountered negative multiplicities",
                     );
@@ -1467,7 +1465,7 @@ impl IndexPeek {
             });
             if copies.is_negative() {
                 let error = cursor.key(&storage);
-                tracing::error!(
+                error!(
                     target = %self.peek.target.id(), diff = %copies, %error,
                     "index peek encountered negative multiplicities in error trace",
                 );
