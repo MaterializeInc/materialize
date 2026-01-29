@@ -11,6 +11,7 @@ import random
 import threading
 from collections.abc import Iterator
 from enum import Enum
+from typing import Any
 
 from pg8000.native import identifier, literal
 
@@ -24,9 +25,12 @@ from materialize.data_ingest.data_type import (
     Boolean,
     Bytea,
     DataType,
+    Date,
+    Interval,
     Jsonb,
     Text,
     TextTextMap,
+    Timestamp,
 )
 from materialize.data_ingest.definition import Insert
 from materialize.data_ingest.executor import (
@@ -49,7 +53,9 @@ from materialize.parallel_workload.column import (
     PostgresColumn,
     SqlServerColumn,
     WebhookColumn,
+    correctness,
     naughtify,
+    set_correctness,
     set_naughty_identifiers,
 )
 from materialize.parallel_workload.executor import Executor
@@ -58,7 +64,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 5
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 50
+MAX_ROWS = 20
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 5
@@ -181,6 +187,7 @@ class Table(DBObject):
     num_rows: int
     schema: Schema
     temp: bool
+    rows: list[list[Any]]
 
     def __init__(
         self, rng: random.Random, table_id: int, schema: Schema, temp: bool = False
@@ -188,13 +195,20 @@ class Table(DBObject):
         super().__init__()
         self.table_id = table_id
         self.schema = schema
+        data_types = (
+            DATA_TYPES
+            if not correctness()
+            else list(set(DATA_TYPES) - {Date, Timestamp, Interval})
+            # else [Int]
+        )
         self.columns = [
-            Column(rng, i, rng.choice(DATA_TYPES), self)
+            Column(rng, i, rng.choice(data_types), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
         self.num_rows = 0
         self.rename = 0
         self.temp = temp
+        self.rows = []
 
     def name(self) -> str:
         if self.rename:
@@ -946,6 +960,7 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
+        correctness: bool,
     ):
         self.host = host
         self.ports = ports
@@ -953,6 +968,7 @@ class Database:
         self.scenario = scenario
         self.seed = seed
         set_naughty_identifiers(naughty_identifiers)
+        set_correctness(correctness)
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
