@@ -5592,9 +5592,13 @@ dependencies = [
 name = "mz-authenticator"
 version = "0.1.0"
 dependencies = [
+ "jsonwebtoken",
  "mz-adapter",
  "mz-frontegg-auth",
+ "reqwest",
  "serde",
+ "tokio",
+ "tracing",
  "workspace-hack",
 ]
 
