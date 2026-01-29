@@ -566,6 +566,83 @@ CREATE CONNECTION csr_ssh TO CONFLUENT SCHEMA REGISTRY (
 {{< /tab >}}
 {{< /tabs >}}
 
+### Iceberg Catalog
+
+{{< private-preview />}}
+
+An Iceberg Catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/) catalog. You can use Iceberg Catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg/).
+
+Materialize supports two types of Iceberg catalogs:
+- **REST Catalog**: Generic Iceberg REST catalog implementations (e.g., Polaris, Nessie)
+- **S3 Tables REST Catalog**: AWS S3 Tables managed Iceberg catalog service
+
+#### Syntax {#iceberg-syntax}
+
+{{% include-syntax file="examples/create_connection" example="syntax-iceberg-catalog" %}}
+
+#### Examples {#iceberg-examples}
+
+##### REST Catalog (Polaris, Nessie)
+
+For generic REST-compatible Iceberg catalogs like Polaris or Nessie:
+
+```mzsql
+CREATE SECRET iceberg_oauth_secret AS '<CLIENT_SECRET>';
+
+CREATE CONNECTION polaris_catalog TO ICEBERG CATALOG (
+    CATALOG TYPE = 'REST',
+    URL = 'https://polaris.example.com/api/catalog',
+    CREDENTIAL = 'client-id:' || SECRET iceberg_oauth_secret,
+    WAREHOUSE = 'analytics',
+    SCOPE = 'PRINCIPAL_ROLE:ALL'
+);
+```
+
+**Options**:
+
+Field | Required | Description
+------|----------|------------
+`CATALOG TYPE` | Yes | Must be `'REST'` for generic REST catalogs
+`URL` | Yes | The HTTP(S) endpoint URL for the Iceberg REST catalog
+`CREDENTIAL` | Yes | OAuth2 credentials in `CLIENT_ID:CLIENT_SECRET` format
+`WAREHOUSE` | No | The warehouse name within the catalog
+`SCOPE` | No | OAuth2 scope for authentication. Default: `'PRINCIPAL_ROLE:ALL'`
+
+##### S3 Tables REST Catalog
+
+For AWS S3 Tables:
+
+```mzsql
+CREATE SECRET aws_secret AS '<AWS_SECRET_ACCESS_KEY>';
+
+CREATE CONNECTION aws_conn TO AWS (
+    ACCESS KEY ID = '<AWS_ACCESS_KEY_ID>',
+    SECRET ACCESS KEY = SECRET aws_secret,
+    REGION = 'us-east-1'
+);
+
+CREATE CONNECTION s3_tables_catalog TO ICEBERG CATALOG (
+    CATALOG TYPE = 'S3TABLESREST',
+    URL = 'https://s3tables.us-east-1.amazonaws.com',
+    AWS CONNECTION = aws_conn,
+    WAREHOUSE = 'my-s3-table-bucket'
+);
+```
+
+**Options**:
+
+Field | Required | Description
+------|----------|------------
+`CATALOG TYPE` | Yes | Must be `'S3TABLESREST'` for AWS S3 Tables
+`URL` | Yes | The AWS S3 Tables REST catalog endpoint URL
+`AWS CONNECTION` | Yes | Reference to an AWS connection for authentication
+`WAREHOUSE` | Yes | The S3 Tables warehouse (bucket) name
+
+#### Related pages
+
+- [CREATE SINK: Iceberg](/sql/create-sink/iceberg) - Create Iceberg sinks
+- [Iceberg integration guide](/serve-results/sink/iceberg) - Step-by-step tutorial
+
 ### MySQL
 
 A MySQL connection establishes a link to a [MySQL] server. You can use
@@ -770,6 +847,51 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
     DATABASE 'my_db'
 );
 ```
+
+### Iceberg Catalog
+
+{{< public-preview />}}
+
+An Iceberg catalog connection establishes a link to an [Apache Iceberg](https://iceberg.apache.org/)
+catalog. You can use Iceberg catalog connections to create [Iceberg sinks](/sql/create-sink/iceberg).
+
+#### Syntax {#iceberg-catalog-syntax}
+
+```mzsql
+CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
+    CATALOG TYPE = 's3tablesrest',
+    URL = '<catalog_url>',
+    WAREHOUSE = '<warehouse_arn>',
+    AWS CONNECTION = <aws_connection>
+);
+```
+
+#### Options {#iceberg-catalog-options}
+
+| Option | Description | Required |
+|--------|-------------|:--------:|
+| `CATALOG TYPE` | The type of Iceberg catalog. Currently only `'s3tablesrest'` (AWS S3 Tables) is supported. | Yes |
+| `URL` | The URL of the Iceberg catalog endpoint. For S3 Tables: `https://s3tables.<region>.amazonaws.com/iceberg` | Yes |
+| `WAREHOUSE` | The ARN of the S3 Tables bucket: `arn:aws:s3tables:<region>:<account-id>:bucket/<bucket-name>` | Yes |
+| `AWS CONNECTION` | The name of the [AWS connection](#aws) used for authentication. | Yes |
+
+#### Example {#iceberg-catalog-example}
+
+```mzsql
+-- First, create an AWS connection for authentication
+CREATE CONNECTION aws_connection
+  TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::123456789012:role/MaterializeIceberg');
+
+-- Create the Iceberg catalog connection
+CREATE CONNECTION iceberg_catalog TO ICEBERG CATALOG (
+    CATALOG TYPE = 's3tablesrest',
+    URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
+    WAREHOUSE = 'arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket',
+    AWS CONNECTION = aws_connection
+);
+```
+
+For more information about using Iceberg sinks, see the [Iceberg sink documentation](/serve-results/sink/iceberg/).
 
 ## Network security connections
 
