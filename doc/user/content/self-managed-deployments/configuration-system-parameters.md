@@ -7,7 +7,6 @@ menu:
   main:
     parent: "sm-deployments"
     weight: 71
-draft: true
 ---
 
 This guide explains how to configure system parameters for your Materialize
@@ -31,6 +30,8 @@ There are two ways to configure system parameters:
    that survives restarts and upgrades.
 
 This guide focuses on the ConfigMap approach for self-managed deployments.
+
+{{< public-preview />}}
 
 ## Creating a System Parameters ConfigMap
 
