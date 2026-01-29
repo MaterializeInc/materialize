@@ -10,14 +10,15 @@
 //! Transformation based on pushing demand information about columns toward sources.
 
 use itertools::Itertools;
-use mz_ore::assert_none;
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_expr::visit::Visit;
 use mz_expr::{
-    AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr,
-    RECURSION_LIMIT,
+    AggregateExpr, AggregateFunc, Id, JoinInputMapper, MapFilterProject, MirRelationExpr,
+    MirScalarExpr, RECURSION_LIMIT,
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
+use mz_ore::{assert_none, soft_assert_or_log};
 use mz_repr::{Datum, Row};
 
 use crate::TransformCtx;
@@ -364,5 +365,66 @@ impl Demand {
                 }
             }
         })
+    }
+
+    /// Checks the optimizer invariant that there are no more opportunities for projection pushdown,
+    /// comparing against Demand.
+    ///
+    /// More specifically, we check that the MFPs directly on top of global Gets project at most
+    /// those columns that `Demand` determines are demanded from that global Get. An exception is
+    /// when there is an `ArrangeBy` on top of a global `Get`, in which case the relevant MFP might
+    /// have been lifted away by `JoinImplementation` to enable index reuse. We skip checking the
+    /// MFP in this case.
+    ///
+    /// This is meant to be called at the end of the MIR pipeline, where it can catch 3 types of
+    /// issues:
+    /// 1. If `ProjectionPushdown` is not as smart as `Demand`.
+    /// 2. If some transform after the last run of `ProjectionPushdown` undoes something that
+    ///    `ProjectionPushdown` did.
+    /// 3. If some transform after the last run of `ProjectionPushdown` opens up new opportunities
+    ///    for projection pushdown.
+    pub fn soft_assert_no_more_projection_pushdown(
+        relation: &MirRelationExpr,
+    ) -> Result<(), crate::TransformError> {
+        let mut relation = relation.clone();
+        let arity = relation.arity();
+        // Gather demanded columns of each of the Ids.
+        let mut demand_on_ids = BTreeMap::new();
+        let demand = Demand::default();
+        demand.action(&mut relation, (0..arity).collect(), &mut demand_on_ids)?;
+        // Check that MFPs on top of global Gets project at most those columns that Demand thinks
+        // are demanded.
+        //
+        // We use `visit_pre_post`, because we'd like to control how we descend to children: we want
+        // to jump over an MFP that we find at the current node, in order to avoid observing partial
+        // MFPs, that are without their Projects.
+        relation.visit_pre_post(&mut |expr| {
+            let (mfp, expr) = MapFilterProject::extract_from_expression(expr);
+            match expr {
+                MirRelationExpr::Get { id: Id::Global(id), .. } => {
+                    let demand = demand_on_ids.get(&Id::Global(*id)).expect("`Demand` should have an opinion on all ids");
+                    let actual_proj_above_get = mfp.projection.iter().filter(|c| **c < mfp.input_arity).collect_vec();
+                    soft_assert_or_log!(
+                        actual_proj_above_get.iter().all(|c| demand.contains(c)),
+                        "Missed ProjectionPushdown opportunity: demand on {}: {:?}. actual_proj_above_get: {:?}. The whole plan:\n{}\n\nmfp:{},\nexpr:{}",
+                        id, demand, actual_proj_above_get, relation.pretty(), mfp, expr.pretty()
+                    );
+                    // Don't descend to children.
+                    Some(vec![])
+                },
+                // If there is an ArrangeBy on top of a global Get, then a projection might have
+                // been lifted away by JoinImplementation to re-use an index, so skip checking the
+                // invariant in this case.
+                MirRelationExpr::ArrangeBy { input, .. } if matches!(**input, MirRelationExpr::Get { id: Id::Global(_), .. }) => {
+                    Some(vec![])
+                },
+                // Just continue with the children of the operator that we found below the MFP.
+                _ => {
+                    Some(expr.children().collect())
+                },
+            }
+
+        }, &mut |_| {})?;
+        Ok(())
     }
 }
