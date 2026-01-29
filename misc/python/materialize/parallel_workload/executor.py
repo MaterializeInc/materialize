@@ -53,6 +53,7 @@ class Executor:
     last_status: str
     action_run_since_last_commit_rollback: bool
     autocommit: bool
+    allow_bad: bool
 
     def __init__(
         self,
@@ -75,6 +76,51 @@ class Executor:
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
         self.autocommit = cur.connection.autocommit
         self.mz_service = "materialized"
+        self.allow_bad = False
+
+        self.keywords = [
+            "+",
+            "-",
+            "*",
+            "/",
+            "%",
+            "+",
+            "-",
+            "~",
+            "=",
+            "<>",
+            "!=",
+            "<",
+            "<=",
+            ">",
+            ">=",
+            "&",
+            "|",
+            "#",
+            "^",
+            "<<",
+            ">>",
+            "||",
+            "~",
+            "!~",
+            "~*",
+            "!~*",
+            "@>",
+            "<@",
+            "&&",
+            "(",
+            ")",
+            ";",
+            "0",
+            '""',
+            "NULL",
+        ]
+        with open("src/sql-lexer/src/keywords.txt") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                self.keywords.append(line.upper())
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
@@ -161,6 +207,19 @@ class Executor:
         http_str = " [HTTP]" if is_http else " [WS]" if use_ws and self.ws else ""
         self.log(f"{query}{extra_info_str}{http_str}")
         self.last_status = "running"
+
+        if self.allow_bad and self.rng.choice([True, False]):
+            parts = query.split(" ")
+            idx = self.rng.randrange(len(parts))
+            parts[idx] = str(
+                self.rng.choice(
+                    self.keywords
+                    if self.rng.choice([True, False])
+                    else self.db.db_objects()
+                )
+            )
+            query = " ".join(parts)
+
         try:
             if not is_http:
                 if use_ws and self.ws:
