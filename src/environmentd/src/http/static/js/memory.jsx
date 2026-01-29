@@ -311,13 +311,13 @@ function View(props) {
             );
 
         SELECT
-          id, from_index, to_index, sent, batch_sent
+          channels.id, channels.from_index, channels.to_index, counts.sent, counts.batch_sent
         FROM
           mz_introspection.mz_dataflow_channels AS channels
           LEFT JOIN mz_introspection.mz_message_counts AS counts
               ON channels.id = counts.channel_id
         WHERE
-          id
+          channels.id
           IN (
               SELECT
                 id
