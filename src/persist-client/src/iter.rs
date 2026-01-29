@@ -16,6 +16,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use arrow::array::{Array, Int64Array};
@@ -680,22 +681,32 @@ where
         Ok(self.iter().map(|i| i.map(|(_idx, kv, t, d)| (kv, t, d))))
     }
 
-    fn chunk(&mut self, max_len: usize, max_bytes: usize) -> Option<Part> {
+    fn chunk(&mut self, max_len: usize, max_bytes: usize, max_time: Option<Duration>) -> Option<Part> {
         let Some(mut iter) = self.iter() else {
             return None;
         };
 
         let parts = iter.parts.clone();
+        let start = Instant::now();
 
         // Keep a running estimate of the size left in the budget, returning None once
-        // budget is 0.
+        // budget is 0 or time threshold is exceeded.
         // Note that we can't use take_while here - that method drops the first non-matching
         // element, but we want to leave any data that we don't return in state for future
         // calls to `next`/`next_chunk`.
         let mut budget = max_bytes;
+        let mut count = 0usize;
         let iter = std::iter::from_fn(move || {
             if budget == 0 {
                 return None;
+            }
+            // Check time threshold periodically (every 1000 iterations) to avoid
+            // excessive Instant::now() calls while still yielding reasonably often.
+            if let Some(max_time) = max_time {
+                count += 1;
+                if count % 1000 == 0 && start.elapsed() >= max_time {
+                    return None;
+                }
             }
             let update @ (_, kv, _, _) = iter.next()?;
             // Budget for the K/V size plus two 8-byte Codec64 values.
@@ -711,14 +722,19 @@ where
     /// Wait until data is available, then return an iterator over the next
     /// consolidated chunk of output. If this method returns `None`, that all the data has been
     /// exhausted and the full consolidated dataset has been returned.
+    ///
+    /// `max_time` limits how long the chunk processing can run before returning early
+    /// to allow yielding. This prevents long-running synchronous work from blocking
+    /// the runtime and causing heartbeat task delays.
     pub(crate) async fn next_chunk(
         &mut self,
         max_len: usize,
         max_bytes: usize,
+        max_time: Option<Duration>,
     ) -> anyhow::Result<Option<Part>> {
         self.trim();
         self.unblock_progress().await?;
-        Ok(self.chunk(max_len, max_bytes))
+        Ok(self.chunk(max_len, max_bytes, max_time))
     }
 
     /// The size of the data that we _might_ be holding concurrently in memory. While this is
@@ -1186,7 +1202,7 @@ mod tests {
                 let mut out = vec![];
                 loop {
                     consolidator.trim();
-                    let Some(chunk) = consolidator.chunk(1000, 1000) else {
+                    let Some(chunk) = consolidator.chunk(1000, 1000, None) else {
                         break;
                     };
                     if chunk.len() > 0 {

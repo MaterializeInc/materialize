@@ -937,7 +937,7 @@ where
         } = self;
 
         let part = consolidator
-            .next_chunk(*max_len, *max_bytes)
+            .next_chunk(*max_len, *max_bytes, None)
             .await
             .expect("fetching a leased part")?;
         let key_decoder = self
