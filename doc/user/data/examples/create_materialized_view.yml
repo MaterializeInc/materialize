@@ -121,6 +121,7 @@
       b.amount DESC,
       b.bid_time,
       b.buyer;
+  testable: false  # TODO: Need to add test_setup for the example
 
 - name: "example-create-replacement-materialized-view"
   description: |
@@ -141,3 +142,4 @@
       b.amount DESC,
       b.bid_time,
       b.buyer;
+  testable: false  # TODO: Need to add test_setup for the example.

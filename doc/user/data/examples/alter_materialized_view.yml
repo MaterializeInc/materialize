@@ -64,3 +64,4 @@
   code: |
     ALTER MATERIALIZED VIEW winning_bids
     APPLY REPLACEMENT winning_bids_replacement;
+  testable: false  # TODO: Need to add test_setup for the example.
