@@ -1270,7 +1270,7 @@ mod tests {
             let shard_id1 = "s11111111-1111-1111-1111-111111111111"
                 .parse::<ShardId>()
                 .expect("invalid shard id");
-            let mut fetcher1 = client
+            let fetcher1 = client
                 .create_batch_fetcher::<String, String, u64, i64>(
                     shard_id1,
                     Default::default(),

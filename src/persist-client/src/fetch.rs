@@ -166,7 +166,7 @@ where
     /// Note to check the `LeasedBatchPart` documentation for how to handle the
     /// returned value.
     pub async fn fetch_leased_part(
-        &mut self,
+        &self,
         part: ExchangeableBatchPart<T>,
     ) -> Result<Result<FetchedBlob<K, V, T, D>, BlobKey>, InvalidUsage<T>> {
         let ExchangeableBatchPart {
@@ -185,16 +185,15 @@ where
             });
         }
 
-        let migration =
-            PartMigration::new(&part, self.read_schemas.clone(), &mut self.schema_cache)
-                .await
-                .unwrap_or_else(|read_schemas| {
-                    panic!(
-                        "could not decode part {:?} with schema: {:?}",
-                        part.schema_id(),
-                        read_schemas
-                    )
-                });
+        let migration = PartMigration::new(&part, self.read_schemas.clone(), &self.schema_cache)
+            .await
+            .unwrap_or_else(|read_schemas| {
+                panic!(
+                    "could not decode part {:?} with schema: {:?}",
+                    part.schema_id(),
+                    read_schemas
+                )
+            });
 
         let (buf, fetch_permit) = match &part {
             BatchPart::Hollow(x) => {
