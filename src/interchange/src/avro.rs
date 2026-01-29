@@ -44,7 +44,7 @@ mod tests {
             "fields": []
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[])?)?;
         assert_eq!(desc.arity(), 0, "empty record produced rows");
 
         Ok(())
@@ -61,7 +61,7 @@ mod tests {
             ]
         }"#;
 
-        let desc = schema_to_relationdesc(parse_schema(schema)?)?;
+        let desc = schema_to_relationdesc(parse_schema(schema, &[])?)?;
         let expected_desc = RelationDesc::builder()
             .with_column("f1", SqlScalarType::Int32.nullable(false))
             .with_column("f2", SqlScalarType::String.nullable(false))

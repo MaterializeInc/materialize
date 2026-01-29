@@ -2245,11 +2245,36 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+
+            // Parse KEY REFERENCES if present (only valid if we have a key schema)
+            let key_reference_schemas =
+                if key_schema.is_some() && self.parse_keywords(&[KEY, REFERENCES]) {
+                    self.expect_token(&Token::LParen)?;
+                    let refs = self.parse_comma_separated(|p| p.parse_literal_string())?;
+                    self.expect_token(&Token::RParen)?;
+                    refs
+                } else {
+                    vec![]
+                };
+
             self.expect_keywords(&[VALUE, SCHEMA])?;
             let value_schema = self.parse_literal_string()?;
+
+            // Parse VALUE REFERENCES if present
+            let value_reference_schemas = if self.parse_keywords(&[VALUE, REFERENCES]) {
+                self.expect_token(&Token::LParen)?;
+                let refs = self.parse_comma_separated(|p| p.parse_literal_string())?;
+                self.expect_token(&Token::RParen)?;
+                refs
+            } else {
+                vec![]
+            };
+
             Some(CsrSeedAvro {
                 key_schema,
                 value_schema,
+                key_reference_schemas,
+                value_reference_schemas,
             })
         } else {
             None

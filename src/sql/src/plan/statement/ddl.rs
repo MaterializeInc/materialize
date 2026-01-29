@@ -2281,6 +2281,10 @@ generate_extracted_config!(AvroSchemaOption, (ConfluentWireFormat, bool, Default
 pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// Reference schemas for the key schema, in dependency order.
+    pub key_reference_schemas: Vec<String>,
+    /// Reference schemas for the value schema, in dependency order.
+    pub value_reference_schemas: Vec<String>,
     pub csr_connection: Option<<ReferencedConnection as ConnectionAccess>::Csr>,
     pub confluent_wire_format: bool,
 }
@@ -2295,6 +2299,8 @@ fn get_encoding_inner(
             let Schema {
                 key_schema,
                 value_schema,
+                key_reference_schemas,
+                value_reference_schemas,
                 csr_connection,
                 confluent_wire_format,
             } = match schema {
@@ -2312,6 +2318,8 @@ fn get_encoding_inner(
                     Schema {
                         key_schema: None,
                         value_schema: schema.clone(),
+                        key_reference_schemas: vec![],
+                        value_reference_schemas: vec![],
                         csr_connection: None,
                         confluent_wire_format,
                     }
@@ -2343,6 +2351,8 @@ fn get_encoding_inner(
                         Schema {
                             key_schema: seed.key_schema.clone(),
                             value_schema: seed.value_schema.clone(),
+                            key_reference_schemas: seed.key_reference_schemas.clone(),
+                            value_reference_schemas: seed.value_reference_schemas.clone(),
                             csr_connection: Some(csr_connection),
                             confluent_wire_format: true,
                         }
@@ -2356,11 +2366,13 @@ fn get_encoding_inner(
                 return Ok(SourceDataEncoding {
                     key: Some(DataEncoding::Avro(AvroEncoding {
                         schema: key_schema,
+                        reference_schemas: key_reference_schemas,
                         csr_connection: csr_connection.clone(),
                         confluent_wire_format,
                     })),
                     value: DataEncoding::Avro(AvroEncoding {
                         schema: value_schema,
+                        reference_schemas: value_reference_schemas,
                         csr_connection,
                         confluent_wire_format,
                     }),
@@ -2368,6 +2380,7 @@ fn get_encoding_inner(
             } else {
                 DataEncoding::Avro(AvroEncoding {
                     schema: value_schema,
+                    reference_schemas: value_reference_schemas,
                     csr_connection,
                     confluent_wire_format,
                 })

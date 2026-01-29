@@ -109,6 +109,29 @@ impl Client {
         })
     }
 
+    /// Gets the latest version of the specified subject along with its direct references.
+    /// Returns the subject and a list of subject names that this subject directly references.
+    pub async fn get_subject_with_references(
+        &self,
+        subject: &str,
+    ) -> Result<(Subject, Vec<String>), GetBySubjectError> {
+        let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
+        let res: GetBySubjectResponse = send_request(req).await?;
+        let referenced_subjects: Vec<String> =
+            res.references.iter().map(|r| r.subject.clone()).collect();
+        Ok((
+            Subject {
+                schema: Schema {
+                    id: res.id,
+                    raw: res.schema,
+                },
+                version: res.version,
+                name: res.subject,
+            },
+            referenced_subjects,
+        ))
+    }
+
     /// Gets the config set for the specified subject
     pub async fn get_subject_config(
         &self,
@@ -145,6 +168,7 @@ impl Client {
         while let Some((subject, version)) = subjects_queue.pop() {
             let req = self.make_request(Method::GET, &["subjects", &subject, "versions", &version]);
             let res: GetBySubjectResponse = send_request(req).await?;
+            println!("subject response: {res:#?}");
             subjects.push(Subject {
                 schema: Schema {
                     id: res.id,
