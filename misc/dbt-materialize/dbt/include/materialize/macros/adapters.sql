@@ -272,6 +272,26 @@
 {% endmacro %}
 
 -- In the dbt-adapter we extend the Relation class to include sinks and indexes
+{% macro materialize__alter_owner(relation) %}
+  {%- set owner = config.get('owner') -%}
+  {% if owner %}
+    {% set alter_stmt %}
+      {% if relation.type == 'view' %}
+        alter view {{ relation }} owner to {{ owner }}
+      {% elif relation.is_materialized_view %}
+        alter materialized view {{ relation }} owner to {{ owner }}
+      {% elif relation.type == 'sink' %}
+        alter sink {{ relation }} owner to {{ owner }}
+      {% elif relation.type == 'source' %}
+        alter source {{ relation }} owner to {{ owner }}
+      {% elif relation.type == 'table' %}
+        alter table {{ relation }} owner to {{ owner }}
+      {% endif %}
+    {% endset %}
+    {% do run_query(alter_stmt) %}
+  {% endif %}
+{% endmacro %}
+
 {% macro materialize__list_relations_without_caching(schema_relation) %}
   {% call statement('list_relations_without_caching', fetch_result=True) -%}
     select
