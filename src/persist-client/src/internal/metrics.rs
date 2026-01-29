@@ -44,6 +44,7 @@ use tokio_metrics::TaskMonitor;
 use tracing::{Instrument, debug, info, info_span};
 
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
+use crate::internal::gc::GC_GLOBAL_CONCURRENCY;
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
 
@@ -2525,6 +2526,7 @@ pub struct SemaphoreMetrics {
     cfg: PersistConfig,
     registry: MetricsRegistry,
     fetch: OnceCell<MetricsSemaphore>,
+    gc: OnceCell<MetricsSemaphore>,
 }
 
 impl SemaphoreMetrics {
@@ -2533,6 +2535,7 @@ impl SemaphoreMetrics {
             cfg,
             registry,
             fetch: OnceCell::new(),
+            gc: OnceCell::new(),
         }
     }
 
@@ -2566,6 +2569,24 @@ impl SemaphoreMetrics {
             MetricsSemaphore::new(&registry, "fetch", total_permits)
         };
         self.fetch.get_or_init(|| init).await
+    }
+
+    /// We can't easily change the number of permits, and the dyncfgs are all
+    /// set to defaults on process start, so make sure we only initialize the
+    /// semaphore once we've synced dyncfgs at least once.
+    pub(crate) async fn gc(&self) -> &MetricsSemaphore {
+        if let Some(x) = self.gc.get() {
+            // Common case of already initialized avoids the cloning below.
+            return x;
+        }
+        let cfg = self.cfg.clone();
+        let registry = self.registry.clone();
+        let init = async move {
+            let () = cfg.configs_synced_once().await;
+            let total_permits = GC_GLOBAL_CONCURRENCY.get(&cfg);
+            MetricsSemaphore::new(&registry, "gc", total_permits)
+        };
+        self.gc.get_or_init(|| init).await
     }
 
     pub(crate) async fn acquire_fetch_permits(&self, encoded_size_bytes: usize) -> MetricsPermits {
@@ -2629,6 +2650,7 @@ impl MetricsSemaphore {
                 metric!(
                     name: "mz_persist_semaphore_available_permits",
                     help: "currently available permits according to the semaphore",
+                    const_labels: {"name" => name},
                 ),
                 {
                     let semaphore = Arc::clone(&semaphore);
