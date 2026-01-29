@@ -12,6 +12,7 @@ use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{self, Debug};
+use std::hash::{Hash, Hasher};
 use std::mem::{size_of, transmute};
 use std::ops::Deref;
 use std::str;
@@ -757,7 +758,7 @@ pub struct RowArena {
 // DatumList and DatumDict defined here rather than near Datum because we need private access to the unsafe data field
 
 /// A sequence of Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy)]
 pub struct DatumList<'a> {
     /// Points at the serialized datums
     data: &'a [u8],
@@ -769,23 +770,76 @@ impl<'a> Debug for DatumList<'a> {
     }
 }
 
+impl<'a> PartialEq for DatumList<'a> {
+    #[inline(always)]
+    fn eq(&self, other: &DatumList<'a>) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl<'a> Eq for DatumList<'a> {}
+
+impl<'a> Hash for DatumList<'a> {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for d in self.iter() {
+            d.hash(state);
+        }
+    }
+}
+
 impl Ord for DatumList<'_> {
+    #[inline(always)]
     fn cmp(&self, other: &DatumList) -> Ordering {
         self.iter().cmp(other.iter())
     }
 }
 
 impl PartialOrd for DatumList<'_> {
+    #[inline(always)]
     fn partial_cmp(&self, other: &DatumList) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy)]
 pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
+}
+
+impl<'a> PartialEq for DatumMap<'a> {
+    #[inline(always)]
+    fn eq(&self, other: &DatumMap<'a>) -> bool {
+        self.iter().eq(other.iter())
+    }
+}
+
+impl<'a> Eq for DatumMap<'a> {}
+
+impl<'a> Hash for DatumMap<'a> {
+    #[inline(always)]
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        for (k, v) in self.iter() {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+impl<'a> Ord for DatumMap<'a> {
+    #[inline(always)]
+    fn cmp(&self, other: &DatumMap<'a>) -> Ordering {
+        self.iter().cmp(other.iter())
+    }
+}
+
+impl<'a> PartialOrd for DatumMap<'a> {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &DatumMap<'a>) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// Represents a single `Datum`, appropriate to be nested inside other
@@ -2958,12 +3012,24 @@ impl Drop for SharedRow {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
     use chrono::{DateTime, NaiveDate};
+    use itertools::Itertools;
     use mz_ore::{assert_err, assert_none};
+    use ordered_float::OrderedFloat;
 
     use crate::SqlScalarType;
 
     use super::*;
+
+    fn hash<T: Hash>(t: &T) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        t.hash(&mut hasher);
+        hasher.finish()
+    }
 
     #[mz_ore::test]
     fn test_assumptions() {
@@ -3443,5 +3509,273 @@ mod tests {
 
         // The biggest one takes 40 s on my laptop, probably not worth it.
         //test_list_encoding_inner(LONG + 1); // huge
+    }
+
+    /// Demonstrates that DatumList's Eq (bytewise) and Ord (datum-by-datum) are now consistent.
+    /// A list containing -0.0 and one containing +0.0 have different byte representations
+    /// (IEEE 754 distinguishes them), originally Eq says they are not equal. But after
+    /// using the new Datum::cmp, Eq says they are equal, which matches what Ord
+    /// compares via iter().cmp(other.iter()), and them as equal.
+    #[mz_ore::test]
+    fn test_datum_list_eq_ord_consistency() {
+        // Build list containing +0.0
+        let mut row_pos = Row::default();
+        row_pos.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let list_pos = row_pos.unpack_first().unwrap_list();
+
+        // Build list containing -0.0 (distinct bit pattern from +0.0)
+        let mut row_neg = Row::default();
+        row_neg.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let list_neg = row_neg.unpack_first().unwrap_list();
+
+        // Eq is bytewise: different encodings => not equal
+        // This was a bug in the past, so we test it.
+        assert_eq!(
+            list_pos, list_neg,
+            "Eq should see different encodings as equal"
+        );
+
+        // Ord is datum-by-datum: -0.0 and +0.0 compare equal as Datums
+        assert_eq!(
+            list_pos.cmp(&list_neg),
+            Ordering::Equal,
+            "Ord (datum-by-datum) should see -0.0 and +0.0 as equal"
+        );
+    }
+
+    /// Demonstrates that DatumMap's derived Eq (bytewise) can make maps with equal keys and
+    /// values compare equal when values have different encodings (e.g. -0.0 vs +0.0).
+    #[mz_ore::test]
+    fn test_datum_map_eq_bytewise_consistency() {
+        // Build map {"k": +0.0}
+        let mut row_pos = Row::default();
+        row_pos.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let map_pos = row_pos.unpack_first().unwrap_map();
+
+        // Build map {"k": -0.0}
+        let mut row_neg = Row::default();
+        row_neg.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let map_neg = row_neg.unpack_first().unwrap_map();
+
+        // Same keys and semantically equal values, but Eq (bytewise) says not equal
+        assert_eq!(
+            map_pos, map_neg,
+            "DatumMap Eq is semantic; -0.0 and +0.0 have different encodings but are equal"
+        );
+        // Verify they have the same logical content
+        let entries_pos: Vec<_> = map_pos.iter().collect();
+        let entries_neg: Vec<_> = map_neg.iter().collect();
+        assert_eq!(entries_pos.len(), entries_neg.len());
+        for ((k1, v1), (k2, v2)) in entries_pos.iter().zip_eq(entries_neg.iter()) {
+            assert_eq!(k1, k2);
+            assert_eq!(
+                v1, v2,
+                "Datum-level comparison treats -0.0 and +0.0 as equal"
+            );
+        }
+    }
+
+    /// Hash must agree with Eq: equal lists must have the same hash.
+    #[mz_ore::test]
+    fn test_datum_list_hash_consistency() {
+        // Equal lists (including -0.0 vs +0.0) must hash the same
+        let mut row_pos = Row::default();
+        row_pos.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let list_pos = row_pos.unpack_first().unwrap_list();
+
+        let mut row_neg = Row::default();
+        row_neg.packer().push_list_with(|p| {
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let list_neg = row_neg.unpack_first().unwrap_list();
+
+        assert_eq!(list_pos, list_neg);
+        assert_eq!(
+            hash(&list_pos),
+            hash(&list_neg),
+            "equal lists must have same hash"
+        );
+
+        // Unequal lists should have different hashes (with asymptotic probability 1)
+        let mut row_a = Row::default();
+        row_a.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(2));
+        });
+        let list_a = row_a.unpack_first().unwrap_list();
+
+        let mut row_b = Row::default();
+        row_b.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(3));
+        });
+        let list_b = row_b.unpack_first().unwrap_list();
+
+        assert_ne!(list_a, list_b);
+        assert_ne!(
+            hash(&list_a),
+            hash(&list_b),
+            "unequal lists must have different hashes"
+        );
+    }
+
+    /// Ord/PartialOrd for DatumList: less, equal, greater.
+    #[mz_ore::test]
+    fn test_datum_list_ordering() {
+        let mut row_12 = Row::default();
+        row_12.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(2));
+        });
+        let list_12 = row_12.unpack_first().unwrap_list();
+
+        let mut row_13 = Row::default();
+        row_13.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(3));
+        });
+        let list_13 = row_13.unpack_first().unwrap_list();
+
+        let mut row_123 = Row::default();
+        row_123.packer().push_list_with(|p| {
+            p.push(Datum::Int32(1));
+            p.push(Datum::Int32(2));
+            p.push(Datum::Int32(3));
+        });
+        let list_123 = row_123.unpack_first().unwrap_list();
+
+        // [1, 2] < [1, 3] due to the second element being different
+        assert_eq!(list_12.cmp(&list_13), Ordering::Less);
+        assert_eq!(list_13.cmp(&list_12), Ordering::Greater);
+        assert_eq!(list_12.cmp(&list_12), Ordering::Equal);
+        // shorter prefix compares less
+        assert_eq!(list_12.cmp(&list_123), Ordering::Less);
+    }
+
+    /// Hash must agree with Eq: equal maps must have the same hash.
+    #[mz_ore::test]
+    fn test_datum_map_hash_consistency() {
+        let mut row_pos = Row::default();
+        row_pos.packer().push_dict_with(|p| {
+            p.push(Datum::String("x"));
+            p.push(Datum::Float64(OrderedFloat::from(0.0)));
+        });
+        let map_pos = row_pos.unpack_first().unwrap_map();
+
+        let mut row_neg = Row::default();
+        row_neg.packer().push_dict_with(|p| {
+            p.push(Datum::String("x"));
+            p.push(Datum::Float64(OrderedFloat::from(-0.0)));
+        });
+        let map_neg = row_neg.unpack_first().unwrap_map();
+
+        assert_eq!(map_pos, map_neg);
+        assert_eq!(
+            hash(&map_pos),
+            hash(&map_neg),
+            "equal maps must have same hash"
+        );
+
+        let mut row_a = Row::default();
+        row_a.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(1));
+        });
+        let map_a = row_a.unpack_first().unwrap_map();
+
+        let mut row_b = Row::default();
+        row_b.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(2));
+        });
+        let map_b = row_b.unpack_first().unwrap_map();
+
+        assert_ne!(map_a, map_b);
+        assert_ne!(
+            hash(&map_a),
+            hash(&map_b),
+            "unequal maps must have different hashes"
+        );
+    }
+
+    /// Ord/PartialOrd for DatumMap: less, equal, greater (by key then value).
+    #[mz_ore::test]
+    fn test_datum_map_ordering() {
+        let mut row_a1 = Row::default();
+        row_a1.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(1));
+        });
+        let map_a1 = row_a1.unpack_first().unwrap_map();
+
+        let mut row_a2 = Row::default();
+        row_a2.packer().push_dict_with(|p| {
+            p.push(Datum::String("a"));
+            p.push(Datum::Int32(2));
+        });
+        let map_a2 = row_a2.unpack_first().unwrap_map();
+
+        let mut row_b1 = Row::default();
+        row_b1.packer().push_dict_with(|p| {
+            p.push(Datum::String("b"));
+            p.push(Datum::Int32(1));
+        });
+        let map_b1 = row_b1.unpack_first().unwrap_map();
+
+        assert_eq!(map_a1.cmp(&map_a2), Ordering::Less);
+        assert_eq!(map_a2.cmp(&map_a1), Ordering::Greater);
+        assert_eq!(map_a1.cmp(&map_a1), Ordering::Equal);
+        assert_eq!(map_a1.cmp(&map_b1), Ordering::Less); // "a" < "b"
+    }
+
+    /// Datum puts Null last in the enum so that nulls sort last (PostgreSQL default).
+    /// This ordering is used when comparing DatumList/DatumMap (e.g. jsonb_agg tiebreaker).
+    #[mz_ore::test]
+    fn test_datum_list_and_map_null_sorts_last() {
+        // DatumList: [1] < [null] so non-null sorts before null
+        let mut row_list_1 = Row::default();
+        row_list_1
+            .packer()
+            .push_list_with(|p| p.push(Datum::Int32(1)));
+        let list_1 = row_list_1.unpack_first().unwrap_list();
+
+        let mut row_list_null = Row::default();
+        row_list_null
+            .packer()
+            .push_list_with(|p| p.push(Datum::Null));
+        let list_null = row_list_null.unpack_first().unwrap_list();
+
+        assert_eq!(list_1.cmp(&list_null), Ordering::Less);
+        assert_eq!(list_null.cmp(&list_1), Ordering::Greater);
+
+        // DatumMap: {"k": 1} < {"k": null} so non-null sorts before null (same as jsonb_agg)
+        let mut row_map_1 = Row::default();
+        row_map_1.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Int32(1));
+        });
+        let map_1 = row_map_1.unpack_first().unwrap_map();
+
+        let mut row_map_null = Row::default();
+        row_map_null.packer().push_dict_with(|p| {
+            p.push(Datum::String("k"));
+            p.push(Datum::Null);
+        });
+        let map_null = row_map_null.unpack_first().unwrap_map();
+
+        assert_eq!(map_1.cmp(&map_null), Ordering::Less);
+        assert_eq!(map_null.cmp(&map_1), Ordering::Greater);
     }
 }
