@@ -48,9 +48,6 @@ pub fn optimize_dataflow(
     transform_ctx: &mut TransformCtx,
     fast_path_optimizer: bool,
 ) -> Result<(), TransformError> {
-    // Inline views that are used in only one other view.
-    inline_views(dataflow)?;
-
     if fast_path_optimizer {
         optimize_dataflow_relations(
             dataflow,
@@ -58,6 +55,9 @@ pub fn optimize_dataflow(
             transform_ctx,
         )?;
     } else {
+        // Inline views that are used in only one other view.
+        inline_views(dataflow)?;
+
         // Logical optimization pass after view inlining
         optimize_dataflow_relations(
             dataflow,
