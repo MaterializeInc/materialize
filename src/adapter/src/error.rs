@@ -16,7 +16,8 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
+use mz_compute_client::controller::error::InstanceMissing;
+
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
@@ -38,7 +39,9 @@ use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
 use crate::coord::NetworkPolicyError;
+use crate::coord::statement_logging::WatchSetInstallError;
 use crate::optimize::OptimizerError;
+use crate::peek_client::CollectionLookupError;
 
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
@@ -695,12 +698,14 @@ impl AdapterError {
     // is appropriate, so we want to make the conversion target explicit at the call site.
     // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
     // in which case `ConcurrentDependencyDrop` would not be appropriate.
+
     pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
         AdapterError::ConcurrentDependencyDrop {
             dependency_kind: "cluster",
             dependency_id: e.0.to_string(),
         }
     }
+
     pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
         AdapterError::ConcurrentDependencyDrop {
             dependency_kind: "collection",
@@ -730,11 +735,26 @@ impl AdapterError {
         }
     }
 
+    pub fn concurrent_dependency_drop_from_watch_set_install_error(
+        e: WatchSetInstallError,
+    ) -> Self {
+        match e {
+            WatchSetInstallError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            WatchSetInstallError::CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+        }
+    }
+
     pub fn concurrent_dependency_drop_from_instance_peek_error(
-        e: mz_compute_client::controller::instance::PeekError,
+        e: mz_compute_client::controller::instance_client::PeekError,
         compute_instance: ComputeInstanceId,
     ) -> AdapterError {
-        use mz_compute_client::controller::instance::PeekError::*;
+        use mz_compute_client::controller::instance_client::PeekError::*;
         match e {
             ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",

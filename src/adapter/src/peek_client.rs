@@ -11,12 +11,15 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
+use mz_compute_client::controller::error::{CollectionMissing, InstanceMissing};
+use mz_compute_client::controller::instance_client::InstanceClient;
+use mz_compute_client::controller::instance_client::{AcquireReadHoldsError, InstanceShutDown};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::PersistClient;
+use mz_repr::GlobalId;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::{RelationDesc, Row};
@@ -24,6 +27,7 @@ use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
+use thiserror::Error;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -54,8 +58,7 @@ pub struct PeekClient {
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
     /// in a hot loop. Hopefully this won't occur any time soon.
-    compute_instances:
-        BTreeMap<ComputeInstanceId, mz_compute_client::controller::instance::Client<Timestamp>>,
+    compute_instances: BTreeMap<ComputeInstanceId, InstanceClient<Timestamp>>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
     /// A generator for transient `GlobalId`s, shared with Coordinator.
@@ -93,7 +96,7 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing> {
+    ) -> Result<InstanceClient<Timestamp>, InstanceMissing> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -499,5 +502,46 @@ impl PeekClient {
             .send(Command::FrontendStatementLogging(
                 FrontendStatementLoggingEvent::EndedExecution(record),
             ));
+    }
+}
+
+/// Errors arising during collection lookup in peek client operations.
+#[derive(Error, Debug)]
+pub enum CollectionLookupError {
+    /// The specified compute instance does not exist.
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    /// The specified compute instance has shut down.
+    #[error("the instance has shut down")]
+    InstanceShutDown,
+    /// The compute collection does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+}
+
+impl From<InstanceMissing> for CollectionLookupError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<InstanceShutDown> for CollectionLookupError {
+    fn from(_error: InstanceShutDown) -> Self {
+        Self::InstanceShutDown
+    }
+}
+
+impl From<CollectionMissing> for CollectionLookupError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<AcquireReadHoldsError> for CollectionLookupError {
+    fn from(error: AcquireReadHoldsError) -> Self {
+        match error {
+            AcquireReadHoldsError::CollectionMissing(id) => Self::CollectionMissing(id),
+            AcquireReadHoldsError::InstanceShutDown => Self::InstanceShutDown,
+        }
     }
 }
