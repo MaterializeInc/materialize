@@ -61,6 +61,17 @@ impl std::fmt::Display for ArrayContains {
         f.write_str("array_contains")
     }
 }
+impl ArrayContains {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(array_contains),
+            category: "Uncategorized",
+            signature: "any array_contains anyarray -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn array_contains<'a>(a: Datum<'a>, array: Array<'a>) -> bool {
     array.elements().iter().any(|e| e == a)
 }

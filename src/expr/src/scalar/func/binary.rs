@@ -180,7 +180,7 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
 mod derive {
     use crate::scalar::func::*;
 
-    derive_binary_from! {
+    derive_binary_func_partial! {
         AddDateInterval,
         AddDateTime,
         AddFloat32,

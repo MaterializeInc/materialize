@@ -61,6 +61,17 @@ impl std::fmt::Display for RangeDifference {
         f.write_str("-")
     }
 }
+impl RangeDifference {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(range_difference),
+            category: "Uncategorized",
+            signature: "anyrange - anyrange -> any",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn range_difference<'a>(
     l: Range<Datum<'a>>,
     r: Range<Datum<'a>>,

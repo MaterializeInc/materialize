@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_monotone = \"(true, true)\", sqlname = \"age\", propagates_nulls = true)]\nfn age_timestamp_tz(\n    a: CheckedTimestamp<chrono::DateTime<Utc>>,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n) -> Result<Interval, EvalError> {\n    Ok(a.age(&b)?)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", sqlname = \"age\")]\nfn age_timestamp_tz(\n    a: CheckedTimestamp<chrono::DateTime<Utc>>,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n) -> Result<Interval, EvalError> {\n    Ok(a.age(&b)?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AgeTimestampTz {
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for AgeTimestampTz {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("age")
+    }
+}
+impl AgeTimestampTz {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(age_timestamp_tz),
+            category: "Uncategorized",
+            signature: "age(a timestamptz, b timestamptz) -> interval",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn age_timestamp_tz(

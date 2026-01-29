@@ -87,6 +87,18 @@ impl fmt::Display for CastArrayToListOneDim {
     }
 }
 
+impl CastArrayToListOneDim {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "arraytolist",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastArrayToString {
     pub ty: SqlScalarType,
@@ -138,6 +150,18 @@ impl LazyUnaryFunc for CastArrayToString {
 impl fmt::Display for CastArrayToString {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytostr")
+    }
+}
+
+impl CastArrayToString {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "arraytostr",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 
@@ -233,6 +257,18 @@ impl fmt::Display for CastArrayToJsonb {
     }
 }
 
+impl CastArrayToJsonb {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "arraytojsonb",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 /// Casts an array of one type to an array of another type. Does so by casting
 /// each element of the first array to the desired inner type and collecting
 /// the results into a new array.
@@ -294,5 +330,17 @@ impl LazyUnaryFunc for CastArrayToArray {
 impl fmt::Display for CastArrayToArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("arraytoarray")
+    }
+}
+
+impl CastArrayToArray {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "arraytoarray",
+            category: "Cast",
+            signature: "",
+            description: "Casts an array of one type to an array of another type. Does so by casting each element of the first array to the desired inner type and collecting the results into a new array.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

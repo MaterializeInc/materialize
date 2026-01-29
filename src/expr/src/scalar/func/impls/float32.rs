@@ -225,3 +225,15 @@ impl fmt::Display for CastFloat32ToNumeric {
         f.write_str("real_to_numeric")
     }
 }
+
+impl CastFloat32ToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "real_to_numeric",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

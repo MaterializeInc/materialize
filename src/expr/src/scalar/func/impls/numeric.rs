@@ -332,3 +332,15 @@ impl fmt::Display for AdjustNumericScale {
         f.write_str("adjust_numeric_scale")
     }
 }
+
+impl AdjustNumericScale {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "adjust_numeric_scale",
+            category: "Numeric",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

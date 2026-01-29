@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \">>\", propagates_nulls = true)]\n#[allow(clippy::as_conversions)]\nfn bit_shift_right_uint16(lhs: u16, rhs: u32) -> u16 {\n    let lhs = lhs as u32;\n    lhs.wrapping_shr(rhs) as u16\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \">>\")]\n#[allow(clippy::as_conversions)]\nfn bit_shift_right_uint16(lhs: u16, rhs: u32) -> u16 {\n    let lhs = lhs as u32;\n    lhs.wrapping_shr(rhs) as u16\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftRightUint16 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for BitShiftRightUint16 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(">>")
+    }
+}
+impl BitShiftRightUint16 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_shift_right_uint16),
+            category: "Uncategorized",
+            signature: "uint2 >> uint4 -> uint2",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 #[allow(clippy::as_conversions)]

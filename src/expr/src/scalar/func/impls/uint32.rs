@@ -152,3 +152,15 @@ impl fmt::Display for CastUint32ToNumeric {
         f.write_str("uint4_to_numeric")
     }
 }
+
+impl CastUint32ToNumeric {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "uint4_to_numeric",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}

@@ -55,6 +55,17 @@ impl std::fmt::Display for ArrayContainsArray {
         f.write_str("@>")
     }
 }
+impl ArrayContainsArray {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(array_contains_array),
+            category: "Uncategorized",
+            signature: "anyarray @> anyarray -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn array_contains_array<'a>(a: Array<'a>, b: Array<'a>) -> bool {
     let a = a.elements();
     let b = b.elements();

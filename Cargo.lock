@@ -6417,6 +6417,7 @@ dependencies = [
  "differential-dataflow",
  "encoding",
  "enum-iterator",
+ "enum-kinds",
  "fallible-iterator 0.2.0",
  "hex",
  "hmac",
@@ -6477,6 +6478,7 @@ version = "0.0.0"
 dependencies = [
  "darling 0.20.11",
  "insta",
+ "itertools 0.14.0",
  "mz-ore",
  "prettyplease",
  "proc-macro2",

@@ -70,6 +70,18 @@ impl fmt::Display for CastRecordToString {
     }
 }
 
+impl CastRecordToString {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "recordtostr",
+            category: "Cast",
+            signature: "",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 /// Casts between two record types by casting each element of `a` ("record1") using
 /// `cast_expr` and collecting the results into a new record ("record2").
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
@@ -133,6 +145,18 @@ impl fmt::Display for CastRecord1ToRecord2 {
     }
 }
 
+impl CastRecord1ToRecord2 {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "record1torecord2",
+            category: "Cast",
+            signature: "",
+            description: "Casts between two record types by casting each element of `a` (\"record1\") using `cast_expr` and collecting the results into a new record (\"record2\").",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct RecordGet(pub usize);
 
@@ -190,5 +214,17 @@ impl LazyUnaryFunc for RecordGet {
 impl fmt::Display for RecordGet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "record_get[{}]", self.0)
+    }
+}
+
+impl RecordGet {
+    pub(crate) fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "record_get",
+            category: "Record",
+            signature: "",
+            description: "Gets the field at the specified index from a record.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }

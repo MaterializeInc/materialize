@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"mz_aclitem_contains_privilege\",\n    output_type = \"bool\",\n    propagates_nulls = true\n)]\n/// Determines if an mz_aclitem contains one of the specified privileges. This will return true if\n/// any of the listed privileges are contained in the mz_aclitem.\nfn mz_acl_item_contains_privilege(\n    mz_acl_item: MzAclItem,\n    privileges: &str,\n) -> Result<bool, EvalError> {\n    let acl_mode = AclMode::parse_multiple_privileges(privileges)\n        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;\n    let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();\n    Ok(contains)\n}\n"
+expression: "#[sqlfunc(sqlname = \"mz_aclitem_contains_privilege\", output_type = \"bool\")]\n/// Determines if an mz_aclitem contains one of the specified privileges. This will return true if\n/// any of the listed privileges are contained in the mz_aclitem.\nfn mz_acl_item_contains_privilege(\n    mz_acl_item: MzAclItem,\n    privileges: &str,\n) -> Result<bool, EvalError> {\n    let acl_mode = AclMode::parse_multiple_privileges(privileges)\n        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;\n    let contains = !mz_acl_item.acl_mode.intersection(acl_mode).is_empty();\n    Ok(contains)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MzAclItemContainsPrivilege
     fn introduces_nulls(&self) -> bool {
         <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for MzAclItemContainsPrivilege {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("mz_aclitem_contains_privilege")
+    }
+}
+impl MzAclItemContainsPrivilege {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_acl_item_contains_privilege),
+            category: "Uncategorized",
+            signature: "mz_aclitem_contains_privilege(mz_acl_item mz_acl_item, privileges text) -> boolean",
+            description: "Determines if an mz_aclitem contains one of the specified privileges. This will return true if\nany of the listed privileges are contained in the mz_aclitem.",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 /// Determines if an mz_aclitem contains one of the specified privileges. This will return true if

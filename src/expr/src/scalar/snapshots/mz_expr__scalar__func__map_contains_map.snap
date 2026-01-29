@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"@>\", propagates_nulls = true)]\nfn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {\n    b.iter()\n        .all(|(b_key, b_val)| {\n            map_a.iter().any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))\n        })\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"@>\")]\nfn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {\n    b.iter()\n        .all(|(b_key, b_val)| {\n            map_a.iter().any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))\n        })\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsMap {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for MapContainsMap {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("@>")
+    }
+}
+impl MapContainsMap {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(map_contains_map),
+            category: "Uncategorized",
+            signature: "anymap @> anymap -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {

@@ -61,6 +61,17 @@ impl std::fmt::Display for JsonbDeleteString {
         f.write_str("-")
     }
 }
+impl JsonbDeleteString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_delete_string),
+            category: "Uncategorized",
+            signature: "any - text -> any",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_delete_string<'a>(
     a: Datum<'a>,
     k: &str,

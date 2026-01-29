@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"convert_from\", propagates_nulls = true)]\nfn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {\n    let encoding_name = b.to_lowercase().replace('_', \"-\").into_boxed_str();\n    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some(\"utf-8\") {\n        return Err(EvalError::InvalidEncodingName(encoding_name));\n    }\n    match str::from_utf8(a) {\n        Ok(from) => Ok(from),\n        Err(e) => {\n            Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.to_string().into(),\n                encoding_name,\n            })\n        }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"convert_from\")]\nfn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {\n    let encoding_name = b.to_lowercase().replace('_', \"-\").into_boxed_str();\n    if encoding_from_whatwg_label(&encoding_name).map(|e| e.name()) != Some(\"utf-8\") {\n        return Err(EvalError::InvalidEncodingName(encoding_name));\n    }\n    match str::from_utf8(a) {\n        Ok(from) => Ok(from),\n        Err(e) => {\n            Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.to_string().into(),\n                encoding_name,\n            })\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,13 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConvertFrom {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ConvertFrom {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("convert_from")
+    }
+}
+impl ConvertFrom {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(convert_from),
+            category: "Uncategorized",
+            signature: "convert_from(a bytea, b text) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
