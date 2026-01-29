@@ -17,7 +17,6 @@ import random
 import re
 import time
 from collections.abc import Callable
-from copy import copy
 from datetime import datetime, timedelta
 from statistics import quantiles
 from textwrap import dedent
@@ -40,6 +39,7 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.helpers.metrics import Metrics
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.localstack import Localstack
@@ -2355,135 +2355,6 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         assert "replica task failed: timed out" in envd.stdout
 
 
-class Metrics:
-    metrics: dict[str, str]
-
-    def __init__(self, raw: str) -> None:
-        self.metrics = {}
-        for line in raw.splitlines():
-            key, value = line.split(maxsplit=1)
-            self.metrics[key] = value
-
-    def for_instance(self, id: str) -> "Metrics":
-        new = copy(self)
-        new.metrics = {
-            k: v for k, v in self.metrics.items() if f'instance_id="{id}"' in k
-        }
-        return new
-
-    def with_name(self, metric_name: str) -> dict[str, float]:
-        items = {}
-        for key, value in self.metrics.items():
-            if key.startswith(metric_name):
-                items[key] = float(value)
-        return items
-
-    def get_value(self, metric_name: str) -> float:
-        metrics = self.with_name(metric_name)
-        values = list(metrics.values())
-        assert len(values) == 1
-        return values[0]
-
-    def get_summed_value(self, metric_name: str) -> float:
-        metrics = self.with_name(metric_name)
-        return sum(metrics.values())
-
-    def get_command_count(self, metric: str, command_type: str) -> float:
-        metrics = self.with_name(metric)
-        values = [
-            v for k, v in metrics.items() if f'command_type="{command_type}"' in k
-        ]
-        assert len(values) == 1
-        return values[0]
-
-    def get_response_count(self, metric: str, response_type: str) -> float:
-        metrics = self.with_name(metric)
-        values = [
-            v for k, v in metrics.items() if f'response_type="{response_type}"' in k
-        ]
-        assert len(values) == 1
-        return values[0]
-
-    def get_replica_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_compute_replica_history_command_count", command_type
-        )
-
-    def get_compute_controller_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_compute_controller_history_command_count", command_type
-        )
-
-    def get_storage_controller_history_command_count(self, command_type: str) -> float:
-        return self.get_command_count(
-            "mz_storage_controller_history_command_count", command_type
-        )
-
-    def get_compute_commands_total(self, command_type: str) -> float:
-        return self.get_command_count("mz_compute_commands_total", command_type)
-
-    def get_compute_responses_total(self, response_type: str) -> float:
-        return self.get_response_count("mz_compute_responses_total", response_type)
-
-    def get_storage_commands_total(self, command_type: str) -> float:
-        return self.get_command_count("mz_storage_commands_total", command_type)
-
-    def get_storage_responses_total(self, response_type: str) -> float:
-        return self.get_response_count("mz_storage_responses_total", response_type)
-
-    def get_peeks_total(self, result: str) -> float:
-        metrics = self.with_name("mz_compute_peeks_total")
-        values = [v for k, v in metrics.items() if f'result="{result}"' in k]
-        assert len(values) == 1
-        return values[0]
-
-    def get_wallclock_lag_count(self, collection_id: str) -> float | None:
-        metrics = self.with_name("mz_dataflow_wallclock_lag_seconds_count")
-        values = [
-            v for k, v in metrics.items() if f'collection_id="{collection_id}"' in k
-        ]
-        assert len(values) <= 1
-        return next(iter(values), None)
-
-    def get_e2e_optimization_time(self, object_type: str) -> float:
-        metrics = self.with_name("mz_optimizer_e2e_optimization_time_seconds_sum")
-        values = [v for k, v in metrics.items() if f'object_type="{object_type}"' in k]
-        assert len(values) == 1
-        return values[0]
-
-    def get_pgwire_message_processing_seconds(self, message_type: str) -> float:
-        metrics = self.with_name("mz_pgwire_message_processing_seconds_sum")
-        values = [
-            v for k, v in metrics.items() if f'message_type="{message_type}"' in k
-        ]
-        assert len(values) == 1
-        return values[0]
-
-    def get_result_rows_first_to_last_byte_seconds(self, statement_type: str) -> float:
-        metrics = self.with_name("mz_result_rows_first_to_last_byte_seconds_sum")
-        values = [
-            v for k, v in metrics.items() if f'statement_type="{statement_type}"' in k
-        ]
-        assert len(values) == 1
-        return values[0]
-
-    def get_last_command_received(self, server_name: str) -> float:
-        metrics = self.with_name("mz_grpc_server_last_command_received")
-        values = [v for k, v in metrics.items() if server_name in k]
-        assert len(values) == 1
-        return values[0]
-
-    def get_compute_collection_count(self, type_: str, hydrated: str) -> float:
-        metrics = self.with_name("mz_compute_collection_count")
-        values = [
-            v
-            for k, v in metrics.items()
-            if f'type="{type_}"' in k and f'hydrated="{hydrated}"' in k
-        ]
-        assert len(values) == 1
-        return values[0]
-
-
 def workflow_test_replica_metrics(c: Composition) -> None:
     """Test metrics exposed by replicas."""
 
@@ -2615,6 +2486,84 @@ def workflow_test_replica_metrics(c: Composition) -> None:
         assert count == 0, "unexpected number of unhydrated user collections"
         count = metrics.get_compute_collection_count("user", "1")
         assert count == 0, "unexpected number of hydrated user collections"
+
+
+def workflow_test_timely_step_duration_metric(c: Composition) -> None:
+    """Test that the timely step duration metric is reported by both compute and storage."""
+
+    with c.override(Clusterd(name="clusterd1", workers=2)):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+            port=6877,
+            user="mz_system",
+        )
+
+        # Set up a cluster with a dataflow that exercises both compute and storage.
+        c.sql(
+            """
+            CREATE CLUSTER cluster1 REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 2
+            ));
+            SET cluster = cluster1;
+
+            CREATE TABLE t (a int);
+            INSERT INTO t SELECT generate_series(1, 100);
+            CREATE DEFAULT INDEX ON t;
+            SELECT * FROM t;
+            """
+        )
+
+        # Allow some time for metrics to be collected.
+        time.sleep(2)
+
+        # Fetch metrics from clusterd.
+        resp = c.exec(
+            "clusterd1", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        metrics = Metrics(resp)
+
+        # Check that compute reports the timely step duration metric.
+        step_metrics = metrics.with_name("mz_timely_step_duration_seconds")
+        compute_histograms = [
+            k for k in step_metrics.keys() if 'cluster="compute"' in k
+        ]
+        assert (
+            len(compute_histograms) > 0
+        ), "expected compute timely step duration metric"
+
+        # Check that storage reports the timely step duration metric.
+        storage_histograms = [
+            k for k in step_metrics.keys() if 'cluster="storage"' in k
+        ]
+        assert (
+            len(storage_histograms) > 0
+        ), "expected storage timely step duration metric"
+
+        # Verify metrics are reported for each worker.
+        for worker_id in ["0", "1"]:
+            compute_worker = [
+                k
+                for k in compute_histograms
+                if f'worker_id="{worker_id}"' in k and "_count" in k
+            ]
+            assert (
+                len(compute_worker) > 0
+            ), f"expected compute metric for worker {worker_id}"
+
+            storage_worker = [
+                k
+                for k in storage_histograms
+                if f'worker_id="{worker_id}"' in k and "_count" in k
+            ]
+            assert (
+                len(storage_worker) > 0
+            ), f"expected storage metric for worker {worker_id}"
 
 
 def workflow_test_compute_controller_metrics(c: Composition) -> None:

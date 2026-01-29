@@ -54,6 +54,9 @@ pub struct ComputeMetrics {
     // doesn't do anything to let you pinpoint _which_ operator or worker isn't
     // yielding, but it should hopefully alert us when there is something to
     // look at.
+    //
+    // There is an equivalent metric in the storage server
+    // (`mz_storage::metrics::StorageMetrics`).
     timely_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
     stashed_peek_seconds: HistogramVec,
@@ -145,7 +148,7 @@ impl ComputeMetrics {
             )),
             timely_step_duration_seconds: registry.register(metric!(
                 name: "mz_timely_step_duration_seconds",
-                help: "The time spent in each compute step_or_park call",
+                help: "The time spent in each step_or_park call",
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
