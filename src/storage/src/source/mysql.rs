@@ -50,15 +50,23 @@
 //! The error streams from both of those operators are published to the source status and also
 //! trigger a restart of the dataflow.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt;
 use std::io;
+use std::io::Error;
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
 use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
+
+use mysql_common::io::ParseBuf;
+use mysql_common::packets::NullBitmap;
+use mysql_common::proto::MyDeserialize;
+use mysql_common::proto::MySerialize;
+use mysql_common::value::ServerSide;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
 use mz_repr::Diff;
@@ -399,10 +407,117 @@ async fn return_definite_error(
     ()
 }
 
+/// Like `return_definite_error`, but for use where the data_handle expects Rows instead of SourceMessages.
+/// The two functions are only necessary until both snapshot and replication workflows have been updated to allow distributed row decoding.
+async fn return_definite_error_rows(
+    err: DefiniteError,
+    outputs: &[usize],
+    data_handle: &AsyncOutputHandle<
+        GtidPartition,
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<(Vec<u8>, MySqlTableDesc), DataflowError>),
+                GtidPartition,
+                Diff,
+            )>,
+        >,
+    >,
+    data_cap_set: &CapabilitySet<GtidPartition>,
+    definite_error_handle: &AsyncOutputHandle<
+        GtidPartition,
+        CapacityContainerBuilder<Vec<ReplicationError>>,
+    >,
+    definite_error_cap_set: &CapabilitySet<GtidPartition>,
+) {
+    for output_index in outputs {
+        let update = (
+            (*output_index, Err(err.clone().into())),
+            GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
+            Diff::ONE,
+        );
+        data_handle.give(&data_cap_set[0], update);
+    }
+    definite_error_handle.give(
+        &definite_error_cap_set[0],
+        ReplicationError::Definite(Rc::new(err)),
+    );
+    ()
+}
+
 async fn validate_mysql_repl_settings(conn: &mut mysql_async::Conn) -> Result<(), MySqlError> {
     ensure_gtid_consistency(conn).await?;
     ensure_full_row_binlog_format(conn).await?;
     ensure_replication_commit_order(conn).await?;
 
     Ok(())
+}
+
+fn serialize_mysql_row(buffer: &mut Vec<u8>, row: mysql_async::Row) {
+    let table_name = row.columns_ref().get(0).map_or("<unknown>".to_string(), |c| {
+        c.table_str().to_string()
+    });
+    println!("Serializing table: {} and columns {:?} ", table_name, row.columns_ref());
+    row.columns_ref().iter().for_each(|col| {
+        col.serialize(buffer);
+    });
+    let mut bitmap = NullBitmap::<ServerSide>::new(row.columns_ref().len());
+    let vals = row.unwrap();
+    vals.iter().enumerate().for_each(|(i, val)| {
+        match val {
+            mysql_async::Value::NULL => bitmap.set(i, true),
+            _ => bitmap.set(i, false),
+        };
+    });
+    buffer.extend(bitmap.as_ref());
+    println!("table: {} Values to be serialized: {:?}", table_name, vals);
+    vals.iter().for_each(|val| -> () {
+        val.serialize(buffer);
+        println!("buffer after serializing value {:?}: {:?}", val, buffer);
+    });
+}
+
+fn deserialize_mysql_row(
+    buffer: &[u8],
+    desc: &MySqlTableDesc,
+) -> Result<Vec<mysql_async::Value>, Error> {
+    println!("Deserializing columns {:?} ", desc.columns);
+    let mut buf = ParseBuf(buffer);
+    let mut columns = Vec::with_capacity(desc.columns.len());
+    for _ in 0..desc.columns.len() {
+        let col = mysql_common::packets::Column::deserialize((), &mut buf)?;
+        columns.push(col);
+    }
+    println!("Deserialized columns: {:?}", columns);
+    let bitmap = NullBitmap::<ServerSide, Cow<[u8]>>::deserialize(columns.len(), &mut buf)?;
+    let mut values = Vec::with_capacity(desc.columns.len());
+    for (column_index, column) in columns.iter().enumerate() {
+        if bitmap.is_null(column_index) {
+            values.push(mysql_async::Value::NULL);
+            println!("Deserialized value: {:?}", mysql_async::Value::NULL);
+            continue;
+        }
+        let val =
+            mysql_common::value::ValueDeserializer::<mysql_common::value::BinValue>::deserialize(
+                (column.column_type(), column.flags()),
+                &mut buf,
+            )?
+            .0;
+            match column.column_type() {
+                mysql_common::constants::ColumnType::MYSQL_TYPE_TINY => {
+                    buf.eat_buf(7);
+                }
+                mysql_common::constants::ColumnType::MYSQL_TYPE_SHORT | mysql_common::constants::ColumnType::MYSQL_TYPE_YEAR => {
+                    buf.eat_buf(6);
+                }
+                mysql_common::constants::ColumnType::MYSQL_TYPE_LONG => {
+                    buf.eat_buf(4);
+                }
+                _ => {}
+            }
+        println!("Deserialized value: {:?}", val);
+        println!("Buffer after deserializing value: {:?}", buf);
+        values.push(val);
+    }
+    println!("table: {} Deserialized values: {:?}", desc.name, values);
+    Ok(values)
 }
