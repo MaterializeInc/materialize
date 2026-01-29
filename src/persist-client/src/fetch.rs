@@ -53,6 +53,7 @@ use crate::internal::paths::BlobKey;
 use crate::internal::state::{
     BatchPart, HollowBatchPart, ProtoHollowBatchPart, ProtoInlineBatchPart,
 };
+use crate::async_runtime::IsolatedRuntime;
 use crate::read::LeasedReaderId;
 use crate::schema::{PartMigration, SchemaCache};
 
@@ -148,6 +149,7 @@ where
     pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
     pub(crate) is_transient: bool,
+    pub(crate) isolated_runtime: Arc<IsolatedRuntime>,
 
     // Ensures that `BatchFetcher` is of the same type as the `ReadHandle` it's
     // derived from.
@@ -204,26 +206,39 @@ where
                     .acquire_fetch_permits(x.encoded_size_bytes)
                     .await;
                 let read_metrics = if self.is_transient {
-                    &self.metrics.read.unindexed
+                    self.metrics.read.unindexed.clone()
                 } else {
-                    &self.metrics.read.batch_fetcher
+                    self.metrics.read.batch_fetcher.clone()
                 };
-                let buf = fetch_batch_part_blob(
+                let blob_bytes = fetch_batch_part_blob(
                     &shard_id,
                     self.blob.as_ref(),
                     &self.metrics,
                     &self.shard_metrics,
-                    read_metrics,
+                    &read_metrics,
                     x,
                 )
                 .await;
-                let buf = match buf {
+                let blob_bytes = match blob_bytes {
                     Ok(buf) => buf,
                     Err(key) => return Ok(Err(key)),
                 };
+                // Decode on the isolated runtime to avoid blocking heartbeat tasks.
+                // CPU-intensive decoding on the main runtime can starve heartbeats,
+                // causing reader lease expiration and "lost lease" errors.
+                let encoded_part = decode_batch_part_blob(
+                    self.cfg.fetch_config.clone(),
+                    Arc::clone(&self.metrics),
+                    read_metrics,
+                    desc.clone(),
+                    x.clone(),
+                    blob_bytes,
+                    Arc::clone(&self.isolated_runtime),
+                )
+                .await;
                 let buf = FetchedBlobBuf::Hollow {
-                    buf,
-                    part: x.clone(),
+                    encoded_part,
+                    stats: x.stats.clone(),
                 };
                 (buf, Some(Arc::new(fetch_permit)))
             }
@@ -322,6 +337,7 @@ pub(crate) async fn fetch_leased_part<K, V, T, D>(
     reader_id: &LeasedReaderId,
     read_schemas: Schemas<K, V>,
     schema_cache: &mut SchemaCache<K, V, T, D>,
+    isolated_runtime: Arc<IsolatedRuntime>,
 ) -> FetchedPart<K, V, T, D>
 where
     K: Debug + Codec,
@@ -334,11 +350,12 @@ where
         &fetch_config,
         &part.shard_id,
         blob,
-        &metrics,
+        Arc::clone(&metrics),
         shard_metrics,
         read_metrics,
         &part.desc,
         &part.part,
+        isolated_runtime,
     )
     .await
     .unwrap_or_else(|blob_key| {
@@ -401,59 +418,88 @@ pub(crate) async fn fetch_batch_part_blob<T>(
     Ok(value)
 }
 
-pub(crate) fn decode_batch_part_blob<T>(
-    cfg: &FetchConfig,
-    metrics: &Metrics,
-    read_metrics: &ReadMetrics,
+/// Decode a batch part blob on the isolated runtime to avoid blocking heartbeat tasks.
+///
+/// This is the counterpart to encoding in `batch.rs` which also uses the isolated runtime.
+/// Running CPU-intensive decode work on a separate runtime prevents it from blocking
+/// other tasks on the main runtime (like heartbeat tasks that maintain reader leases).
+///
+/// # Why IsolatedRuntime instead of spawn_blocking?
+///
+/// We use persist's [`IsolatedRuntime`] rather than [`tokio::task::spawn_blocking`] because:
+///
+/// 1. **Shutdown safety**: `spawn_blocking` closures cannot be aborted during runtime
+///    shutdown (they have no await points), but Tokio disables its timer during shutdown.
+///    This causes panics if the closure uses `tokio::time::sleep`. See PR #13955.
+///
+/// 2. **Thread count control**: The blocking thread pool can grow up to 512 threads,
+///    potentially pinning CPU to 100% and starving critical threads like the Coordinator.
+///
+/// 3. **Consistency**: This matches the pattern already used for encoding in `batch.rs`.
+///
+/// The `IsolatedRuntime` provides a dedicated, fixed-size thread pool with clean shutdown
+/// semantics. See [`crate::async_runtime::IsolatedRuntime`] for more details.
+pub(crate) async fn decode_batch_part_blob<T>(
+    cfg: FetchConfig,
+    metrics: Arc<Metrics>,
+    read_metrics: ReadMetrics,
     registered_desc: Description<T>,
-    part: &HollowBatchPart<T>,
-    buf: &SegmentedBytes,
+    part: HollowBatchPart<T>,
+    buf: SegmentedBytes,
+    isolated_runtime: Arc<IsolatedRuntime>,
 ) -> EncodedPart<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Send + Sync,
 {
-    trace_span!("fetch_batch::decode").in_scope(|| {
-        let parsed = metrics
-            .codecs
-            .batch
-            .decode(|| BlobTraceBatchPart::decode(buf, &metrics.columnar))
-            .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
-            // We received a State that we couldn't decode. This could happen if
-            // persist messes up backward/forward compatibility, if the durable
-            // data was corrupted, or if operations messes up deployment. In any
-            // case, fail loudly.
-            .expect("internal error: invalid encoded state");
-        read_metrics
-            .part_goodbytes
-            .inc_by(u64::cast_from(parsed.updates.goodbytes()));
-        EncodedPart::from_hollow(cfg, read_metrics.clone(), registered_desc, part, parsed)
-    })
+    isolated_runtime
+        .spawn_named(|| "fetch::decode_part", async move {
+            trace_span!("fetch_batch::decode").in_scope(|| {
+                let parsed = metrics
+                    .codecs
+                    .batch
+                    .decode(|| BlobTraceBatchPart::decode(&buf, &metrics.columnar))
+                    .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
+                    // We received a State that we couldn't decode. This could happen if
+                    // persist messes up backward/forward compatibility, if the durable
+                    // data was corrupted, or if operations messes up deployment. In any
+                    // case, fail loudly.
+                    .expect("internal error: invalid encoded state");
+                read_metrics
+                    .part_goodbytes
+                    .inc_by(u64::cast_from(parsed.updates.goodbytes()));
+                EncodedPart::from_hollow(&cfg, read_metrics, registered_desc, &part, parsed)
+            })
+        })
+        .await
 }
 
 pub(crate) async fn fetch_batch_part<T>(
     cfg: &FetchConfig,
     shard_id: &ShardId,
     blob: &dyn Blob,
-    metrics: &Metrics,
+    metrics: Arc<Metrics>,
     shard_metrics: &ShardMetrics,
     read_metrics: &ReadMetrics,
     registered_desc: &Description<T>,
     part: &HollowBatchPart<T>,
+    isolated_runtime: Arc<IsolatedRuntime>,
 ) -> Result<EncodedPart<T>, BlobKey>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Send + Sync,
 {
     let buf =
-        fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
-    let part = decode_batch_part_blob(
-        cfg,
+        fetch_batch_part_blob(shard_id, blob, &metrics, shard_metrics, read_metrics, part).await?;
+    let decoded = decode_batch_part_blob(
+        cfg.clone(),
         metrics,
-        read_metrics,
+        read_metrics.clone(),
         registered_desc.clone(),
-        part,
-        &buf,
-    );
-    Ok(part)
+        part.clone(),
+        buf,
+        isolated_runtime,
+    )
+    .await;
+    Ok(decoded)
 }
 
 /// This represents the lease of a seqno. It's generally paired with some external state,
@@ -671,10 +717,13 @@ pub struct FetchedBlob<K: Codec, V: Codec, T, D> {
 
 #[derive(Debug, Clone)]
 enum FetchedBlobBuf<T> {
+    /// A hollow batch part that has been fetched from blob storage and decoded.
+    /// The decode work was done on the isolated runtime to avoid blocking heartbeat tasks.
     Hollow {
-        buf: SegmentedBytes,
-        part: HollowBatchPart<T>,
+        encoded_part: EncodedPart<T>,
+        stats: Option<LazyPartStats>,
     },
+    /// An inline batch part embedded in the state.
     Inline {
         desc: Description<T>,
         updates: LazyInlineBatchPart,
@@ -724,25 +773,22 @@ where
     }
 }
 
-impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64 + Sync, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
     pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
         self.parse_internal(&self.fetch_config)
     }
 
     /// Partially decodes this blob into a [FetchedPart].
+    ///
+    /// For hollow parts, the heavy decode work has already been done on the
+    /// isolated runtime in `BatchFetcher::fetch_leased_part`. This method
+    /// just wraps the pre-decoded data in the appropriate types.
     pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
         let (part, stats) = match &self.buf {
-            FetchedBlobBuf::Hollow { buf, part } => {
-                let parsed = decode_batch_part_blob(
-                    cfg,
-                    &self.metrics,
-                    &self.read_metrics,
-                    self.registered_desc.clone(),
-                    part,
-                    buf,
-                );
-                (parsed, part.stats.as_ref())
+            FetchedBlobBuf::Hollow { encoded_part, stats } => {
+                // Decode work was already done on isolated runtime in fetch_leased_part
+                (encoded_part.clone(), stats.as_ref())
             }
             FetchedBlobBuf::Inline {
                 desc,
@@ -778,7 +824,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     /// Decodes and returns the pushdown stats for this part, if known.
     pub fn stats(&self) -> Option<PartStats> {
         match &self.buf {
-            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Hollow { stats, .. } => stats.as_ref().map(|x| x.decode()),
             FetchedBlobBuf::Inline { .. } => None,
         }
     }
@@ -813,7 +859,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     _phantom: PhantomData<fn() -> D>,
 }
 
-impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, T, D> {
+impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64 + Sync, D> FetchedPart<K, V, T, D> {
     pub(crate) fn new(
         metrics: Arc<Metrics>,
         part: EncodedPart<T>,
@@ -972,7 +1018,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
 
 /// A [Blob] object that has been fetched, but has no associated decoding
 /// logic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct EncodedPart<T> {
     metrics: ReadMetrics,
     registered_desc: Description<T>,
@@ -1164,17 +1210,18 @@ where
 
 impl<T> EncodedPart<T>
 where
-    T: Timestamp + Lattice + Codec64,
+    T: Timestamp + Lattice + Codec64 + Send + Sync,
 {
     pub async fn fetch(
         cfg: &FetchConfig,
         shard_id: &ShardId,
         blob: &dyn Blob,
-        metrics: &Metrics,
+        metrics: Arc<Metrics>,
         shard_metrics: &ShardMetrics,
         read_metrics: &ReadMetrics,
         registered_desc: &Description<T>,
         part: &BatchPart<T>,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Result<Self, BlobKey> {
         match part {
             BatchPart::Hollow(x) => {
@@ -1187,6 +1234,7 @@ where
                     read_metrics,
                     registered_desc,
                     x,
+                    isolated_runtime,
                 )
                 .await
             }
@@ -1196,7 +1244,7 @@ where
                 ..
             } => Ok(EncodedPart::from_inline(
                 cfg,
-                metrics,
+                &metrics,
                 read_metrics.clone(),
                 registered_desc.clone(),
                 updates,
@@ -1517,4 +1565,250 @@ fn client_exchange_data() {
     fn is_exchange_data<T: timely::ExchangeData>() {}
     is_exchange_data::<ExchangeableBatchPart<u64>>();
     is_exchange_data::<ExchangeableBatchPart<u64>>();
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests demonstrating that CPU-bound decode work must run on the isolated runtime.
+    //!
+    //! # Background
+    //!
+    //! A production incident revealed that synchronous blob decoding on the main Tokio
+    //! runtime can starve heartbeat tasks. When heartbeats don't run for 15+ minutes,
+    //! reader leases expire, GC deletes blobs, and fetches fail with "lost lease?" errors.
+    //!
+    //! The fix moves decoding to persist's `IsolatedRuntime`, which runs on separate OS
+    //! threads. This keeps the main runtime responsive for heartbeats.
+    //!
+    //! These tests validate the fix by demonstrating:
+    //! 1. CPU-bound work on the main runtime DOES block heartbeats (the problem)
+    //! 2. CPU-bound work on the isolated runtime does NOT block heartbeats (the fix)
+    //!
+    //! See `decode_batch_part_blob` and `IsolatedRuntime` for implementation details.
+
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use mz_ore::metrics::MetricsRegistry;
+
+    use crate::async_runtime::IsolatedRuntime;
+
+    /// Simulates CPU-bound work similar to blob decoding.
+    /// This function does busy work without yielding to simulate
+    /// what happens during synchronous decode operations.
+    ///
+    /// Returns the duration of the work for verification.
+    fn simulate_decode_work(target_duration: Duration) -> Duration {
+        let start = Instant::now();
+        let mut sum: u64 = 0;
+        let mut i: u64 = 0;
+
+        // Keep doing work until we've spent the target duration
+        while start.elapsed() < target_duration {
+            // Busy work that doesn't yield - simulate parquet/arrow decoding
+            for _ in 0..10000 {
+                sum = sum.wrapping_add(i.wrapping_mul(7919));
+                i = i.wrapping_add(1);
+            }
+            // Prevent compiler from optimizing away
+            std::hint::black_box(sum);
+        }
+
+        start.elapsed()
+    }
+
+    /// Test demonstrating that synchronous CPU-bound work on the main runtime
+    /// can block other tasks (like heartbeats) from running.
+    ///
+    /// This test reproduces the conditions that lead to persist reader lease
+    /// expirations when blob decoding blocks the tokio runtime.
+    ///
+    /// The hypothesis:
+    /// - Blob decoding is synchronous and runs on the main runtime
+    /// - Multiple concurrent decode operations can saturate runtime workers
+    /// - When workers are saturated, heartbeat tasks can't get scheduled
+    /// - After 15 minutes, leases expire and GC deletes blobs
+    ///
+    /// Note: This test uses a single-threaded runtime to make blocking
+    /// deterministic. In production, multi-threaded runtimes may mask the
+    /// issue until enough concurrent decodes saturate all workers.
+    #[mz_ore::test]
+    fn decode_blocking_starves_heartbeat_task() {
+        // Use a SINGLE-THREADED runtime to make the blocking behavior deterministic
+        // With only one worker thread, CPU-bound tasks WILL block other tasks
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let heartbeat_count = Arc::new(AtomicU64::new(0));
+            let max_heartbeat_delay_ms = Arc::new(AtomicU64::new(0));
+            let stop_flag = Arc::new(AtomicBool::new(false));
+
+            // Spawn a "heartbeat" task that should run every 10ms
+            let heartbeat_handle = {
+                let heartbeat_count = Arc::clone(&heartbeat_count);
+                let max_heartbeat_delay_ms = Arc::clone(&max_heartbeat_delay_ms);
+                let stop_flag = Arc::clone(&stop_flag);
+
+                mz_ore::task::spawn(|| "test_heartbeat", async move {
+                    let expected_interval = Duration::from_millis(10);
+                    let mut last_run = Instant::now();
+
+                    while !stop_flag.load(Ordering::Relaxed) {
+                        tokio::time::sleep(expected_interval).await;
+
+                        let actual_delay = last_run.elapsed();
+                        let delay_ms = actual_delay.as_millis() as u64;
+
+                        // Update max delay if this one is worse
+                        let _ = max_heartbeat_delay_ms.fetch_max(delay_ms, Ordering::Relaxed);
+
+                        heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                        last_run = Instant::now();
+                    }
+                })
+            };
+
+            // Spawn multiple "decode" tasks that do CPU-bound work without yielding
+            // This simulates what happens when decode_batch_part_blob runs
+            //
+            // We use spawn_blocking-style synchronous work to simulate the actual
+            // decode behavior. Each task will block for 200ms.
+            let decode_handles: Vec<_> = (0..4)
+                .map(|i| {
+                    mz_ore::task::spawn(|| format!("test_decode_{}", i), async move {
+                        // Simulate CPU-bound decode work that takes 200ms
+                        // This is synchronous work that doesn't yield
+                        let duration = simulate_decode_work(Duration::from_millis(200));
+                        println!("Decode task {} completed in {:?}", i, duration);
+                    })
+                })
+                .collect();
+
+            // Wait for all decode tasks to complete
+            for handle in decode_handles {
+                handle.await;
+            }
+
+            // Stop the heartbeat task
+            stop_flag.store(true, Ordering::Relaxed);
+            let _ = heartbeat_handle.await;
+
+            let final_heartbeat_count = heartbeat_count.load(Ordering::Relaxed);
+            let final_max_delay_ms = max_heartbeat_delay_ms.load(Ordering::Relaxed);
+
+            // In a healthy runtime, heartbeats should run ~every 10ms
+            // With blocking decode work, we expect significant delays
+            println!(
+                "Heartbeat count: {}, Max delay: {}ms",
+                final_heartbeat_count, final_max_delay_ms
+            );
+
+            // If decode work blocks the runtime, we expect:
+            // - Fewer heartbeats than expected (decode takes ~400ms total)
+            // - Max delay significantly higher than 10ms
+            //
+            // On a single-threaded runtime, we expect the heartbeat to be
+            // completely blocked during decode operations.
+            assert!(
+                final_max_delay_ms > 50,
+                "Expected heartbeat delays > 50ms due to blocking decode work, got {}ms. \
+                 This suggests decode work is not blocking as expected.",
+                final_max_delay_ms
+            );
+        });
+    }
+
+    /// Test demonstrating that running CPU-bound work on an isolated runtime
+    /// does NOT block tasks on the main runtime.
+    ///
+    /// This is the pattern used for encoding (which works correctly).
+    /// Decoding should follow the same pattern.
+    #[mz_ore::test]
+    fn isolated_runtime_does_not_block_heartbeat() {
+        // Use a SINGLE-THREADED main runtime - the heartbeat runs here
+        // But decode work runs on the isolated runtime (separate threads)
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let isolated = IsolatedRuntime::new(&MetricsRegistry::new(), Some(2));
+
+            let heartbeat_count = Arc::new(AtomicU64::new(0));
+            let max_heartbeat_delay_ms = Arc::new(AtomicU64::new(0));
+            let stop_flag = Arc::new(AtomicBool::new(false));
+
+            // Spawn a "heartbeat" task on the MAIN runtime
+            let heartbeat_handle = {
+                let heartbeat_count = Arc::clone(&heartbeat_count);
+                let max_heartbeat_delay_ms = Arc::clone(&max_heartbeat_delay_ms);
+                let stop_flag = Arc::clone(&stop_flag);
+
+                mz_ore::task::spawn(|| "test_heartbeat_isolated", async move {
+                    let expected_interval = Duration::from_millis(10);
+                    let mut last_run = Instant::now();
+
+                    while !stop_flag.load(Ordering::Relaxed) {
+                        tokio::time::sleep(expected_interval).await;
+
+                        let actual_delay = last_run.elapsed();
+                        let delay_ms = actual_delay.as_millis() as u64;
+
+                        let _ = max_heartbeat_delay_ms.fetch_max(delay_ms, Ordering::Relaxed);
+
+                        heartbeat_count.fetch_add(1, Ordering::Relaxed);
+                        last_run = Instant::now();
+                    }
+                })
+            };
+
+            // Spawn CPU-bound "decode" tasks on the ISOLATED runtime
+            // This is the pattern used for encoding
+            let decode_handles: Vec<_> = (0..4)
+                .map(|i| {
+                    isolated.spawn_named(
+                        || format!("test_decode_isolated_{}", i),
+                        async move {
+                            let duration = simulate_decode_work(Duration::from_millis(200));
+                            println!("Isolated decode task {} completed in {:?}", i, duration);
+                        },
+                    )
+                })
+                .collect();
+
+            // Wait for all decode tasks to complete
+            for handle in decode_handles {
+                handle.await;
+            }
+
+            // Stop the heartbeat task
+            stop_flag.store(true, Ordering::Relaxed);
+            let _ = heartbeat_handle.await;
+
+            let final_heartbeat_count = heartbeat_count.load(Ordering::Relaxed);
+            let final_max_delay_ms = max_heartbeat_delay_ms.load(Ordering::Relaxed);
+
+            println!(
+                "Heartbeat count (isolated): {}, Max delay: {}ms",
+                final_heartbeat_count, final_max_delay_ms
+            );
+
+            // When decode work runs on isolated runtime, heartbeats should
+            // run on schedule (~10ms intervals) with minimal delays
+            //
+            // Note: We allow some slack because the test runtime itself
+            // may have scheduling jitter
+            assert!(
+                final_max_delay_ms < 100,
+                "Expected heartbeat delays < 100ms when decode runs on isolated runtime, got {}ms. \
+                 This suggests the isolated runtime is not properly isolating work.",
+                final_max_delay_ms
+            );
+        });
+    }
 }
