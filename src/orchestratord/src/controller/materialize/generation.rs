@@ -1057,7 +1057,7 @@ fn create_environmentd_statefulset_object(
         args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
         if matches!(
             mz.spec.authenticator_kind,
-            AuthenticatorKind::Password | AuthenticatorKind::Sasl
+            AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc
         ) {
             args.push("--system-parameter-default=enable_password_auth=true".into());
             env.push(EnvVar {
@@ -1366,7 +1366,7 @@ fn create_connection_info(
 
     if matches!(
         authenticator_kind,
-        AuthenticatorKind::Password | AuthenticatorKind::Sasl
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl | AuthenticatorKind::Oidc
     ) {
         listeners_config.sql.remove("internal");
         listeners_config.http.remove("internal");
