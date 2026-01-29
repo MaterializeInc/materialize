@@ -1159,7 +1159,6 @@ impl SystemVars {
             &ENABLE_STORAGE_SHARD_FINALIZATION,
             &ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE,
             &ENABLE_DEFAULT_CONNECTION_VALIDATION,
-            &ENABLE_REDUCE_REDUCTION,
             &MIN_TIMESTAMP_INTERVAL,
             &MAX_TIMESTAMP_INTERVAL,
             &LOGGING_FILTER,
@@ -1997,10 +1996,6 @@ impl SystemVars {
 
     pub fn enable_consolidate_after_union_negate(&self) -> bool {
         *self.expect_value(&ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE)
-    }
-
-    pub fn enable_reduce_reduction(&self) -> bool {
-        *self.expect_value(&ENABLE_REDUCE_REDUCTION)
     }
 
     /// Returns the `enable_default_connection_validation` configuration parameter.

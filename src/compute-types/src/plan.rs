@@ -634,9 +634,6 @@ impl<T: timely::progress::Timestamp> Plan<T> {
                     PlanNode::Reduce { plan, .. } => {
                         // Upgrade non-monotonic hierarchical plans to monotonic with mandatory consolidation.
                         match plan {
-                            ReducePlan::Collation(collation) => {
-                                collation.as_monotonic(true);
-                            }
                             ReducePlan::Hierarchical(hierarchical) => {
                                 hierarchical.as_monotonic(true);
                             }

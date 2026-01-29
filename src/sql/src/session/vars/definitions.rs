@@ -1443,13 +1443,6 @@ pub static ENABLE_CONSOLIDATE_AFTER_UNION_NEGATE: VarDefinition = VarDefinition:
     true,
 );
 
-pub static ENABLE_REDUCE_REDUCTION: VarDefinition = VarDefinition::new(
-    "enable_reduce_reduction",
-    value!(bool; true),
-    "split complex reductions in to simpler ones and a join (Materialize).",
-    true,
-);
-
 pub static MIN_TIMESTAMP_INTERVAL: VarDefinition = VarDefinition::new(
     "min_timestamp_interval",
     value!(Duration; Duration::from_millis(1000)),
@@ -2255,7 +2248,6 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_letrec_fixpoint_analysis: vars.enable_letrec_fixpoint_analysis(),
             enable_cardinality_estimates: vars.enable_cardinality_estimates(),
-            enable_reduce_reduction: vars.enable_reduce_reduction(),
             persist_fast_path_limit: vars.persist_fast_path_limit(),
             reoptimize_imported_views: false,
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),

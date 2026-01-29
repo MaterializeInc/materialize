@@ -60,12 +60,10 @@
 //! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
-use std::collections::BTreeMap;
-
 use mz_expr::{
     AggregateExpr, AggregateFunc, MapFilterProject, MirScalarExpr, permutation_for_arrangement,
 };
-use mz_ore::{assert_none, soft_assert_eq_or_log, soft_assert_or_log};
+use mz_ore::soft_assert_or_log;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
@@ -127,10 +125,6 @@ pub enum ReducePlan {
     Hierarchical(HierarchicalPlan),
     /// Plan for computing only basic aggregations.
     Basic(BasicPlan),
-    /// Plan for computing a mix of different kinds of aggregations.
-    /// We need to do extra work here to reassemble results back in the
-    /// requested order.
-    Collation(CollationPlan),
 }
 
 /// Plan for computing a set of accumulable aggregations.
@@ -148,12 +142,11 @@ pub struct AccumulablePlan {
     pub full_aggrs: Vec<AggregateExpr>,
     /// All of the non-distinct accumulable aggregates.
     /// Each element represents:
-    /// (index of the aggregation among accumulable aggregations,
-    ///  index of the datum among inputs, aggregation expr)
+    /// (index of the datum among inputs, aggregation expr)
     /// These will all be rendered together in one dataflow fragment.
-    pub simple_aggrs: Vec<(usize, usize, AggregateExpr)>,
+    pub simple_aggrs: Vec<(usize, AggregateExpr)>,
     /// Same as above but for all of the `DISTINCT` accumulable aggregations.
-    pub distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
+    pub distinct_aggrs: Vec<(usize, AggregateExpr)>,
 }
 
 /// Plan for computing a set of hierarchical aggregations.
@@ -208,9 +201,6 @@ impl HierarchicalPlan {
 pub struct MonotonicPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
-    /// Set of "skips" or calls to `nth()` an iterator needs to do over
-    /// the input to extract the relevant datums.
-    pub skips: Vec<usize>,
     /// True if the input is not physically monotonic, and the operator must perform
     /// consolidation to remove potential negations. The operator implementation is
     /// free to consolidate as late as possible while ensuring correctness, so it is
@@ -235,9 +225,6 @@ pub struct MonotonicPlan {
 pub struct BucketedPlan {
     /// All of the aggregations we were asked to compute.
     pub aggr_funcs: Vec<AggregateFunc>,
-    /// Set of "skips" or calls to `nth()` an iterator needs to do over
-    /// the input to extract the relevant datums.
-    pub skips: Vec<usize>,
     /// The number of buckets in each layer of the reduction tree. Should
     /// be decreasing, and ideally, a power of two so that we can easily
     /// distribute values to buckets with `value.hashed() % buckets[layer]`.
@@ -250,7 +237,6 @@ impl BucketedPlan {
     fn into_monotonic(self, must_consolidate: bool) -> MonotonicPlan {
         MonotonicPlan {
             aggr_funcs: self.aggr_funcs,
-            skips: self.skips,
             must_consolidate,
         }
     }
@@ -278,7 +264,7 @@ pub enum BasicPlan {
     /// reduction. Each element represents the:
     /// `(index of the set of the input we are aggregating over,
     ///   the aggregation function)`
-    Multiple(Vec<(usize, AggregateExpr)>),
+    Multiple(Vec<AggregateExpr>),
 }
 
 /// Plan for rendering a single basic aggregation, with possibly fusing a `FlatMap UnnestList` with
@@ -334,88 +320,33 @@ impl ReducePlan {
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
     ) -> Self {
-        // If we don't have any aggregations we are just computing a distinct.
-        if aggregates.is_empty() {
-            return ReducePlan::Distinct;
-        }
-
-        // Otherwise, we need to group aggregations according to their
-        // reduction type (accumulable, hierarchical, or basic)
-        let mut reduction_types = BTreeMap::new();
         // We need to make sure that each list of aggregates by type forms
         // a subsequence of the overall sequence of aggregates.
-        for index in 0..aggregates.len() {
-            let typ = reduction_type(&aggregates[index].func);
-            let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
-            aggregates_list.push((index, aggregates[index].clone()));
-        }
+        let mut aggregates_list = Vec::with_capacity(aggregates.len());
+        let mut aggregates = aggregates.into_iter();
+        if let Some(aggregate) = aggregates.next() {
+            let typ = reduction_type(&aggregate.func);
+            aggregates_list.push(aggregate);
 
-        // Convert each grouped list of reductions into a plan.
-        let plan: Vec<_> = reduction_types
-            .into_iter()
-            .map(|(typ, aggregates_list)| {
-                ReducePlan::create_inner(
-                    typ,
-                    aggregates_list,
-                    monotonic,
-                    expected_group_size,
-                    fused_unnest_list,
-                )
-            })
-            .collect();
-
-        // If we only have a single type of aggregation present we can
-        // render that directly
-        if plan.len() == 1 {
-            return plan[0].clone();
-        }
-
-        // Warn if we encounter a collation plan. This can trigger if the `enable_reduce_reduction`
-        // flag is disabled.
-        soft_assert_eq_or_log!(
-            plan.len(),
-            1,
-            "Expected reduce reduction to remove collation plans"
-        );
-
-        // Otherwise, we have to stitch reductions together.
-
-        // First, lets sanity check that we don't have an impossible number
-        // of reduction types.
-        assert!(plan.len() <= 3);
-
-        let mut collation: CollationPlan = Default::default();
-
-        // Construct a mapping from output_position -> reduction that we can
-        // use to reconstruct the output in the correct order.
-        let aggregate_types = aggregates
-            .iter()
-            .map(|a| reduction_type(&a.func))
-            .collect::<Vec<_>>();
-
-        collation.aggregate_types = aggregate_types;
-
-        for expr in plan.into_iter() {
-            match expr {
-                ReducePlan::Accumulable(e) => {
-                    assert_none!(collation.accumulable);
-                    collation.accumulable = Some(e);
-                }
-                ReducePlan::Hierarchical(e) => {
-                    assert_none!(collation.hierarchical);
-                    collation.hierarchical = Some(e);
-                }
-                ReducePlan::Basic(e) => {
-                    assert_none!(collation.basic);
-                    collation.basic = Some(e);
-                }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
-                    panic!("Inner reduce plan was unsupported type!")
-                }
+            for aggregate in aggregates {
+                let this_typ = reduction_type(&aggregate.func);
+                assert_eq!(
+                    this_typ, typ,
+                    "Multiple reduction types detected: expected {typ:?}, found {this_typ:?}"
+                );
+                aggregates_list.push(aggregate);
             }
+            ReducePlan::create_inner(
+                typ,
+                aggregates_list,
+                monotonic,
+                expected_group_size,
+                fused_unnest_list,
+            )
+        } else {
+            // If we don't have any aggregations we are just computing a distinct.
+            ReducePlan::Distinct
         }
-
-        ReducePlan::Collation(collation)
     }
 
     /// Generate a plan for computing the specified type of aggregations.
@@ -425,7 +356,7 @@ impl ReducePlan {
     /// of the total list of requested aggregations.
     fn create_inner(
         typ: ReductionType,
-        aggregates_list: Vec<(usize, AggregateExpr)>,
+        aggregates_list: Vec<AggregateExpr>,
         monotonic: bool,
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
@@ -441,21 +372,15 @@ impl ReducePlan {
             ReductionType::Accumulable => {
                 let mut simple_aggrs = vec![];
                 let mut distinct_aggrs = vec![];
-                let full_aggrs: Vec<_> = aggregates_list
-                    .iter()
-                    .cloned()
-                    .map(|(_, aggr)| aggr)
-                    .collect();
-                for (accumulable_index, (datum_index, aggr)) in
-                    aggregates_list.into_iter().enumerate()
-                {
+                let full_aggrs = aggregates_list.clone();
+                for (datum_index, aggr) in aggregates_list.into_iter().enumerate() {
                     // Accumulable aggregations need to do extra per-aggregate work
                     // for aggregations with the distinct bit set, so we'll separate
                     // those out now.
                     if aggr.distinct {
-                        distinct_aggrs.push((accumulable_index, datum_index, aggr));
+                        distinct_aggrs.push((datum_index, aggr));
                     } else {
-                        simple_aggrs.push((accumulable_index, datum_index, aggr));
+                        simple_aggrs.push((datum_index, aggr));
                     };
                 }
                 ReducePlan::Accumulable(AccumulablePlan {
@@ -465,25 +390,14 @@ impl ReducePlan {
                 })
             }
             ReductionType::Hierarchical => {
-                let aggr_funcs: Vec<_> = aggregates_list
+                let aggr_funcs = aggregates_list
                     .iter()
-                    .cloned()
-                    .map(|(_, aggr)| aggr.func)
-                    .collect();
-                let indexes: Vec<_> = aggregates_list
-                    .into_iter()
-                    .map(|(index, _)| index)
+                    .map(|aggr| aggr.func.clone())
                     .collect();
 
-                // We don't have random access over Rows so we can simplify the
-                // task of grabbing the inputs we are aggregating over by
-                // generating a list of "skips" an iterator over the Row needs
-                // to do to get the desired indexes.
-                let skips = convert_indexes_to_skips(indexes);
                 if monotonic {
                     let monotonic = MonotonicPlan {
                         aggr_funcs,
-                        skips,
                         must_consolidate: false,
                     };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
@@ -491,7 +405,6 @@ impl ReducePlan {
                     let buckets = bucketing_of_expected_group_size(expected_group_size);
                     let bucketed = BucketedPlan {
                         aggr_funcs,
-                        skips,
                         buckets,
                     };
 
@@ -501,8 +414,8 @@ impl ReducePlan {
             ReductionType::Basic => {
                 if aggregates_list.len() == 1 {
                     ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
-                        index: aggregates_list[0].0,
-                        expr: aggregates_list[0].1.clone(),
+                        index: 0,
+                        expr: aggregates_list[0].clone(),
                         fused_unnest_list,
                     }))
                 } else {

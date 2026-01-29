@@ -37,8 +37,7 @@ use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, LinearJoinPlan};
 use crate::plan::reduce::{
-    AccumulablePlan, BasicPlan, BucketedPlan, CollationPlan, HierarchicalPlan, MonotonicPlan,
-    SingleBasicPlan,
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, MonotonicPlan, SingleBasicPlan,
 };
 use crate::plan::threshold::ThresholdPlan;
 use crate::plan::{AvailableCollections, LirId, Plan, PlanNode};
@@ -357,14 +356,6 @@ impl Plan {
                         )?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                         ctx.indent.reset();
-                    }
-                    ReducePlan::Collation(plan) => {
-                        writeln!(
-                            f,
-                            "{}→Collated Multi-GroupAggregate{annotations}",
-                            ctx.indent
-                        )?;
-                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
 
@@ -763,10 +754,6 @@ impl Plan {
                     }
                     ReducePlan::Basic(plan) => {
                         writeln!(f, "{}Reduce::Basic{}", ctx.indent, annotations)?;
-                        ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-                    }
-                    ReducePlan::Collation(plan) => {
-                        writeln!(f, "{}Reduce::Collation{}", ctx.indent, annotations)?;
                         ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
                     }
                 }
@@ -1430,7 +1417,7 @@ impl AccumulablePlan {
             let simple_aggrs = self
                 .simple_aggrs
                 .iter()
-                .map(|(_i_aggs, _i_datum, agg)| mode.expr(agg, None));
+                .map(|(_i_datum, agg)| mode.expr(agg, None));
             let simple_aggrs = separated(", ", simple_aggrs);
             writeln!(f, "{}Simple aggregates: {simple_aggrs}", ctx.indent)?;
         }
@@ -1439,7 +1426,7 @@ impl AccumulablePlan {
             let distinct_aggrs = self
                 .distinct_aggrs
                 .iter()
-                .map(|(_i_aggs, _i_datum, agg)| mode.expr(agg, None));
+                .map(|(_i_datum, agg)| mode.expr(agg, None));
             let distinct_aggrs = separated(", ", distinct_aggrs);
             writeln!(f, "{}Distinct aggregates: {distinct_aggrs}", ctx.indent)?;
         }
@@ -1460,16 +1447,16 @@ impl AccumulablePlan {
         //     writeln!(f)?;
         // }
         // simple_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
+        for (i, (i_datum, agg)) in self.simple_aggrs.iter().enumerate() {
             let agg = mode.expr(agg, None);
             write!(f, "{}simple_aggrs[{}]=", ctx.indent, i)?;
-            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {})", i_datum, agg)?;
         }
         // distinct_aggrs
-        for (i, (i_aggs, i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
+        for (i, (i_datum, agg)) in self.distinct_aggrs.iter().enumerate() {
             let agg = mode.expr(agg, None);
             write!(f, "{}distinct_aggrs[{}]=", ctx.indent, i)?;
-            writeln!(f, "({}, {}, {})", i_aggs, i_datum, agg)?;
+            writeln!(f, "({}, {})", i_datum, agg)?;
         }
         Ok(())
     }
@@ -1513,8 +1500,6 @@ impl HierarchicalPlan {
                 let aggr_funcs = mode.seq(&plan.aggr_funcs, None);
                 let aggr_funcs = separated(", ", aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
-                let skips = separated(", ", &plan.skips);
-                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
                 writeln!(f, "{}monotonic", ctx.indent)?;
                 if plan.must_consolidate {
                     writeln!(f, "{}must_consolidate", ctx.indent)?;
@@ -1524,8 +1509,6 @@ impl HierarchicalPlan {
                 let aggr_funcs = mode.seq(&plan.aggr_funcs, None);
                 let aggr_funcs = separated(", ", aggr_funcs);
                 writeln!(f, "{}aggr_funcs=[{}]", ctx.indent, aggr_funcs)?;
-                let skips = separated(", ", &plan.skips);
-                writeln!(f, "{}skips=[{}]", ctx.indent, skips)?;
                 let buckets = separated(", ", &plan.buckets);
                 writeln!(f, "{}buckets=[{}]", ctx.indent, buckets)?;
             }
@@ -1568,7 +1551,7 @@ impl BasicPlan {
                 let mode = HumanizedExplain::new(ctx.config.redacted);
                 write!(f, "{}Aggregations:", ctx.indent)?;
 
-                for (_, agg) in aggs.iter() {
+                for agg in aggs.iter() {
                     let agg = mode.expr(agg, None);
                     write!(f, " {agg}")?;
                 }
@@ -1604,82 +1587,11 @@ impl BasicPlan {
                 )?;
             }
             BasicPlan::Multiple(aggs) => {
-                for (i, (i_datum, agg)) in aggs.iter().enumerate() {
+                for (i, agg) in aggs.iter().enumerate() {
                     let agg = mode.expr(agg, None);
-                    writeln!(f, "{}aggrs[{}]=({}, {})", ctx.indent, i, i_datum, agg)?;
+                    writeln!(f, "{}aggrs[{}]={}", ctx.indent, i, agg)?;
                 }
             }
-        }
-        Ok(())
-    }
-}
-
-impl DisplayText<PlanRenderingContext<'_, Plan>> for CollationPlan {
-    fn fmt_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        if ctx.config.verbose_syntax {
-            self.fmt_verbose_text(f, ctx)
-        } else {
-            self.fmt_default_text(f, ctx)
-        }
-    }
-}
-
-impl CollationPlan {
-    #[allow(clippy::needless_pass_by_ref_mut)]
-    fn fmt_default_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        if let Some(plan) = &self.accumulable {
-            writeln!(f, "{}Accumulable sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.hierarchical {
-            writeln!(f, "{}Hierarchical sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.basic {
-            writeln!(f, "{}Non-incremental sub-aggregation", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        Ok(())
-    }
-
-    fn fmt_verbose_text(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        ctx: &mut PlanRenderingContext<'_, Plan>,
-    ) -> fmt::Result {
-        {
-            use crate::plan::reduce::ReductionType;
-            let aggregate_types = &self
-                .aggregate_types
-                .iter()
-                .map(|reduction_type| match reduction_type {
-                    ReductionType::Accumulable => "a".to_string(),
-                    ReductionType::Hierarchical => "h".to_string(),
-                    ReductionType::Basic => "b".to_string(),
-                })
-                .collect::<Vec<_>>();
-            let aggregate_types = separated(", ", aggregate_types);
-            writeln!(f, "{}aggregate_types=[{}]", ctx.indent, aggregate_types)?;
-        }
-        if let Some(plan) = &self.accumulable {
-            writeln!(f, "{}accumulable", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.hierarchical {
-            writeln!(f, "{}hierarchical", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
-        }
-        if let Some(plan) = &self.basic {
-            writeln!(f, "{}basic", ctx.indent)?;
-            ctx.indented(|ctx| plan.fmt_text(f, ctx))?;
         }
         Ok(())
     }
