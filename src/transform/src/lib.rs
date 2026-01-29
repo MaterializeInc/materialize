@@ -977,7 +977,29 @@ impl Optimizer {
         mut relation: MirRelationExpr,
         ctx: &mut TransformCtx,
     ) -> Result<mz_expr::OptimizedMirRelationExpr, TransformError> {
+        // Capture the type before and after transformation.
+        let old_type = relation.typ();
         let transform_result = self.transform(&mut relation, ctx);
+        let new_type = relation.typ();
+        // Notice if types and their nullability have regressed.
+        use crate::typecheck::relation_subtype_difference;
+        soft_assert_or_log!(
+            relation_subtype_difference(&new_type.column_types[..], &old_type.column_types[..])
+                .is_empty(),
+            "Relation column types have regressed, from {:?} to {:?}",
+            old_type.column_types,
+            new_type.column_types,
+        );
+        // Notice if unique keys have regressed.
+        soft_assert_or_log!(
+            old_type.keys.iter().all(|o_key| new_type
+                .keys
+                .iter()
+                .any(|n_key| n_key.iter().all(|nk| o_key.contains(nk)))),
+            "Relation unique keys have regressed, from {:?} to {:?}",
+            old_type.keys,
+            new_type.keys,
+        );
 
         match transform_result {
             Ok(_) => {
