@@ -15,19 +15,47 @@ $ set-max-tries max-tries=1
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_copy_from_remote = true;
 
+
 # Prepare the table we want to COPY INTO.
 > CREATE TABLE t1 (a text, b text);
+> CREATE TABLE t1_num (a text, b numeric);
+> CREATE TABLE t1_bad_cast (a jsonb, b int);
+> CREATE TABLE t1_single_col (a text);
+> CREATE TABLE t1_not_null (a text, b int, c float NOT NULL);
+> CREATE TABLE t1_fun_house (y int, z text, c float NOT NULL DEFAULT 1.11, d bigint);
 
 $ s3-file-upload bucket=copytos3 key=csv/1.csv repeat=2
 none,100
 
 $ s3-set-presigned-url bucket=copytos3 key=csv/1.csv var-name=1_csv_url
 
+# everything imports as text
 > COPY INTO t1 FROM '${1_csv_url}' (FORMAT CSV);
-
 > SELECT * FROM t1;
 none 100
 none 100
+
+# columns can be cast to types
+> COPY INTO t1_num FROM '${1_csv_url}' (FORMAT CSV);
+> SELECT *, pg_typeof(b) FROM t1_num;
+none 100 numeric
+none 100 numeric
+
+# FYI: casting a number to json/jsonb, e.g. '1'::jsonb, is valid, casting alphabetic string is not
+! COPY INTO t1_bad_cast FROM '${1_csv_url}' (FORMAT CSV);
+contains:failed to decode Row
+
+! COPY INTO t1_single_col FROM '${1_csv_url}' (FORMAT CSV);
+contains:wrong number of columns
+
+# disabled as MZ panics database-issues#9886
+# ! COPY INTO t1_not_null FROM '${1_csv_url}' (FORMAT CSV);
+# contains:some error that's not a panic
+
+> COPY INTO t1_fun_house (z, y) FROM '${1_csv_url}' (FORMAT CSV);
+> SELECT * from t1_fun_house;
+100 none 1.11 <null>
+100 none 1.11 <null>
 
 # gzip Compression.
 
