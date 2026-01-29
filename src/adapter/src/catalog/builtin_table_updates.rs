@@ -12,7 +12,6 @@ mod notice;
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_adapter_types::compaction::CompactionWindow;
-use mz_adapter_types::dyncfgs::ENABLE_PASSWORD_AUTH;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, VersionedStorageUsage};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
@@ -231,18 +230,11 @@ impl CatalogState {
             RoleId::Public => vec![],
             id => {
                 let role = self.get_role(&id);
-                let self_managed_auth_enabled = self
-                    .system_config()
-                    .get(ENABLE_PASSWORD_AUTH.name())
-                    .ok()
-                    .map(|v| v.value() == "on")
-                    .unwrap_or(false);
-
                 let builtin_supers = [MZ_SYSTEM_ROLE_ID, MZ_SUPPORT_ROLE_ID];
 
                 // For self managed auth, we can get the actual login and superuser bits
-                // directly from the role. For cloud auth, we have to do some heuristics.
-                // We determine login status each time a role logs in, so there's no clean
+                // directly from the role. For cloud auth, the LOGIN and SUPERUSER attribute
+                // are nullish and determined each time a role logs in, so there's no clean
                 // way to accurately determine this in the catalog. Instead we do something
                 // a little gross. For system roles, we hardcode the known roles that can
                 // log in. For user roles, we determine `rolcanlogin` based on whether the
@@ -258,23 +250,42 @@ impl CatalogState {
                 // that folks are regularly creating non-login roles with names that look
                 // like an email address (e.g., `admins@sysops.foocorp`), we can change
                 // course.
-
                 let cloud_login_regex = "^[^@]+@[^@]+\\.[^@]+$";
-                let matches = regex::Regex::new(cloud_login_regex, true)
+                let matches_cloud_login_heuristic = regex::Regex::new(cloud_login_regex, true)
                     .expect("valid regex")
                     .is_match(&role.name);
 
-                let rolcanlogin = if self_managed_auth_enabled {
-                    role.attributes.login.unwrap_or(false)
+                let rolcanlogin = if let Some(login) = role.attributes.login {
+                    login
                 } else {
-                    builtin_supers.contains(&role.id) || matches
+                    // Note: Self-managed users with email-like
+                    // role names may have `rolcanlogin` set to true if the role
+                    // was initialized without an explicit LOGIN attribute.
+                    // We're comfortable with this edge case, since roles that
+                    // have login explictly turned off via NOLOGIN will have a
+                    // LOGIN attribute value of false.
+                    builtin_supers.contains(&role.id) || matches_cloud_login_heuristic
                 };
 
-                let rolsuper = if self_managed_auth_enabled {
-                    Datum::from(role.attributes.superuser.unwrap_or(false))
+                let rolsuper = if let Some(superuser) = role.attributes.superuser {
+                    Datum::from(superuser)
+                } else if let Some(_) = role.attributes.login {
+                    // If a role has an explicit LOGIN attribute but no SUPERUSER
+                    // attribute, we assume this is self-managed auth where
+                    // the role was created without indicating superuser privileges.
+                    Datum::from(false)
                 } else if builtin_supers.contains(&role.id) {
+                    // System roles (mz_system, mz_support) are superusers
                     Datum::from(true)
                 } else {
+                    // In cloud environments, superuser status is determined
+                    // at login, so we set `rolsuper` to `null` here because
+                    // it cannot be known beforehand. For self-managed
+                    // auth, roles created without an explicit LOGIN
+                    // attribute would typically have `rolsuper` set to false.
+                    // However, since we cannot reliably distinguish between
+                    // cloud and self-managed here, we conservatively use NULL
+                    // for indeterminate cases.
                     Datum::Null
                 };
 
