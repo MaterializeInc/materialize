@@ -159,6 +159,12 @@ class Action:
             "is only defined for finite arguments",
             "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
+            # The following is errors like
+            # `cluster replica 'quickstart."cluster-1"."r-1"' does not exist`
+            # which come when a replica is selected in the `cluster_replica` session var and
+            # - the replica is dropped, or
+            # - we move to a different cluster, where that replica doesn't exist.
+            "cluster replica '",
         ]
         if exe.db.complexity in (Complexity.DDL, Complexity.DDLOnly):
             result.extend(
@@ -2104,6 +2110,41 @@ class DropClusterReplicaAction(Action):
         return True
 
 
+class SetClusterReplicaAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            # Get unmanaged clusters that have replicas (similar to DropClusterReplicaAction)
+            unmanaged_clusters = [c for c in exe.db.clusters[1:] if not c.managed]
+            if not unmanaged_clusters:
+                return False
+            cluster = self.rng.choice(unmanaged_clusters)
+            if not cluster.replicas:
+                return False
+            replica = self.rng.choice(cluster.replicas)
+
+        # Commit/rollback before SET to ensure no active transaction
+        if self.rng.choice([True, False]):
+            exe.commit(http=Http.NO)
+        else:
+            exe.rollback(http=Http.NO)
+
+        query = f"SET cluster_replica = '{cluster}.{replica}'"
+        exe.execute(query, http=Http.NO)
+        return True
+
+
+class ResetClusterReplicaAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if self.rng.choice([True, False]):
+            exe.commit(http=Http.NO)
+        else:
+            exe.rollback(http=Http.NO)
+
+        query = "RESET cluster_replica"
+        exe.execute(query, http=Http.NO)
+        return True
+
+
 class GrantPrivilegesAction(Action):
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
@@ -3065,6 +3106,8 @@ read_action_list = ActionList(
             100,
         ),  # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9661 is fixed
         (SetClusterAction, 1),
+        (SetClusterReplicaAction, 1),
+        (ResetClusterReplicaAction, 3),
         (CommitRollbackAction, 30),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
@@ -3076,6 +3119,8 @@ fetch_action_list = ActionList(
     [
         (FetchAction, 30),
         (SetClusterAction, 1),
+        (SetClusterReplicaAction, 1),
+        (ResetClusterReplicaAction, 3),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
     ],
@@ -3088,6 +3133,8 @@ write_action_list = ActionList(
         (CopyFromStdinAction, 20),
         (SelectOneAction, 1),  # can be mixed with writes
         (SetClusterAction, 1),
+        (SetClusterReplicaAction, 1),
+        (ResetClusterReplicaAction, 3),
         (HttpPostAction, 5),
         (CommitRollbackAction, 10),
         (ReconnectAction, 1),
@@ -3104,6 +3151,8 @@ dml_nontrans_action_list = ActionList(
         (InsertReturningAction, 10),
         (CommentAction, 5),
         (SetClusterAction, 1),
+        (SetClusterReplicaAction, 1),
+        (ResetClusterReplicaAction, 3),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
         # (TransactionIsolationAction, 1),
@@ -3127,6 +3176,8 @@ ddl_action_list = ActionList(
         (CreateClusterReplicaAction, 2),
         (DropClusterReplicaAction, 2),
         (SetClusterAction, 1),
+        (SetClusterReplicaAction, 1),
+        (ResetClusterReplicaAction, 3),
         (CreateWebhookSourceAction, 2),
         (DropWebhookSourceAction, 2),
         (CreateKafkaSinkAction, 4),
