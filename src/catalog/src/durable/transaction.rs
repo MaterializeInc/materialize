@@ -77,10 +77,9 @@ type Timestamp = u64;
 /// An operation also logically groups multiple catalog updates together.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Transaction<'a> {
-    #[derivative(Debug = "ignore")]
-    #[derivative(PartialEq = "ignore")]
-    durable_catalog: &'a mut dyn DurableCatalogState,
+pub struct Transaction {
+    is_bootstrap_complete: bool,
+    is_savepoint: bool,
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
@@ -107,15 +106,14 @@ pub struct Transaction<'a> {
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
     audit_log_updates: Vec<(AuditLogKey, Diff, Timestamp)>,
-    /// The upper of `durable_catalog` at the start of the transaction.
+    /// The upper of durable storage at the start of the transaction.
     upper: mz_repr::Timestamp,
     /// The ID of the current operation of this transaction.
     op_id: Timestamp,
 }
 
-impl<'a> Transaction<'a> {
+impl Transaction {
     pub fn new(
-        durable_catalog: &'a mut dyn DurableCatalogState,
         Snapshot {
             databases,
             schemas,
@@ -140,9 +138,12 @@ impl<'a> Transaction<'a> {
             txn_wal_shard,
         }: Snapshot,
         upper: mz_repr::Timestamp,
-    ) -> Result<Transaction<'a>, CatalogError> {
+        is_bootstrap_complete: bool,
+        is_savepoint: bool,
+    ) -> Result<Transaction, CatalogError> {
         Ok(Transaction {
-            durable_catalog,
+            is_bootstrap_complete,
+            is_savepoint,
             databases: TableTransaction::new_with_uniqueness_fn(
                 databases,
                 |a: &DatabaseValue, b| a.name == b.name,
@@ -743,7 +744,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<u64>, CatalogError> {
         assert!(
-            key != SYSTEM_ITEM_ALLOC_KEY || !self.durable_catalog.is_bootstrap_complete(),
+            key != SYSTEM_ITEM_ALLOC_KEY || !self.is_bootstrap_complete,
             "system item IDs cannot be allocated outside of bootstrap"
         );
 
@@ -775,7 +776,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         assert!(
-            !self.durable_catalog.is_bootstrap_complete(),
+            !self.is_bootstrap_complete,
             "we can only allocate system item IDs during bootstrap"
         );
         Ok(self
@@ -2292,7 +2293,8 @@ impl<'a> Transaction<'a> {
         }
 
         let Transaction {
-            durable_catalog: _,
+            is_bootstrap_complete: _,
+            is_savepoint: _,
             databases,
             schemas,
             items,
@@ -2422,7 +2424,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn is_savepoint(&self) -> bool {
-        self.durable_catalog.is_savepoint()
+        self.is_savepoint
     }
 
     fn commit_op(&mut self) {
@@ -2437,7 +2439,7 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
-    pub(crate) fn into_parts(self) -> (TransactionBatch, &'a mut dyn DurableCatalogState) {
+    pub(crate) fn into_parts(self) -> TransactionBatch {
         let audit_log_updates = self
             .audit_log_updates
             .into_iter()
@@ -2469,7 +2471,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates,
             upper: self.upper,
         };
-        (txn_batch, self.durable_catalog)
+        txn_batch
     }
 
     /// Commits the storage transaction to durable storage. Any error returned outside read-only
@@ -2486,9 +2488,68 @@ impl<'a> Transaction<'a> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn commit_internal(
         self,
+        durable_catalog: &mut dyn DurableCatalogState,
         commit_ts: mz_repr::Timestamp,
-    ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
-        let (mut txn_batch, durable_catalog) = self.into_parts();
+    ) -> Result<mz_repr::Timestamp, CatalogError> {
+        let txn_batch = self.into_consolidated_batch();
+        let upper = txn_batch.upper;
+
+        assert!(
+            commit_ts >= upper,
+            "expected commit ts, {}, to be greater than or equal to upper, {}",
+            commit_ts,
+            upper
+        );
+        let upper = durable_catalog
+            .commit_transaction(txn_batch, commit_ts)
+            .await?;
+        Ok(upper)
+    }
+
+    /// Commits the storage transaction to durable storage. Any error returned outside read-only
+    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
+    /// before proceeding. In general, this must be fatal to the calling process. We do not
+    /// panic/halt inside this function itself so that errors can bubble up during initialization.
+    ///
+    /// In read-only mode, this will return an error for non-empty transactions indicating that the
+    /// catalog is not writeable.
+    ///
+    /// IMPORTANT: It is assumed that the committer of this transaction has already applied all
+    /// updates from this transaction. Therefore, updates from this transaction will not be returned
+    /// when calling [`crate::durable::ReadOnlyDurableCatalogState::sync_to_current_updates`] or
+    /// [`crate::durable::ReadOnlyDurableCatalogState::sync_updates`].
+    ///
+    /// An alternative implementation would be for the caller to explicitly consume their updates
+    /// after committing and only then apply the updates in-memory. While this removes assumptions
+    /// about the caller in this method, in practice it results in duplicate work on every commit.
+    #[mz_ore::instrument(level = "debug")]
+    pub async fn commit(
+        self,
+        durable_catalog: &mut dyn DurableCatalogState,
+        commit_ts: mz_repr::Timestamp,
+    ) -> Result<(), CatalogError> {
+        let op_updates = self.get_op_updates();
+        assert!(
+            op_updates.is_empty(),
+            "unconsumed transaction updates: {op_updates:?}"
+        );
+
+        let upper = self.commit_internal(durable_catalog, commit_ts).await?;
+        // Drain all the updates from the commit since it is assumed that they were already applied.
+        let updates = durable_catalog.sync_updates(upper).await?;
+        // Writable and savepoint catalogs should have consumed all updates before committing a
+        // transaction, otherwise the commit was performed with an out of date state.
+        // Read-only catalogs can only commit empty transactions, so they don't need to consume all
+        // updates before committing.
+        soft_assert_no_log!(
+            durable_catalog.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
+            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}"
+        );
+        Ok(())
+    }
+
+    pub(crate) fn into_consolidated_batch(self) -> TransactionBatch {
+        let mut txn_batch = self.into_parts();
         let TransactionBatch {
             databases,
             schemas,
@@ -2512,8 +2573,9 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            upper,
+            upper: _,
         } = &mut txn_batch;
+
         // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
         differential_dataflow::consolidation::consolidate_updates(databases);
@@ -2539,54 +2601,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
-        assert!(
-            commit_ts >= *upper,
-            "expected commit ts, {}, to be greater than or equal to upper, {}",
-            commit_ts,
-            upper
-        );
-        let upper = durable_catalog
-            .commit_transaction(txn_batch, commit_ts)
-            .await?;
-        Ok((durable_catalog, upper))
-    }
-
-    /// Commits the storage transaction to durable storage. Any error returned outside read-only
-    /// mode indicates the catalog may be in an indeterminate state and needs to be fully re-read
-    /// before proceeding. In general, this must be fatal to the calling process. We do not
-    /// panic/halt inside this function itself so that errors can bubble up during initialization.
-    ///
-    /// In read-only mode, this will return an error for non-empty transactions indicating that the
-    /// catalog is not writeable.
-    ///
-    /// IMPORTANT: It is assumed that the committer of this transaction has already applied all
-    /// updates from this transaction. Therefore, updates from this transaction will not be returned
-    /// when calling [`crate::durable::ReadOnlyDurableCatalogState::sync_to_current_updates`] or
-    /// [`crate::durable::ReadOnlyDurableCatalogState::sync_updates`].
-    ///
-    /// An alternative implementation would be for the caller to explicitly consume their updates
-    /// after committing and only then apply the updates in-memory. While this removes assumptions
-    /// about the caller in this method, in practice it results in duplicate work on every commit.
-    #[mz_ore::instrument(level = "debug")]
-    pub async fn commit(self, commit_ts: mz_repr::Timestamp) -> Result<(), CatalogError> {
-        let op_updates = self.get_op_updates();
-        assert!(
-            op_updates.is_empty(),
-            "unconsumed transaction updates: {op_updates:?}"
-        );
-
-        let (durable_storage, upper) = self.commit_internal(commit_ts).await?;
-        // Drain all the updates from the commit since it is assumed that they were already applied.
-        let updates = durable_storage.sync_updates(upper).await?;
-        // Writable and savepoint catalogs should have consumed all updates before committing a
-        // transaction, otherwise the commit was performed with an out of date state.
-        // Read-only catalogs can only commit empty transactions, so they don't need to consume all
-        // updates before committing.
-        soft_assert_no_log!(
-            durable_storage.is_read_only() || updates.iter().all(|update| update.ts == commit_ts),
-            "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, updates:{updates:?}"
-        );
-        Ok(())
+        txn_batch
     }
 }
 
@@ -2595,7 +2610,7 @@ use crate::durable::async_trait;
 use super::objects::{RoleAuthKey, RoleAuthValue};
 
 #[async_trait]
-impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
+impl StorageTxn<mz_repr::Timestamp> for Transaction {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
         self.storage_collection_metadata
             .items()
@@ -4006,7 +4021,7 @@ mod tests {
             .insert_user_database(db_name, db_owner, db_privileges.clone(), &HashSet::new())
             .unwrap();
         let commit_ts = txn.upper();
-        txn.commit_internal(commit_ts).await.unwrap();
+        txn.commit_internal(&mut catalog, commit_ts).await.unwrap();
         let updates = savepoint_state.sync_to_current_updates().await.unwrap();
         let update = updates.into_element();
 

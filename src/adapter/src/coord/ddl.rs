@@ -220,16 +220,29 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let Some(Transaction {
-            ops:
+        let Some((txn_ops, txn_revision, durable_snapshot, durable_upper, durable_is_bootstrap_complete, durable_is_savepoint)) = ctx
+            .session()
+            .transaction()
+            .inner()
+            .and_then(|txn| match &txn.ops {
                 TransactionOps::DDL {
-                    ops: txn_ops,
-                    revision: txn_revision,
-                    side_effects: _,
-                    state: _,
-                },
-            ..
-        }) = ctx.session().transaction().inner()
+                    ops,
+                    revision,
+                    durable_snapshot,
+                    durable_upper,
+                    durable_is_bootstrap_complete,
+                    durable_is_savepoint,
+                    ..
+                } => Some((
+                    ops.clone(),
+                    *revision,
+                    durable_snapshot.clone(),
+                    *durable_upper,
+                    *durable_is_bootstrap_complete,
+                    *durable_is_savepoint,
+                )),
+                _ => None,
+            })
         else {
             let result = self
                 .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
@@ -242,7 +255,7 @@ impl Coordinator {
         };
 
         // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
+        if self.catalog().transient_revision() != txn_revision {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -257,7 +270,19 @@ impl Coordinator {
         all_ops.push(Op::TransactionDryRun);
 
         // Run our Catalog transaction, but abort before committing.
-        let result = self.catalog_transact(Some(ctx.session()), all_ops).await;
+        let oracle_write_ts = self.get_local_write_ts().await.timestamp;
+        let result = self
+            .catalog()
+            .transact_dry_run_with_snapshot(
+                durable_snapshot.clone(),
+                durable_upper,
+                durable_is_bootstrap_complete,
+                durable_is_savepoint,
+                oracle_write_ts,
+                self.active_conns.get(ctx.session().conn_id()),
+                all_ops,
+            )
+            .await;
 
         let result = match result {
             // We purposefully fail with this error to prevent committing the transaction.
@@ -269,6 +294,10 @@ impl Coordinator {
                     .add_ops(TransactionOps::DDL {
                         ops: new_ops,
                         state: new_state,
+                        durable_snapshot: durable_snapshot.clone(),
+                        durable_upper,
+                        durable_is_bootstrap_complete,
+                        durable_is_savepoint,
                         side_effects: vec![Box::new(side_effect)],
                         revision: self.catalog().transient_revision(),
                     })?;

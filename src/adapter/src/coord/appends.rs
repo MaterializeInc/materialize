@@ -737,6 +737,9 @@ impl<'a> BuiltinTableAppend<'a> {
     /// Note: When in read-only mode, this will buffer the update and return
     /// immediately.
     pub fn background(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        if updates.is_empty() {
+            return Box::pin(futures::future::ready(()));
+        }
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates
@@ -765,6 +768,9 @@ impl<'a> BuiltinTableAppend<'a> {
     /// returned future will resolve immediately, without the update actually
     /// having been written.
     pub fn defer(self, mut updates: Vec<BuiltinTableUpdate>) -> BuiltinTableAppendNotify {
+        if updates.is_empty() {
+            return Box::pin(futures::future::ready(()));
+        }
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates
@@ -798,6 +804,9 @@ impl<'a> BuiltinTableAppend<'a> {
         self,
         mut updates: Vec<BuiltinTableUpdate>,
     ) -> (BuiltinTableAppendNotify, Option<Timestamp>) {
+        if updates.is_empty() {
+            return (Box::pin(futures::future::ready(())), None);
+        }
         if self.coord.controller.read_only() {
             self.coord
                 .buffered_builtin_table_updates

@@ -54,22 +54,22 @@ use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 /// in writable mode, before any migrations have run.
 const MIGRATION_VERSION_KEY: &str = "migration_version";
 
-pub(crate) fn get_migration_version(txn: &Transaction<'_>) -> Option<Version> {
+pub(crate) fn get_migration_version(txn: &Transaction) -> Option<Version> {
     txn.get_setting(MIGRATION_VERSION_KEY.into())
         .map(|s| s.parse().expect("valid migration version"))
 }
 
 pub(crate) fn set_migration_version(
-    txn: &mut Transaction<'_>,
+    txn: &mut Transaction,
     version: Version,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     txn.set_setting(MIGRATION_VERSION_KEY.into(), Some(version.to_string()))
 }
 
-fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
+fn rewrite_ast_items<F>(tx: &mut Transaction, mut f: F) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
-        &'a mut Transaction<'_>,
+        &'a mut Transaction,
         CatalogItemId,
         &'a mut Statement<Raw>,
     ) -> Result<(), anyhow::Error>,
@@ -89,13 +89,13 @@ where
 }
 
 fn rewrite_items<F>(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     cat: &ConnCatalog<'_>,
     mut f: F,
 ) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
-        &'a mut Transaction<'_>,
+        &'a mut Transaction,
         &'a &ConnCatalog<'_>,
         CatalogItemId,
         &'a mut Statement<Raw>,
@@ -127,7 +127,7 @@ pub(crate) struct MigrateResult {
 /// Returns the builtin updates corresponding to all user items.
 pub(crate) async fn migrate(
     state: &mut CatalogState,
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     local_expr_cache: &mut LocalExpressionCache,
     item_updates: Vec<StateUpdate>,
     _now: NowFn,
@@ -337,7 +337,7 @@ pub(crate) async fn migrate(
 /// points to the original `source_name` but with the altered global id (which is now
 /// `progress_id`).
 fn rewrite_sources_to_tables(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     catalog: &ConnCatalog<'_>,
 ) -> Result<(), anyhow::Error> {
     use mz_sql::ast::{
@@ -948,7 +948,7 @@ fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), a
 
 /// Add missing item IDs to the ON clauses of CREATE INDEX statements.
 fn ast_rewrite_add_missing_index_ids(
-    tx: &Transaction<'_>,
+    tx: &Transaction,
     stmt: &mut Statement<Raw>,
 ) -> Result<(), anyhow::Error> {
     let Statement::CreateIndex(stmt) = stmt else {

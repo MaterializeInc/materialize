@@ -25,6 +25,7 @@ use derivative::Derivative;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
+use mz_catalog::durable::objects::Snapshot;
 use mz_controller_types::ClusterId;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
@@ -1395,6 +1396,10 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                         ops: og_ops,
                         revision: og_revision,
                         state: og_state,
+                        durable_snapshot: _,
+                        durable_upper: _,
+                        durable_is_bootstrap_complete: _,
+                        durable_is_savepoint: _,
                         side_effects,
                     } => match add_ops {
                         TransactionOps::DDL {
@@ -1402,6 +1407,10 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
                             revision: new_revision,
                             side_effects: mut net_new_side_effects,
                             state: new_state,
+                            durable_snapshot: _,
+                            durable_upper: _,
+                            durable_is_bootstrap_complete: _,
+                            durable_is_savepoint: _,
                         } => {
                             if *og_revision != new_revision {
                                 return Err(AdapterError::DDLTransactionRace);
@@ -1586,6 +1595,14 @@ pub enum TransactionOps<T> {
         ops: Vec<crate::catalog::Op>,
         /// In-memory state that reflects the previously applied ops.
         state: CatalogState,
+        /// Snapshot of the durable catalog state at the start of the DDL transaction.
+        durable_snapshot: Snapshot,
+        /// Upper of the durable catalog state at the start of the DDL transaction.
+        durable_upper: mz_repr::Timestamp,
+        /// Whether bootstrap was complete when this DDL transaction started.
+        durable_is_bootstrap_complete: bool,
+        /// Whether the durable catalog was opened in savepoint mode.
+        durable_is_savepoint: bool,
         /// A list of side effects that should be executed if this DDL transaction commits.
         #[derivative(Debug = "ignore")]
         side_effects: Vec<

@@ -519,7 +519,7 @@ impl Catalog {
         // Bump the migration version immediately before committing.
         set_migration_version(&mut txn, config.build_info.semver_version())?;
 
-        txn.commit(config.boot_ts).await?;
+        txn.commit(storage.as_mut(), config.boot_ts).await?;
 
         // Now that the migration is durable, run any requested deferred cleanup.
         schema_migration_result.cleanup_action.await;
@@ -668,7 +668,7 @@ impl Catalog {
             "storage is not allowed to generate catalog changes that would change the catalog or controller state"
         );
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await?;
+        txn.commit(storage.as_mut(), commit_ts).await?;
         drop(storage);
 
         // Save updated state.
@@ -699,7 +699,7 @@ impl Catalog {
                 "initializing controller should not produce updates: {updates:?}"
             );
             let commit_ts = tx.upper();
-            tx.commit(commit_ts).await?;
+            tx.commit(storage.as_mut(), commit_ts).await?;
 
             let read_only_tx = storage.transaction().await?;
 
@@ -744,7 +744,7 @@ impl CatalogState {
 /// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
-    txn: &mut mz_catalog::durable::Transaction<'_>,
+    txn: &mut mz_catalog::durable::Transaction,
 ) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
     // Used to validate unique descriptions.
@@ -955,7 +955,7 @@ fn add_new_remove_old_builtin_items_migration(
 }
 
 fn add_new_remove_old_builtin_clusters_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
+    txn: &mut mz_catalog::durable::Transaction,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let mut durable_clusters: BTreeMap<_, _> = txn
@@ -1001,7 +1001,7 @@ fn add_new_remove_old_builtin_clusters_migration(
 }
 
 fn add_new_remove_old_builtin_introspection_source_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
+    txn: &mut mz_catalog::durable::Transaction,
 ) -> Result<(), AdapterError> {
     let mut new_indexes = Vec::new();
     let mut removed_indexes = BTreeSet::new();
@@ -1036,7 +1036,7 @@ fn add_new_remove_old_builtin_introspection_source_migration(
 }
 
 fn add_new_remove_old_builtin_roles_migration(
-    txn: &mut mz_catalog::durable::Transaction<'_>,
+    txn: &mut mz_catalog::durable::Transaction,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let mut durable_roles: BTreeMap<_, _> = txn
         .get_roles()
@@ -1066,7 +1066,7 @@ fn add_new_remove_old_builtin_roles_migration(
 }
 
 fn add_new_remove_old_builtin_cluster_replicas_migration(
-    txn: &mut Transaction<'_>,
+    txn: &mut Transaction,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
 ) -> Result<(), AdapterError> {
     let cluster_lookup: BTreeMap<_, _> = txn
@@ -1135,7 +1135,7 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
 /// input is no longer valid. For example if we remove a configuration parameter or change the
 /// accepted set of values.
 fn remove_invalid_config_param_role_defaults_migration(
-    txn: &mut Transaction<'_>,
+    txn: &mut Transaction,
 ) -> Result<(), AdapterError> {
     static BUILD_INFO: mz_build_info::BuildInfo = mz_build_info::build_info!();
 

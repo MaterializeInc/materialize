@@ -325,7 +325,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut state, commit_ts).await.unwrap();
 
         // Read back writes.
         let snapshot = state.snapshot().await.unwrap();
@@ -353,7 +353,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
         // Drain txn updates.
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut state, commit_ts).await.unwrap();
 
         // Read back updates.
         let snapshot = state.snapshot().await.unwrap();
@@ -468,7 +468,7 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut state, commit_ts).await.unwrap();
 
     let snapshot = read_only_state.snapshot().await.unwrap();
     let role = snapshot.roles.get(&proto::RoleKey {
@@ -603,7 +603,7 @@ async fn test_persist_unopened_deploy_generation_fencing() {
         txn.set_0dt_deployment_max_wait(zdt_deployment_max_wait)
             .unwrap();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut state, commit_ts).await.unwrap();
     }
     let mut openable_state = state_builder.clone().unwrap_build().await;
 
@@ -791,7 +791,7 @@ async fn test_persist_fencing_during_write() {
 
 async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
     let deploy_generation = 0;
-    let mut state = state_builder
+    let mut fence_state = state_builder
         .clone()
         .with_deploy_generation(deploy_generation)
         .unwrap_build()
@@ -801,8 +801,8 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .0;
     // Drain updates.
-    let _ = state.sync_to_current_updates().await;
-    let mut txn = state.transaction().await.unwrap();
+    let _ = fence_state.sync_to_current_updates().await;
+    let mut txn = fence_state.transaction().await.unwrap();
     txn.set_config("cmu".to_string(), Some(1900)).unwrap();
 
     // Open catalog, which will bump the epoch.
@@ -820,7 +820,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
 
     // Committing results in an epoch fence error.
     let commit_ts = txn.upper();
-    let err = txn.commit(commit_ts).await.unwrap_err();
+    let err = txn.commit(&mut fence_state, commit_ts).await.unwrap_err();
     assert!(
         matches!(
             err,
@@ -845,7 +845,7 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
 
     // Committing results in a deploy generation fence error.
     let commit_ts = txn.upper();
-    let err = txn.commit(commit_ts).await.unwrap_err();
+    let err = txn.commit(&mut state, commit_ts).await.unwrap_err();
     assert!(
         matches!(
             err,

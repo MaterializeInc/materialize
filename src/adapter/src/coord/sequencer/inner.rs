@@ -2141,9 +2141,9 @@ impl Coordinator {
                     }
                     TransactionOps::DDL {
                         ops,
-                        state: _,
                         side_effects,
                         revision,
+                        ..
                     } => {
                         // Make sure our catalog hasn't changed.
                         if *revision != self.catalog().transient_revision() {

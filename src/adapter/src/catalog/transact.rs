@@ -27,6 +27,7 @@ use mz_audit_log::{
 };
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
+use mz_catalog::durable::objects::Snapshot;
 use mz_catalog::durable::{NetworkPolicy, Transaction};
 use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
@@ -457,7 +458,7 @@ impl Catalog {
         // process if this fails, because we have to restart envd due to
         // indeterminate catalog state, which we only reconcile during catalog
         // init.
-        tx.commit(oracle_write_ts)
+        tx.commit(storage.as_mut(), oracle_write_ts)
             .await
             .unwrap_or_terminate("catalog storage transaction commit must succeed");
 
@@ -485,6 +486,68 @@ impl Catalog {
             catalog_updates,
             audit_events,
         })
+    }
+
+    #[instrument(name = "catalog::transact_dry_run_with_snapshot")]
+    pub async fn transact_dry_run_with_snapshot(
+        &self,
+        snapshot: Snapshot,
+        upper: mz_repr::Timestamp,
+        is_bootstrap_complete: bool,
+        is_savepoint: bool,
+        oracle_write_ts: mz_repr::Timestamp,
+        session: Option<&ConnMeta>,
+        ops: Vec<Op>,
+    ) -> Result<(), AdapterError> {
+        trace!("transact dry run: {:?}", ops);
+
+        let drop_ids: BTreeSet<CatalogItemId> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::DropObjects(drop_object_infos) => {
+                    let ids = drop_object_infos.iter().map(|info| info.to_object_id());
+                    let item_ids = ids.filter_map(|id| match id {
+                        ObjectId::Item(id) => Some(id),
+                        _ => None,
+                    });
+                    Some(item_ids)
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let temporary_drops = drop_ids
+            .iter()
+            .filter_map(|id| {
+                let entry = self.get_entry(id);
+                match entry.item().conn_id() {
+                    Some(conn_id) => Some((conn_id, entry.name().item.clone())),
+                    None => None,
+                }
+            })
+            .collect();
+        let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
+
+        let mut builtin_table_updates = vec![];
+        let mut catalog_updates = vec![];
+        let mut audit_events = vec![];
+        let mut tx = Transaction::new(snapshot, upper, is_bootstrap_complete, is_savepoint)?;
+
+        let _ = Self::transact_inner(
+            None,
+            oracle_write_ts,
+            session,
+            ops,
+            temporary_ids,
+            &mut builtin_table_updates,
+            &mut catalog_updates,
+            &mut audit_events,
+            &mut tx,
+            &self.state,
+        )
+        .await?;
+
+        Ok(())
     }
 
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
@@ -544,7 +607,7 @@ impl Catalog {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &CatalogState,
     ) -> Result<Option<CatalogState>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
@@ -720,7 +783,7 @@ impl Catalog {
         op: Op,
         temporary_ids: &BTreeSet<CatalogItemId>,
         audit_events: &mut Vec<VersionedEvent>,
-        tx: &mut Transaction<'_>,
+        tx: &mut Transaction,
         state: &CatalogState,
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
@@ -2639,7 +2702,7 @@ impl Catalog {
 /// for catalog items. We currently think that there are no use cases that require this assumption,
 /// but no way to know for sure.
 fn tx_replace_item(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,

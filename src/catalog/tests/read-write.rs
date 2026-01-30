@@ -188,7 +188,7 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut state, commit_ts).await.unwrap();
 
     let persisted_audit_logs = state.get_audit_logs().await.unwrap();
     for audit_log in &audit_logs {
@@ -262,7 +262,7 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut state, commit_ts).await.unwrap();
 
     let snapshot_items: Vec<_> = state
         .snapshot()
@@ -316,7 +316,7 @@ async fn test_schemas(state_builder: TestCatalogStateBuilder) {
     // Drain txn updates.
     let _ = txn.get_and_commit_op_updates();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut state, commit_ts).await.unwrap();
 
     // Test removing schemas where one doesn't exist.
     let mut txn = state.transaction().await.unwrap();
@@ -400,7 +400,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // Drain updates.
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut writer_state, commit_ts).await.unwrap();
 
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
@@ -426,7 +426,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // Drain updates.
         let _ = txn.get_and_commit_op_updates();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut savepoint_state, commit_ts).await.unwrap();
 
         let snapshot = savepoint_state.snapshot().await.unwrap();
 
@@ -451,6 +451,6 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
     {
         let txn = reader_state.transaction().await.unwrap();
         let commit_ts = txn.upper();
-        txn.commit(commit_ts).await.unwrap();
+        txn.commit(&mut reader_state, commit_ts).await.unwrap();
     }
 }

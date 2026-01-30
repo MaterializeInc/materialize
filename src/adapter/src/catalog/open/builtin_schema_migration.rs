@@ -192,7 +192,7 @@ impl Default for MigrationResult {
 pub(super) async fn run(
     build_info: &BuildInfo,
     deploy_generation: u64,
-    txn: &mut Transaction<'_>,
+    txn: &mut Transaction,
     config: BuiltinItemMigrationConfig,
 ) -> Result<MigrationResult, Error> {
     // Sanity check to ensure we're not touching durable state in read-only mode.
@@ -285,7 +285,7 @@ impl Default for MigrationRunResult {
 
 impl MigrationRunResult {
     /// Apply this migration result to the given transaction.
-    fn apply(&self, txn: &mut Transaction<'_>) {
+    fn apply(&self, txn: &mut Transaction) {
         // Update collection metadata.
         let replaced_ids = self.new_shards.keys().copied().collect();
         let old_metadata = txn.delete_collection_metadata(replaced_ids);

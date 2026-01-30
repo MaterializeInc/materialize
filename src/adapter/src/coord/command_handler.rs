@@ -74,7 +74,7 @@ use crate::coord::{
 };
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::session::{Session, Transaction, TransactionOps, TransactionStatus};
 use crate::statement_logging::WatchSetCreation;
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
@@ -1118,19 +1118,39 @@ impl Coordinator {
                     | Statement::AlterObjectSwap(_)
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
-                        let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        if !matches!(
+                            ctx.session().transaction().inner(),
+                            Some(Transaction {
+                                ops: TransactionOps::DDL { .. },
+                                ..
+                            })
+                        ) {
+                            let state = self.catalog().for_session(ctx.session()).state().clone();
+                            let revision = self.catalog().transient_revision();
+                            let (
+                                durable_snapshot,
+                                durable_upper,
+                                durable_is_bootstrap_complete,
+                                durable_is_savepoint,
+                            ) = self.catalog().durable_snapshot().await.unwrap_or_terminate(
+                                "taking durable catalog snapshot for DDL transaction",
+                            );
 
-                        // Initialize our transaction with a set of empty ops, or return an error
-                        // if we can't run a DDL transaction
-                        let txn_status = ctx.session_mut().transaction_mut();
-                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                            ops: vec![],
-                            state,
-                            revision,
-                            side_effects: vec![],
-                        }) {
-                            return ctx.retire(Err(err));
+                            // Initialize our transaction with a set of empty ops, or return an error
+                            // if we can't run a DDL transaction
+                            let txn_status = ctx.session_mut().transaction_mut();
+                            if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                                ops: vec![],
+                                state,
+                                durable_snapshot,
+                                durable_upper,
+                                durable_is_bootstrap_complete,
+                                durable_is_savepoint,
+                                revision,
+                                side_effects: vec![],
+                            }) {
+                                return ctx.retire(Err(err));
+                            }
                         }
                     }
 

@@ -213,7 +213,7 @@ static SYSTEM_SCHEMAS: LazyLock<BTreeMap<&str, &Schema>> = LazyLock::new(|| {
 /// Initializes the Catalog with some default objects.
 #[mz_ore::instrument]
 pub(crate) async fn initialize(
-    tx: &mut Transaction<'_>,
+    tx: &mut Transaction,
     options: &BootstrapArgs,
     initial_ts: EpochMillis,
     catalog_content_version: String,

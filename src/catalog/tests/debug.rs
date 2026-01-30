@@ -462,7 +462,7 @@ async fn test_debug_delete_fencing(state_builder: TestCatalogStateBuilder) {
     let mut txn = state.transaction().await.unwrap();
     txn.set_config("joe".to_string(), Some(666)).unwrap();
     let commit_ts = txn.upper();
-    txn.commit(commit_ts).await.unwrap();
+    txn.commit(&mut state, commit_ts).await.unwrap();
 
     let mut debug_state = state_builder
         .clone()

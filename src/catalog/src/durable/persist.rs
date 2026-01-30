@@ -1282,12 +1282,12 @@ impl UnopenedPersistCatalogState {
         };
 
         if read_only {
-            let (txn_batch, _) = txn.into_parts();
+            let txn_batch = txn.into_parts();
             // The upper here doesn't matter because we are only applying the updates in memory.
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
             catalog.apply_updates(updates)?;
         } else {
-            txn.commit_internal(commit_ts).await?;
+            txn.commit_internal(&mut catalog, commit_ts).await?;
         }
 
         // Now that we've fully opened the catalog at the current version, we can increment the
@@ -1729,7 +1729,12 @@ impl DurableCatalogState for PersistCatalogState {
         self.metrics.transactions_started.inc();
         let snapshot = self.snapshot().await?;
         let commit_ts = self.upper.clone();
-        Transaction::new(self, snapshot, commit_ts)
+        Transaction::new(
+            snapshot,
+            commit_ts,
+            self.is_bootstrap_complete(),
+            self.is_savepoint(),
+        )
     }
 
     #[mz_ore::instrument(level = "debug")]

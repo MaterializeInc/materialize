@@ -220,6 +220,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// Returns true if the system bootstrapping process is complete, false otherwise.
     fn is_bootstrap_complete(&self) -> bool;
 
+    /// Returns a snapshot of the current on-disk state.
+    async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
+
     /// Get all audit log events.
     ///
     /// Results are guaranteed to be sorted by ID.
@@ -252,9 +255,6 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
 
     /// Get the deployment generation of this instance.
     async fn get_deployment_generation(&mut self) -> Result<u64, CatalogError>;
-
-    /// Get a snapshot of the catalog.
-    async fn snapshot(&mut self) -> Result<Snapshot, CatalogError>;
 
     /// Listen and return all updates that are currently in the catalog.
     ///
@@ -332,7 +332,8 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
-        txn.commit_internal(commit_ts).await?;
+        let txn_batch = txn.into_consolidated_batch();
+        self.commit_transaction(txn_batch, commit_ts).await?;
         self.metrics()
             .allocate_id_seconds
             .observe(start.elapsed().as_secs_f64());

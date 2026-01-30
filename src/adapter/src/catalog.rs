@@ -34,6 +34,7 @@ use mz_catalog::builtin::{
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
+use mz_catalog::durable::objects::Snapshot;
 use mz_catalog::durable::{
     BootstrapArgs, DurableCatalogState, TestCatalogStateBuilder, test_bootstrap_args,
 };
@@ -722,6 +723,21 @@ impl Catalog {
         self.storage.lock().await
     }
 
+    pub async fn durable_snapshot(
+        &self,
+    ) -> Result<(Snapshot, mz_repr::Timestamp, bool, bool), Error> {
+        let mut storage = self.storage().await;
+        let snapshot = storage
+            .snapshot()
+            .await
+            .maybe_terminate("taking durable catalog snapshot")
+            .err_into::<Error>()?;
+        let upper = storage.current_upper().await;
+        let is_bootstrap_complete = storage.is_bootstrap_complete();
+        let is_savepoint = storage.is_savepoint();
+        Ok((snapshot, upper, is_bootstrap_complete, is_savepoint))
+    }
+
     pub async fn current_upper(&self) -> mz_repr::Timestamp {
         self.storage().await.current_upper().await
     }
@@ -781,7 +797,7 @@ impl Catalog {
             .into_element();
         // Drain transaction.
         let _ = txn.get_and_commit_op_updates();
-        txn.commit(commit_ts).await?;
+        txn.commit(storage.as_mut(), commit_ts).await?;
         Ok(id)
     }
 
