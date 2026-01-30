@@ -288,7 +288,6 @@ impl FdbConsensus {
         Ok(())
     }
 
-    // TODO: The current implementation doesn't clean up `keys` when removing the last seqno.
     async fn truncate_trx(
         &self,
         trx: &Transaction,

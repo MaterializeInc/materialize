@@ -210,7 +210,6 @@ struct MetricsVecs {
     external_op_bytes: IntCounterVec,
     external_op_seconds: CounterVec,
     external_consensus_truncated_count: IntCounter,
-    external_consensus_truncated_success: IntCounter,
     external_blob_delete_noop_count: IntCounter,
     external_blob_sizes: Histogram,
     external_rtt_latency: GaugeVec,
@@ -297,10 +296,6 @@ impl MetricsVecs {
             external_consensus_truncated_count: registry.register(metric!(
                 name: "mz_persist_external_consensus_truncated_count",
                 help: "count of versions deleted by consensus truncate calls",
-            )),
-            external_consensus_truncated_success: registry.register(metric!(
-                name: "mz_persist_external_consensus_truncated_success",
-                help: "count of successful consensus truncate calls",
             )),
             external_blob_delete_noop_count: registry.register(metric!(
                 name: "mz_persist_external_blob_delete_noop_count",
@@ -532,7 +527,6 @@ impl MetricsVecs {
             scan: self.external_op_metrics("consensus_scan", false),
             truncate: self.external_op_metrics("consensus_truncate", false),
             truncated_count: self.external_consensus_truncated_count.clone(),
-            truncated_success: self.external_consensus_truncated_success.clone(),
             rtt_latency: self.external_rtt_latency.with_label_values(&["consensus"]),
         }
     }
@@ -2905,7 +2899,6 @@ pub struct ConsensusMetrics {
     compare_and_set: ExternalOpMetrics,
     scan: ExternalOpMetrics,
     truncate: ExternalOpMetrics,
-    truncated_success: IntCounter,
     truncated_count: IntCounter,
     pub rtt_latency: Gauge,
 }
@@ -3020,7 +3013,6 @@ impl Consensus for MetricsConsensus {
             .truncate
             .run_op(|| self.consensus.truncate(key, seqno), Self::on_err)
             .await?;
-        metrics.truncated_success.inc();
         if let Some(deleted) = deleted {
             metrics.truncated_count.inc_by(u64::cast_from(deleted));
         }
