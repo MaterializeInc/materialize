@@ -696,30 +696,9 @@ impl State {
             };
         }
 
-        match self
-            .ccsr_client
-            .list_subjects()
-            .await
-            .context("listing schema registry subjects")
-        {
-            Ok(subjects) => {
-                let testdrive_subjects: Vec<_> = subjects
-                    .iter()
-                    .filter(|s| s.starts_with("testdrive-"))
-                    .collect();
+        let schema_registry_errors = self.reset_schema_registry().await;
 
-                for subject in testdrive_subjects {
-                    match self.ccsr_client.delete_subject(subject).await {
-                        Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
-                        Err(e) => errors.push(e.into()),
-                    }
-                }
-            }
-            Err(e) => {
-                errors.push(e);
-            }
-        }
-
+        errors.extend(schema_registry_errors);
         if errors.is_empty() {
             Ok(())
         } else {
@@ -732,6 +711,115 @@ impl State {
                     .join("\n")
             );
         }
+    }
+
+    #[allow(clippy::disallowed_types)]
+    async fn reset_schema_registry(&self) -> Vec<anyhow::Error> {
+        use std::collections::{HashMap, HashSet};
+
+        let mut errors = Vec::new();
+        match self
+            .ccsr_client
+            .list_subjects()
+            .await
+            .context("listing schema registry subjects")
+        {
+            Ok(subjects) => {
+                let testdrive_subjects: std::collections::HashSet<_> = subjects
+                    .into_iter()
+                    .filter(|s| s.starts_with("testdrive-"))
+                    .collect();
+
+                // Build a dependency graph to delete subjects in the correct order.
+                // If subject A references subject B, we must delete A before B.
+                // We build a map of: subject -> set of subjects that reference it (dependents)
+                let mut dependents: HashMap<String, HashSet<&str>> = HashMap::new();
+                let mut references: HashMap<&str, Vec<String>> = HashMap::new();
+
+                // Fetch references for each subject and build the dependency graph
+                for subject in &testdrive_subjects {
+                    // initialize discovered subjects
+                    dependents.entry(subject.clone()).or_default();
+
+                    match self.ccsr_client.get_subject_with_references(subject).await {
+                        Ok((_subj, refs)) => {
+                            // Filter to only testdrive subjects
+                            let refs: Vec<_> = refs
+                                .into_iter()
+                                .filter(|r| r.starts_with("testdrive-"))
+                                .collect();
+                            for referenced in &refs {
+                                dependents
+                                    .entry(referenced.clone())
+                                    .or_default()
+                                    .insert(subject);
+                            }
+                            references.insert(subject, refs);
+                        }
+                        Err(mz_ccsr::GetBySubjectError::SubjectNotFound) => {
+                            // Subject was already deleted, skip it
+                        }
+                        Err(e) => {
+                            errors.push(anyhow::anyhow!(
+                                "failed to get references for subject {}: {}",
+                                subject,
+                                e
+                            ));
+                        }
+                    }
+                }
+
+                // Delete subjects in topological order:
+                // First delete subjects that have no dependents (nothing references them),
+                // then remove them from the dependent sets of other subjects, repeat.
+
+                let mut remaining = testdrive_subjects.clone();
+
+                while !remaining.is_empty() {
+                    // Find subjects with no dependents (safe to delete)
+                    let deletable: Vec<_> = remaining
+                        .extract_if(|s| {
+                            dependents
+                                .get(s.as_str())
+                                .map(|d| d.is_empty())
+                                .unwrap_or(true)
+                        })
+                        .collect();
+
+                    if deletable.is_empty() {
+                        // All remaining subjects have dependents - try deleting anyway
+                        // This handles edge cases where references point to non-testdrive subjects
+                        for subject in &remaining {
+                            match self.ccsr_client.delete_subject(subject).await {
+                                Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                                Err(e) => errors.push(e.into()),
+                            }
+                        }
+                        break;
+                    }
+
+                    for subject in deletable {
+                        match self.ccsr_client.delete_subject(&subject).await {
+                            Ok(()) | Err(mz_ccsr::DeleteError::SubjectNotFound) => (),
+                            Err(e) => errors.push(e.into()),
+                        }
+
+                        // Remove this subject from the dependent sets of subjects it referenced
+                        if let Some(refs) = references.get(subject.as_str()) {
+                            for referenced in refs {
+                                if let Some(deps) = dependents.get_mut(referenced.as_str()) {
+                                    deps.remove(subject.as_str());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+        errors
     }
 }
 
