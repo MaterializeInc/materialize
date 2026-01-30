@@ -77,7 +77,7 @@ pub async fn run_verify(
     cmd.args.done()?;
     let expected_schema = match &cmd.input[..] {
         [expected_schema] => {
-            avro::parse_schema(expected_schema).context("parsing expected avro schema")?
+            avro::parse_schema(expected_schema, &[]).context("parsing expected avro schema")?
         }
         _ => bail!("unable to read expected schema input"),
     };
@@ -105,7 +105,8 @@ pub async fn run_verify(
         .await
         .context("fetching schema")?;
 
-    let actual_schema = avro::parse_schema(&actual_schema).context("parsing actual avro schema")?;
+    let actual_schema =
+        avro::parse_schema(&actual_schema, &[]).context("parsing actual avro schema")?;
     if expected_schema != actual_schema {
         bail!(
             "schema did not match\nexpected:\n{:?}\n\nactual:\n{:?}",

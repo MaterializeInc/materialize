@@ -54,7 +54,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let ccsr_client: Option<mz_ccsr::Client> = None;
     let debug_name = String::from("avro-decode");
     let confluent_wire_format = false;
-    let mut decoder = Decoder::new(&schema, ccsr_client, debug_name, confluent_wire_format)
+    let mut decoder = Decoder::new(&schema, &[], ccsr_client, debug_name, confluent_wire_format)
         .context("creating decoder")?;
     let row = decoder.decode(&mut data).await.context("decoding data")?;
     println!("row: {row:?}");

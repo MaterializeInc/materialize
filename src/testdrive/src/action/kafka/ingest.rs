@@ -418,11 +418,11 @@ async fn make_transcoder(
                     .publish_schema(&ccsr_subject, &schema, mz_ccsr::SchemaType::Avro, &[])
                     .await
                     .context("publishing to schema registry")?;
-                let schema = avro::parse_schema(&schema)
+                let schema = avro::parse_schema(&schema, &[])
                     .with_context(|| format!("parsing avro schema: {}", schema))?;
                 Ok::<_, anyhow::Error>(Transcoder::ConfluentAvro { schema, schema_id })
             } else {
-                let schema = avro::parse_schema(&schema)
+                let schema = avro::parse_schema(&schema, &[])
                     .with_context(|| format!("parsing avro schema: {}", schema))?;
                 Ok(Transcoder::PlainAvro { schema })
             }

@@ -346,6 +346,7 @@ async fn get_decoder(
     let decoder = match encoding {
         DataEncoding::Avro(AvroEncoding {
             schema,
+            reference_schemas,
             csr_connection,
             confluent_wire_format,
         }) => {
@@ -360,6 +361,7 @@ async fn get_decoder(
             };
             let state = avro::AvroDecoderState::new(
                 &schema,
+                &reference_schemas,
                 csr_client,
                 debug_name.to_string(),
                 confluent_wire_format,

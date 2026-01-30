@@ -21,12 +21,19 @@ pub struct AvroDecoderState {
 impl AvroDecoderState {
     pub fn new(
         value_schema: &str,
+        reference_schemas: &[String],
         ccsr_client: Option<mz_ccsr::Client>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
-            decoder: Decoder::new(value_schema, ccsr_client, debug_name, confluent_wire_format)?,
+            decoder: Decoder::new(
+                value_schema,
+                reference_schemas,
+                ccsr_client,
+                debug_name,
+                confluent_wire_format,
+            )?,
             events_success: 0,
         })
     }

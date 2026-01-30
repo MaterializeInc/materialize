@@ -51,7 +51,7 @@ mod tests {
 "name": "test",
 "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
 }"#;
-        let mut decoder = Decoder::new(schema, None, "Test".to_string(), false).unwrap();
+        let mut decoder = Decoder::new(schema, &[], None, "Test".to_string(), false).unwrap();
         // This is not a valid Avro blob for the given schema
         let mut bad_bytes: &[u8] = &[0];
         assert_err!(decoder.decode(&mut bad_bytes).await.unwrap());
@@ -71,14 +71,23 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
+    ///
+    /// The `reader_reference_schemas` parameter provides schemas for types that
+    /// are referenced by the reader schema but defined in separate schemas.
+    /// These should be provided in dependency order (dependencies first).
     pub fn new(
         reader_schema: &str,
+        reader_reference_schemas: &[String],
         ccsr_client: Option<mz_ccsr::Client>,
         debug_name: String,
         confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
-        let csr_avro =
-            ConfluentAvroResolver::new(reader_schema, ccsr_client, confluent_wire_format)?;
+        let csr_avro = ConfluentAvroResolver::new(
+            reader_schema,
+            reader_reference_schemas,
+            ccsr_client,
+            confluent_wire_format,
+        )?;
 
         Ok(Decoder {
             csr_avro,
