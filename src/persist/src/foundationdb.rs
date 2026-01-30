@@ -21,19 +21,19 @@ use anyhow::anyhow;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use bytes::Bytes;
-use foundationdb::directory::{
+use futures_util::future::FutureExt;
+use mz_foundationdb::FdbConfig;
+use mz_foundationdb::directory::{
     Directory, DirectoryError, DirectoryLayer, DirectoryOutput, DirectorySubspace,
 };
-use foundationdb::tuple::{
+use mz_foundationdb::tuple::{
     PackError, PackResult, Subspace, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack,
     unpack,
 };
-use foundationdb::{
+use mz_foundationdb::{
     Database, FdbBindingError, FdbError, KeySelector, RangeOption, TransactError, TransactOption,
     Transaction,
 };
-use futures_util::future::FutureExt;
-use mz_foundationdb::FdbConfig;
 use mz_ore::url::SensitiveUrl;
 
 use crate::error::Error;
@@ -208,7 +208,7 @@ impl FdbConsensus {
     ) -> Result<Option<VersionedData>, FdbTransactError> {
         let mut range = RangeOption::from(data_key).rev();
         range.limit = Some(1);
-        range.mode = foundationdb::options::StreamingMode::Exact;
+        range.mode = mz_foundationdb::options::StreamingMode::Exact;
         // Allow snapshot reads as we don't need the latest data for head, just some recent data.
         let values = trx.get_range(&range, 1, true).await?;
         if let Some(kv) = values.first() {
@@ -434,7 +434,7 @@ impl Consensus for FdbConsensus {
 mod tests {
     use super::*;
 
-    use foundationdb::directory::Directory;
+    use mz_foundationdb::directory::Directory;
     use uuid::Uuid;
 
     use crate::location::tests::consensus_impl_test;
@@ -510,6 +510,8 @@ mod tests {
         drop_and_recreate(&consensus).await?;
 
         assert_eq!(consensus.head(&key).await, Ok(None));
+
+        mz_foundationdb::shutdown_network();
         Ok(())
     }
 }

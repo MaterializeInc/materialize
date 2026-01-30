@@ -85,6 +85,9 @@ crates=(
     tikv_jemalloc_ctl
     tikv_jemallocator
     tikv_jemalloc_sys
+    # Checks that foundationdb is not included unless explicitly enabled, unless on Linux,
+    # here it's enabled by default.
+    foundationdb
 )
 
 # The crates whose dependency graphs we want to lint.
@@ -99,10 +102,12 @@ for target in "${targets[@]}"; do
         deps > "$resources/$target-default"
         deps --no-default-features > "$resources/$target-no-default-features"
         deps --features jemalloc > "$resources/$target-jemalloc"
+        deps --features foundationdb > "$resources/$target-foundationdb"
     else
         try diff "$resources/$target-default" <(deps)
         try diff "$resources/$target-no-default-features" <(deps --no-default-features)
         try diff "$resources/$target-jemalloc" <(deps --features jemalloc)
+        try diff "$resources/$target-foundationdb" <(deps --features foundationdb)
     fi
 done
 

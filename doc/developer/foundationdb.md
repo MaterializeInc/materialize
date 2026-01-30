@@ -17,6 +17,8 @@ Please refer to the [official FoundationDB documentation](https://apple.github.i
 * On Linux, install the official packages, at least the client.
 * On macOS, we try not to link against FoundationDB as it requires manual setup.
   However, you can install it from the releases, and then set `LIBRARY_PATH=/usr/local/lib` to link againt the FoundationDB client library.
+* On Linux we link against `libfdb_c` unconditionally.
+  On other systems, enable the `fdb` feature to link against FoundationDB.
 
 ## Integration with Materialize
 
@@ -61,3 +63,21 @@ We map the timestamp oracle structure to the following schema in FoundationDB:
 ## Running tests against FoundationDB
 
 Set the `EXTERNAL_METADATA_STORE` to `foundationdb` to force all compatible tests to use FoundationDB as the metadata store.
+
+## Handling FoundationDB shutdown
+
+FoundationDB has a peculiar way to handle its lifecycle.
+According to the documentation, one needs to initialize the network _once_ per process.
+Before shutdown, one needs to stop the network.
+A stopped network cannot be restarted.
+
+For Materialize itself (environmentd, clusterd) doesn't have a clean exit path and always terminates without running exit handlers.
+This means that we don't need to worry about stopping the network cleanly.
+However, tests do have a clean exit path, and we need to ensure that we either stop the network, or terminate without stopping the network.
+
+Rust tests do not have a notion of global setup and teardown, which makes it difficult to manage the FoundationDB network lifecycle.
+To work around this, we use the `ctor` crate to terminate the process without dropping the network and without running destructors.
+
+Specifically, this means:
+* Tests using FoundationDB need to depend on `mz-foundationdb` with the `shutdown` feature.
+  This ensures that we register an exit handler that terminates immediately.

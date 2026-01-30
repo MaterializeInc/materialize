@@ -72,7 +72,7 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
-mz-timestamp-oracle = { path = "../timestamp-oracle" }
+mz-timestamp-oracle = { path = "../timestamp-oracle", default-features = false }
 openssl = { version = "0.10.75", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 prometheus = { version = "0.14.0", default-features = false }
@@ -116,3 +116,4 @@ normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
+foundationdb = ["mz-timestamp-oracle/foundationdb"]

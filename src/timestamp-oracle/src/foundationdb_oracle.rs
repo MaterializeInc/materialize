@@ -22,15 +22,15 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use foundationdb::directory::{Directory, DirectoryError, DirectoryLayer, DirectoryOutput};
-use foundationdb::tuple::{
-    PackError, PackResult, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack, unpack,
-};
-use foundationdb::{
-    Database, FdbBindingError, FdbError, TransactError, TransactOption, Transaction,
-};
 use futures_util::future::FutureExt;
 use mz_foundationdb::FdbConfig;
+use mz_foundationdb::directory::{Directory, DirectoryError, DirectoryLayer, DirectoryOutput};
+use mz_foundationdb::tuple::{
+    PackError, PackResult, TupleDepth, TuplePack, TupleUnpack, VersionstampOffset, pack, unpack,
+};
+use mz_foundationdb::{
+    Database, FdbBindingError, FdbError, TransactError, TransactOption, Transaction,
+};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_repr::Timestamp;
@@ -560,8 +560,9 @@ where
 mod tests {
     use super::*;
 
-    use crate::TimestampOracle;
     use mz_ore::now::NowFn;
+
+    use crate::TimestampOracle;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
@@ -582,6 +583,8 @@ mod tests {
             }
         })
         .await?;
+
+        mz_foundationdb::shutdown_network();
 
         Ok(())
     }

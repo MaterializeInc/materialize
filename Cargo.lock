@@ -3470,7 +3470,6 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "static_assertions",
- "uuid",
 ]
 
 [[package]]
@@ -6612,7 +6611,6 @@ name = "mz-foundationdb"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "ctor",
  "foundationdb",
  "mz-ore",
  "tracing",
@@ -7189,7 +7187,6 @@ dependencies = [
  "deadpool-postgres",
  "differential-dataflow",
  "fail",
- "foundationdb",
  "futures-util",
  "itertools 0.14.0",
  "md-5",
@@ -8455,7 +8452,6 @@ dependencies = [
  "async-trait",
  "deadpool-postgres",
  "dec",
- "foundationdb",
  "futures",
  "futures-util",
  "mz-adapter-types",
@@ -10878,9 +10874,9 @@ checksum = "eded382c5f5f786b989652c49544c4877d9f015cc22e145a5ea8ea66c2921cd2"
 
 [[package]]
 name = "rusty-fork"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb3dcc6e454c328bb824492db107ab7c0ae8fcffe4ad210136ef014458c1bc4f"
+checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
 dependencies = [
  "fnv",
  "quick-error",
@@ -13589,7 +13585,6 @@ dependencies = [
  "fastrand 2.3.0",
  "flate2",
  "form_urlencoded",
- "foundationdb",
  "futures-channel",
  "futures-core",
  "futures-executor",

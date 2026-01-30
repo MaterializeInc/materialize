@@ -39,9 +39,8 @@ bytes = "1.10.1"
 deadpool-postgres = "0.10.3"
 differential-dataflow = "0.18.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
-foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"], optional = true }
 futures-util = "0.3.31"
-mz-foundationdb = { path = "../foundationdb", optional = true }
+mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 itertools = "0.14.0"
 md-5 = "0.10.6"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
@@ -81,10 +80,8 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 version = "0.10.9"
 features = ["asm"]
 
-# On Linux, FoundationDB support is always enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
-foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
-mz-foundationdb = { path = "../foundationdb" }
+mz-foundationdb = { path = "../foundationdb", default-features = false  }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
@@ -97,7 +94,7 @@ prost-build = "0.14.3"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
-fdb = ["dep:foundationdb", "dep:mz-foundationdb"]
+foundationdb = ["mz-foundationdb"]
 turmoil = ["dep:serde_json", "dep:turmoil"]
 
 [package.metadata.cargo-udeps.ignore]

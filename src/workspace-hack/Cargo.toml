@@ -66,7 +66,6 @@ event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
 flate2 = { version = "1.1.8", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.2" }
-foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.31" }
@@ -221,7 +220,6 @@ event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
 flate2 = { version = "1.1.8", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.2" }
-foundationdb = { version = "0.10.0", features = ["embedded-fdb-include", "fdb-7_3"] }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
 futures-executor = { version = "0.3.31" }

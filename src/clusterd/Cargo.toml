@@ -23,7 +23,7 @@ mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }
-mz-compute = { path = "../compute" }
+mz-compute = { path = "../compute", default-features = false }
 mz-compute-client = { path = "../compute-client" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }
@@ -50,6 +50,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 default = ["tokio-console", "mz-alloc-default", "workspace-hack"]
 jemalloc = ["mz-alloc/jemalloc"]
 tokio-console = ["mz-ore/tokio-console"]
+foundationdb = ["mz-persist-client/foundationdb"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["mz-alloc-default", "workspace-hack"]
