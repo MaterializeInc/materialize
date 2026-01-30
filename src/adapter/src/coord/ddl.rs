@@ -883,7 +883,7 @@ impl Coordinator {
     }
 
     fn update_timestamp_oracle_config(&self) {
-        let config_params = flags::timstamp_oracle_config(self.catalog().system_config());
+        let config_params = flags::timestamp_oracle_config(self.catalog().system_config());
         if let Some(config) = self.timestamp_oracle_config.as_ref() {
             config.apply_parameters(config_params)
         }

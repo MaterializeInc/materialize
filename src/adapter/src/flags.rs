@@ -164,7 +164,7 @@ pub fn caching_config(config: &SystemVars) -> mz_secrets::CachingPolicy {
     }
 }
 
-pub fn timstamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
+pub fn timestamp_oracle_config(config: &SystemVars) -> TimestampOracleParameters {
     TimestampOracleParameters {
         pg_connection_pool_max_size: Some(config.pg_timestamp_oracle_connection_pool_max_size()),
         pg_connection_pool_max_wait: Some(config.pg_timestamp_oracle_connection_pool_max_wait()),

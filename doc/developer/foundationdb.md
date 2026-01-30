@@ -22,7 +22,7 @@ Please refer to the [official FoundationDB documentation](https://apple.github.i
 
 ## Integration with Materialize
 
-Materialize can use FoundationDB to store consensus and timestamp oracle data, the only two metadata compontents required for Materialize.
+Materialize can use FoundationDB to store consensus and timestamp oracle data, the only two metadata components required for Materialize.
 
 ### Consensus
 

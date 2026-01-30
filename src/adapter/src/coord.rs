@@ -4322,7 +4322,7 @@ pub fn serve(
             // Apply settings from system vars as early as possible because some
             // of them are locked in right when an oracle is first opened!
             let pg_timestamp_oracle_params =
-                flags::timstamp_oracle_config(catalog.system_config());
+                flags::timestamp_oracle_config(catalog.system_config());
             pg_timestamp_oracle_params.apply(pg_config);
         }
 
