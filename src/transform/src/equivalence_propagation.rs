@@ -69,7 +69,8 @@ impl crate::Transform for EquivalencePropagation {
         let derived = builder.visit(relation);
         let derived = derived.as_view();
 
-        let prior = relation.clone();
+        // Hash comparison instead of expensive clone+equality.
+        let hash_before = relation.hash_to_u64();
 
         let mut get_equivalences = BTreeMap::default();
         self.apply(
@@ -84,10 +85,13 @@ impl crate::Transform for EquivalencePropagation {
         // `ColumnKnowledge`. (If `ColumnKnowledge` runs, it will trace its own result.)
         mz_repr::explain::trace_plan(&*relation);
 
-        if prior == *relation {
+        let hash_after = relation.hash_to_u64();
+        if hash_before == hash_after {
             let ck = crate::ColumnKnowledge::default();
+            let hash_before_ck = hash_after;
             ck.transform(relation, ctx)?;
-            if prior != *relation {
+            let hash_after_ck = relation.hash_to_u64();
+            if hash_before_ck != hash_after_ck {
                 // This used to be tracing::error, but it became too common with
                 // dequadratic_eqprop_map.
                 tracing::warn!(

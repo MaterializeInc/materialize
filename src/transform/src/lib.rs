@@ -459,16 +459,18 @@ impl Transform for Fixpoint {
         loop {
             let prev_size = relation.size();
             for i in iter_no..iter_no + self.limit {
-                let prev = relation.clone();
+                // Hash comparison instead of expensive clone+equality.
+                let hash_before = relation.hash_to_u64();
                 self.apply_transforms(relation, ctx, format!("{i:04}"))?;
-                if *relation == prev {
+                let hash_after = relation.hash_to_u64();
+                if hash_before == hash_after {
                     if prev_size > 100000 {
                         tracing::warn!(%prev_size, "Very big MIR plan");
                     }
                     mz_repr::explain::trace_plan(relation);
                     return Ok(());
                 }
-                let seen_i = seen.insert(relation.hash_to_u64(), i);
+                let seen_i = seen.insert(hash_after, i);
                 if let Some(seen_i) = seen_i {
                     // Let's see whether this is just a hash collision, or a real loop: Run the
                     // whole thing from the beginning up until `seen_i`, and compare all the plans
