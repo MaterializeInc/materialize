@@ -26,6 +26,15 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
+# The -Z flags are only available in nightly. If running locally using rustup proxy,
+# add the +nightly flag, otherwise, assume the caller (CI) is using the correct
+# binary. RUSTFLAGS and RUSTDOCFLAGS are toolchain variables, not rustup variables, so we
+# need to pass flags via `cargo`
+RUSTUP_FLAGS=""
+if [[ -z "${CI+x}" || "$CI" != "true" ]] ; then
+  RUSTUP_FLAGS="+nightly"
+fi
+
 RUSTDOCFLAGS+=" -D warnings "
 if [[ $(cargo -V) = *nightly* ]]; then
   RUSTDOCFLAGS+=" --cfg nightly_doc_features"
@@ -36,12 +45,12 @@ target=${CARGO_TARGET_DIR:-target}
 
 CARGO_DOC_OUTPUT=$(mktemp)
 # TODO: Remove -Zrustdoc-mergeable-info when https://github.com/rust-lang/rust/issues/146895 is fixed
-if ! cargo doc --all-features -Zrustdoc-mergeable-info "$@" 2> "$CARGO_DOC_OUTPUT"; then
+if ! cargo $RUSTUP_FLAGS doc --all-features -Zrustdoc-mergeable-info "$@" 2> "$CARGO_DOC_OUTPUT"; then
   if grep -q "invalid template" "$CARGO_DOC_OUTPUT"; then
     echo "Failed due to invalid template, nuking doc directory and retrying from scratch"
     rm -f "$CARGO_DOC_OUTPUT"
     rm -rf "$target"/doc
-    cargo doc --all-features -Zrustdoc-mergeable-info "$@"
+    cargo $RUSTUP_FLAGS doc --all-features -Zrustdoc-mergeable-info "$@"
   else
     echo "cargo doc failed:"
     cat "$CARGO_DOC_OUTPUT"
