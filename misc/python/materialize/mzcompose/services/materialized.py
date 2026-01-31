@@ -9,6 +9,7 @@
 
 
 import json
+import multiprocessing
 import os
 import shutil
 import tempfile
@@ -120,6 +121,10 @@ class Materialized(Service):
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
 
+        cores = multiprocessing.cpu_count()
+        allowed = [1 << i for i in range(6)]
+        workers = max(w for w in allowed if w <= cores)
+
         environment = [
             "MZ_NO_TELEMETRY=1",
             # Not used in most tests
@@ -150,7 +155,7 @@ class Materialized(Service):
             "MZ_LOG_FILTER",
             "CLUSTERD_LOG_FILTER",
             f"MZ_CLUSTER_REPLICA_SIZES={json.dumps(cluster_replica_size)}",
-            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
+            f"MZ_BOOTSTRAP_DEFAULT_CLUSTER_REPLICA_SIZE=scale=1,workers={workers}",
             f"MZ_BOOTSTRAP_BUILTIN_SYSTEM_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             f"MZ_BOOTSTRAP_BUILTIN_PROBE_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
             f"MZ_BOOTSTRAP_BUILTIN_SUPPORT_CLUSTER_REPLICA_SIZE={bootstrap_replica_size}",
