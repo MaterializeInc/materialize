@@ -300,4 +300,4 @@ def expression(
     record_size = rng.choice(
         [RecordSize.TINY, RecordSize.SMALL, RecordSize.MEDIUM, RecordSize.LARGE]
     )
-    return str(data_type.random_value(rng, record_size=record_size, in_query=True))
+    return str(data_type.random_value(rng, record_size=record_size).inquery)

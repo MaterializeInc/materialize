@@ -149,7 +149,7 @@ class Executor:
         http: Http = Http.NO,
         fetch: bool = False,
         cluster_replica: str | None = None,
-    ) -> None:
+    ) -> None | list[Any]:
         is_http = (
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
@@ -225,7 +225,7 @@ class Executor:
 
                 if fetch and not use_ws:
                     try:
-                        self.cur.fetchall()
+                        return self.cur.fetchall()
                     except psycopg.DataError:
                         # We don't care about psycopg being unable to parse, examples:
                         # date too large (after year 10K): '97940-08-25'

@@ -156,6 +156,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             scenario,
             args.threads,
             args.naughty_identifiers,
+            args.correctness,
             args.replicas,
             c,
             args.azurite,
