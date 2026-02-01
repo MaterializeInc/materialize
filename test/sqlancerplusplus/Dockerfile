@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Build and run SQLancer ported for Materialize
+# Build and run SQLancer++ ported for Materialize
 
 MZFROM ubuntu-base
 
@@ -22,17 +22,13 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-# TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1293
-RUN git clone https://github.com/def-/sqlancer \
-    && cd sqlancer \
-    && git checkout 02e7778b31ba2a8b2d98eb11facf17c3341e1950 \
+# Build SQLancer++
+RUN git clone --single-branch --depth=1 https://github.com/def-/sqlancerplusplus \
+    && cd sqlancerplusplus \
+    && git checkout f3916b9b3573c2157e488357cacb9a211253dfeb \
     && rm -rf .git \
-    && mvn package -DskipTests
-# RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
-#     && cd sqlancer \
-#     && rm -rf .git \
-#     && mvn package -DskipTests
+    && mvn package -DskipTests \
+    && sed -i "s/MATERIALIZE.host=localhost/MATERIALIZE.host=materialized/g" dbconfigs/jdbc.properties
 
-WORKDIR /workdir/sqlancer
-
-ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-Xmx8g", "-jar", "target/sqlancer-2.0.0.jar"]
+WORKDIR /workdir/sqlancerplusplus
+ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-Xmx16g", "-jar", "target/sqlancer-2.0.0.jar"]
