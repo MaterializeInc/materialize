@@ -45,7 +45,7 @@ SERVICES = [
     MySql(),
     Azurite(),
     Mz(app_password=""),
-    Minio(setup_materialize=True, additional_directories=["copytos3"]),
+    Minio(setup_materialize=True, additional_directories=["copytos3", "upsert"]),
     Materialized(external_blob_store=True, sanity_restart=False),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),

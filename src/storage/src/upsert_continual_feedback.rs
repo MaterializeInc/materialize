@@ -478,6 +478,14 @@ where
                     worker_id = %source_config.worker_id,
                     source_id = %source_config.id,
                     "input exhausted, shutting down");
+
+                // Clean up the backend resources before shutting down.
+                if let Err(e) = state.close().await {
+                    tracing::warn!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        "failed to close upsert state backend: {}", e);
+                }
                 break;
             };
 

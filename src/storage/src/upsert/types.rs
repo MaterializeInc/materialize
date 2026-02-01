@@ -893,6 +893,12 @@ where
     async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>;
+
+    /// Close the backend and clean up any resources.
+    /// This is called when the upsert operator is shutting down.
+    /// For backends that use external storage (like object storage),
+    /// this should clean up any data that was written.
+    async fn close(self) -> Result<(), anyhow::Error>;
 }
 
 /// A function that merges a set of updates for a key into the existing value
@@ -1337,6 +1343,15 @@ where
             .inc_by(stats.processed_gets_size);
 
         Ok(())
+    }
+
+    /// Close the state backend and clean up any associated resources.
+    ///
+    /// This should be called when the upsert operator is shutting down to
+    /// ensure proper cleanup of backend resources (e.g., deleting objects
+    /// from object storage).
+    pub async fn close(self) -> Result<(), anyhow::Error> {
+        self.inner.close().await
     }
 }
 

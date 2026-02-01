@@ -103,4 +103,9 @@ where
         }
         Ok(stats)
     }
+
+    async fn close(self) -> Result<(), anyhow::Error> {
+        // In-memory storage has nothing to clean up.
+        Ok(())
+    }
 }
