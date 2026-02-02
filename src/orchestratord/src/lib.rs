@@ -13,6 +13,7 @@ pub mod controller;
 pub mod k8s;
 pub mod metrics;
 pub mod tls;
+pub mod webhook;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

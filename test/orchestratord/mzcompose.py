@@ -20,6 +20,7 @@ import random
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -1740,6 +1741,200 @@ class RolloutStrategy(Modification):
         return
 
 
+class MaterializeCRDVersion(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            "materialize.cloud/v1alpha1",
+            "materialize.cloud/v1alpha2",
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "materialize.cloud/v1alpha2"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if operator_supports_v1alpha2(definition):
+            definition["materialize"]["apiVersion"] = self.value
+        else:
+            # Older versions do not support v1alpha2
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # This should be OK without additional validation,
+        # as we check we deployed in post_run_check.
+        return
+
+
+class CertificateSource(Modification):
+    SECRET_NAME = "orchestratord-custom-cert"
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return ["cert-manager", "secret"]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "cert-manager"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["operator"]["operator"]["certificate"]["source"] = self.value
+        if self.value == "secret":
+            definition["operator"]["operator"]["certificate"][
+                "secretName"
+            ] = self.SECRET_NAME
+            self._create_cert_secret()
+
+    @classmethod
+    def _create_cert_secret(cls) -> None:
+        dns_name = "operator-materialize-operator.materialize.svc"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_key = os.path.join(tmpdir, "ca.key")
+            ca_crt = os.path.join(tmpdir, "ca.crt")
+            tls_key = os.path.join(tmpdir, "tls.key")
+            tls_crt = os.path.join(tmpdir, "tls.crt")
+            csr_path = os.path.join(tmpdir, "server.csr")
+            ext_path = os.path.join(tmpdir, "ext.cnf")
+
+            # Generate CA key and self-signed cert
+            spawn.runv(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-keyout",
+                    ca_key,
+                    "-out",
+                    ca_crt,
+                    "-days",
+                    "1",
+                    "-nodes",
+                    "-subj",
+                    "/CN=Test CA",
+                ]
+            )
+
+            # Generate server key
+            spawn.runv(
+                [
+                    "openssl",
+                    "genpkey",
+                    "-algorithm",
+                    "rsa",
+                    "-pkeyopt",
+                    "rsa_keygen_bits:2048",
+                    "-out",
+                    tls_key,
+                ]
+            )
+
+            # Generate CSR
+            spawn.runv(
+                [
+                    "openssl",
+                    "req",
+                    "-new",
+                    "-key",
+                    tls_key,
+                    "-out",
+                    csr_path,
+                    "-subj",
+                    f"/CN={dns_name}",
+                ]
+            )
+
+            # Write extension file for SAN
+            with open(ext_path, "w") as f:
+                f.write(f"subjectAltName=DNS:{dns_name}\n")
+
+            # Sign CSR with CA
+            spawn.runv(
+                [
+                    "openssl",
+                    "x509",
+                    "-req",
+                    "-in",
+                    csr_path,
+                    "-CA",
+                    ca_crt,
+                    "-CAkey",
+                    ca_key,
+                    "-CAcreateserial",
+                    "-out",
+                    tls_crt,
+                    "-days",
+                    "1",
+                    "-extfile",
+                    ext_path,
+                ]
+            )
+
+            # Delete existing secret if present
+            try:
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "delete",
+                        "secret",
+                        cls.SECRET_NAME,
+                        "-n",
+                        "materialize",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            except subprocess.CalledProcessError:
+                pass
+
+            # Create the secret with ca.crt, tls.crt, and tls.key
+            spawn.runv(
+                [
+                    "kubectl",
+                    "create",
+                    "secret",
+                    "generic",
+                    cls.SECRET_NAME,
+                    f"--from-file=ca.crt={ca_crt}",
+                    f"--from-file=tls.crt={tls_crt}",
+                    f"--from-file=tls.key={tls_key}",
+                    "-n",
+                    "materialize",
+                ]
+            )
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        def check() -> None:
+            orchestratord = get_orchestratord_data()
+            volumes = orchestratord["items"][0]["spec"]["volumes"]
+            cert_volume = next(
+                (v for v in volumes if v.get("name") == "certificate"),
+                None,
+            )
+            assert cert_volume is not None, f"Expected certificate volume in {volumes}"
+
+            secret_name = cert_volume["secret"]["secretName"]
+            if self.value == "cert-manager":
+                expected = "operator-materialize-operator-cert"
+            else:
+                expected = self.SECRET_NAME
+            assert (
+                secret_name == expected
+            ), f"Expected certificate secret name '{expected}', got '{secret_name}'"
+
+        retry(check, 120)
+
+
+def operator_supports_v1alpha2(definition: dict[str, Any]):
+    operator_version = Version.parse(
+        definition["operator"]["operator"]["image"]["tag"].removeprefix("v")
+    )
+    if operator_version >= Version.parse("26.17.0-dev.0"):
+        return True
+    return False
+
+
 class Properties(Enum):
     Defaults = "defaults"
     Individual = "individual"
@@ -1791,6 +1986,8 @@ def workflow_documentation_defaults(
             shutil.rmtree(dir)
         os.mkdir(dir)
         recreate_kind_cluster()
+
+        helm_install_cert_manager()
 
         shutil.copyfile(
             "misc/helm-charts/operator/values.yaml",
@@ -2154,7 +2351,8 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     thread.start()
     time.sleep(10)  # some time to make sure the thread runs fine
     request = str(uuid.uuid4())
-    definition["materialize"]["spec"]["requestRollout"] = request
+    if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+        definition["materialize"]["spec"]["requestRollout"] = request
     definition["materialize"]["spec"]["forceRollout"] = request
     run(definition, False)
     time.sleep(120)  # some time to make sure there is no downtime later
@@ -2200,6 +2398,156 @@ def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition = setup(c, args)
     init(definition)
     run_balancer(definition, False)
+
+
+def get_materialize_v1alpha1() -> dict[str, Any]:
+    """Get the first Materialize resource at v1alpha1."""
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes.v1alpha1.materialize.cloud",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    return data["items"][0]
+
+
+def get_materialize_status_v1alpha1() -> dict[str, Any] | None:
+    """Get the status of the first Materialize resource at v1alpha1."""
+    return get_materialize_v1alpha1().get("status")
+
+
+def workflow_v1alpha2_opt_in(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that applying a v1alpha2 resource triggers reconciliation only
+    when the spec has changed, and not when it is unchanged.
+
+    The conversion webhook computes a rollout hash from the v1alpha2 spec.
+    When converting to v1alpha1 for storage, it derives a deterministic
+    requestRollout UUID from the hash. When the spec is unchanged, the
+    derived UUID matches lastCompletedRolloutRequest, so no rollout occurs.
+    When the spec changes, the derived UUID differs, triggering a rollout.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+
+    # Step 1: Deploy with v1alpha2, complete initial rollout.
+    definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+    init(definition)
+    run(definition, False)
+    print("Initial v1alpha2 deployment completed")
+
+    # Record the initial v1alpha1 status.
+    mz_v1 = get_materialize_v1alpha1()
+    initial_request_rollout = mz_v1["spec"]["requestRollout"]
+    initial_last_completed_rollout_request = mz_v1["status"][
+        "lastCompletedRolloutRequest"
+    ]
+    assert (
+        initial_request_rollout == initial_last_completed_rollout_request
+    ), f"Expected completed rollout: requestRollout={initial_request_rollout} != lastCompletedRolloutRequest={initial_last_completed_rollout_request}"
+    print(f"Initial requestRollout: {initial_request_rollout}")
+
+    # Step 2: Re-apply the same spec at v1alpha2 (no changes).
+    # The conversion webhook should compute the same hash, deriving the
+    # same requestRollout UUID, so no new rollout should occur.
+    print("Re-applying same spec at v1alpha2 (expecting no rollout)...")
+    defs = [
+        definition["namespace"],
+        definition["secret"],
+        definition["materialize"],
+    ]
+    yaml_str = yaml.dump_all(defs)
+    max_attempts = 120
+    for attempt in range(max_attempts):
+        result = subprocess.run(
+            ["kubectl", "apply", "-f", "-"],
+            input=yaml_str.encode(),
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            break
+        stderr_str = result.stderr.decode(errors="replace")
+        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
+            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
+            time.sleep(2)
+            continue
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
+
+    # Wait a bit and verify that no new rollout was triggered.
+    time.sleep(30)
+    mz_v1 = get_materialize_v1alpha1()
+    noop_request_rollout = mz_v1["spec"]["requestRollout"]
+    assert (
+        noop_request_rollout == initial_request_rollout
+    ), f"Expected requestRollout unchanged, but changed from {initial_request_rollout} to {noop_request_rollout}"
+    noop_last_completed_rollout_request = mz_v1["status"]["lastCompletedRolloutRequest"]
+    assert (
+        noop_last_completed_rollout_request == initial_last_completed_rollout_request
+    ), f"Expected lastCompletedRolloutRequest unchanged, but changed from {initial_last_completed_rollout_request} to {noop_last_completed_rollout_request}"
+    print("Confirmed: no rollout triggered by v1alpha2 apply with no changes")
+
+    # Step 3: Apply at v1alpha2 with a spec change (extra env var).
+    # The conversion webhook should compute a different hash, deriving a
+    # different requestRollout UUID, triggering a rollout.
+    print("Applying v1alpha2 with changed environmentdExtraEnv (expecting rollout)...")
+    definition["materialize"]["spec"]["environmentdExtraEnv"] = [
+        {"name": "V1ALPHA2_OPT_IN_TEST", "value": "true"},
+    ]
+    run(definition, False)
+
+    mz_v1 = get_materialize_v1alpha1()
+    changed_request_rollout = mz_v1["spec"]["requestRollout"]
+    assert (
+        changed_request_rollout != initial_request_rollout
+    ), f"Expected requestRollout to change after spec change, but still {changed_request_rollout}"
+
+    def check_rollout_complete():
+        mz_v1 = get_materialize_v1alpha1()
+        changed_last_completed_rollout_request = mz_v1["status"][
+            "lastCompletedRolloutRequest"
+        ]
+        assert (
+            changed_last_completed_rollout_request == changed_request_rollout
+        ), f"Expected rollout to complete: requestRollout={changed_request_rollout} != lastCompletedRolloutRequest={changed_last_completed_rollout_request}"
+
+    retry(check_rollout_complete, 120)
+    print(
+        f"Confirmed: rollout triggered by v1alpha2 spec change. "
+        f"requestRollout changed from {initial_request_rollout} to {changed_request_rollout}"
+    )
+    print("v1alpha2 opt-in test PASSED")
 
 
 def workflow_orchestratord_upgrade(
@@ -2300,8 +2648,21 @@ def workflow_orchestratord_upgrade(
     versions = get_all_self_managed_versions()
     versions.append(get_version(args.tag))
 
+    def set_latest_supported_crd_version(definition: dict[str, Any]):
+        if operator_supports_v1alpha2(definition):
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha2"
+        else:
+            definition["materialize"]["apiVersion"] = "materialize.cloud/v1alpha1"
+
+    def request_rollout_if_needed(definition: dict[str, Any]):
+        if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        else:
+            definition["materialize"]["spec"].pop("requestRollout", None)
+
     print(f"running orchestratord {versions[-3]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    set_latest_supported_crd_version(definition)
     init(definition)
     check_orchestratord_version(versions[-3])
 
@@ -2319,6 +2680,7 @@ def workflow_orchestratord_upgrade(
         print(f"running orchestratord {version}")
         definition["operator"]["operator"]["image"]["tag"] = str(version)
         helm_install_operator(definition["operator"], upgrade=True)
+        wait_for_crd_established()
         check_orchestratord_version(version)
 
         print(f"running environmentd {version}")
@@ -2326,7 +2688,8 @@ def workflow_orchestratord_upgrade(
             c.compose["services"]["environmentd"]["image"],
             str(version),
         )
-        definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+        set_latest_supported_crd_version(definition)
+        request_rollout_if_needed(definition)
         run(definition, False)
         check_environmentd_version(version)
         check_clusterd_version(version)
@@ -2334,10 +2697,22 @@ def workflow_orchestratord_upgrade(
         if str(version) != "v26.4.0":
             check_balancerd_version(version)
 
+    # We cannot roll back orchestratord versions once the CRD is updated,
+    # so let's just get a clean cluster and start over.
+    spawn.runv(
+        [
+            "kind",
+            "delete",
+            "cluster",
+            "--name",
+            "kind",
+        ]
+    )
     definition = setup(c, args)
 
     print(f"running orchestratord {versions[-3]}")
     definition["operator"]["operator"]["image"]["tag"] = str(versions[-3])
+    set_latest_supported_crd_version(definition)
     init(definition)
     check_orchestratord_version(versions[-3])
 
@@ -2361,7 +2736,8 @@ def workflow_orchestratord_upgrade(
         c.compose["services"]["environmentd"]["image"],
         str(versions[-1]),
     )
-    definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+    set_latest_supported_crd_version(definition)
+    request_rollout_if_needed(definition)
     run(definition, False)
     check_environmentd_version(versions[-1])
     check_clusterd_version(versions[-1])
@@ -2498,6 +2874,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     if cluster not in clusters or args.recreate_cluster:
         recreate_kind_cluster()
 
+        helm_install_cert_manager()
+
         spawn.runv(["kubectl", "create", "namespace", "materialize"])
 
         spawn.runv(
@@ -2630,7 +3008,8 @@ def run_scenario(
                 values=definition["operator"],
                 upgrade=True,
             )
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            if definition["materialize"]["apiVersion"] == "materialize.cloud/v1alpha1":
+                definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
             run(definition, expect_fail)
         mod_dict = {mod.__class__: mod.value for mod in mods}
         for subclass in all_subclasses(Modification):
@@ -2732,6 +3111,24 @@ def helm_install_operator(
         )
 
 
+def helm_install_cert_manager():
+    spawn.runv(
+        [
+            "helm",
+            "install",
+            "cert-manager",
+            "oci://quay.io/jetstack/charts/cert-manager",
+            "--version",
+            "v1.19.2",
+            "--namespace",
+            "cert-manager",
+            "--create-namespace",
+            "--set",
+            "crds.enabled=true",
+        ]
+    )
+
+
 def init(definition: dict[str, Any]) -> None:
     try:
         spawn.capture(
@@ -2810,14 +3207,31 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
         defs.append(definition["materialize2"])
     if "system_params_configmap" in definition:
         defs.append(definition["system_params_configmap"])
-    try:
-        spawn.runv(
+    yaml_str = yaml.dump_all(defs)
+    print(f"Attempting to apply:\n{yaml_str}")
+    # Retry to handle transient webhook unavailability (e.g. endpoint
+    # propagation delay after pod restart during helm upgrade).
+    max_attempts = 120
+    for attempt in range(max_attempts):
+        result = subprocess.run(
             ["kubectl", "apply", "-f", "-"],
-            stdin=yaml.dump_all(defs).encode(),
+            input=yaml_str.encode(),
+            capture_output=True,
         )
-    except subprocess.CalledProcessError as e:
-        print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
-        raise
+        if result.returncode == 0:
+            break
+        stderr_str = result.stderr.decode(errors="replace")
+        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
+            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
+            time.sleep(2)
+            continue
+        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            result.args,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
 
     if definition["materialize"]["spec"].get("rolloutStrategy") == "ManuallyPromote":
         # First wait for it to become ready to promote, but not yet promoted
@@ -2857,26 +3271,27 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
                 "Stopped being ready for manual promotion before promoting"
             )
 
-        # Manually promote it
-        mz = json.loads(
-            spawn.capture(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "json",
-                ],
-                stderr=subprocess.DEVNULL,
-            )
-        )["items"][0]
-        definition["materialize"]["spec"]["forcePromote"] = mz["spec"]["requestRollout"]
+        # Manually promote it by reading the v1alpha1 resource to get the
+        # requestRollout UUID, then patching forcePromote to match it.
+        # We must use v1alpha1 because the controller reconciles v1alpha1
+        # and compares forcePromote against requestRollout as UUIDs.
+        mz = get_materialize_v1alpha1()
+        request_rollout = mz["spec"]["requestRollout"]
+        assert request_rollout is not None
+        mz_name = mz["metadata"]["name"]
         try:
             spawn.runv(
-                ["kubectl", "apply", "-f", "-"],
-                stdin=yaml.dump(definition["materialize"]).encode(),
+                [
+                    "kubectl",
+                    "patch",
+                    "materializes.v1alpha1.materialize.cloud",
+                    mz_name,
+                    "-n",
+                    "materialize-environment",
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"forcePromote": request_rollout}}),
+                ],
             )
         except subprocess.CalledProcessError as e:
             print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
@@ -2886,21 +3301,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
 
 
 def is_ready_to_manually_promote():
-    data = json.loads(
-        spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "json",
-            ],
-            stderr=subprocess.DEVNULL,
-        )
-    )
-    conditions = data["items"][0].get("status", {}).get("conditions")
+    mz = get_materialize_v1alpha1()
+    conditions = mz.get("status", {}).get("conditions")
     return (
         conditions is not None
         and len(conditions)
@@ -2911,24 +3313,12 @@ def is_ready_to_manually_promote():
 
 
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
+    # Read at v1alpha1 explicitly to avoid going through the conversion
+    # webhook, which may not be ready yet during initial deployment.
     for i in range(900):
         time.sleep(1)
         try:
-            data = json.loads(
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "materializes",
-                        "-n",
-                        "materialize-environment",
-                        "-o",
-                        "json",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-            )
-            status = data["items"][0].get("status")
+            status = get_materialize_status_v1alpha1()
             if not status:
                 continue
             if expect_fail:
@@ -2939,10 +3329,10 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                 or status["conditions"][0]["status"] != "True"
             ):
                 continue
-            if (
-                status["lastCompletedRolloutRequest"]
-                == data["items"][0]["spec"]["requestRollout"]
+            if status.get("lastCompletedRolloutHash") or status.get(
+                "lastCompletedRolloutRequest"
             ):
+                # TODO should I check somehow that this is the latest to handle upgrades?
                 break
         except subprocess.CalledProcessError:
             pass
@@ -2951,7 +3341,7 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             [
                 "kubectl",
                 "get",
-                "materializes",
+                "materializes.v1alpha1.materialize.cloud",
                 "-n",
                 "materialize-environment",
                 "-o",
