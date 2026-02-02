@@ -30,15 +30,12 @@ Consensus offers an interface where keys are mapped to values identified by sequ
 Sequence numbers are integers that increase monotonically, ensuring that updates to a key are ordered.
 We map the consensus structure to the following schema in FoundationDB:
 
-* Looking up the latest sequence number for a key:
-    ```
-    ./data/<key> -> <sequence_number>
-    ```
 * Looking up data by key and sequence number:
     ```
     ./data/<key>/<sequence_number> -> <value>
     ```
     The `data` directory contains entries for each key and sequence number pair, mapping to the corresponding value.
+    The latest sequence number for a key is determined by a reverse scan of the data entries, which ensures locality between the current sequence number lookup and the actual data.
 * The `keys` directory contains entries for each key to simplify listing all keys:
     ```
     ./keys/<key> -> []
