@@ -33,8 +33,8 @@ from materialize.mzcompose.service import (
 from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.metadata_store import (
+    EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
-    REQUIRES_EXTERNAL_METADATA_STORE,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 
@@ -77,7 +77,7 @@ class Materialized(Service):
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
-        external_metadata_store: str | bool = REQUIRES_EXTERNAL_METADATA_STORE,
+        external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: str | bool = False,
         blob_store_is_azure: bool = False,
         unsafe_mode: bool = True,
@@ -246,6 +246,8 @@ class Materialized(Service):
             )
         )
 
+        volumes = []
+
         if external_metadata_store:
             depends_graph[metadata_store] = {"condition": "service_healthy"}
             address = (
@@ -271,6 +273,11 @@ class Materialized(Service):
                     "--persist-consensus-url=foundationdb:?prefix=consensus",
                     "--timestamp-oracle-url=foundationdb:?prefix=ts_oracle",
                 ]
+
+                # Generate fdb.cluster file dynamically based on the metadata store address
+                min_version = MzVersion.parse_mz("v26.9.0")
+                if image_version is None or image_version >= min_version:
+                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",
@@ -326,8 +333,6 @@ class Materialized(Service):
         if platform:
             config["platform"] = platform
 
-        volumes = []
-
         if image_version is None or image_version >= "v0.147.0-dev":
             assert os.path.exists(listeners_config_path)
             volumes.append(f"{listeners_config_path}:/listeners_config")
@@ -353,12 +358,6 @@ class Materialized(Service):
                 environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
 
                 volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
-
-        if image_version is None or image_version >= MzVersion.parse_mz("v26.9.0"):
-            # Generate fdb.cluster file dynamically based on the metadata store address
-            volumes += foundationdb.fdb_cluster_file(
-                metadata_store, external_metadata_store
-            )
 
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES

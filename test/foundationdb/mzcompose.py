@@ -15,19 +15,31 @@ from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.cockroach import Cockroach
-from materialize.mzcompose.services.foundationdb import FoundationDB
+from materialize.mzcompose.services.foundationdb import (
+    FDB_NUM_NODES,
+    foundationdb_services,
+)
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.metadata_store import (
+    fdb_coordinator_addresses,
+)
 from materialize.mzcompose.services.testdrive import Testdrive
+
+# Use environment variable FDB_NUM_NODES, defaulting to 1 for this test
+NUM_NODES = FDB_NUM_NODES if FDB_NUM_NODES >= 1 else 3
+FDB_COORDINATORS = fdb_coordinator_addresses(num_nodes=NUM_NODES)
 
 SERVICES = [
     Cockroach(setup_materialize=True),
-    FoundationDB(),
+    *foundationdb_services(num_nodes=NUM_NODES),
     Materialized(
-        external_metadata_store=True,
+        external_metadata_store=FDB_COORDINATORS,
         metadata_store="foundationdb",
     ),
     Testdrive(
-        external_metadata_store=True, metadata_store="foundationdb", no_reset=True
+        external_metadata_store=FDB_COORDINATORS,
+        metadata_store="foundationdb",
+        no_reset=True,
     ),
 ]
 
@@ -36,7 +48,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """Test that Materialize works with FoundationDB as the timestamp oracle backend."""
 
     c.down(destroy_volumes=True, sanity_restart_mz=False)
-    c.up("foundationdb", "materialized")
+    # Start materialized (foundationdb cluster service and its nodes start automatically via depends_on)
+    c.up("materialized")
 
     # Basic smoke test - create objects and verify they work
     c.testdrive(

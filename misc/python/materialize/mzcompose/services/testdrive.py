@@ -20,8 +20,8 @@ from materialize.mzcompose.service import (
 from materialize.mzcompose.services import foundationdb
 from materialize.mzcompose.services.azurite import azure_blob_uri
 from materialize.mzcompose.services.metadata_store import (
+    EXTERNAL_METADATA_STORE_ADDRESS,
     METADATA_STORE,
-    REQUIRES_EXTERNAL_METADATA_STORE,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
 
@@ -57,7 +57,7 @@ class Testdrive(Service):
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
         check_statement_logging: bool = False,
-        external_metadata_store: bool = REQUIRES_EXTERNAL_METADATA_STORE,
+        external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
         fivetran_destination: bool = False,
@@ -199,9 +199,7 @@ class Testdrive(Service):
                     entrypoint.append(
                         "--persist-consensus-url=foundationdb:?prefix=consensus"
                     )
-                    volumes += foundationdb.fdb_cluster_file(
-                        metadata_store, external_metadata_store
-                    )
+                    volumes += foundationdb.fdb_cluster_file(external_metadata_store)
                 else:
                     address = (
                         metadata_store

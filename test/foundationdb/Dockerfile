@@ -9,10 +9,11 @@
 
 FROM foundationdb/foundationdb:7.3.71
 
-COPY setup-foundationdb.sh /usr/local/bin/setup-foundationdb.sh
-RUN chmod +x /usr/local/bin/setup-foundationdb.sh
+# Use the upstream entrypoint which handles FDB_CLUSTER_FILE_CONTENTS
+# Database initialization is handled separately by FoundationDBCluster service
 
-ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/setup-foundationdb.sh"]
-
+# Healthcheck verifies the FDB server process is running and listening
+# Note: We check if the process is listening, not if the database is configured,
+# because initialization happens in a separate service after nodes are up
 HEALTHCHECK --interval=2s --timeout=5s --start-period=10s --retries=3 \
-    CMD fdbcli -C "${FDB_CLUSTER_FILE:-/var/fdb/fdb.cluster}" --exec "status minimal" --timeout 3 || exit 1
+    CMD pgrep fdbserver > /dev/null || exit 1
