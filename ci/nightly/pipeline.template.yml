@@ -2587,3 +2587,29 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-mid-rollout-migration
+        label: "Orchestratord mid-rollout CRD migration tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: mid-rollout-migration
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-force-rollout-annotation
+        label: "Orchestratord force-rollout annotation tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: force-rollout-annotation
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb

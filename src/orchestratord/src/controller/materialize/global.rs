@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
-
 use k8s_openapi::{
     api::{
         core::v1::ServiceAccount,
@@ -23,13 +21,12 @@ use k8s_openapi::{
 use kube::{Api, Client, ResourceExt, api::ObjectMeta, runtime::controller::Action};
 use maplit::btreemap;
 use serde::Serialize;
-use tracing::{trace, warn};
+use tracing::trace;
 
 use super::Error;
 use crate::k8s::apply_resource;
 use crate::tls::create_certificate;
-use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::materialize::v1alpha2::Materialize;
 use mz_cloud_resources::crd::{
     ManagedResource,
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
@@ -49,7 +46,7 @@ impl Resources {
     pub fn new(config: &super::Config, mz: &Materialize) -> Result<Self, Error> {
         let environmentd_network_policies = create_environmentd_network_policies(config, mz);
 
-        let service_account = Box::new(create_service_account_object(config, mz));
+        let service_account = Box::new(create_service_account_object(mz));
         let role = Box::new(create_role_object(mz));
         let role_binding = Box::new(create_role_binding_object(mz));
         let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz)?);
@@ -284,37 +281,21 @@ fn create_environmentd_network_policies(
     network_policies
 }
 
-fn create_service_account_object(
-    config: &super::Config,
-    mz: &Materialize,
-) -> Option<ServiceAccount> {
+fn create_service_account_object(mz: &Materialize) -> Option<ServiceAccount> {
     if mz.create_service_account() {
-        let mut annotations: BTreeMap<String, String> = mz
+        let annotations = mz
             .spec
             .service_account_annotations
             .clone()
             .unwrap_or_default();
-        if let (CloudProvider::Aws, Some(role_arn)) = (
-            config.cloud_provider,
-            mz.spec
-                .environmentd_iam_role_arn
-                .as_deref()
-                .or(config.environmentd_iam_role_arn.as_deref()),
-        ) {
-            warn!(
-                "Use of Materialize.spec.environmentd_iam_role_arn is deprecated. Please set \"eks.amazonaws.com/role-arn\" in Materialize.spec.service_account_annotations instead."
-            );
-            annotations.insert(
-                "eks.amazonaws.com/role-arn".to_string(),
-                role_arn.to_string(),
-            );
-        };
 
         let mut labels = mz.default_labels();
         labels.extend(mz.spec.service_account_labels.clone().unwrap_or_default());
 
         Some(ServiceAccount {
             metadata: ObjectMeta {
+                // Explicitly using Some here even if they don't have any defined,
+                // to handle when the user removes annotations/labels.
                 annotations: Some(annotations),
                 labels: Some(labels),
                 ..mz.managed_resource_meta(mz.service_account_name())

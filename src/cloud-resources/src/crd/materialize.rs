@@ -21,6 +21,7 @@ use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
@@ -28,53 +29,54 @@ use mz_server_core::listeners::AuthenticatorKind;
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
+pub const FORCE_ROLLOUT_ANNOTATION: &str = "materialize.cloud/force-rollout";
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub enum MaterializeRolloutStrategy {
+    /// Create a new generation of pods, leaving the old generation around until the
+    /// new ones are ready to take over.
+    /// This minimizes downtime, and is what almost everyone should use.
+    #[default]
+    WaitUntilReady,
+
+    /// Create a new generation of pods, leaving the old generation as the serving generation
+    /// until the user manually promotes the new generation.
+    ///
+    /// When using `ManuallyPromote`, the new generation can be promoted at any
+    /// time, even if it has dataflows that are not fully caught up, by setting
+    /// `forcePromote` to the same value as `requestRollout` in the Materialize spec.
+    ///
+    /// To minimize downtime, promotion should occur when the new generation
+    /// has caught up to the prior generation. To determine if the new
+    /// generation has caught up, consult the `UpToDate` condition in the
+    /// status of the Materialize Resource. If the condition's reason is
+    /// `ReadyToPromote` the new generation is ready to promote.
+    ///
+    /// {{<warning>}}
+    /// Do not leave new generations unpromoted indefinitely.
+    ///
+    /// The new generation keeps open read holds which prevent compaction. Once promoted or
+    /// cancelled, those read holds are released. If left unpromoted for an extended time, this
+    /// data can build up, and can cause extreme deletion load on the metadata backend database
+    /// when finally promoted or cancelled.
+    /// {{</warning>}}
+    ManuallyPromote,
+
+    /// {{<warning>}}
+    /// THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
+    ///
+    /// This strategy should ONLY be used by customers with physical hardware who do not have
+    /// enough hardware for the `WaitUntilReady` strategy. If you think you want this, please
+    /// consult with Materialize engineering to discuss your situation.
+    /// {{</warning>}}
+    ///
+    /// Tear down the old generation of pods and promote the new generation of pods immediately,
+    /// without waiting for the new generation of pods to be ready.
+    ImmediatelyPromoteCausingDowntime,
+}
 
 pub mod v1alpha1 {
     use super::*;
-
-    #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
-    pub enum MaterializeRolloutStrategy {
-        /// Create a new generation of pods, leaving the old generation around until the
-        /// new ones are ready to take over.
-        /// This minimizes downtime, and is what almost everyone should use.
-        #[default]
-        WaitUntilReady,
-
-        /// Create a new generation of pods, leaving the old generation as the serving generation
-        /// until the user manually promotes the new generation.
-        ///
-        /// When using `ManuallyPromote`, the new generation can be promoted at any
-        /// time, even if it has dataflows that are not fully caught up, by setting
-        /// `forcePromote` to the same value as `requestRollout` in the Materialize spec.
-        ///
-        /// To minimize downtime, promotion should occur when the new generation
-        /// has caught up to the prior generation. To determine if the new
-        /// generation has caught up, consult the `UpToDate` condition in the
-        /// status of the Materialize Resource. If the condition's reason is
-        /// `ReadyToPromote` the new generation is ready to promote.
-        ///
-        /// {{<warning>}}
-        /// Do not leave new generations unpromoted indefinitely.
-        ///
-        /// The new generation keeps open read holds which prevent compaction. Once promoted or
-        /// cancelled, those read holds are released. If left unpromoted for an extended time, this
-        /// data can build up, and can cause extreme deletion load on the metadata backend database
-        /// when finally promoted or cancelled.
-        /// {{</warning>}}
-        ManuallyPromote,
-
-        /// {{<warning>}}
-        /// THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
-        ///
-        /// This strategy should ONLY be used by customers with physical hardware who do not have
-        /// enough hardware for the `WaitUntilReady` strategy. If you think you want this, please
-        /// consult with Materialize engineering to discuss your situation.
-        /// {{</warning>}}
-        ///
-        /// Tear down the old generation of pods and promote the new generation of pods immediately,
-        /// without waiting for the new generation of pods to be ready.
-        ImmediatelyPromoteCausingDowntime,
-    }
 
     #[derive(
         CustomResource,
@@ -168,7 +170,7 @@ pub mod v1alpha1 {
         /// generation to rehydrate before promoting the new environmentd to
         /// leader.
         #[serde(default)]
-        pub force_promote: Uuid,
+        pub force_promote: String,
         /// This value will be written to an annotation in the generated
         /// environmentd statefulset, in order to force the controller to
         /// detect the generated resources as changed even if no other changes
@@ -238,7 +240,306 @@ pub mod v1alpha1 {
         pub internal_certificate_spec: Option<MaterializeCertSpec>,
     }
 
+    #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct MaterializeStatus {
+        /// Resource identifier used as a name prefix to avoid pod name collisions.
+        pub resource_id: String,
+        /// The generation of Materialize pods actively capable of servicing requests.
+        pub active_generation: u64,
+        /// The UUID of the last successfully completed rollout.
+        pub last_completed_rollout_request: Uuid,
+        /// The image ref of the environmentd image that was last successfully rolled out.
+        /// Used to deny upgrades past 1 major version from the last successful rollout.
+        /// When None, we upgrade anyways.
+        pub last_completed_rollout_environmentd_image_ref: Option<String>,
+        /// A hash calculated from the spec of resources to be created based on this Materialize
+        /// spec. This is used for detecting when the existing resources are up to date.
+        /// If you want to trigger a rollout without making other changes that would cause this
+        /// hash to change, you must set forceRollout to the same UUID as requestRollout.
+        pub resources_hash: String,
+        /// The last completed rollout hash from v1alpha2.
+        /// This exists on this older version only for round-trip conversion support.
+        pub last_completed_rollout_hash: Option<String>,
+        pub conditions: Vec<Condition>,
+    }
+
     impl Materialize {
+        pub fn is_promoting(&self) -> bool {
+            let Some(status) = self.status.as_ref() else {
+                return false;
+            };
+            if status.conditions.is_empty() {
+                return false;
+            }
+            status
+                .conditions
+                .iter()
+                .any(|condition| condition.reason == "Promoting")
+        }
+    }
+
+    impl From<v1alpha2::Materialize> for Materialize {
+        fn from(value: v1alpha2::Materialize) -> Self {
+            Materialize {
+                metadata: value.metadata,
+                spec: MaterializeSpec {
+                    environmentd_image_ref: value.spec.environmentd_image_ref,
+                    environmentd_extra_args: value.spec.environmentd_extra_args,
+                    environmentd_extra_env: value.spec.environmentd_extra_env,
+                    environmentd_iam_role_arn: None,
+                    environmentd_connection_role_arn: value.spec.environmentd_connection_role_arn,
+                    environmentd_resource_requirements: value
+                        .spec
+                        .environmentd_resource_requirements,
+                    environmentd_scratch_volume_storage_requirement: value
+                        .spec
+                        .environmentd_scratch_volume_storage_requirement,
+                    balancerd_resource_requirements: value.spec.balancerd_resource_requirements,
+                    console_resource_requirements: value.spec.console_resource_requirements,
+                    balancerd_replicas: value.spec.balancerd_replicas,
+                    console_replicas: value.spec.console_replicas,
+                    service_account_name: value.spec.service_account_name,
+                    service_account_annotations: value.spec.service_account_annotations,
+                    service_account_labels: value.spec.service_account_labels,
+                    pod_annotations: value.spec.pod_annotations,
+                    pod_labels: value.spec.pod_labels,
+                    force_promote: match value.spec.force_promote {
+                        Some(s) => Uuid::try_from(s).unwrap_or(Uuid::nil()),
+                        None => Uuid::nil(),
+                    }
+                    .hyphenated()
+                    .to_string(),
+                    force_rollout: value.spec.force_rollout,
+                    rollout_strategy: value.spec.rollout_strategy,
+                    backend_secret_name: value.spec.backend_secret_name,
+                    authenticator_kind: value.spec.authenticator_kind,
+                    enable_rbac: value.spec.enable_rbac,
+                    environment_id: value.spec.environment_id,
+                    system_parameter_configmap_name: value.spec.system_parameter_configmap_name,
+                    balancerd_external_certificate_spec: value
+                        .spec
+                        .balancerd_external_certificate_spec,
+                    console_external_certificate_spec: value.spec.console_external_certificate_spec,
+                    internal_certificate_spec: value.spec.internal_certificate_spec,
+                    request_rollout: Uuid::nil(),
+                    in_place_rollout: false,
+                },
+                status: value.status.map(|status| MaterializeStatus {
+                    resource_id: status.resource_id,
+                    active_generation: status.active_generation,
+                    last_completed_rollout_environmentd_image_ref: status
+                        .last_completed_rollout_environmentd_image_ref,
+                    conditions: status.conditions,
+                    last_completed_rollout_request: Uuid::nil(),
+                    last_completed_rollout_hash: status.last_completed_rollout_hash,
+                    resources_hash: "".to_owned(),
+                }),
+            }
+        }
+    }
+}
+
+pub mod v1alpha2 {
+    use super::*;
+
+    #[derive(
+        CustomResource,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Deserialize,
+        Serialize,
+        JsonSchema
+    )]
+    #[serde(rename_all = "camelCase")]
+    #[kube(
+        namespaced,
+        group = "materialize.cloud",
+        version = "v1alpha2",
+        kind = "Materialize",
+        singular = "materialize",
+        plural = "materializes",
+        shortname = "mzs",
+        status = "MaterializeStatus",
+        printcolumn = r#"{"name": "ImageRefRunning", "type": "string", "description": "Reference to the Docker image that is currently in use.", "jsonPath": ".status.lastCompletedRolloutEnvironmentdImageRef", "priority": 1}"#,
+        printcolumn = r#"{"name": "ImageRefToDeploy", "type": "string", "description": "Reference to the Docker image which will be deployed on the next rollout.", "jsonPath": ".spec.environmentdImageRef", "priority": 1}"#,
+        printcolumn = r#"{"name": "UpToDate", "type": "string", "description": "Whether the spec has been applied", "jsonPath": ".status.conditions[?(@.type==\"UpToDate\")].status", "priority": 1}"#
+    )]
+    pub struct MaterializeSpec {
+        /// The environmentd image to run.
+        pub environmentd_image_ref: String,
+        /// Extra args to pass to the environmentd binary.
+        pub environmentd_extra_args: Option<Vec<String>>,
+        /// Extra environment variables to pass to the environmentd binary.
+        pub environmentd_extra_env: Option<Vec<EnvVar>>,
+        /// If running in AWS, override the IAM role to use to support
+        /// the CREATE CONNECTION feature.
+        pub environmentd_connection_role_arn: Option<String>,
+        /// Resource requirements for the environmentd pod.
+        pub environmentd_resource_requirements: Option<ResourceRequirements>,
+        /// Amount of disk to allocate, if a storage class is provided.
+        pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
+        /// Resource requirements for the balancerd pod.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub balancerd_resource_requirements: Option<ResourceRequirements>,
+        /// Resource requirements for the console pod.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub console_resource_requirements: Option<ResourceRequirements>,
+        /// Number of balancerd pods to create.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub balancerd_replicas: Option<i32>,
+        /// Number of console pods to create.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub console_replicas: Option<i32>,
+
+        /// Name of the kubernetes service account to use.
+        /// If not set, we will create one with the same name as this Materialize object.
+        pub service_account_name: Option<String>,
+        /// Annotations to apply to the service account.
+        ///
+        /// Annotations on service accounts are commonly used by cloud providers for IAM.
+        /// AWS uses "eks.amazonaws.com/role-arn".
+        /// Azure uses "azure.workload.identity/client-id", but
+        /// additionally requires "azure.workload.identity/use": "true" on the pods.
+        pub service_account_annotations: Option<BTreeMap<String, String>>,
+        /// Labels to apply to the service account.
+        pub service_account_labels: Option<BTreeMap<String, String>>,
+        /// Annotations to apply to the pods.
+        pub pod_annotations: Option<BTreeMap<String, String>>,
+        /// Labels to apply to the pods.
+        pub pod_labels: Option<BTreeMap<String, String>>,
+
+        /// If `forcePromote` is set to the same value as the `status.requestedRolloutHash`,
+        /// current rollout will skip waiting for clusters in the new
+        /// generation to rehydrate before promoting the new environmentd to
+        /// leader.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub force_promote: Option<String>,
+        /// This value will force the controller to detect the spec as changed
+        /// even if no other changes happened. This can be used to force a rollout
+        /// to a new generation even without making any meaningful changes.
+        #[serde(default)]
+        pub force_rollout: Uuid,
+        /// Rollout strategy to use when upgrading this Materialize instance.
+        #[serde(default)]
+        pub rollout_strategy: MaterializeRolloutStrategy,
+        /// The name of a secret containing `metadata_backend_url` and `persist_backend_url`.
+        /// It may also contain `external_login_password_mz_system`, which will be used as
+        /// the password for the `mz_system` user if `authenticatorKind` is `Password`.
+        pub backend_secret_name: String,
+        /// How to authenticate with Materialize.
+        #[serde(default)]
+        pub authenticator_kind: AuthenticatorKind,
+        /// Whether to enable role based access control. Defaults to false.
+        #[serde(default)]
+        pub enable_rbac: bool,
+
+        /// The value used by environmentd (via the --environment-id flag) to
+        /// uniquely identify this instance. Must be globally unique, and
+        /// is required if a license key is not provided.
+        /// NOTE: This value MUST NOT be changed in an existing instance,
+        /// since it affects things like the way data is stored in the persist
+        /// backend.
+        #[serde(default)]
+        pub environment_id: Uuid,
+
+        /// The name of a ConfigMap containing system parameters in JSON format.
+        /// The ConfigMap must contain a `system-params.json` key whose value
+        /// is a valid JSON object containing valid system parameters.
+        ///
+        /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
+        ///
+        /// Example ConfigMap:
+        /// ```yaml
+        /// data:
+        ///   system-params.json: |
+        ///     {
+        ///       "max_connections": 1000
+        ///     }
+        /// ```
+        pub system_parameter_configmap_name: Option<String>,
+
+        /// The configuration for generating an x509 certificate using cert-manager for balancerd
+        /// to present to incoming connections.
+        /// The `dnsNames` and `issuerRef` fields are required.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub balancerd_external_certificate_spec: Option<MaterializeCertSpec>,
+        /// The configuration for generating an x509 certificate using cert-manager for the console
+        /// to present to incoming connections.
+        /// The `dnsNames` and `issuerRef` fields are required.
+        /// Not yet implemented.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        pub console_external_certificate_spec: Option<MaterializeCertSpec>,
+        /// The cert-manager Issuer or ClusterIssuer to use for database internal communication.
+        /// The `issuerRef` field is required.
+        /// This currently is only used for environmentd, but will eventually support clusterd.
+        /// Not yet implemented.
+        pub internal_certificate_spec: Option<MaterializeCertSpec>,
+    }
+
+    impl Materialize {
+        pub fn generate_rollout_hash(&self) -> String {
+            let mut hasher = Sha256::new();
+            // Remove fields that don't affect the resources generated per generation,
+            // and we don't want to trigger a rollout from.
+            let spec = MaterializeSpec {
+                environmentd_image_ref: self.spec.environmentd_image_ref.clone(),
+                environmentd_extra_args: self.spec.environmentd_extra_args.clone(),
+                environmentd_extra_env: self.spec.environmentd_extra_env.clone(),
+                environmentd_connection_role_arn: self
+                    .spec
+                    .environmentd_connection_role_arn
+                    .clone(),
+                environmentd_resource_requirements: self
+                    .spec
+                    .environmentd_resource_requirements
+                    .clone(),
+                environmentd_scratch_volume_storage_requirement: self
+                    .spec
+                    .environmentd_scratch_volume_storage_requirement
+                    .clone(),
+                balancerd_resource_requirements: None,
+                console_resource_requirements: None,
+                balancerd_replicas: None,
+                console_replicas: None,
+                service_account_name: self.spec.service_account_name.clone(),
+                service_account_annotations: self.spec.service_account_annotations.clone(),
+                service_account_labels: self.spec.service_account_labels.clone(),
+                pod_annotations: self.spec.pod_annotations.clone(),
+                pod_labels: self.spec.pod_labels.clone(),
+                force_promote: None,
+                force_rollout: self.spec.force_rollout,
+                rollout_strategy: self.spec.rollout_strategy.clone(),
+                backend_secret_name: self.spec.backend_secret_name.clone(),
+                authenticator_kind: self.spec.authenticator_kind,
+                enable_rbac: self.spec.enable_rbac,
+                environment_id: self.spec.environment_id,
+                system_parameter_configmap_name: self.spec.system_parameter_configmap_name.clone(),
+                balancerd_external_certificate_spec: None,
+                console_external_certificate_spec: None,
+                internal_certificate_spec: self.spec.internal_certificate_spec.clone(),
+            };
+            hasher.update(&serde_json::to_vec(&spec).unwrap());
+            if let Some(annotation) = self
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get(FORCE_ROLLOUT_ANNOTATION))
+            {
+                hasher.update(annotation);
+            }
+            format!("{:x}", hasher.finalize())
+        }
+
         pub fn backend_secret_name(&self) -> String {
             self.spec.backend_secret_name.clone()
         }
@@ -401,24 +702,23 @@ pub mod v1alpha1 {
             )
         }
 
-        pub fn requested_reconciliation_id(&self) -> Uuid {
-            self.spec.request_rollout
-        }
-
         pub fn rollout_requested(&self) -> bool {
-            self.requested_reconciliation_id()
-                != self
-                    .status
-                    .as_ref()
-                    .map_or_else(Uuid::nil, |status| status.last_completed_rollout_request)
+            self.status
+                .as_ref()
+                .map(|status| status.last_completed_rollout_hash != status.requested_rollout_hash)
+                .unwrap_or(false)
         }
 
         pub fn set_force_promote(&mut self) {
-            self.spec.force_promote = self.spec.request_rollout;
+            self.spec.force_promote = Some(self.generate_rollout_hash());
         }
 
         pub fn should_force_promote(&self) -> bool {
-            self.spec.force_promote == self.spec.request_rollout
+            self.spec.force_promote.as_ref()
+                == self
+                    .status
+                    .as_ref()
+                    .and_then(|status| status.requested_rollout_hash.as_ref())
                 || self.spec.rollout_strategy
                     == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
         }
@@ -438,7 +738,7 @@ pub mod v1alpha1 {
             false
         }
 
-        pub fn is_ready_to_promote(&self, resources_hash: &str) -> bool {
+        pub fn is_ready_to_promote(&self, rollout_hash: &str) -> bool {
             let Some(status) = self.status.as_ref() else {
                 return false;
             };
@@ -449,7 +749,7 @@ pub mod v1alpha1 {
                 .conditions
                 .iter()
                 .any(|condition| condition.reason == "ReadyToPromote")
-                && &status.resources_hash == resources_hash
+                && status.requested_rollout_hash.as_deref() == Some(rollout_hash)
         }
 
         pub fn is_promoting(&self) -> bool {
@@ -605,17 +905,15 @@ pub mod v1alpha1 {
         pub resource_id: String,
         /// The generation of Materialize pods actively capable of servicing requests.
         pub active_generation: u64,
-        /// The UUID of the last successfully completed rollout.
-        pub last_completed_rollout_request: Uuid,
         /// The image ref of the environmentd image that was last successfully rolled out.
         /// Used to deny upgrades past 1 major version from the last successful rollout.
         /// When None, we upgrade anyways.
         pub last_completed_rollout_environmentd_image_ref: Option<String>,
-        /// A hash calculated from the spec of resources to be created based on this Materialize
-        /// spec. This is used for detecting when the existing resources are up to date.
-        /// If you want to trigger a rollout without making other changes that would cause this
-        /// hash to change, you must set forceRollout to the same UUID as requestRollout.
-        pub resources_hash: String,
+        /// The last completed rollout's requestedRolloutHash.
+        pub last_completed_rollout_hash: Option<String>,
+        /// Hash of a subset of the Materialize spec and other fields.
+        /// This is used to determine when the spec has changed and we need to rollout.
+        pub requested_rollout_hash: Option<String>,
         pub conditions: Vec<Condition>,
     }
 
@@ -652,6 +950,108 @@ pub mod v1alpha1 {
             ])
         }
     }
+
+    impl From<v1alpha1::Materialize> for Materialize {
+        fn from(value: v1alpha1::Materialize) -> Self {
+            let is_promoting = value.is_promoting();
+            let service_account_annotations = if let Some(environmentd_iam_role_arn) =
+                value.spec.environmentd_iam_role_arn
+            {
+                let mut annotations = value.spec.service_account_annotations.unwrap_or_default();
+                annotations
+                    .entry("eks.amazonaws.com/role-arn".to_owned())
+                    .or_insert(environmentd_iam_role_arn);
+                Some(annotations)
+            } else {
+                value.spec.service_account_annotations
+            };
+            let mut mz = Materialize {
+                metadata: value.metadata,
+                spec: MaterializeSpec {
+                    environmentd_image_ref: value.spec.environmentd_image_ref,
+                    environmentd_extra_args: value.spec.environmentd_extra_args,
+                    environmentd_extra_env: value.spec.environmentd_extra_env,
+                    environmentd_connection_role_arn: value.spec.environmentd_connection_role_arn,
+                    environmentd_resource_requirements: value
+                        .spec
+                        .environmentd_resource_requirements,
+                    environmentd_scratch_volume_storage_requirement: value
+                        .spec
+                        .environmentd_scratch_volume_storage_requirement,
+                    balancerd_resource_requirements: value.spec.balancerd_resource_requirements,
+                    console_resource_requirements: value.spec.console_resource_requirements,
+                    balancerd_replicas: value.spec.balancerd_replicas,
+                    console_replicas: value.spec.console_replicas,
+                    service_account_name: value.spec.service_account_name,
+                    service_account_annotations,
+                    service_account_labels: value.spec.service_account_labels,
+                    pod_annotations: value.spec.pod_annotations,
+                    pod_labels: value.spec.pod_labels,
+                    force_promote: if value.spec.force_promote.is_empty()
+                        || &value.spec.force_promote == "00000000-0000-0000-0000-000000000000"
+                    {
+                        None
+                    } else {
+                        Some(value.spec.force_promote.to_string())
+                    },
+                    force_rollout: value.spec.force_rollout,
+                    rollout_strategy: value.spec.rollout_strategy,
+                    backend_secret_name: value.spec.backend_secret_name,
+                    authenticator_kind: value.spec.authenticator_kind,
+                    enable_rbac: value.spec.enable_rbac,
+                    environment_id: value.spec.environment_id,
+                    system_parameter_configmap_name: value.spec.system_parameter_configmap_name,
+                    balancerd_external_certificate_spec: value
+                        .spec
+                        .balancerd_external_certificate_spec,
+                    console_external_certificate_spec: value.spec.console_external_certificate_spec,
+                    internal_certificate_spec: value.spec.internal_certificate_spec,
+                },
+                status: None,
+            };
+            let calculated_rollout_hash = mz.generate_rollout_hash();
+            let last_completed_rollout_hash = match value
+                .status
+                .as_ref()
+                .and_then(|status| status.last_completed_rollout_hash.to_owned())
+            {
+                Some(last_completed_rollout_hash) => Some(last_completed_rollout_hash),
+                None => {
+                    let currently_rolling_out = value
+                        .status
+                        .as_ref()
+                        .map(|status| {
+                            status.last_completed_rollout_request != value.spec.request_rollout
+                                // If this is the first apply,
+                                // these could both be nil and we still need to do a rollout.
+                                || status.last_completed_rollout_request.is_nil()
+                        })
+                        .unwrap_or(true);
+                    if currently_rolling_out {
+                        // If they store a change, we're going to start over on a new rollout.
+                        None
+                    } else {
+                        Some(calculated_rollout_hash.clone())
+                    }
+                }
+            };
+            let requested_rollout_hash = if is_promoting {
+                None
+            } else {
+                Some(calculated_rollout_hash)
+            };
+            mz.status = value.status.map(|status| MaterializeStatus {
+                resource_id: status.resource_id,
+                active_generation: status.active_generation,
+                last_completed_rollout_environmentd_image_ref: status
+                    .last_completed_rollout_environmentd_image_ref,
+                last_completed_rollout_hash,
+                requested_rollout_hash,
+                conditions: status.conditions,
+            });
+            mz
+        }
+    }
 }
 
 fn parse_image_ref(image_ref: &str) -> Option<Version> {
@@ -673,7 +1073,7 @@ mod tests {
     use kube::core::ObjectMeta;
     use semver::Version;
 
-    use super::v1alpha1::{Materialize, MaterializeSpec};
+    use super::v1alpha2::{Materialize, MaterializeSpec};
 
     #[mz_ore::test]
     fn meets_minimum_version() {
@@ -722,7 +1122,7 @@ mod tests {
 
     #[mz_ore::test]
     fn within_upgrade_window() {
-        use super::v1alpha1::MaterializeStatus;
+        use super::v1alpha2::MaterializeStatus;
 
         let mut mz = Materialize {
             spec: MaterializeSpec {
