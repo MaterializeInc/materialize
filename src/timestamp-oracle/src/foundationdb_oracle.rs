@@ -44,6 +44,7 @@ pub struct FdbTimestampOracle<N> {
     timeline: String,
     next: N,
     db: Arc<Database>,
+    metrics: Arc<Metrics>,
     /// A read-only timestamp oracle is NOT allowed to do operations that change
     /// the backing FoundationDB state.
     read_only: bool,
@@ -64,6 +65,7 @@ where
             .field("read_only", &self.read_only)
             .field("read_ts_key", &self.read_ts_key)
             .field("write_ts_key", &self.write_ts_key)
+            .field("metrics", &self.metrics)
             .finish_non_exhaustive()
     }
 }
@@ -186,6 +188,7 @@ impl<N: Sync> FdbTimestampOracle<N> {
         next: N,
         read_only: bool,
         db: Arc<Database>,
+        metrics: Arc<Metrics>,
         prefix: Vec<String>,
         directory: DirectoryLayer,
     ) -> Result<FdbTimestampOracle<N>, anyhow::Error> {
@@ -220,6 +223,7 @@ impl<N: Sync> FdbTimestampOracle<N> {
             read_ts_key,
             write_ts_key,
             db,
+            metrics,
             read_only,
         })
     }
@@ -276,10 +280,12 @@ where
         mz_foundationdb::init_network();
 
         let db = Arc::new(Database::new(None)?);
+        let metrics = Arc::clone(&config.metrics);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
 
-        let oracle = Self::open_inner(timeline, next, read_only, db, prefix, directory).await?;
+        let oracle =
+            Self::open_inner(timeline, next, read_only, db, metrics, prefix, directory).await?;
 
         // Initialize the timestamps for this timeline if they don't exist.
         oracle.initialize(initially).await?;
@@ -334,6 +340,7 @@ where
         mz_foundationdb::init_network();
 
         let db = Arc::new(Database::new(None)?);
+        let metrics = Arc::clone(&config.metrics);
         let prefix = fdb_config.prefix;
         let directory = DirectoryLayer::default();
 
@@ -356,6 +363,7 @@ where
                 (),
                 true,
                 Arc::clone(&db),
+                Arc::clone(&metrics),
                 prefix.clone(),
                 directory.clone(),
             )
@@ -466,12 +474,19 @@ where
         let proposed_next_ts = self.next.now();
 
         let write_ts: Timestamp = self
-            .db
-            .transact_boxed(
-                &proposed_next_ts,
-                |trx, proposed_next_ts| self.write_ts_trx(trx, **proposed_next_ts).boxed(),
-                TransactOption::default(),
-            )
+            .metrics
+            .oracle
+            .write_ts
+            .run_op(|| async {
+                self.db
+                    .transact_boxed(
+                        &proposed_next_ts,
+                        |trx, proposed_next_ts| self.write_ts_trx(trx, **proposed_next_ts).boxed(),
+                        TransactOption::default(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
             .await
             .expect("write_ts transaction failed");
 
@@ -492,16 +507,23 @@ where
 
     async fn peek_write_ts(&self) -> Timestamp {
         let write_ts = self
-            .db
-            .transact_boxed(
-                &(),
-                |trx, ()| self.peek_write_ts_trx(trx).boxed(),
-                TransactOption::default(),
-            )
+            .metrics
+            .oracle
+            .peek_write_ts
+            .run_op(|| async {
+                self.db
+                    .transact_boxed(
+                        &(),
+                        |trx, ()| self.peek_write_ts_trx(trx).boxed(),
+                        TransactOption::default(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)?
+                    .ok_or_else(|| anyhow!("timeline not initialized"))
+                    .map(|ts| ts.0)
+            })
             .await
-            .expect("peek_write_ts transaction failed")
-            .expect("timeline not initialized")
-            .0;
+            .expect("peek_write_ts transaction failed");
 
         debug!(
             timeline = ?self.timeline,
@@ -514,16 +536,23 @@ where
 
     async fn read_ts(&self) -> Timestamp {
         let read_ts = self
-            .db
-            .transact_boxed(
-                &(),
-                |trx, ()| self.read_ts_trx(trx).boxed(),
-                TransactOption::default(),
-            )
+            .metrics
+            .oracle
+            .read_ts
+            .run_op(|| async {
+                self.db
+                    .transact_boxed(
+                        &(),
+                        |trx, ()| self.read_ts_trx(trx).boxed(),
+                        TransactOption::default(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)?
+                    .ok_or_else(|| anyhow!("timeline not initialized"))
+                    .map(|ts| ts.0)
+            })
             .await
-            .expect("read_ts transaction failed")
-            .expect("timeline not initialized")
-            .0;
+            .expect("read_ts transaction failed");
 
         debug!(
             timeline = ?self.timeline,
@@ -539,12 +568,19 @@ where
             panic!("attempting apply_write in read-only mode");
         }
 
-        self.db
-            .transact_boxed(
-                &write_ts,
-                |trx, write_ts| self.apply_write_trx(trx, **write_ts).boxed(),
-                TransactOption::default(),
-            )
+        self.metrics
+            .oracle
+            .apply_write
+            .run_op(|| async {
+                self.db
+                    .transact_boxed(
+                        &write_ts,
+                        |trx, write_ts| self.apply_write_trx(trx, **write_ts).boxed(),
+                        TransactOption::default(),
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
+            })
             .await
             .expect("apply_write transaction failed");
 
