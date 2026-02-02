@@ -144,6 +144,8 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
+| `operator.certificate.secretName` | Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret". | ``nil`` |
+| `operator.certificate.source` | Where to obtain the certificate for orchestratord. Valid values are 'cert-manager' and 'secret'. | ``"cert-manager"`` |
 | `operator.cloudProvider.providers.aws.accountID` | When using AWS, accountID is required | ``""`` |
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
 | `operator.cloudProvider.providers.aws.iam.roles.connection` | ARN for CREATE CONNECTION feature | ``""`` |

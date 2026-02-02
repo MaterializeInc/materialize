@@ -38,7 +38,7 @@ use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomRe
 use kube::api::{ListParams, LogParams};
 use kube::{Api, Client};
 use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::materialize::v1alpha2::Materialize;
 
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{info, warn};

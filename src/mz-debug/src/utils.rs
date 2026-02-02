@@ -21,7 +21,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, Utc};
 use kube::{Api, Client};
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::materialize::v1alpha2::Materialize;
 use mz_server_core::listeners::AuthenticatorKind;
 use zip::ZipWriter;
 use zip::write::SimpleFileOptions;

@@ -34,6 +34,13 @@ operator:
     #  priority: 2
     #  type: "string"
 
+  certificate:
+    # -- (string) Where to obtain the certificate for orchestratord. Valid values are 'cert-manager' and 'secret'.
+    source: cert-manager
+    # -- (string) Name of a secret in the operator's namespace containing ca.crt, tls.crt, and tls.key entries. Only used if `source` is "secret".
+    secretName: null
+
+
   # Cloud provider configuration
   cloudProvider:
     # -- Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
