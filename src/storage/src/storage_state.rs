@@ -390,6 +390,9 @@ pub struct StorageInstanceContext {
     /// The memory limit of the materialize cluster replica. This will
     /// be used to calculate and configure the maximum inflight bytes for backpressure
     pub cluster_memory_limit: Option<usize>,
+    /// A unique identifier for this replica instance. Used to differentiate
+    /// multiple replicas when using shared object storage backends.
+    pub replica_id: uuid::Uuid,
 }
 
 impl StorageInstanceContext {
@@ -405,10 +408,15 @@ impl StorageInstanceContext {
             rocksdb::Env::mem_env()?
         };
 
+        // Generate a unique ID for this replica instance. This is used to
+        // differentiate replicas when using shared object storage backends.
+        let replica_id = uuid::Uuid::new_v4();
+
         Ok(Self {
             scratch_directory,
             rocksdb_env,
             cluster_memory_limit,
+            replica_id,
         })
     }
 }

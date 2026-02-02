@@ -53,11 +53,78 @@ use types::{
 
 #[cfg(test)]
 pub mod memory;
+pub(crate) mod object_storage;
 pub(crate) mod rocksdb;
 // TODO(aljoscha): Move next to upsert module, rename to upsert_types.
 pub(crate) mod types;
 
+use serde::de::DeserializeOwned;
+use types::{GetStats, MergeStats, MergeValue, PutStats, PutValue, UpsertValueAndSize};
+
 pub type UpsertValue = Result<Row, Box<UpsertError>>;
+
+/// An enum that wraps the different upsert state backends, allowing runtime
+/// selection of the backend via dyncfg.
+pub(crate) enum UpsertBackend<T, O> {
+    RocksDB(rocksdb::RocksDB<T, O>),
+    ObjectStorage(object_storage::ObjectStorageUpsertBackend<T, O>),
+}
+
+#[async_trait::async_trait(?Send)]
+impl<T, O> UpsertStateBackend<T, O> for UpsertBackend<T, O>
+where
+    O: Send + Sync + Serialize + DeserializeOwned + 'static,
+    T: Eq + Send + Sync + Serialize + DeserializeOwned + 'static,
+{
+    fn supports_merge(&self) -> bool {
+        match self {
+            UpsertBackend::RocksDB(inner) => inner.supports_merge(),
+            UpsertBackend::ObjectStorage(inner) => inner.supports_merge(),
+        }
+    }
+
+    async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>,
+    {
+        match self {
+            UpsertBackend::RocksDB(inner) => inner.multi_put(puts).await,
+            UpsertBackend::ObjectStorage(inner) => inner.multi_put(puts).await,
+        }
+    }
+
+    async fn multi_get<'r, G, R>(
+        &mut self,
+        gets: G,
+        results_out: R,
+    ) -> Result<GetStats, anyhow::Error>
+    where
+        G: IntoIterator<Item = UpsertKey>,
+        R: IntoIterator<Item = &'r mut UpsertValueAndSize<T, O>>,
+    {
+        match self {
+            UpsertBackend::RocksDB(inner) => inner.multi_get(gets, results_out).await,
+            UpsertBackend::ObjectStorage(inner) => inner.multi_get(gets, results_out).await,
+        }
+    }
+
+    async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
+    where
+        P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,
+    {
+        match self {
+            UpsertBackend::RocksDB(inner) => inner.multi_merge(merges).await,
+            UpsertBackend::ObjectStorage(inner) => inner.multi_merge(merges).await,
+        }
+    }
+
+    async fn close(self) -> Result<(), anyhow::Error> {
+        match self {
+            UpsertBackend::RocksDB(inner) => inner.close().await,
+            UpsertBackend::ObjectStorage(inner) => inner.close().await,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct UpsertKey([u8; 32]);
@@ -254,6 +321,34 @@ where
     let rocksdb_use_native_merge_operator =
         dyncfgs::STORAGE_ROCKSDB_USE_MERGE_OPERATOR.get(storage_configuration.config_set());
 
+    // Whether to use the object storage (SlateDB) backend instead of RocksDB.
+    let use_object_storage =
+        dyncfgs::STORAGE_UPSERT_USE_OBJECT_STORAGE.get(storage_configuration.config_set());
+
+    // Object storage configuration (only used if use_object_storage is true)
+    let object_storage_config = object_storage::ObjectStorageConfig {
+        in_memory: dyncfgs::STORAGE_UPSERT_OBJECT_STORAGE_IN_MEMORY
+            .get(storage_configuration.config_set()),
+        s3_bucket: dyncfgs::STORAGE_UPSERT_OBJECT_STORAGE_S3_BUCKET
+            .get(storage_configuration.config_set())
+            .to_string(),
+        s3_region: dyncfgs::STORAGE_UPSERT_OBJECT_STORAGE_S3_REGION
+            .get(storage_configuration.config_set())
+            .to_string(),
+        s3_endpoint: dyncfgs::STORAGE_UPSERT_OBJECT_STORAGE_S3_ENDPOINT
+            .get(storage_configuration.config_set())
+            .to_string(),
+        s3_access_key_id: dyncfgs::STORAGE_UPSERT_OBJECT_STORAGE_S3_ACCESS_KEY_ID
+            .get(storage_configuration.config_set())
+            .to_string(),
+        s3_secret_access_key: dyncfgs::STORAGE_UPSERT_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY
+            .get(storage_configuration.config_set())
+            .to_string(),
+        replica_id: instance_context.replica_id,
+        // Use the same dyncfg as RocksDB for controlling merge operator usage
+        use_merge_operator: rocksdb_use_native_merge_operator,
+    };
+
     let upsert_config = UpsertConfig {
         shrink_upsert_unused_buffers_by_ratio: storage_configuration
             .parameters
@@ -283,6 +378,8 @@ where
         ?rocksdb_dir,
         ?tuning,
         ?rocksdb_use_native_merge_operator,
+        ?use_object_storage,
+        ?object_storage_config,
         "rendering upsert source"
     );
 
@@ -290,36 +387,52 @@ where
     let rocksdb_instance_metrics = Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
     let env = instance_context.rocksdb_env.clone();
+    let source_id = source_config.id;
+    let worker_id = source_config.worker_id;
 
-    // A closure that will initialize and return a configured RocksDB instance
-    let rocksdb_init_fn = move || async move {
-        let merge_operator = if rocksdb_use_native_merge_operator {
-            Some((
-                "upsert_state_snapshot_merge_v1".to_string(),
-                |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<G::Timestamp, FromTime>>| {
-                    consolidating_merge_function::<G::Timestamp, FromTime>(a.into(), b)
-                },
-            ))
-        } else {
-            None
-        };
-        rocksdb::RocksDB::new(
-            mz_rocksdb::RocksDBInstance::new(
-                &rocksdb_dir,
-                mz_rocksdb::InstanceOptions::new(
-                    env,
-                    rocksdb_cleanup_tries,
-                    merge_operator,
-                    // For now, just use the same config as the one used for
-                    // merging snapshots.
-                    upsert_bincode_opts(),
-                ),
-                tuning,
-                rocksdb_shared_metrics,
-                rocksdb_instance_metrics,
+    // A closure that will initialize and return a configured backend instance
+    let backend_init_fn = move || async move {
+        if use_object_storage {
+            // Use SlateDB (object storage) backend
+            let backend = object_storage::ObjectStorageUpsertBackend::from_config(
+                &object_storage_config,
+                source_id,
+                worker_id,
             )
-            .unwrap(),
-        )
+            .await
+            .expect("failed to create object storage backend");
+            UpsertBackend::ObjectStorage(backend)
+        } else {
+            // Use RocksDB backend
+            let merge_operator = if rocksdb_use_native_merge_operator {
+                Some((
+                    "upsert_state_snapshot_merge_v1".to_string(),
+                    |a: &[u8], b: ValueIterator<BincodeOpts, StateValue<G::Timestamp, FromTime>>| {
+                        consolidating_merge_function::<G::Timestamp, FromTime>(a.into(), b)
+                    },
+                ))
+            } else {
+                None
+            };
+            let rocksdb_backend = rocksdb::RocksDB::new(
+                mz_rocksdb::RocksDBInstance::new(
+                    &rocksdb_dir,
+                    mz_rocksdb::InstanceOptions::new(
+                        env,
+                        rocksdb_cleanup_tries,
+                        merge_operator,
+                        // For now, just use the same config as the one used for
+                        // merging snapshots.
+                        upsert_bincode_opts(),
+                    ),
+                    tuning,
+                    rocksdb_shared_metrics,
+                    rocksdb_instance_metrics,
+                )
+                .unwrap(),
+            );
+            UpsertBackend::RocksDB(rocksdb_backend)
+        }
     };
 
     upsert_operator(
@@ -330,7 +443,7 @@ where
         previous_token,
         upsert_metrics,
         source_config,
-        rocksdb_init_fn,
+        backend_init_fn,
         upsert_config,
         storage_configuration,
         prevent_snapshot_buffering,
@@ -928,6 +1041,16 @@ where
 
                 output_handle.give_container(&output_cap, &mut output_updates);
             }
+        }
+
+        // Clean up the backend resources before shutting down.
+        if let Err(e) = state.close().await {
+            tracing::warn!(
+                "timely-{} upsert source {} failed to close state backend: {}",
+                source_config.worker_id,
+                source_config.id,
+                e
+            );
         }
     });
 

@@ -127,4 +127,11 @@ where
         g_stats.returned_gets += stats.returned_gets;
         Ok(g_stats)
     }
+
+    async fn close(self) -> Result<(), anyhow::Error> {
+        // RocksDB uses local disk storage which is ephemeral per-replica,
+        // so no explicit cleanup is needed. The data will be cleaned up
+        // when the scratch directory is removed.
+        Ok(())
+    }
 }

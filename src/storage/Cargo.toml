@@ -50,6 +50,7 @@ mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-mysql-util = { path = "../mysql-util" }
 mz-ore = { path = "../ore", features = ["async", "tracing", "chrono", "metrics", "columnation"] }
+object_store = { version = "0.12.5", features = ["aws"] }
 mz-persist = { path = "../persist" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
@@ -97,6 +98,7 @@ thiserror = { version = "2.0.18" }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 arrow-ipc = "57"
+slatedb = "0.10.1"
 
 [dev-dependencies]
 async-trait = "0.1.89"

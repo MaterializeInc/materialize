@@ -264,6 +264,69 @@ pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
     "Use the native rocksdb merge operator where possible.",
 );
 
+/// Whether to use the object storage (SlateDB) backend for upsert instead of RocksDB.
+pub const STORAGE_UPSERT_USE_OBJECT_STORAGE: Config<bool> = Config::new(
+    "storage_upsert_use_object_storage",
+    false,
+    "Use SlateDB (object storage) backend for upsert instead of RocksDB.",
+);
+
+/// Whether to use in-memory storage for the SlateDB upsert backend (for testing).
+/// Only used when `storage_upsert_use_object_storage` is true.
+/// When true, ignores S3 bucket/region/endpoint settings and uses in-memory storage.
+pub const STORAGE_UPSERT_OBJECT_STORAGE_IN_MEMORY: Config<bool> = Config::new(
+    "storage_upsert_object_storage_in_memory",
+    true,
+    "Use in-memory storage for SlateDB upsert backend (for testing). When false, uses S3.",
+);
+
+/// The S3 bucket name for the SlateDB upsert backend.
+/// Only used when `storage_upsert_use_object_storage` is true and
+/// `storage_upsert_object_storage_in_memory` is false.
+pub const STORAGE_UPSERT_OBJECT_STORAGE_S3_BUCKET: Config<&'static str> = Config::new(
+    "storage_upsert_object_storage_s3_bucket",
+    "",
+    "S3 bucket name for SlateDB upsert backend.",
+);
+
+/// The AWS region for the SlateDB upsert backend S3 bucket.
+/// Only used when `storage_upsert_use_object_storage` is true and
+/// `storage_upsert_object_storage_in_memory` is false.
+pub const STORAGE_UPSERT_OBJECT_STORAGE_S3_REGION: Config<&'static str> = Config::new(
+    "storage_upsert_object_storage_s3_region",
+    "us-east-1",
+    "AWS region for SlateDB upsert backend S3 bucket.",
+);
+
+/// Optional custom endpoint for the SlateDB upsert backend (e.g., for MinIO or LocalStack).
+/// Only used when `storage_upsert_use_object_storage` is true and
+/// `storage_upsert_object_storage_in_memory` is false.
+pub const STORAGE_UPSERT_OBJECT_STORAGE_S3_ENDPOINT: Config<&'static str> = Config::new(
+    "storage_upsert_object_storage_s3_endpoint",
+    "",
+    "Custom S3 endpoint for SlateDB upsert backend. Empty string uses AWS default.",
+);
+
+/// AWS access key ID for the SlateDB upsert backend.
+/// Only used when `storage_upsert_use_object_storage` is true and
+/// `storage_upsert_object_storage_in_memory` is false.
+/// Empty string uses environment variables or default AWS credential chain.
+pub const STORAGE_UPSERT_OBJECT_STORAGE_S3_ACCESS_KEY_ID: Config<&'static str> = Config::new(
+    "storage_upsert_object_storage_s3_access_key_id",
+    "",
+    "AWS access key ID for SlateDB upsert backend. Empty uses default credential chain.",
+);
+
+/// AWS secret access key for the SlateDB upsert backend.
+/// Only used when `storage_upsert_use_object_storage` is true and
+/// `storage_upsert_object_storage_in_memory` is false.
+/// Empty string uses environment variables or default AWS credential chain.
+pub const STORAGE_UPSERT_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY: Config<&'static str> = Config::new(
+    "storage_upsert_object_storage_s3_secret_access_key",
+    "",
+    "AWS secret access key for SlateDB upsert backend. Empty uses default credential chain.",
+);
+
 /// If `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
 /// operator from buffering too many events from the upstream snapshot. In the absence
 /// of hydration flow control, this could prevent certain workloads from causing egregiously
@@ -376,6 +439,13 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_UPSERT_USE_OBJECT_STORAGE)
+        .add(&STORAGE_UPSERT_OBJECT_STORAGE_IN_MEMORY)
+        .add(&STORAGE_UPSERT_OBJECT_STORAGE_S3_BUCKET)
+        .add(&STORAGE_UPSERT_OBJECT_STORAGE_S3_REGION)
+        .add(&STORAGE_UPSERT_OBJECT_STORAGE_S3_ENDPOINT)
+        .add(&STORAGE_UPSERT_OBJECT_STORAGE_S3_ACCESS_KEY_ID)
+        .add(&STORAGE_UPSERT_OBJECT_STORAGE_S3_SECRET_ACCESS_KEY)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)
         .add(&STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING)
