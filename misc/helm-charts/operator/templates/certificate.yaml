@@ -1,0 +1,41 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+{{- if eq .Values.operator.certificate.source "cert-manager" -}}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}-self-signed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "materialize-operator.fullname" . }}-self-signed
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "materialize-operator.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+    - {{ include "materialize-operator.fullname" . }}.{{ .Release.Namespace }}.svc
+  secretName: {{ include "materialize-operator.fullname" . }}-cert
+  privateKey:
+    algorithm: Ed25519
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ include "materialize-operator.fullname" . }}-self-signed
+    kind: Issuer
+    group: cert-manager.io
+{{- end -}}
