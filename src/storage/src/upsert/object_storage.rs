@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_repr::GlobalId;
@@ -18,13 +19,121 @@ use object_store::ObjectStore;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path;
 use serde::{Serialize, de::DeserializeOwned};
+use slatedb::MergeOperatorError;
 use slatedb::object_store::memory::InMemory;
 
 use super::UpsertKey;
 use super::types::{
     BincodeOpts, GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue,
-    UpsertStateBackend, UpsertValueAndSize, ValueMetadata, upsert_bincode_opts,
+    UpsertStateBackend, UpsertValueAndSize, ValueMetadata, consolidating_merge_function,
+    upsert_bincode_opts,
 };
+
+/// A merge operator for SlateDB that consolidates upsert state values.
+///
+/// This wraps the generic `consolidating_merge_function` to work with SlateDB's
+/// merge operator interface. The merge operation is associative, which is required
+/// by SlateDB for correct compaction behavior.
+///
+/// See the [SlateDB merge operator RFC](https://slatedb.io/rfcs/0006-merge-operator/)
+/// for details on how merge operators work.
+pub struct UpsertMergeOperator<T, O> {
+    bincode_opts: BincodeOpts,
+    _phantom: std::marker::PhantomData<fn() -> (T, O)>,
+}
+
+impl<T, O> UpsertMergeOperator<T, O> {
+    /// Create a new merge operator.
+    pub fn new() -> Self {
+        Self {
+            bincode_opts: upsert_bincode_opts(),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<T, O> Default for UpsertMergeOperator<T, O> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T, O> slatedb::MergeOperator for UpsertMergeOperator<T, O>
+where
+    T: Eq + Send + Sync + Serialize + DeserializeOwned + 'static,
+    O: Send + Sync + Serialize + DeserializeOwned + 'static,
+{
+    fn merge(
+        &self,
+        key: &Bytes,
+        existing_value: Option<Bytes>,
+        value: Bytes,
+    ) -> Result<Bytes, MergeOperatorError> {
+        use bincode::Options;
+
+        let existing: Option<StateValue<T, O>> = existing_value
+            .map(|b| self.bincode_opts.deserialize(&b))
+            .transpose()
+            .map_err(|e| {
+                tracing::error!("Failed to deserialize existing value in merge: {}", e);
+                MergeOperatorError::EmptyBatch
+            })?;
+
+        let operand: StateValue<T, O> = self.bincode_opts.deserialize(&value).map_err(|e| {
+            tracing::error!("Failed to deserialize operand in merge: {}", e);
+            MergeOperatorError::EmptyBatch
+        })?;
+
+        let updates = existing.into_iter().chain(std::iter::once(operand));
+        let upsert_key = UpsertKey::from(key.as_ref());
+        let result = consolidating_merge_function(upsert_key, updates);
+
+        let serialized = self.bincode_opts.serialize(&result).map_err(|e| {
+            tracing::error!("Failed to serialize merge result: {}", e);
+            MergeOperatorError::EmptyBatch
+        })?;
+
+        Ok(Bytes::from(serialized))
+    }
+
+    fn merge_batch(
+        &self,
+        key: &Bytes,
+        existing_value: Option<Bytes>,
+        operands: &[Bytes],
+    ) -> Result<Bytes, MergeOperatorError> {
+        use bincode::Options;
+
+        let existing: Option<StateValue<T, O>> = existing_value
+            .map(|b| self.bincode_opts.deserialize(&b))
+            .transpose()
+            .map_err(|e| {
+                tracing::error!("Failed to deserialize existing value in merge_batch: {}", e);
+                MergeOperatorError::EmptyBatch
+            })?;
+
+        let operands_vec: Result<Vec<StateValue<T, O>>, _> = operands
+            .iter()
+            .map(|b| self.bincode_opts.deserialize(b))
+            .collect();
+
+        let operands_vec = operands_vec.map_err(|e| {
+            tracing::error!("Failed to deserialize operand in merge_batch: {}", e);
+            MergeOperatorError::EmptyBatch
+        })?;
+
+        let updates = existing.into_iter().chain(operands_vec);
+        let upsert_key = UpsertKey::from(key.as_ref());
+        let result = consolidating_merge_function(upsert_key, updates);
+
+        let serialized = self.bincode_opts.serialize(&result).map_err(|e| {
+            tracing::error!("Failed to serialize merge_batch result: {}", e);
+            MergeOperatorError::EmptyBatch
+        })?;
+
+        Ok(Bytes::from(serialized))
+    }
+}
 
 /// Configuration for the object storage upsert backend.
 #[derive(Clone, Debug)]
@@ -44,6 +153,9 @@ pub struct ObjectStorageConfig {
     /// Unique identifier for this replica instance. Used to differentiate
     /// multiple replicas when using shared object storage.
     pub replica_id: uuid::Uuid,
+    /// Whether to use SlateDB's native merge operator for faster snapshot
+    /// consolidation.
+    pub use_merge_operator: bool,
 }
 
 pub struct ObjectStorageUpsertBackend<T, O> {
@@ -53,33 +165,55 @@ pub struct ObjectStorageUpsertBackend<T, O> {
     object_store: Arc<dyn ObjectStore>,
     /// The path prefix used for this backend's data.
     path: String,
+    /// Whether the merge operator is enabled for this backend.
+    merge_operator_enabled: bool,
 
     _phantom: std::marker::PhantomData<(T, O)>,
 }
 
-impl<T, O> ObjectStorageUpsertBackend<T, O> {
+impl<T, O> ObjectStorageUpsertBackend<T, O>
+where
+    T: Eq + Send + Sync + Serialize + DeserializeOwned + 'static,
+    O: Send + Sync + Serialize + DeserializeOwned + 'static,
+{
     /// Create a new backend with in-memory storage (for testing).
+    ///
+    /// If `use_merge_operator` is true, the backend will use SlateDB's native
+    /// merge operator for faster snapshot consolidation.
     pub async fn new_in_memory(
         replica_id: uuid::Uuid,
         source_id: GlobalId,
         worker_id: usize,
+        use_merge_operator: bool,
     ) -> Self {
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        // Include replica_id in path to ensure uniqueness across replicas
         let path = format!("upsert/{}/{}/{}", replica_id, source_id, worker_id);
-        let store = slatedb::Db::open(path.clone(), Arc::clone(&object_store))
-            .await
-            .expect("db to open");
+
+        let db_builder = slatedb::Db::builder(path.clone(), Arc::clone(&object_store));
+        let store = if use_merge_operator {
+            db_builder
+                .with_merge_operator(Arc::new(UpsertMergeOperator::<T, O>::new()))
+                .build()
+                .await
+                .expect("db to open")
+        } else {
+            db_builder.build().await.expect("db to open")
+        };
+
         Self {
             store,
             bincode_opts: upsert_bincode_opts(),
             object_store,
             path,
+            merge_operator_enabled: use_merge_operator,
             _phantom: std::marker::PhantomData,
         }
     }
 
     /// Create a new backend with S3 storage.
+    ///
+    /// If `use_merge_operator` is true, the backend will use SlateDB's native
+    /// merge operator for faster snapshot consolidation.
     pub async fn new_s3(
         bucket: &str,
         region: &str,
@@ -89,6 +223,7 @@ impl<T, O> ObjectStorageUpsertBackend<T, O> {
         replica_id: uuid::Uuid,
         source_id: GlobalId,
         worker_id: usize,
+        use_merge_operator: bool,
     ) -> Result<Self, anyhow::Error> {
         let mut builder = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
@@ -111,17 +246,28 @@ impl<T, O> ObjectStorageUpsertBackend<T, O> {
                 .map_err(|e| anyhow::anyhow!("Failed to create S3 object store: {}", e))?,
         );
 
-        // Include replica_id in path to ensure uniqueness across replicas
         let path = format!("upsert/{}/{}/{}", replica_id, source_id, worker_id);
-        let store = slatedb::Db::open(path.clone(), Arc::clone(&object_store))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to open SlateDB: {}", e))?;
+
+        let db_builder = slatedb::Db::builder(path.clone(), Arc::clone(&object_store));
+        let store = if use_merge_operator {
+            db_builder
+                .with_merge_operator(Arc::new(UpsertMergeOperator::<T, O>::new()))
+                .build()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to open SlateDB: {}", e))?
+        } else {
+            db_builder
+                .build()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to open SlateDB: {}", e))?
+        };
 
         Ok(Self {
             store,
             bincode_opts: upsert_bincode_opts(),
             object_store,
             path,
+            merge_operator_enabled: use_merge_operator,
             _phantom: std::marker::PhantomData,
         })
     }
@@ -133,7 +279,13 @@ impl<T, O> ObjectStorageUpsertBackend<T, O> {
         worker_id: usize,
     ) -> Result<Self, anyhow::Error> {
         if config.in_memory {
-            Ok(Self::new_in_memory(config.replica_id, source_id, worker_id).await)
+            Ok(Self::new_in_memory(
+                config.replica_id,
+                source_id,
+                worker_id,
+                config.use_merge_operator,
+            )
+            .await)
         } else {
             Self::new_s3(
                 &config.s3_bucket,
@@ -144,6 +296,7 @@ impl<T, O> ObjectStorageUpsertBackend<T, O> {
                 config.replica_id,
                 source_id,
                 worker_id,
+                config.use_merge_operator,
             )
             .await
         }
@@ -154,11 +307,10 @@ impl<T, O> ObjectStorageUpsertBackend<T, O> {
 impl<T, O> UpsertStateBackend<T, O> for ObjectStorageUpsertBackend<T, O>
 where
     O: Send + Sync + Serialize + DeserializeOwned + 'static,
-    T: Send + Sync + Serialize + DeserializeOwned + 'static,
+    T: Eq + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
-    // Slatedb supports merges but I'm lazy and I'm not implementing it yet.
     fn supports_merge(&self) -> bool {
-        false
+        self.merge_operator_enabled
     }
 
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
@@ -266,21 +418,51 @@ where
         Ok(stats)
     }
 
-    async fn multi_merge<P>(&mut self, _merges: P) -> Result<MergeStats, anyhow::Error>
+    async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,
     {
-        unimplemented!("ObjectStorageUpsertBackend::multi_merge is not implemented yet")
+        use bincode::Options;
+        use slatedb::WriteBatch;
+
+        if !self.merge_operator_enabled {
+            return Err(anyhow::anyhow!(
+                "multi_merge called but merge operator is not enabled"
+            ));
+        }
+
+        let mut stats = MergeStats::default();
+        let mut batch = WriteBatch::new();
+
+        for (key, MergeValue { value, diff }) in merges {
+            let serialized = self
+                .bincode_opts
+                .serialize(&value)
+                .map_err(|e| anyhow::anyhow!("Error serializing merge value: {}", e))?;
+
+            let size = serialized.len();
+            batch.merge(&key, serialized);
+
+            stats.written_merge_operands += 1;
+            stats.size_written += u64::try_from(size).unwrap_or(u64::MAX);
+            stats.size_diff += diff.into_inner();
+        }
+
+        self.store
+            .write(batch)
+            .await
+            .map_err(|e| anyhow::anyhow!("Error writing merge batch to object store: {}", e))?;
+
+        Ok(stats)
     }
 
     async fn close(self) -> Result<(), anyhow::Error> {
-        // First, close the SlateDB database
         self.store
             .close()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to close SlateDB: {}", e))?;
 
-        // Then, delete all objects under our path prefix
+        // Delete all objects under our path prefix to clean up storage
         let prefix = Path::from(self.path.as_str());
         let mut list_stream = self.object_store.list(Some(&prefix));
 
@@ -336,14 +518,14 @@ mod tests {
         let worker_id = 0;
 
         let mut backend =
-            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id).await;
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, false)
+                .await;
 
         let key1 = make_key(1);
         let key2 = make_key(2);
         let value1: UpsertValue = Ok(make_row(1, 100));
         let value2: UpsertValue = Ok(make_row(2, 200));
 
-        // Put two values
         let puts: Vec<(UpsertKey, PutValue<TestStateValue>)> = vec![
             (
                 key1,
@@ -365,7 +547,6 @@ mod tests {
         assert_eq!(put_stats.processed_puts, 2);
         assert_eq!(put_stats.values_diff, 2);
 
-        // Get the values back
         let mut results: Vec<TestUpsertValueAndSize> = vec![
             TestUpsertValueAndSize::default(),
             TestUpsertValueAndSize::default(),
@@ -378,7 +559,6 @@ mod tests {
         assert_eq!(get_stats.processed_gets, 2);
         assert_eq!(get_stats.returned_gets, 2);
 
-        // Verify the values
         assert!(results[0].value.is_some());
         assert!(results[1].value.is_some());
 
@@ -397,7 +577,8 @@ mod tests {
         let worker_id = 0;
 
         let mut backend =
-            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id).await;
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, false)
+                .await;
 
         let key = make_key(999);
 
@@ -421,12 +602,12 @@ mod tests {
         let worker_id = 0;
 
         let mut backend =
-            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id).await;
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, false)
+                .await;
 
         let key = make_key(1);
         let value: UpsertValue = Ok(make_row(1, 100));
 
-        // Put a value
         let puts: Vec<(UpsertKey, PutValue<TestStateValue>)> = vec![(
             key,
             PutValue {
@@ -436,7 +617,6 @@ mod tests {
         )];
         backend.multi_put(puts).await.unwrap();
 
-        // Verify it exists
         let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
         backend
             .multi_get(vec![key], results.iter_mut())
@@ -444,13 +624,11 @@ mod tests {
             .unwrap();
         assert!(results[0].value.is_some());
 
-        // Get the metadata for the delete
         let prev_metadata = results[0].metadata.map(|m| ValueMetadata {
             size: m.size.try_into().unwrap(),
             is_tombstone: m.is_tombstone,
         });
 
-        // Delete the value
         let deletes: Vec<(UpsertKey, PutValue<TestStateValue>)> = vec![(
             key,
             PutValue {
@@ -462,7 +640,6 @@ mod tests {
         assert_eq!(delete_stats.processed_puts, 1);
         assert_eq!(delete_stats.values_diff, -1);
 
-        // Verify it's gone
         let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
         let get_stats = backend
             .multi_get(vec![key], results.iter_mut())
@@ -480,13 +657,13 @@ mod tests {
         let worker_id = 0;
 
         let mut backend =
-            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id).await;
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, false)
+                .await;
 
         let key = make_key(1);
         let value1: UpsertValue = Ok(make_row(1, 100));
         let value2: UpsertValue = Ok(make_row(1, 200));
 
-        // Put initial value
         let puts: Vec<(UpsertKey, PutValue<TestStateValue>)> = vec![(
             key,
             PutValue {
@@ -496,7 +673,6 @@ mod tests {
         )];
         backend.multi_put(puts).await.unwrap();
 
-        // Get metadata for update
         let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
         backend
             .multi_get(vec![key], results.iter_mut())
@@ -507,7 +683,6 @@ mod tests {
             is_tombstone: m.is_tombstone,
         });
 
-        // Update to new value
         let puts: Vec<(UpsertKey, PutValue<TestStateValue>)> = vec![(
             key,
             PutValue {
@@ -517,10 +692,8 @@ mod tests {
         )];
         let update_stats = backend.multi_put(puts).await.unwrap();
         assert_eq!(update_stats.processed_puts, 1);
-        // values_diff should be 0 since we're updating, not inserting
-        assert_eq!(update_stats.values_diff, 0);
+        assert_eq!(update_stats.values_diff, 0); // Update, not insert
 
-        // Verify the new value
         let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
         backend
             .multi_get(vec![key], results.iter_mut())
@@ -539,11 +712,11 @@ mod tests {
         let worker_id = 0;
 
         let mut backend =
-            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id).await;
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, false)
+                .await;
 
         let key = make_key(1);
 
-        // Put a tombstone (finalized = None)
         let puts: Vec<(UpsertKey, PutValue<TestStateValue>)> = vec![(
             key,
             PutValue {
@@ -553,11 +726,9 @@ mod tests {
         )];
         let put_stats = backend.multi_put(puts).await.unwrap();
         assert_eq!(put_stats.processed_puts, 1);
-        // Tombstones don't count as values
-        assert_eq!(put_stats.values_diff, 0);
+        assert_eq!(put_stats.values_diff, 0); // Tombstones don't count as values
         assert_eq!(put_stats.tombstones_diff, 1);
 
-        // Get the tombstone back
         let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
         backend
             .multi_get(vec![key], results.iter_mut())
@@ -567,5 +738,114 @@ mod tests {
         assert!(results[0].value.is_some());
         assert!(results[0].metadata.as_ref().unwrap().is_tombstone);
         assert!(results[0].value.as_ref().unwrap().is_tombstone());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_merge_operator() {
+        use mz_repr::Diff;
+
+        let replica_id = uuid::Uuid::new_v4();
+        let source_id = GlobalId::User(6);
+        let worker_id = 0;
+
+        let mut backend =
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, true).await;
+
+        assert!(backend.supports_merge());
+
+        let key = make_key(1);
+        let value1: UpsertValue = Ok(make_row(1, 100));
+        let value2: UpsertValue = Ok(make_row(1, 200));
+
+        let mut state1: TestStateValue = Default::default();
+        state1.merge_update(
+            value1.clone(),
+            Diff::ONE,
+            upsert_bincode_opts(),
+            &mut Vec::new(),
+        );
+
+        let merges: Vec<(UpsertKey, MergeValue<TestStateValue>)> = vec![(
+            key,
+            MergeValue {
+                value: state1,
+                diff: mz_ore::Overflowing::from(1i64),
+            },
+        )];
+
+        let merge_stats = backend.multi_merge(merges).await.unwrap();
+        assert_eq!(merge_stats.written_merge_operands, 1);
+
+        let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
+        backend
+            .multi_get(vec![key], results.iter_mut())
+            .await
+            .unwrap();
+
+        assert!(results[0].value.is_some());
+
+        // Simulate an update: retract old value, insert new value
+        let mut state2: TestStateValue = Default::default();
+        state2.merge_update(
+            value1.clone(),
+            Diff::MINUS_ONE,
+            upsert_bincode_opts(),
+            &mut Vec::new(),
+        );
+        state2.merge_update(
+            value2.clone(),
+            Diff::ONE,
+            upsert_bincode_opts(),
+            &mut Vec::new(),
+        );
+
+        let merges: Vec<(UpsertKey, MergeValue<TestStateValue>)> = vec![(
+            key,
+            MergeValue {
+                value: state2,
+                diff: mz_ore::Overflowing::from(0i64),
+            },
+        )];
+
+        backend.multi_merge(merges).await.unwrap();
+
+        let mut results: Vec<TestUpsertValueAndSize> = vec![TestUpsertValueAndSize::default()];
+        backend
+            .multi_get(vec![key], results.iter_mut())
+            .await
+            .unwrap();
+
+        assert!(results[0].value.is_some());
+        let mut retrieved = results[0].value.as_ref().unwrap().clone();
+        retrieved.ensure_decoded(upsert_bincode_opts(), source_id);
+        let decoded = retrieved.into_decoded();
+        assert_eq!(decoded.finalized, Some(value2));
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_merge_without_operator_fails() {
+        let replica_id = uuid::Uuid::new_v4();
+        let source_id = GlobalId::User(7);
+        let worker_id = 0;
+
+        let mut backend =
+            ObjectStorageUpsertBackend::new_in_memory(replica_id, source_id, worker_id, false)
+                .await;
+
+        assert!(!backend.supports_merge());
+
+        let key = make_key(1);
+        let merges: Vec<(UpsertKey, MergeValue<TestStateValue>)> = vec![(
+            key,
+            MergeValue {
+                value: TestStateValue::default(),
+                diff: mz_ore::Overflowing::from(1i64),
+            },
+        )];
+
+        let result = backend.multi_merge(merges).await;
+        assert!(result.is_err());
     }
 }

@@ -74,7 +74,7 @@ pub(crate) enum UpsertBackend<T, O> {
 impl<T, O> UpsertStateBackend<T, O> for UpsertBackend<T, O>
 where
     O: Send + Sync + Serialize + DeserializeOwned + 'static,
-    T: Send + Sync + Serialize + DeserializeOwned + 'static,
+    T: Eq + Send + Sync + Serialize + DeserializeOwned + 'static,
 {
     fn supports_merge(&self) -> bool {
         match self {
@@ -345,6 +345,8 @@ where
             .get(storage_configuration.config_set())
             .to_string(),
         replica_id: instance_context.replica_id,
+        // Use the same dyncfg as RocksDB for controlling merge operator usage
+        use_merge_operator: rocksdb_use_native_merge_operator,
     };
 
     let upsert_config = UpsertConfig {
