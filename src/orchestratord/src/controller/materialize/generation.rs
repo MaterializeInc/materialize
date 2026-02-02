@@ -44,7 +44,7 @@ use crate::k8s::{apply_resource, delete_resource, get_resource};
 use crate::tls::issuer_ref_defined;
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::ManagedResource;
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::materialize::v1alpha2::Materialize;
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
