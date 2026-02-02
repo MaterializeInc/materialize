@@ -29,7 +29,7 @@ use super::Error;
 use crate::k8s::apply_resource;
 use crate::tls::create_certificate;
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::materialize::v1alpha2::Materialize;
 use mz_cloud_resources::crd::{
     ManagedResource,
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},

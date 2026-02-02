@@ -13,6 +13,7 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use axum_server::tls_openssl::OpenSSLConfig;
 use http::HeaderValue;
 use k8s_openapi::{
     api::{
@@ -28,16 +29,17 @@ use k8s_openapi::{
 use kube::{Api, runtime::watcher};
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
-use tracing::info;
+use tracing::{info, warn};
 
 use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, util::create_client};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{
     controller,
-    k8s::register_crds,
+    k8s::{migrate_materialize_storage_version, register_crds},
     metrics::{self, Metrics},
     tls::DefaultCertificateSpecs,
+    webhook,
 };
 use mz_ore::{
     cli::{self, CliConfig, KeyValueArg},
@@ -58,6 +60,21 @@ pub struct Args {
     profiling_listen_address: SocketAddr,
     #[clap(long, default_value = "[::]:3100")]
     metrics_listen_address: SocketAddr,
+    #[clap(long, default_value = "[::]:8001")]
+    webhook_listen_address: SocketAddr,
+
+    #[clap(long)]
+    webhook_service_name: String,
+    #[clap(long)]
+    webhook_service_namespace: String,
+    #[clap(long, default_value = "8001")]
+    webhook_service_port: u16,
+    #[clap(long, default_value = "/etc/tls/ca.crt")]
+    tls_ca: String,
+    #[clap(long, default_value = "/etc/tls/tls.crt")]
+    tls_cert: String,
+    #[clap(long, default_value = "/etc/tls/tls.key")]
+    tls_key: String,
 
     #[clap(long)]
     cloud_provider: CloudProvider,
@@ -263,12 +280,35 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
 
+    {
+        mz_ore::task::spawn(|| "webhook server", async move {
+            let config = OpenSSLConfig::from_pem_file(args.tls_cert, args.tls_key).unwrap();
+            if let Err(e) = axum_server::bind_openssl(args.webhook_listen_address, config)
+                .serve(webhook::router().into_make_service())
+                .await
+            {
+                panic!("webhook server failed: {}", e.display_with_causes());
+            }
+        });
+    }
+
     let (client, namespace) = create_client(args.kubernetes_context.clone()).await?;
     register_crds(
         client.clone(),
         args.additional_crd_columns.unwrap_or_default(),
+        args.webhook_service_name,
+        args.webhook_service_namespace,
+        args.webhook_service_port,
+        args.tls_ca,
     )
     .await?;
+
+    if let Err(e) = migrate_materialize_storage_version(client.clone()).await {
+        warn!(
+            "Failed to migrate Materialize storage versions: {}",
+            e.display_with_causes(),
+        );
+    }
 
     {
         let router = mz_prof_http::router(&BUILD_INFO);

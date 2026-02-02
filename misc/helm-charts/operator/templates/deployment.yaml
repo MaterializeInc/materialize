@@ -240,9 +240,15 @@ spec:
         - >
           --additional-crd-columns={{ toJson .Values.operator.additionalMaterializeCRDColumns }}
         {{- end }}
+        - "--webhook-service-name"
+        - {{ include "materialize-operator.fullname" . }}
+        - "--webhook-service-namespace"
+        - {{ .Release.Namespace }}
         ports:
         - containerPort: 3100
           name: metrics
+        - containerPort: 8001
+          name: webhook
         resources:
           {{- toYaml .Values.operator.resources | nindent 10 }}
         securityContext:
@@ -254,3 +260,27 @@ spec:
           runAsNonRoot: true
           seccompProfile:
             type: RuntimeDefault
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+          failureThreshold: 3
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /healthz
+            port: webhook
+            scheme: HTTPS
+          failureThreshold: 1
+          periodSeconds: 10
+        volumeMounts:
+          - mountPath: /etc/tls
+            name: certificate
+            readOnly: true
+      volumes:
+        - name: certificate
+          secret:
+            defaultMode: 256
+            optional: false
+            secretName: {{ if eq .Values.operator.certificate.source "cert-manager" }}{{ include "materialize-operator.fullname" . }}-cert{{ else }}{{ .Values.operator.certificate.secretName }}{{ end }}
