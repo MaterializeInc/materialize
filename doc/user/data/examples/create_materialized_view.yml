@@ -143,3 +143,12 @@
       b.bid_time,
       b.buyer;
   testable: false  # TODO: Need to add test_setup for the example.
+
+- name: "create-replacement-view-syntax-details"
+  content: |
+    To create a replacement materialized view, you must:
+    - Specify the target materialized view.
+    - Specify a `SELECT` statement for the replacement view that produces the
+      same output schema (including column order and keys) as the target view.
+
+    Upon creation, the replacement view starts hydrating in the background.

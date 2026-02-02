@@ -59,9 +59,10 @@ Create a replacement materialized view for an existing materialized view.
 
 {{% include-syntax file="examples/create_materialized_view" example="syntax-replacement" %}}
 
-The created replacement materialized view starts hydrating immediately. The
-replacement can later be applied in place. For more information, see [Creating
-replacement materialized views](#creating-replacement-materialized-views).
+The created replacement materialized view starts hydrating immediately and can
+later be applied to replace the specified materialized view. For more
+information, see [Creating replacement materialized
+views](#creating-replacement-materialized-views).
 
 {{< /tab >}}
 {{< /if-released >}}
@@ -298,13 +299,25 @@ JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 
 {{< public-preview />}}
 
-{{% include-headless
-"/headless/replacement-views/replacement-view-syntax-details/" %}}
-
-#### Use case
-
 {{% include-headless "/headless/replacement-views/associated-commands-blurb/"
 %}}
+
+{{% include-from-yaml data="examples/create_materialized_view"
+name="create-replacement-view-syntax-details" %}}
+
+{{< include-from-yaml data="examples/alter_materialized_view"
+name="prereq-recommendations-short" >}}
+
+The replacement view is dropped when you apply the replacement view. For more
+information on applying the replacement view, including recommendations and
+CPU/memory considerations, see [`ALTER MATERIALIZED VIEW ... APPLY
+REPLACEMENT...`](/sql/alter-materialized-view/#replacing-a-materialized-view)
+
+See also:
+
+- [Replace materialized
+views](/transform-data/updating-materialized-views/replace-materialized-view/)
+guide for a step-by-step tutorial.
 
 #### Query performance of replacement views
 
@@ -372,8 +385,8 @@ non-indexed, and so on."
 
 {{< public-preview />}}
 
-{{% include-headless
-"/headless/replacement-views/replacement-view-syntax-details" %}}
+{{% include-from-yaml file="examples/create_materialized_view"
+name="replacement-view-syntax-details" %}}
 
 {{% include-example file="examples/create_materialized_view"
 example="example-create-replacement-materialized-view" %}}
@@ -384,7 +397,7 @@ VIEW`](../alter-materialized-view).
 See also:
 
 - [Replace materialized views guide
-](/transform-data/updating-materialized-views/replace-materialized-view/).
+](/transform-data/updating-materialized-views/replace-materialized-view/)
 
 {{< /if-released >}}
 

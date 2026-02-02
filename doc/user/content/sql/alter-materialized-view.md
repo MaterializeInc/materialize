@@ -64,10 +64,6 @@ materialized view:
 
 {{% include-syntax file="examples/alter_materialized_view" example="syntax-apply-replacement" %}}
 
-{{< tip >}}
-Applying the replacement after it is hydrated avoids downtime.
-{{< /tip >}}
-
 {{< /tab >}}
 {{< /if-released >}}
 {{< /tabs >}}
@@ -80,35 +76,18 @@ Applying the replacement after it is hydrated avoids downtime.
 
 {{< public-preview />}}
 
-{{% include-headless
-"headless/replacement-views/replacement-view-target-restrictions" %}}
-
-{{% include-headless
-"/headless/replacement-views/apply-replacement-command-details" %}}
-
-{{< tip >}}
-Applying the replacement after it is hydrated avoids downtime.
-{{< /tip >}}
-
-#### Use case
-
-{{< note >}}
-{{% include-headless
-"/headless/replacement-views/replacement-view-target-restrictions" %}}
-{{< /note >}}
-
 {{% include-headless "/headless/replacement-views/associated-commands-blurb/"
 %}}
 
-#### CPU and memory considerations
+{{% include-from-yaml data="examples/alter_materialized_view" name="apply-replacement-command-details" %}}
 
-{{% include-headless
-"/headless/replacement-views/cpu-memory-considerations" %}}
+See [Recommended checks before replacing a
+view](/sql/alter-materialized-view/#recommended-checks-before-replacing-a-view).
 
-#### Restrictions and limitations
+#### Recommended checks before replacing a view
 
-{{% include-headless
-"headless/replacement-views/apply-replacement-txn-restrictions" %}}
+{{% include-from-yaml data="examples/alter_materialized_view"
+name="prereq-recommendations" %}}
 
 {{< /if-released >}}
 
@@ -138,15 +117,15 @@ The replacement view hydrates in the background.
 
 #### Apply the replacement
 
+{{% include-from-yaml data="examples/alter_materialized_view"
+name="apply-replacement-command-details" %}}
+
 {{% include-example file="examples/alter_materialized_view"
 example="example-apply-replacement" %}}
 
-{{% include-headless
-"/headless/replacement-views/apply-replacement-command-details" %}}
-
-See also:
-- [Replace materialized views
-  guide](/transform-data/updating-materialized-views/replace-materialized-view/)
+For a step-by-step tutorial on replacing a materialized view, see [Replace
+materialized views
+guide](/transform-data/updating-materialized-views/replace-materialized-view/)
 
 {{< /if-released >}}
 
