@@ -239,6 +239,8 @@ continuous query against Materialize in your application code:
    updates with timestamp greater than the `AS OF` timestamp. To include updates
    that occurred at the last progress timestamp, subtract `1` from the last
    progress timestamp.
+   
+   If you're subscribing _directly_ to a collection, as in `SUBSCRIBE TO <your collection> WITH (PROGRESS, SNAPSHOT false) AS OF <time>`, Materialize will only fetch the recent data for that query from storage, which can make this resumption fairly quick. However, subscribing to a query will build a new dataflow that needs to rehydrate, which can be slower.
 
    In a similar way, as results come in continuously, buffer the latest results
    in memory until you receive a [progress](/sql/subscribe#progress) message. At that point,
