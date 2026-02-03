@@ -35,7 +35,7 @@ fn sql_impl_cast(expr: &'static str) -> CastTemplate {
     let invoke = crate::func::sql_impl(expr);
     CastTemplate::new(move |ecx, _ccx, from_type, _to_type| {
         // Oddly, this needs to be able to gracefully fail so we can detect unmet dependencies.
-        let mut out = invoke(ecx.qcx, vec![from_type.clone()]).ok()?;
+        let mut out = invoke(ecx, vec![from_type.clone()]).ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);
             out
@@ -50,7 +50,7 @@ fn sql_impl_cast_per_context(casts: &[(CastContext, &'static str)]) -> CastTempl
         .collect();
     CastTemplate::new(move |ecx, ccx, from_type, _to_type| {
         let invoke = &casts[&ccx];
-        let r = invoke(ecx.qcx, vec![from_type.clone()]);
+        let r = invoke(ecx, vec![from_type.clone()]);
         let mut out = r.ok()?;
         Some(move |e| {
             out.splice_parameters(&[e], 0);

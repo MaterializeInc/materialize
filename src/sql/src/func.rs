@@ -344,7 +344,7 @@ impl<R> Operation<R> {
 /// functions for details.
 pub fn sql_impl(
     expr: &str,
-) -> impl Fn(&QueryContext, Vec<SqlScalarType>) -> Result<HirScalarExpr, PlanError> + use<> {
+) -> impl Fn(&ExprContext, Vec<SqlScalarType>) -> Result<HirScalarExpr, PlanError> + use<> {
     let expr = mz_sql_parser::parser::parse_expr(expr).unwrap_or_else(|e| {
         panic!(
             "static function definition failed to parse {}: {}",
@@ -352,10 +352,10 @@ pub fn sql_impl(
             e,
         )
     });
-    move |qcx, types| {
+    move |ecx, types| {
         // Reconstruct an expression context where the parameter types are
         // bound to the types of the expressions in `args`.
-        let mut scx = qcx.scx.clone();
+        let mut scx = ecx.qcx.scx.clone();
         scx.param_types = RefCell::new(
             types
                 .into_iter()
@@ -363,19 +363,29 @@ pub fn sql_impl(
                 .map(|(i, ty)| (i + 1, ty))
                 .collect(),
         );
-        let qcx = QueryContext::root(&scx, qcx.lifetime);
+        let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
 
         let (mut expr, _) = names::resolve(qcx.scx.catalog, expr.clone())?;
         // Desugar the expression
         transform_ast::transform(&scx, &mut expr)?;
 
+        let ecx_name = format!(
+            "static function definition (or its outer context '{}')",
+            ecx.name
+        );
         let ecx = ExprContext {
             qcx: &qcx,
-            name: "static function definition",
+            name: ecx_name.as_str(),
             scope: &Scope::empty(),
             relation_type: &SqlRelationType::empty(),
+            // Constrain the new context by the outer context's `allow_subqueries`.
+            // (We could potentially to the same for `allow_aggregates` and `allow_windows`, I just
+            // don't want to think these through until we have a concrete use case.)
+            // (`allow_parameters` we have to set true, because that is the machinery for function
+            // arguments, i.e., parameters from in here won't escape `sql_impl_func` or
+            // `sql_impl_cast`.)
             allow_aggregates: false,
-            allow_subqueries: true,
+            allow_subqueries: ecx.allow_subqueries,
             allow_parameters: true,
             allow_windows: false,
         };
@@ -402,7 +412,7 @@ fn sql_impl_func(expr: &str) -> Operation<HirScalarExpr> {
     let invoke = sql_impl(expr);
     Operation::variadic(move |ecx, args| {
         let types = args.iter().map(|arg| ecx.scalar_type(arg)).collect();
-        let mut out = invoke(ecx.qcx, types)?;
+        let mut out = invoke(ecx, types)?;
         out.splice_parameters(&args, 0);
         Ok(out)
     })
