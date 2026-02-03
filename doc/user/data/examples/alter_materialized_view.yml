@@ -46,12 +46,12 @@
 
 - name: "syntax-apply-replacement"
   code: |
-    ALTER MATERIALIZED VIEW <name> APPLY REPLACEMENT <replacement_view>;
+    ALTER MATERIALIZED VIEW <name> APPLY REPLACEMENT <replacement_materialized_view>;
   syntax_elements:
     - name: "`<name>`"
       description: |
         The name of the materialized view to replace.
-    - name: "`<replacement_view>`"
+    - name: "`<replacement_materialized_view>`"
       description: |
         The name of a replacement materialized view specifically created for
         the target materialized view. See [`CREATE REPLACEMENT MATERIALIZED VIEW
@@ -59,8 +59,8 @@
 
 - name: "example-apply-replacement"
   description: |
-    Assume that the `winning_bids_replacement` is hydrated to avoid downtime and
-    that the target `winning_bids` is not behind the replacement view (see
+    Assume that `winning_bids_replacement` is hydrated to avoid downtime and
+    that `winning_bids` is not behind `winning_bids_replacement` (see
     [Recommended checks before replacing a
     view](/sql/alter-materialized-view/#recommended-checks-before-replacing-a-view)
     for details).
@@ -79,30 +79,14 @@
     - Replaces the materialized view's definition with that of the replacement
       view and drops the replacement view at the same time.
 
-      {{< note >}}
-
-      If the replacement view is ahead of the target view, both the command and
-      the replacement view wait for the target view to catch up. During this
-      wait, the replacement view buffers any changes it receives from its
-      inputs, which, depending on the amount to buffer, could cause the cluster
-      to run out of memory.
-
-      {{< /note >}}
-
     - Emits a diff representing the changes between the old and new output.
-
-      {{< note >}}
-      All downstream objects must process this diff, which may cause temporary CPU
-      and memory spikes depending on the size of the changes.
-      {{< /note >}}
 
 - name: "prereq-recommendations-short"
   content: |
-    Before applying the replacement view:
-
-    - Verify that the replacement view is hydrated to replace without downtime.
-    - Verify that the target materialized view results are not behind the
-      replacement materialized view by checking their `write_frontier`.
+    Before applying the replacement materialized view:
+    - Verify that the replacement materialized view is hydrated to replace without downtime.
+    - Verify that the original and replacement materialized views are up to
+    date.
 
 - name: "prereq-recommendations"
   content: |
@@ -119,8 +103,9 @@
      JOIN mz_internal.mz_hydration_statuses AS h ON (mv.id = h.object_id)
      WHERE mv.name = '<replacement_view>';
      ```
-    - Verify that the target materialized view are is **not** behind the
-      replacement materialized view by checking their `write_frontier`.
+
+    - Verify that the original materialized view is not behind the replacement
+      and replacement materialized view.
 
       ```mzsql
       SELECT o.name, f.write_frontier
@@ -129,6 +114,19 @@
       AND f.object_id = o.id;
       ```
 
-      If the target view is behind, it is recommended to drop the replacement
-      view instead of having it run for an extended period, buffering
-      changes.
+      If the original materialized view is behind the replacement materialized view, both the command and the replacement view wait for the original view
+      to catch up. During this wait, the replacement view buffers any changes it
+      receives from its inputs, which, depending on the amount to buffer, could
+      cause the cluster to run out of memory.
+
+      {{< tip >}}
+      If the original view is behind, you can rerun the query to check the
+      progress of the original materialized view. If the rate of advancement
+      suggests that catch up will need an extended period of time, it is
+      recommended to drop the replacement view.
+      {{< /tip >}}
+
+    - Verify that the downstream objects (i.e., the cluster(s) hosting the
+    downstream objects) are able to process the diffs emitted by the operation.
+    Depending on the size of the changes, this may cause temporary CPU and
+    memory spikes

@@ -14,7 +14,7 @@ Use `ALTER MATERIALIZED VIEW` to:
 
 {{< if-released "v26.10" >}}
 
-- Replace a materialized view. *Public preview*.
+- Replace a materialized view. (*Public preview*)
 
 {{< /if-released >}}
 
@@ -117,15 +117,22 @@ The replacement view hydrates in the background.
 
 #### Apply the replacement
 
+{{< tip >}}
+
 {{% include-from-yaml data="examples/alter_materialized_view"
-name="apply-replacement-command-details" %}}
+name="prereq-recommendations-short" %}}
+
+See [Recommended checks for
+details](/sql/alter-materialized-view/#recommended-checks-before-replacing-a-view).
+
+{{< /tip >}}
 
 {{% include-example file="examples/alter_materialized_view"
 example="example-apply-replacement" %}}
 
 For a step-by-step tutorial on replacing a materialized view, see [Replace
 materialized views
-guide](/transform-data/updating-materialized-views/replace-materialized-view/)
+guide](/transform-data/updating-materialized-views/replace-materialized-view/).
 
 {{< /if-released >}}
 

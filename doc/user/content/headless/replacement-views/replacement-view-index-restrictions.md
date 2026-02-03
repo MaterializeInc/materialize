@@ -1,5 +1,6 @@
 ---
 headless: true
 ---
-You cannot create indexes on [replacement materialized
-views](/sql/create-materialized-view/#creating-replacement-materialized-views).
+You cannot create dependent objects using [replacement materialized
+views](/sql/create-materialized-view/#creating-replacement-materialized-views);
+for example, you cannot create an index on a replacement materialized view.
