@@ -121,7 +121,7 @@
       memory. If the  command does not execute successfully, we recommend
       canceling to prevent out-of-memory errors. To avoid this situation, t is
       recommended to first check whether the original materialized view is up to
-      date with the replacement. 
+      date with the replacement.
 
       {{< tip >}}
       If the original view is behind, you can rerun the query to check the
