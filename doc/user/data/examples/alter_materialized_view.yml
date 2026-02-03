@@ -85,8 +85,8 @@
   content: |
     Before applying the replacement materialized view:
     - Verify that the replacement materialized view is hydrated to replace without downtime.
-    - Verify that the original and replacement materialized views are up to
-    date.
+    - Verify that the original materialized view is not behind the replacement
+      materialized view.
 
 - name: "prereq-recommendations"
   content: |
@@ -105,7 +105,7 @@
      ```
 
     - Verify that the original materialized view is not behind the replacement
-      and replacement materialized view.
+      materialized view.
 
       ```mzsql
       SELECT o.name, f.write_frontier
