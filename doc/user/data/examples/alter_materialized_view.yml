@@ -85,8 +85,8 @@
   content: |
     Before applying the replacement materialized view:
     - Verify that the replacement materialized view is hydrated to replace without downtime.
-    - Verify that the original materialized view is not behind the replacement
-      materialized view.
+    - Verify that the original materializedview is up to date with its
+    replacement.
 
 - name: "prereq-recommendations"
   content: |
@@ -104,8 +104,7 @@
      WHERE mv.name = '<replacement_view>';
      ```
 
-    - Verify that the original materialized view is not behind the replacement
-      materialized view.
+    - Verify that the original view is up to date with its replacement.
 
       ```mzsql
       SELECT o.name, f.write_frontier
@@ -114,10 +113,15 @@
       AND f.object_id = o.id;
       ```
 
-      If the original materialized view is behind the replacement materialized view, both the command and the replacement view wait for the original view
+      To successfully replace a materialized view, the original and the
+      replacement materialized views need to both be up to date. If the original
+      is lagging behind the replacement, the command waits for the original view
       to catch up. During this wait, the replacement view buffers any changes it
-      receives from its inputs, which, depending on the amount to buffer, could
-      cause the cluster to run out of memory.
+      receives from its inputs, which could cause the cluster to run out of
+      memory. If the  command does not execute successfully, we recommend
+      canceling to prevent out-of-memory errors. To avoid this situation, t is
+      recommended to first check whether the original materialized view is up to
+      date with the replacement. 
 
       {{< tip >}}
       If the original view is behind, you can rerun the query to check the
