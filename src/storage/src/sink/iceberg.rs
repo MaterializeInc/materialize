@@ -73,6 +73,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
+use std::convert::Infallible;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
@@ -571,6 +572,7 @@ fn mint_batch_descriptions<G, D>(
 ) -> (
     VecCollection<G, D, Diff>,
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     PressOnDropButton,
 )
@@ -585,6 +587,7 @@ where
 
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let (_, table_ready_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (output, output_stream) = builder.new_output();
     let (batch_desc_output, batch_desc_stream) =
         builder.new_output::<CapacityContainerBuilder<_>>();
@@ -599,7 +602,7 @@ where
 
     let (button, errors): (_, Stream<G, Rc<anyhow::Error>>) = builder.build_fallible(move |caps| {
         Box::pin(async move {
-            let [data_capset, capset]: &mut [_; 2] = caps.try_into().unwrap();
+            let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
             *data_capset = CapabilitySet::new();
 
             if !is_active_worker {
@@ -629,6 +632,8 @@ where
                 initial_schema.as_ref(),
             )
             .await?;
+
+            *table_ready_capset = CapabilitySet::new();
 
             let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
             let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
@@ -766,6 +771,7 @@ where
     (
         output_stream.as_collection(),
         batch_desc_stream,
+        table_ready_stream,
         statuses,
         button.press_on_drop(),
     )
@@ -876,6 +882,7 @@ fn write_data_files<G>(
     name: String,
     input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
     batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: &Stream<G, Infallible>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     materialize_arrow_schema: Arc<ArrowSchema>,
@@ -894,6 +901,7 @@ where
 
     let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
+    let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
     let mut batch_desc_input =
         builder.new_input_for(&batch_desc_input.broadcast(), Pipeline, &output);
     let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
@@ -909,6 +917,9 @@ where
 
             let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
             let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
+            while let Some(_) = table_ready_input.next().await {
+                // Wait for table to be ready
+            }
             let table = catalog
                 .load_table(&table_ident)
                 .await
@@ -1221,6 +1232,7 @@ fn commit_to_iceberg<G>(
     sink_version: u64,
     batch_input: &Stream<G, BoundedDataFile>,
     batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: &Stream<G, Infallible>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1242,6 +1254,7 @@ where
     let mut input = builder.new_disconnected_input(batch_input, Exchange::new(move |_| hashed_id));
     let mut batch_desc_input =
         builder.new_disconnected_input(batch_desc_input, Exchange::new(move |_| hashed_id));
+    let mut table_ready_input = builder.new_disconnected_input(table_ready_stream, Pipeline);
 
     let (button, errors) = builder.build_fallible(move |_caps| {
         Box::pin(async move {
@@ -1260,6 +1273,9 @@ where
 
             let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
             let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
+            while let Some(_) = table_ready_input.next().await {
+                // Wait for table to be ready
+            }
             let mut table = catalog
                 .load_table(&table_ident)
                 .await
@@ -1537,21 +1553,23 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             .clone();
 
         let connection_for_minter = self.clone();
-        let (minted_input, batch_descriptions, mint_status, mint_button) = mint_batch_descriptions(
-            format!("{sink_id}-iceberg-mint"),
-            sink_id,
-            &input,
-            sink,
-            connection_for_minter,
-            storage_state.storage_configuration.clone(),
-            Arc::clone(&iceberg_schema),
-        );
+        let (minted_input, batch_descriptions, table_ready, mint_status, mint_button) =
+            mint_batch_descriptions(
+                format!("{sink_id}-iceberg-mint"),
+                sink_id,
+                &input,
+                sink,
+                connection_for_minter,
+                storage_state.storage_configuration.clone(),
+                Arc::clone(&iceberg_schema),
+            );
 
         let connection_for_writer = self.clone();
         let (datafiles, write_status, write_button) = write_data_files(
             format!("{sink_id}-write-data-files"),
             minted_input,
             &batch_descriptions,
+            &table_ready,
             connection_for_writer,
             storage_state.storage_configuration.clone(),
             Arc::new(arrow_schema_with_ids.clone()),
@@ -1566,6 +1584,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             sink.version,
             &datafiles,
             &batch_descriptions,
+            &table_ready,
             Rc::clone(&write_frontier),
             connection_for_committer,
             storage_state.storage_configuration.clone(),
