@@ -2233,7 +2233,7 @@ feature_flags!(
     {
         name: enable_replacement_materialized_views,
         desc: "Whether to enable replacement materialized views.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
