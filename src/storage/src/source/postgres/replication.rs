@@ -311,6 +311,12 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 std::future::pending::<()>().await;
                 return Ok(());
             };
+            // If we don't set "offset_committed" now, it'll be stuck at 0 (the default value)
+            // until we finish processing the table snapshot. If the snapshot is large, that could be a long time.
+            // This confuses the ingestion lag calculation in the UI, causing it to yield erroneously high values.
+            for stat in config.statistics.values() {
+                stat.set_offset_committed(resume_lsn.offset);
+            }
             upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
 
