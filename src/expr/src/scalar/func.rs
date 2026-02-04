@@ -2507,6 +2507,7 @@ pub enum BinaryFunc {
     ConvertFrom(ConvertFrom),
     Left(Left),
     Position(Position),
+    Strpos(Strpos),
     Right(Right),
     RepeatString,
     Normalize,
@@ -2789,6 +2790,7 @@ impl BinaryFunc {
             BinaryFunc::Decode(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Left(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Position(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::Strpos(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Right(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Trim(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::TrimLeading(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -3133,6 +3135,7 @@ impl BinaryFunc {
             DigestString(s) => s.output_type(input1_type, input2_type),
             DigestBytes(s) => s.output_type(input1_type, input2_type),
             Position(s) => s.output_type(input1_type, input2_type),
+            Strpos(s) => s.output_type(input1_type, input2_type),
             Encode(s) => s.output_type(input1_type, input2_type),
             Decode(s) => s.output_type(input1_type, input2_type),
             Power(s) => s.output_type(input1_type, input2_type),
@@ -3330,6 +3333,7 @@ impl BinaryFunc {
             BinaryFunc::NotEq(s) => s.propagates_nulls(),
             BinaryFunc::ParseIdent(s) => s.propagates_nulls(),
             BinaryFunc::Position(s) => s.propagates_nulls(),
+            BinaryFunc::Strpos(s) => s.propagates_nulls(),
             BinaryFunc::Power(s) => s.propagates_nulls(),
             BinaryFunc::PowerNumeric(s) => s.propagates_nulls(),
             BinaryFunc::PrettySql(s) => s.propagates_nulls(),
@@ -3526,6 +3530,7 @@ impl BinaryFunc {
             NotEq(s) => s.introduces_nulls(),
             ParseIdent(s) => s.introduces_nulls(),
             Position(s) => s.introduces_nulls(),
+            Strpos(s) => s.introduces_nulls(),
             Power(s) => s.introduces_nulls(),
             PowerNumeric(s) => s.introduces_nulls(),
             PrettySql(s) => s.introduces_nulls(),
@@ -3778,6 +3783,7 @@ impl BinaryFunc {
             Normalize => false,
             ParseIdent(s) => s.is_infix_op(),
             Position(s) => s.is_infix_op(),
+            Strpos(s) => s.is_infix_op(),
             Power(s) => s.is_infix_op(),
             PowerNumeric(s) => s.is_infix_op(),
             PrettySql(s) => s.is_infix_op(),
@@ -3952,6 +3958,7 @@ impl BinaryFunc {
             BinaryFunc::NotEq(s) => s.negate(),
             BinaryFunc::ParseIdent(s) => s.negate(),
             BinaryFunc::Position(s) => s.negate(),
+            BinaryFunc::Strpos(s) => s.negate(),
             BinaryFunc::Power(s) => s.negate(),
             BinaryFunc::PowerNumeric(s) => s.negate(),
             BinaryFunc::PrettySql(s) => s.negate(),
@@ -4181,6 +4188,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom(s) => s.could_error(),
             BinaryFunc::Left(s) => s.could_error(),
             BinaryFunc::Position(s) => s.could_error(),
+            BinaryFunc::Strpos(s) => s.could_error(),
             BinaryFunc::Right(s) => s.could_error(),
             BinaryFunc::RepeatString => true,
             BinaryFunc::Normalize => true,
@@ -4379,6 +4387,7 @@ impl BinaryFunc {
             BinaryFunc::MapContainsMap(s) => s.is_monotone(),
             BinaryFunc::ConvertFrom(s) => s.is_monotone(),
             BinaryFunc::Position(s) => s.is_monotone(),
+            BinaryFunc::Strpos(s) => s.is_monotone(),
             BinaryFunc::Right(s) => s.is_monotone(),
             BinaryFunc::RepeatString => (false, false),
             BinaryFunc::Trim(s) => s.is_monotone(),
@@ -4591,6 +4600,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ConvertFrom(s) => s.fmt(f),
             BinaryFunc::Left(s) => s.fmt(f),
             BinaryFunc::Position(s) => s.fmt(f),
+            BinaryFunc::Strpos(s) => s.fmt(f),
             BinaryFunc::Right(s) => s.fmt(f),
             BinaryFunc::Trim(s) => s.fmt(f),
             BinaryFunc::TrimLeading(s) => s.fmt(f),
@@ -4941,6 +4951,11 @@ fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     } else {
         Ok(0)
     }
+}
+
+#[sqlfunc(propagates_nulls = true)]
+fn strpos(string: &str, substring: &str) -> Result<i32, EvalError> {
+    position(substring, string)
 }
 
 #[sqlfunc(

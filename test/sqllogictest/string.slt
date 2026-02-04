@@ -1095,6 +1095,22 @@ NULL
 1
 0
 
+query I rowsort
+SELECT strpos(strcol2, strcol1) FROM positiontest;
+----
+0
+0
+1
+3
+3
+NULL
+NULL
+
+query I
+SELECT strpos('high', 'ig')
+----
+3
+
 # NULL inputs
 query I
 SELECT position(NULL IN 'str')

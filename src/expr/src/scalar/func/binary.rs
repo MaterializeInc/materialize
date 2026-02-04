@@ -329,6 +329,7 @@ mod derive {
         NotEq,
         ParseIdent,
         Position,
+        Strpos,
         Power,
         PowerNumeric,
         PrettySql,
