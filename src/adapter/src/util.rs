@@ -14,18 +14,13 @@ use mz_catalog::durable::{DurableCatalogError, FenceError};
 use mz_compute_client::controller::error::{
     CollectionUpdateError, DataflowCreationError, InstanceMissing, PeekError, ReadPolicyError,
 };
-use mz_controller_types::ClusterId;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{exit, soft_assert_no_log};
 use mz_repr::{RelationDesc, RowIterator, SqlScalarType};
-use mz_sql::names::FullItemName;
 use mz_sql::plan::StatementDesc;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::Var;
-use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{
-    CreateIndexStatement, Ident, Raw, RawClusterName, RawItemName, Statement,
-};
+use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::controller::StorageError;
 use mz_transform::TransformError;
 use tokio::sync::mpsc::UnboundedSender;
@@ -191,35 +186,6 @@ impl<T: Transmittable> Drop for ClientTransmitter<T> {
             panic!("client transmitter dropped without send")
         }
     }
-}
-
-// TODO(benesch): constructing the canonical CREATE INDEX statement should be
-// the responsibility of the SQL package.
-pub fn index_sql(
-    index_name: String,
-    cluster_id: ClusterId,
-    view_name: FullItemName,
-    view_desc: &RelationDesc,
-    keys: &[usize],
-) -> String {
-    use mz_sql::ast::{Expr, Value};
-
-    CreateIndexStatement::<Raw> {
-        name: Some(Ident::new_unchecked(index_name)),
-        on_name: RawItemName::Name(mz_sql::normalize::unresolve(view_name)),
-        in_cluster: Some(RawClusterName::Resolved(cluster_id.to_string())),
-        key_parts: Some(
-            keys.iter()
-                .map(|i| match view_desc.get_unambiguous_name(*i) {
-                    Some(n) => Expr::Identifier(vec![Ident::new_unchecked(n.to_string())]),
-                    _ => Expr::Value(Value::Number((i + 1).to_string())),
-                })
-                .collect(),
-        ),
-        with_options: vec![],
-        if_not_exists: false,
-    }
-    .to_ast_string_stable()
 }
 
 /// Creates a description of the statement `stmt`.
