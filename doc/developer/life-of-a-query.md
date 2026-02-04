@@ -97,7 +97,7 @@ commands for itself.
 
 Query processing follows these steps:
 
-parsing & describing → logical planning → timestamp selection → optimization & physical planning → execution
+parsing & describing → query planning → timestamp selection → optimization → execution
 
 ## Parsing & Describing
 
@@ -120,13 +120,13 @@ as needed. All further steps are orchestrated by the adapter/Coordinator: the
 front end passes the AST as a command and will become involved again when
 sending results back to the client.
 
-## Logical Planning
+## Query Planning
 
-Logical planning generates a
+Query planning generates a
 [Plan](https://github.com/MaterializeInc/materialize/blob/b3475aaaf96f9fae4a0d68cbb5202c224d9ce15b/src/sql/src/plan.rs#L133)
 from the AST. Glossing over some details, this binds referenced names based on
-the Catalog as of planning time and determines a logical execution plan. The
-entry point is
+the Catalog as of planning time and determines an execution plan. The entry
+point is
 [plan](https://github.com/MaterializeInc/materialize/blob/b3475aaaf96f9fae4a0d68cbb5202c224d9ce15b/src/sql/src/plan/statement.rs#L274).
 
 One of the differences between the user (SQL) commands that are input to the
@@ -134,7 +134,7 @@ adapter and commands for the rest of the system is the use of user-defined and
 reusable names in SQL statements rather than the use of immutable, non-reusable
 IDs. The binding mentioned above turns those user-defined names into IDs.
 
-As mentioned in the previous section, logical planning happens inside the
+As mentioned in the previous section, query planning happens inside the
 Coordinator.
 
 ## Timestamp Selection
@@ -170,7 +170,8 @@ include a
 Which is a physical execution plan that can be given to the compute layer, to
 execute on a cluster.
 
-TODO: Expand this section on optimization, if/when needed.
+For more details on query compilation and optimization, see
+[101-query-compilation.md](/doc/developer/101-query-compilation.md).
 
 ## Execution on a Cluster
 
@@ -219,7 +220,8 @@ arrangement that a peek can read out of.
 On the more technical side, arrangements are multi-versioned indexes. The
 [arrangements documentation](/doc/developer/arrangements.md) describes them as
 an indexed representation of a stream of update triples `(data, time, diff)`,
-organized by key for efficient lookups.
+organized by key for efficient lookups. For more background, see also the
+[Shared Arrangements paper](https://arxiv.org/pdf/1812.02639).
 
 ## Controller <-> Cluster Protocol
 
@@ -285,7 +287,7 @@ processing can use the peek stash, so queries that have OFFSET, LIMIT, or ORDER
 BY _cannot_ use the large result stash.
 
 For all queries, we start out trying to use the inline result protocol but then
-fall back to the stash when we notice the result size getting to large and a
+fall back to the stash when we notice the result size getting too large and a
 query is eligible. [This
 code](https://github.com/MaterializeInc/materialize/blob/a15c9298b3c4b442a295ec1db175ca6b72af6f29/src/compute/src/compute_state.rs#L939)
 inside `process_peek` is where that decision happens.
@@ -326,9 +328,9 @@ from the clusters, before sending the result out to the client. This happens
 within the async task that routes results from the controller to the front end,
 in [this
 code](https://github.com/MaterializeInc/materialize/blob/53acc93eee1bbbf418fde681389aec0419db8954/src/adapter/src/coord/peek.rs#L910).
-As mentioned above, the presence or not of a Finishing is what determines the
-eligibility of a query for the large result stash feature. Queries that require
-a Finishing cannot use the stash.
+As mentioned above, the shape of the Finishing determines the eligibility of a
+query for the large result stash feature. Queries with ORDER BY or non-identity
+projections cannot use the stash (see `RowSetFinishing::is_streamable`).
 
 ## Query Processing: A Flow Chart
 
@@ -364,9 +366,9 @@ Details on components and concepts that we didn't explain above.
 
 ### Durable Storage
 
-At the coarsest level, a Materialize Environment has to types of durable state:
+At the coarsest level, a Materialize Environment has two types of durable state:
 
-- The _Catalog_, which is the metadata about what objects exists, settings,
+- The _Catalog_, which is the metadata about what objects exist, settings,
   roles, clusters, replicas, etc.
 - Collection data, which is both builtin collections and user collections, such
   as Tables, Sources, Materialized Views, etc.
