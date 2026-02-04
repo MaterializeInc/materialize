@@ -443,4 +443,3 @@ replica happens via the storage protocol.
 Both controllers maintain read and write capabilities for their respective
 resources, coordinate compaction policies, and ensure that data remains
 accessible as long as needed.
-
