@@ -14,7 +14,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.100"
 arrow = { version = "57", default-features = false }
-bytes = { version = "1.10.1", features = ["serde"] }
+bytes = { version = "1.11.1", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 hex = "0.4.3"
 itertools = "0.14.0"

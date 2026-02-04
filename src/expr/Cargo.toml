@@ -20,7 +20,7 @@ harness = false
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1.0.100"
-bytes = "1.10.1"
+bytes = "1.11.1"
 bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }

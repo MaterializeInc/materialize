@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 async-trait = "0.1.89"
 byteorder = "1.4.3"
-bytes = "1.10.1"
+bytes = "1.11.1"
 bytesize = "2.1.0"
 derivative = "2.2.0"
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
