@@ -246,6 +246,17 @@ def workflow_silent_connection_drop(
         _verify_exactly_n_replication_slots_exist(pg_conn, n=1)
 
 
+def workflow_verify_offset_committed_on_startup(c: Composition) -> None:
+    """Test that offset_committed advances past zero before new cluster finishes processing snapshot."""
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "postgres")
+
+    c.run_testdrive_files(
+        "override/verify-offset-committed-on-startup.td",
+    )
+
+
 def _await_postgres_replication_slot_state(
     pg_conn: Connection, await_active: bool, error_message: str
 ) -> None:
