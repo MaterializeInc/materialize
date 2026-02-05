@@ -113,6 +113,10 @@ impl Optimizer {
     pub fn up_to(&self) -> Option<Timestamp> {
         self.up_to.clone()
     }
+
+    pub fn sink_id(&self) -> GlobalId {
+        self.sink_id
+    }
 }
 
 /// The (sealed intermediate) result after:

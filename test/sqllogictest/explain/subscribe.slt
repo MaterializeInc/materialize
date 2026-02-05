@@ -70,7 +70,23 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE (SELECT a FROM t WHERE a > 5)
 ----
-t48:
+Explained Query:
+  Project (#0)
+    Filter (#0{a} > 5)
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+  filter=((#0{a} > 5))
+
+Target cluster: quickstart
+
+EOF
+
+# Test EXPLAIN OPTIMIZED PLAN for SUBSCRIBE with a query
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SELECT a FROM t WHERE a > 5
+----
+Explained Query:
   Project (#0)
     Filter (#0{a} > 5)
       ReadStorage materialize.public.t
@@ -97,7 +113,7 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE (SELECT a, b FROM t WHERE a > 5)
 ----
-t52:
+Explained Query:
   Get::Collection materialize.public.t
     raw=true
 
@@ -121,8 +137,6 @@ Source materialize.public.valid
 
 Target cluster: quickstart
 
-AS OF: 1000
-
 EOF
 
 # Test EXPLAIN with AS OF AT LEAST timestamp
@@ -133,8 +147,6 @@ EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF AT LEAST 500
 Source materialize.public.valid
 
 Target cluster: quickstart
-
-AS OF: AT LEAST 500
 
 EOF
 
@@ -147,8 +159,6 @@ Source materialize.public.valid
 
 Target cluster: quickstart
 
-UP TO: 18446744073709551615
-
 EOF
 
 # Test EXPLAIN with AS OF and UP TO combined
@@ -159,9 +169,6 @@ EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 100 UP TO 500
 Source materialize.public.valid
 
 Target cluster: quickstart
-
-AS OF: 100
-UP TO: 500
 
 EOF
 
@@ -176,8 +183,6 @@ Source materialize.public.t
 
 Target cluster: quickstart
 
-WITH SNAPSHOT: false
-
 EOF
 
 # Test EXPLAIN with PROGRESS option
@@ -189,8 +194,6 @@ Source materialize.public.t
 
 Target cluster: quickstart
 
-EMIT PROGRESS: true
-
 EOF
 
 # Test EXPLAIN with multiple options (both SNAPSHOT and PROGRESS)
@@ -201,9 +204,6 @@ EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false, PROGRESS = true)
 Source materialize.public.t
 
 Target cluster: quickstart
-
-WITH SNAPSHOT: false
-EMIT PROGRESS: true
 
 EOF
 

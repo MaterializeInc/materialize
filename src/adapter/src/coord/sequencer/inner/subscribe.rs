@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use maplit::btreemap;
 use mz_ore::instrument;
-use mz_repr::explain::ExprHumanizerExt;
+use mz_repr::GlobalId;
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, Row};
-use mz_sql::plan::{self, QueryWhen};
+use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -81,7 +82,12 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let stage = return_if_err!(
-            self.subscribe_validate(ctx.session_mut(), plan, target_cluster, ExplainContext::None),
+            self.subscribe_validate(
+                ctx.session_mut(),
+                plan,
+                target_cluster,
+                ExplainContext::None
+            ),
             ctx
         );
         self.sequence_staged(ctx, Span::current(), stage).await;
@@ -110,6 +116,11 @@ impl Coordinator {
             unreachable!()
         };
 
+        let desc = match &plan.from {
+            SubscribeFrom::Id(_) => None,
+            SubscribeFrom::Query { desc, .. } => Some(desc.clone()),
+        };
+
         // Create an OptimizerTrace instance to collect plans emitted when
         // executing the optimizer pipeline.
         let optimizer_trace = OptimizerTrace::new(stage.paths());
@@ -120,7 +131,7 @@ impl Coordinator {
             format,
             stage,
             replan: None,
-            desc: None,
+            desc,
             optimizer_trace,
         });
         let stage = return_if_err!(
@@ -368,6 +379,7 @@ impl Coordinator {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 SubscribeStage::Explain(SubscribeExplain {
                                     validity,
+                                    optimizer,
                                     plan,
                                     df_meta,
                                     cluster_id,
@@ -390,12 +402,10 @@ impl Coordinator {
                             };
 
                             if explain_ctx.broken {
-                                tracing::error!(
-                                    "error while handling EXPLAIN statement: {}",
-                                    err
-                                );
+                                tracing::error!("error while handling EXPLAIN statement: {}", err);
                                 SubscribeStage::Explain(SubscribeExplain {
                                     validity,
+                                    optimizer,
                                     plan,
                                     df_meta: Default::default(),
                                     cluster_id,
@@ -496,7 +506,8 @@ impl Coordinator {
         &self,
         session: &Session,
         SubscribeExplain {
-            plan,
+            plan: _,
+            optimizer,
             df_meta,
             cluster_id,
             explain_ctx:
@@ -505,13 +516,27 @@ impl Coordinator {
                     format,
                     stage,
                     optimizer_trace,
+                    desc,
                     ..
                 },
             ..
         }: SubscribeExplain,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
-        let expr_humanizer = ExprHumanizerExt::new(Default::default(), &session_catalog);
+
+        let expr_humanizer = {
+            let transient_items = desc
+                .map(|desc| {
+                    btreemap! {
+                        optimizer.sink_id() => TransientItem::new(
+                            Some(vec![GlobalId::Explain.to_string()]),
+                            Some(desc.iter_names().map(|c| c.to_string()).collect()),
+                        )
+                    }
+                })
+                .unwrap_or_default();
+            ExprHumanizerExt::new(transient_items, &session_catalog)
+        };
 
         let target_cluster = self.catalog().get_cluster(cluster_id);
 
@@ -534,73 +559,6 @@ impl Coordinator {
             )
             .await?;
 
-        // Add SUBSCRIBE-specific options to the explain output for TEXT format.
-        // Skip for TRACE stage (which has multi-column output) and JSON format.
-        let rows = if matches!(format, mz_repr::explain::ExplainFormat::Text)
-            && !matches!(stage, mz_sql_parser::ast::ExplainStage::Trace)
-        {
-            rows.into_iter()
-                .map(|row| {
-                    let mut output = row.iter().next().unwrap().unwrap_str().to_string();
-                    output.push_str(&Self::format_subscribe_options(&plan));
-                    Row::pack_slice(&[Datum::from(output.as_str())])
-                })
-                .collect()
-        } else {
-            rows
-        };
-
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
-    }
-
-    /// Formats SUBSCRIBE-specific options for explain output.
-    fn format_subscribe_options(plan: &plan::SubscribePlan) -> String {
-        use std::fmt::Write;
-        let mut output = String::new();
-
-        // Format AS OF
-        match &plan.when {
-            plan::QueryWhen::Immediately => {
-                // Default, don't print anything
-            }
-            plan::QueryWhen::FreshestTableWrite => {
-                writeln!(output).unwrap();
-                writeln!(output, "AS OF: AT LEAST (freshest table write)").unwrap();
-            }
-            plan::QueryWhen::AtTimestamp(ts) => {
-                writeln!(output).unwrap();
-                writeln!(output, "AS OF: {}", ts).unwrap();
-            }
-            plan::QueryWhen::AtLeastTimestamp(ts) => {
-                writeln!(output).unwrap();
-                writeln!(output, "AS OF: AT LEAST {}", ts).unwrap();
-            }
-        }
-
-        // Format UP TO
-        if let Some(up_to) = &plan.up_to {
-            if output.is_empty() {
-                writeln!(output).unwrap();
-            }
-            writeln!(output, "UP TO: {}", up_to).unwrap();
-        }
-
-        // Format SNAPSHOT
-        if !plan.with_snapshot {
-            if output.is_empty() {
-                writeln!(output).unwrap();
-            }
-            writeln!(output, "WITH SNAPSHOT: false").unwrap();
-        }
-
-        // Format PROGRESS
-        if plan.emit_progress {
-            if output.is_empty() {
-                writeln!(output).unwrap();
-            }
-            writeln!(output, "EMIT PROGRESS: true").unwrap();
-        }
-
-        output
     }
 }
