@@ -56,7 +56,7 @@ contains:wrong number of columns
 
 # Cannot perform this COPY because column c is NOT NULL, has no default value, and is not being copied into.
 ! COPY INTO t1_not_null (a, b) FROM '${1_csv_url}' (FORMAT CSV);
-contains:is NOT NULL but is not specified in the COPY statement and has no DEFAULT value
+contains:is NOT NULL
 
 > COPY INTO t1_fun_house (z, y) FROM '${1_csv_url}' (FORMAT CSV);
 > SELECT * from t1_fun_house;

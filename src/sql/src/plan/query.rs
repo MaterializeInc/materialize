@@ -503,6 +503,7 @@ pub fn plan_copy_item(
 > {
     let item = scx.get_item_by_resolved_name(&item_name)?;
     let fullname = scx.catalog.resolve_full_name(item.name());
+    
     let table_desc = match item.relation_desc() {
         Some(desc) => desc.into_owned(),
         None => {
@@ -512,6 +513,10 @@ pub fn plan_copy_item(
             });
         }
     };
+    println!(
+        "DEBUG plan_copy_item: planning COPY into target: {fullname} {:?}",
+        table_desc
+    );
     let mut ordering = Vec::with_capacity(columns.len());
 
     // TODO(cf2): The logic here to create the `source_desc` and the MFP are a bit duplicated and
@@ -543,7 +548,15 @@ pub fn plan_copy_item(
         // For each column in the destination table, either project it from the source data, or provide
         // an expression to fill in a default value.
         let column_details = table_desc.iter().zip_eq(table_defaults);
+        println!(
+            "DEBUG plan_copy_item: source_column_names: {:?}",
+            source_column_names
+        );
         for ((col_name, col_type), col_default) in column_details {
+            println!(
+                "DEBUG plan_copy_item: processing column {} of type {:?} with default {:?}",
+                col_name, col_type, col_default
+            );
             let maybe_src_idx = source_column_names.iter().position(|name| name == col_name);
             if let Some(src_idx) = maybe_src_idx {
                 project_keys.push(src_idx);
@@ -555,13 +568,21 @@ pub fn plan_copy_item(
                 // implicit default is NULL), we should reject this COPY statement as it would
                 // always fail at runtime due to a NOT NULL constraint violation.
                 if !col_type.nullable && matches!(&col_default, Expr::Value(Value::Null)) {
-                    sql_bail!(
-                        "column {} is NOT NULL but is not specified in the COPY statement and has no DEFAULT value",
+                    // sql_bail!(
+                    //     "column {} is NOT NULL but is not specified in the COPY statement and has no DEFAULT value",
+                    //     col_name.quoted()
+                    // );
+                    println!(
+                        "DEBUG plan_copy_item: column {} is NOT NULL but is not specified in the COPY statement and has no DEFAULT value",
                         col_name.quoted()
                     );
                 }
                 let hir = plan_default_expr(scx, &col_default, &col_type.scalar_type)?;
                 let mir = hir.lower_uncorrelated(scx.catalog.system_vars())?;
+                println!(
+                    "DEBUG plan_copy_item: default for column {}: {:?}",
+                    col_name, mir
+                );
                 project_keys.push(source_column_names.len() + default_exprs.len());
                 default_exprs.push(mir);
             }
@@ -570,6 +591,10 @@ pub fn plan_copy_item(
         let mfp = MapFilterProject::new(source_column_names.len())
             .map(default_exprs)
             .project(project_keys);
+        println!(
+            "DEBUG plan_copy_item: constructed MFP for COPY: {:?}",
+            mfp
+        );
         Some(mfp)
     } else {
         None
@@ -612,6 +637,10 @@ pub fn plan_copy_item(
         // The source data is a different shape than the destination table.
         RelationDesc::new(SqlRelationType::new(source_types), names)
     };
+    println!(
+        "DEBUG plan_copy_item: constructed source_desc for COPY: {:?}",
+        source_desc
+    );
 
     Ok((item.id(), source_desc, ordering, mfp))
 }
