@@ -74,6 +74,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
+use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
@@ -137,6 +138,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
+use tracing::{debug, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -582,6 +584,7 @@ where
 {
     let scope = input.scope();
     let name_for_error = name.clone();
+    let name_for_logging = name.clone();
     let mut builder = OperatorBuilder::new(name, scope.clone());
     let sink_version = sink.version;
 
@@ -633,6 +636,13 @@ where
                 initial_schema.as_ref(),
             )
             .await?;
+            debug!(
+                ?sink_id,
+                %name_for_logging,
+                namespace = %connection.namespace,
+                table = %connection.table,
+                "iceberg mint loaded/created table"
+            );
 
             *table_ready_capset = CapabilitySet::new();
 
@@ -642,6 +652,13 @@ where
                 Some((f, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
+            debug!(
+                ?sink_id,
+                %name_for_logging,
+                resume_upper = %resume_upper.pretty(),
+                resume_version,
+                "iceberg mint resume position loaded"
+            );
 
             // The input has overcompacted if
             let overcompacted =
@@ -714,7 +731,20 @@ where
                     };
 
                     if PartialOrder::less_than(&batch_lower, &current_upper) {
-                        let batch_description = (batch_lower, current_upper.clone());
+                        let batch_description = (batch_lower.clone(), current_upper.clone());
+                        debug!(
+                            ?sink_id,
+                            %name_for_logging,
+                            batch_lower = %batch_lower.pretty(),
+                            current_upper = %current_upper.pretty(),
+                            "iceberg mint initializing (catch-up batch)"
+                        );
+                        debug!(
+                            "{}: creating catch-up batch [{}, {})",
+                            name_for_logging,
+                            batch_lower.pretty(),
+                            current_upper.pretty()
+                        );
                         batch_descriptions.push(batch_description);
                     }
 
@@ -727,7 +757,15 @@ where
                             .expect("commit interval too large for u64"));
                         let desired_batch_upper = Antichain::from_elem(current_upper_ts.step_forward_by(&duration_ts));
 
-                        let batch_description = (current_upper.clone(), desired_batch_upper);
+                        let batch_description = (current_upper.clone(), desired_batch_upper.clone());
+                        debug!(
+                            "{}: minting future batch {}/{} [{}, {})",
+                            name_for_logging,
+                            i,
+                            INITIAL_DESCRIPTIONS_TO_MINT,
+                            current_upper.pretty(),
+                            desired_batch_upper.pretty()
+                        );
                         current_upper = batch_description.1.clone();
                         batch_descriptions.push(batch_description);
                     }
@@ -908,6 +946,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let scope = input.scope();
+    let name_for_logging = name.clone();
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
     let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
@@ -917,7 +956,7 @@ where
         builder.new_input_for(&batch_desc_input.broadcast(), Pipeline, &output);
     let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
 
-    let (button, errors) = builder.build_fallible(|caps| {
+    let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
             let catalog = connection
@@ -1115,15 +1154,24 @@ where
                                 let (lower, upper) = &batch_desc;
                                 // Disable seen_rows tracking for snapshot batch to save memory
                                 let is_snapshot = lower == &as_of;
+                                debug!(
+                                    "{}: received batch description [{}, {}), snapshot={}",
+                                    name_for_logging,
+                                    lower.pretty(),
+                                    upper.pretty(),
+                                    is_snapshot
+                                );
                                 let mut delta_writer = create_delta_writer(is_snapshot).await?;
                                 // Drain any stashed rows that belong to this batch
                                 let row_ts_keys: Vec<_> = stashed_rows.keys().cloned().collect();
+                                let mut drained_count = 0;
                                 for row_ts in row_ts_keys {
                                     let ts = Antichain::from_elem(row_ts.clone());
                                     if PartialOrder::less_equal(lower, &ts)
                                         && PartialOrder::less_than(&ts, upper)
                                     {
                                         if let Some(rows) = stashed_rows.remove(&row_ts) {
+                                            drained_count += rows.len();
                                             for (_row, diff_pair) in rows {
                                                 metrics.stashed_rows.dec();
                                                 let record_batch = row_to_recordbatch(
@@ -1138,6 +1186,15 @@ where
                                             }
                                         }
                                     }
+                                }
+                                if drained_count > 0 {
+                                    debug!(
+                                        "{}: drained {} stashed rows into batch [{}, {})",
+                                        name_for_logging,
+                                        drained_count,
+                                        lower.pretty(),
+                                        upper.pretty()
+                                    );
                                 }
                                 let prev =
                                     in_flight_batches.insert(batch_desc.clone(), delta_writer);
@@ -1185,9 +1242,25 @@ where
                                 }
                                 if !written {
                                     // ...otherwise stash it for later
+                                    trace!(
+                                        "{}: stashing row at timestamp {}",
+                                        name_for_logging, row_ts
+                                    );
                                     let entry = stashed_rows.entry(row_ts).or_default();
                                     metrics.stashed_rows.inc();
                                     entry.push((row, diff_pair));
+
+                                    // Periodically warn if stashed rows are growing
+                                    let total_stashed: usize =
+                                        stashed_rows.values().map(|v| v.len()).sum();
+                                    if total_stashed > 0 && total_stashed % 10000 == 0 {
+                                        debug!(
+                                            "{}: {} rows stashed across {} timestamps",
+                                            name_for_logging,
+                                            total_stashed,
+                                            stashed_rows.len()
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1212,12 +1285,26 @@ where
                         .collect();
 
                     if !ready_batches.is_empty() {
+                        debug!(
+                            "{}: closing {} batches (batch_frontier: {}, input_frontier: {})",
+                            name_for_logging,
+                            ready_batches.len(),
+                            batch_description_frontier.pretty(),
+                            input_frontier.pretty()
+                        );
                         let mut max_upper = Antichain::from_elem(Timestamp::minimum());
                         for (desc, mut delta_writer) in ready_batches {
                             let data_files = delta_writer
                                 .close()
                                 .await
                                 .context("Failed to close DeltaWriter")?;
+                            debug!(
+                                "{}: closed batch [{}, {}), wrote {} files",
+                                name_for_logging,
+                                desc.0.pretty(),
+                                desc.1.pretty(),
+                                data_files.len()
+                            );
                             for data_file in data_files {
                                 match data_file.content_type() {
                                     iceberg::spec::DataContentType::Data => {
@@ -1286,6 +1373,7 @@ where
 
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let name_for_logging = format!("{sink_id}-commit-to-iceberg");
 
     let mut input = builder.new_disconnected_input(batch_input, Exchange::new(move |_| hashed_id));
     let mut batch_desc_input =
@@ -1408,6 +1496,20 @@ where
                         }
                     }
 
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        lower = %batch.0.pretty(),
+                        upper = %batch.1.pretty(),
+                        data_files = data_files.len(),
+                        delete_files = delete_files.len(),
+                        total_messages,
+                        total_bytes,
+                        "iceberg commit applying batch"
+                    );
+
+                    let instant = Instant::now();
+
                     let frontier = batch.1.clone();
                     let tx = Transaction::new(&table);
 
@@ -1475,6 +1577,19 @@ where
                             Ok(table) => RetryResult::Ok(table)
                         }
                     }).await.context("failed to commit to iceberg")?;
+
+                    let duration = instant.elapsed();
+
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        lower = %batch.0.pretty(),
+                        upper = %batch.1.pretty(),
+                        total_messages,
+                        total_bytes,
+                        ?duration,
+                        "iceberg commit applied batch"
+                    );
 
                     metrics.snapshots_committed.inc();
                     statistics.inc_messages_committed_by(total_messages);
