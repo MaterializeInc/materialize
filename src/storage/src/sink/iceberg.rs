@@ -703,9 +703,18 @@ where
                     let mut current_upper = observed_frontier.clone();
                     let current_upper_ts = current_upper.as_option().expect("frontier not empty").clone();
 
-                    // If we're resuming, create a catch-up batch from resume_upper to current frontier
-                    if PartialOrder::less_than(&resume_upper, &current_upper) {
-                        let batch_description = (resume_upper.clone(), current_upper.clone());
+                    // Create a catch-up batch from the later of resume_upper or as_of to current frontier.
+                    // We use the later of the two because:
+                    // - For fresh sinks: resume_upper = minimum, as_of = actual timestamp, data starts at as_of
+                    // - For resuming: as_of <= resume_upper (enforced by overcompaction check), data starts at resume_upper
+                    let batch_lower = if PartialOrder::less_than(&resume_upper, &as_of) {
+                        as_of.clone()
+                    } else {
+                        resume_upper.clone()
+                    };
+
+                    if PartialOrder::less_than(&batch_lower, &current_upper) {
+                        let batch_description = (batch_lower, current_upper.clone());
                         batch_descriptions.push(batch_description);
                     }
 
