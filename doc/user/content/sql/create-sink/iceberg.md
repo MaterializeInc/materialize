@@ -76,7 +76,7 @@ Iceberg sinks use a hybrid delete strategy:
   snapshot. Materialize writes a delete file containing the `KEY` column values.
 
 This means short-lived rows use efficient position deletes, while updates to
-older data use equality deletes. 
+older data use equality deletes.
 
 {{< tip >}}
 Consider running Iceberg compaction periodically to merge delete files and improve query performance.

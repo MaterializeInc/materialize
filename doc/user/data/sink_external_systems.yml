@@ -23,7 +23,7 @@ rows:
     Method: "Use a native connector"
     Guide(s) or Example(s): |
       - [Sink to Kafka/Redpanda](/serve-results/sink/kafka/)
-  
+
   - External system: "Apache Iceberg hosted on AWS S3 Tables"
     Method: "Use a native connector"
     Guide(s) or Example(s): |

@@ -120,7 +120,7 @@ authentication with object storage (as well as an **Iceberg catalog connection**
 
 1. Use [`CREATE CONNECTION ... TO AWS`](/sql/create-connection/#aws) to create
    an AWS connection, replacing:
-   
+
    - `<IAM role ARN>` with your IAM role ARN from [step 1](#create-an-iam-role)
    - `<region>` with your AWS region (e.g., `us-east-1`):
 
@@ -150,7 +150,7 @@ created in [step 1](#create-an-iam-role). Replace `"PENDING"` with your external
 ID value. Your IAM trust policy should look like the following (but with your
 external ID value):
 
-```json{hl_lines="12"} 
+```json{hl_lines="12"}
 {
     "Version": "2012-10-17",
     "Statement": [
