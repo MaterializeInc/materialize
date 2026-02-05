@@ -757,6 +757,12 @@ fn plan_explainee(
 
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateIndex { broken, plan })
         }
+        Explainee::Subscribe(stmt, broken) => {
+            let Plan::Subscribe(plan) = plan_subscribe(scx, *stmt, params, None)? else {
+                sql_bail!("expected SubscribePlan");
+            };
+            crate::plan::Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan })
+        }
     };
 
     Ok(explainee)

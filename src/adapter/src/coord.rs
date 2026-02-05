@@ -861,6 +861,7 @@ pub enum SubscribeStage {
     OptimizeMir(SubscribeOptimizeMir),
     TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
     Finish(SubscribeFinish),
+    Explain(SubscribeExplain),
 }
 
 #[derive(Debug)]
@@ -871,6 +872,9 @@ pub struct SubscribeOptimizeMir {
     dependency_ids: BTreeSet<GlobalId>,
     cluster_id: ComputeInstanceId,
     replica_id: Option<ReplicaId>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -882,6 +886,9 @@ pub struct SubscribeTimestampOptimizeLir {
     global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
     dependency_ids: BTreeSet<GlobalId>,
     replica_id: Option<ReplicaId>,
+    /// An optional context set iff the state machine is initiated from
+    /// sequencing an EXPLAIN for this statement.
+    explain_ctx: ExplainContext,
 }
 
 #[derive(Debug)]
@@ -892,6 +899,14 @@ pub struct SubscribeFinish {
     plan: plan::SubscribePlan,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     dependency_ids: BTreeSet<GlobalId>,
+}
+
+#[derive(Debug)]
+pub struct SubscribeExplain {
+    validity: PlanValidity,
+    df_meta: DataflowMetainfo,
+    cluster_id: ComputeInstanceId,
+    explain_ctx: ExplainPlanContext,
 }
 
 #[derive(Debug)]

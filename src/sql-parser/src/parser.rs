@@ -8993,6 +8993,14 @@ impl<'a> Parser<'a> {
                 };
 
                 Explainee::CreateIndex(Box::new(stmt), broken)
+            } else if self.peek_keyword(SUBSCRIBE) {
+                // Parse: `BROKEN? SUBSCRIBE ...`
+                let _ = self.parse_keyword(SUBSCRIBE); // consume SUBSCRIBE token
+                let stmt = match self.parse_subscribe()? {
+                    Statement::Subscribe(stmt) => stmt,
+                    _ => panic!("Unexpected statement type return after parsing"),
+                };
+                Explainee::Subscribe(Box::new(stmt), broken)
             } else {
                 // Parse: `BROKEN? query`
                 let query = self.parse_select_statement()?;

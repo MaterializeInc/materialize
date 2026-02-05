@@ -2361,6 +2361,9 @@ impl Coordinator {
                 plan::ExplaineeStatement::Select { .. } => {
                     self.explain_peek(ctx, plan, target_cluster).await;
                 }
+                plan::ExplaineeStatement::Subscribe { .. } => {
+                    self.explain_subscribe(ctx, plan, target_cluster).await;
+                }
             },
             plan::Explainee::View(_) => {
                 let result = self.explain_view(&ctx, plan);

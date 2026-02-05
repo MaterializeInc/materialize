@@ -4802,6 +4802,7 @@ pub enum Explainee<T: AstInfo> {
     CreateView(Box<CreateViewStatement<T>>, bool),
     CreateMaterializedView(Box<CreateMaterializedViewStatement<T>>, bool),
     CreateIndex(Box<CreateIndexStatement<T>>, bool),
+    Subscribe(Box<SubscribeStatement<T>>, bool),
 }
 
 impl<T: AstInfo> Explainee<T> {
@@ -4816,7 +4817,8 @@ impl<T: AstInfo> Explainee<T> {
             Self::Select(..)
             | Self::CreateView(..)
             | Self::CreateMaterializedView(..)
-            | Self::CreateIndex(..) => None,
+            | Self::CreateIndex(..)
+            | Self::Subscribe(..) => None,
         }
     }
 
@@ -4872,6 +4874,12 @@ impl<T: AstInfo> AstDisplay for Explainee<T> {
                 f.write_node(statement);
             }
             Self::CreateIndex(statement, broken) => {
+                if *broken {
+                    f.write_str("BROKEN ");
+                }
+                f.write_node(statement);
+            }
+            Self::Subscribe(statement, broken) => {
                 if *broken {
                     f.write_str("BROKEN ");
                 }

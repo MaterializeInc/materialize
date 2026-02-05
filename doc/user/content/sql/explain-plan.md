@@ -1,6 +1,6 @@
 ---
 title: "EXPLAIN PLAN"
-description: "Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, indexes, and materialized views."
+description: "Reference page for `EXPLAIN PLAN`. `EXPLAIN PLAN` is used to inspect the plans of `SELECT` statements, `SUBSCRIBE` statements, indexes, and materialized views."
 aliases:
   - /sql/explain/
 menu:
@@ -12,7 +12,7 @@ menu:
 
 |                             |                       |
 |-----------------------------|-----------------------|
-| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
+| <ul><li>`SELECT` statements </li><li>`CREATE VIEW` statements</li><li>`CREATE INDEX` statements</li><li>`CREATE MATERIALIZED VIEW` statements</li><li>`SUBSCRIBE` statements</li></ul>|<ul><li>Existing views</li><li>Existing indexes</li><li>Existing materialized views</li></ul> |
 
 {{< warning >}}
 `EXPLAIN` is not part of Materialize's stable interface and is not subject to
@@ -94,6 +94,16 @@ FOR ] -- The FOR keyword is required if the PLAN keyword is specified
 ;
 ```
 {{</tab>}}
+{{< tab "FOR SUBSCRIBE">}}
+```mzsql
+EXPLAIN [ [ OPTIMIZED | PHYSICAL ] PLAN
+    [ WITH (<output_modifier> [, <output_modifier> ...]) ]
+    [ AS TEXT | AS JSON ]
+FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+    <SUBSCRIBE ...>
+;
+```
+{{</tab>}}
 {{</tabs>}}
 
 Note that the `FOR` keyword is required if the `PLAN` keyword is present. The following three statements are equivalent:
@@ -121,6 +131,7 @@ Explained object | Description
 **create_view** | Display a plan for a [`CREATE VIEW` statement](../create-view).
 **create_index** | Display a plan for a [`CREATE INDEX` statement](../create-index).
 **create_materialized_view** | Display a plan for a [`CREATE MATERIALIZED VIEW` statement](../create-materialized-view).
+**subscribe_stmt** | Display an `OPTIMIZED` or `PHYSICAL` plan for a [`SUBSCRIBE` statement](../subscribe).
 **VIEW name** | Display the `RAW` or `LOCALLY OPTIMIZED` plan for an existing view.
 **INDEX name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
 **MATERIALIZED VIEW name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
@@ -520,6 +531,35 @@ Explain the physical plan as verbose text:
 ```mzsql
 EXPLAIN PHYSICAL PLAN FOR
 MATERIALIZED VIEW my_mat_view;
+```
+
+### Explaining a `SUBSCRIBE` query
+
+You can also explain `SUBSCRIBE` statements to understand how data changes will be streamed.
+
+{{< note >}}
+`SUBSCRIBE` only supports `OPTIMIZED PLAN` and `PHYSICAL PLAN` stages. The `RAW`, `DECORRELATED`, and `LOCALLY OPTIMIZED` stages are not available for `SUBSCRIBE` because it takes MIR (mid-level intermediate representation) directly rather than going through HIR lowering.
+{{< /note >}}
+
+Explain the optimized plan for subscribing to a table:
+
+```mzsql
+EXPLAIN OPTIMIZED PLAN FOR
+SUBSCRIBE accounts;
+```
+
+Explain the optimized plan for subscribing to a query:
+
+```mzsql
+EXPLAIN OPTIMIZED PLAN FOR
+SUBSCRIBE (SELECT id, balance FROM accounts WHERE balance > 1000);
+```
+
+Explain the physical plan:
+
+```mzsql
+EXPLAIN PHYSICAL PLAN FOR
+SUBSCRIBE accounts;
 ```
 
 ## Debugging running dataflows
