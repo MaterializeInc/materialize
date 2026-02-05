@@ -10,7 +10,7 @@ headless: true
 Certain additional schema changes (such as dropping/altering existing columns) to SQL Server tables are supported as detailed by the [source versioning guide](/ingest-data/sql-server/source-versioning/)
 
 {{< note >}}
-Note that source versioning is actively in development, and may have stability issues. 
+Note that source versioning is actively in development, and may have stability issues.
 {{< /note >}}
 
 ### Supported types
