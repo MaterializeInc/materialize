@@ -992,7 +992,8 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let scope = input.scope();
-    let name_for_logging = name.clone();
+    let worker_id = scope.index();
+    let name_for_logging = format!("{name}-worker-{worker_id}");
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
     let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
@@ -1354,16 +1355,19 @@ where
                         );
                         let mut max_upper = Antichain::from_elem(Timestamp::minimum());
                         for (desc, mut delta_writer) in ready_batches {
+                            let instant = Instant::now();
                             let data_files = delta_writer
                                 .close()
                                 .await
                                 .context("Failed to close DeltaWriter")?;
+                            let duration = instant.elapsed();
                             debug!(
-                                "{}: closed batch [{}, {}), wrote {} files",
+                                "{}: closed batch [{}, {}), wrote {} files in {:?}",
                                 name_for_logging,
                                 desc.0.pretty(),
                                 desc.1.pretty(),
-                                data_files.len()
+                                data_files.len(),
+                                duration
                             );
                             for data_file in data_files {
                                 match data_file.content_type() {
@@ -1375,7 +1379,6 @@ where
                                         metrics.delete_files_written.inc();
                                     }
                                 }
-                                statistics.inc_messages_staged_by(data_file.record_count());
                                 statistics.inc_bytes_staged_by(data_file.file_size_in_bytes());
                                 let file = BoundedDataFile::new(
                                     data_file,
@@ -1534,43 +1537,90 @@ where
                     }
                 });
 
-                for batch in done_batches {
-                    let file_set = batch_descriptions.remove(&batch).unwrap();
-
+                let mut done_iter = done_batches.into_iter().peekable();
+                while let Some(batch) = done_iter.next() {
                     let mut data_files = vec![];
                     let mut delete_files = vec![];
                     // Track totals for committed statistics
                     let mut total_messages: u64 = 0;
                     let mut total_bytes: u64 = 0;
-                    for file in file_set.data_files {
-                        total_messages += file.data_file().record_count();
-                        total_bytes += file.data_file().file_size_in_bytes();
-                        match file.data_file().content_type() {
-                            iceberg::spec::DataContentType::Data => {
-                                data_files.push(file.into_data_file());
+                    let mut empty_batch_count: Option<usize> = None;
+                    let is_empty = batch_descriptions
+                        .get(&batch)
+                        .map(|set| set.data_files.is_empty())
+                        .unwrap_or(false);
+                    let (commit_lower, commit_upper) = if is_empty {
+                        // Optimization: coalesce contiguous empty batches into a single commit
+                        // that advances the frontier to the last empty upper. This avoids a long
+                        // sequence of zero-file Iceberg commits during snapshots.
+                        let mut upper = batch.1.clone();
+                        let mut count = 1usize;
+                        batch_descriptions
+                            .remove(&batch)
+                            .expect("batch exists in descriptions");
+                        while let Some(next_batch) = done_iter.peek() {
+                            let next_empty = batch_descriptions
+                                .get(next_batch)
+                                .map(|set| set.data_files.is_empty())
+                                .unwrap_or(false);
+                            if next_batch.0 != upper || !next_empty {
+                                break;
                             }
-                            iceberg::spec::DataContentType::PositionDeletes |
-                            iceberg::spec::DataContentType::EqualityDeletes => {
-                                delete_files.push(file.into_data_file());
+                            let next_batch = done_iter.next().expect("peeked batch");
+                            batch_descriptions
+                                .remove(&next_batch)
+                                .expect("batch exists in descriptions");
+                            upper = next_batch.1.clone();
+                            count += 1;
+                        }
+                        empty_batch_count = Some(count);
+                        (batch.0.clone(), upper)
+                    } else {
+                        let file_set = batch_descriptions
+                            .remove(&batch)
+                            .expect("batch exists in descriptions");
+                        for file in file_set.data_files {
+                            total_messages += file.data_file().record_count();
+                            total_bytes += file.data_file().file_size_in_bytes();
+                            match file.data_file().content_type() {
+                                iceberg::spec::DataContentType::Data => {
+                                    data_files.push(file.into_data_file());
+                                }
+                                iceberg::spec::DataContentType::PositionDeletes |
+                                iceberg::spec::DataContentType::EqualityDeletes => {
+                                    delete_files.push(file.into_data_file());
+                                }
                             }
                         }
-                    }
+                        (batch.0.clone(), batch.1.clone())
+                    };
 
-                    debug!(
-                        ?sink_id,
-                        %name_for_logging,
-                        lower = %batch.0.pretty(),
-                        upper = %batch.1.pretty(),
-                        data_files = data_files.len(),
-                        delete_files = delete_files.len(),
-                        total_messages,
-                        total_bytes,
-                        "iceberg commit applying batch"
-                    );
+                    if let Some(empty_batches) = empty_batch_count {
+                        debug!(
+                            ?sink_id,
+                            %name_for_logging,
+                            lower = %commit_lower.pretty(),
+                            upper = %commit_upper.pretty(),
+                            empty_batches,
+                            "iceberg commit applying empty batch run"
+                        );
+                    } else {
+                        debug!(
+                            ?sink_id,
+                            %name_for_logging,
+                            lower = %commit_lower.pretty(),
+                            upper = %commit_upper.pretty(),
+                            data_files = data_files.len(),
+                            delete_files = delete_files.len(),
+                            total_messages,
+                            total_bytes,
+                            "iceberg commit applying batch"
+                        );
+                    }
 
                     let instant = Instant::now();
 
-                    let frontier = batch.1.clone();
+                    let frontier = commit_upper.clone();
                     let tx = Transaction::new(&table);
 
                     let frontier_json = serde_json::to_string(&frontier.elements())
@@ -1640,16 +1690,30 @@ where
 
                     let duration = instant.elapsed();
 
-                    debug!(
-                        ?sink_id,
-                        %name_for_logging,
-                        lower = %batch.0.pretty(),
-                        upper = %batch.1.pretty(),
-                        total_messages,
-                        total_bytes,
-                        ?duration,
-                        "iceberg commit applied batch"
-                    );
+                    if let Some(empty_batches) = empty_batch_count {
+                        debug!(
+                            ?sink_id,
+                            %name_for_logging,
+                            lower = %commit_lower.pretty(),
+                            upper = %commit_upper.pretty(),
+                            empty_batches,
+                            total_messages,
+                            total_bytes,
+                            ?duration,
+                            "iceberg commit applied empty batch run"
+                        );
+                    } else {
+                        debug!(
+                            ?sink_id,
+                            %name_for_logging,
+                            lower = %commit_lower.pretty(),
+                            upper = %commit_upper.pretty(),
+                            total_messages,
+                            total_bytes,
+                            ?duration,
+                            "iceberg commit applied batch"
+                        );
+                    }
 
                     metrics.snapshots_committed.inc();
                     statistics.inc_messages_committed_by(total_messages);
