@@ -685,6 +685,7 @@ where
 
             let mut initialized = false;
             let mut observed_frontier;
+            let mut max_seen_ts: Option<Timestamp> = None;
             // Track minted batches to maintain a sliding window of open batch descriptions.
             // This is needed to know when to retire old batches and mint new ones.
             // It's "sortedness" is derived from the monotonicity of batch descriptions,
@@ -694,6 +695,20 @@ where
                 if let Some(event) = input.next().await {
                     match event {
                         Event::Data([output_cap, _], mut data) => {
+                            if !initialized {
+                                for (_, ts, _) in data.iter() {
+                                    match max_seen_ts.as_mut() {
+                                        Some(max) => {
+                                            if max.less_than(ts) {
+                                                *max = ts.clone();
+                                            }
+                                        }
+                                        None => {
+                                            max_seen_ts = Some(ts.clone());
+                                        }
+                                    }
+                                }
+                            }
                             output.give_container(&output_cap, &mut data);
                             continue;
                         }
@@ -706,13 +721,37 @@ where
                 }
 
                 if !initialized {
+                    if observed_frontier.is_empty() {
+                        // Bounded inputs can close (frontier becomes empty) before we finish
+                        // initialization. For example, a loadgen source configured for a finite
+                        // dataset may emit all rows at time t and then immediately close. If we
+                        // saw any data, synthesize an upper one tick past the maximum timestamp
+                        // so we can mint a snapshot batch and commit it.
+                        if let Some(max_ts) = max_seen_ts.as_ref() {
+                            let synthesized_upper =
+                                Antichain::from_elem(max_ts.step_forward());
+                            debug!(
+                                ?sink_id,
+                                %name_for_logging,
+                                max_seen_ts = %max_ts,
+                                synthesized_upper = %synthesized_upper.pretty(),
+                                "iceberg mint input closed before initialization; using max seen ts"
+                            );
+                            observed_frontier = synthesized_upper;
+                        } else {
+                            debug!(
+                                ?sink_id,
+                                %name_for_logging,
+                                "iceberg mint input closed before initialization with no data"
+                            );
+                            // Input stream closed before initialization completed and no data arrived.
+                            return Ok(());
+                        }
+                    }
+
                     // We only start minting after we've reached as_of and resume_upper to avoid
                     // minting batches that would be immediately skipped.
-                    if observed_frontier.is_empty() {
-                        // Input stream closed before initialization completed
-                        return Ok(());
-                    }
-                    if PartialOrder::less_equal(&observed_frontier, &resume_upper) || PartialOrder::less_equal(&observed_frontier, &as_of) {
+                    if PartialOrder::less_than(&observed_frontier, &resume_upper) || PartialOrder::less_than(&observed_frontier, &as_of) {
                         continue;
                     }
 
@@ -730,24 +769,27 @@ where
                         resume_upper.clone()
                     };
 
-                    if PartialOrder::less_than(&batch_lower, &current_upper) {
-                        let batch_description = (batch_lower.clone(), current_upper.clone());
-                        debug!(
-                            ?sink_id,
-                            %name_for_logging,
-                            batch_lower = %batch_lower.pretty(),
-                            current_upper = %current_upper.pretty(),
-                            "iceberg mint initializing (catch-up batch)"
-                        );
-                        debug!(
-                            "{}: creating catch-up batch [{}, {})",
-                            name_for_logging,
-                            batch_lower.pretty(),
-                            current_upper.pretty()
-                        );
-                        batch_descriptions.push(batch_description);
+                    if batch_lower == current_upper {
+                        // Snapshot! as_of is exactly at the frontier. We still need to mint
+                        // a batch to create the snapshot, so we step the upper forward by one.
+                        current_upper = Antichain::from_elem(current_upper_ts.step_forward());
                     }
 
+                    let batch_description = (batch_lower.clone(), current_upper.clone());
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        batch_lower = %batch_lower.pretty(),
+                        current_upper = %current_upper.pretty(),
+                        "iceberg mint initializing (catch-up batch)"
+                    );
+                    debug!(
+                        "{}: creating catch-up batch [{}, {})",
+                        name_for_logging,
+                        batch_lower.pretty(),
+                        current_upper.pretty()
+                    );
+                    batch_descriptions.push(batch_description);
                     // Mint initial future batch descriptions at configurable intervals
                     for i in 1..INITIAL_DESCRIPTIONS_TO_MINT + 1 {
                         let duration_millis = commit_interval.as_millis()
@@ -780,6 +822,10 @@ where
 
                     initialized = true;
                 } else {
+                    if observed_frontier.is_empty() {
+                        // We're done!
+                        return Ok(());
+                    }
                     // Maintain a sliding window: when the oldest batch becomes ready, retire it
                     // and mint a new future batch to keep the pipeline full
                     while let Some(oldest_desc) = minted_batches.front() {
@@ -1271,7 +1317,7 @@ where
                 }
 
                 // Check if frontiers have advanced, which may unlock batches ready to close
-                if PartialOrder::less_equal(
+                if PartialOrder::less_than(
                     &processed_batch_description_frontier,
                     &batch_description_frontier,
                 ) || PartialOrder::less_than(&processed_input_frontier, &input_frontier)
@@ -1280,7 +1326,7 @@ where
                     let ready_batches: Vec<_> = in_flight_batches
                         .extract_if(|(lower, upper), _| {
                             PartialOrder::less_than(lower, &batch_description_frontier)
-                                && PartialOrder::less_than(upper, &input_frontier)
+                                && PartialOrder::less_equal(upper, &input_frontier)
                         })
                         .collect();
 
