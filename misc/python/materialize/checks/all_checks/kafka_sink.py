@@ -43,7 +43,7 @@ def schemas_null() -> str:
 
 
 @externally_idempotent(False)
-class SinkUpsert(Check):
+class KafkaSinkUpsert(Check):
     """Basic Check on sinks from an upsert source"""
 
     def initialize(self) -> Testdrive:
@@ -205,7 +205,7 @@ class SinkUpsert(Check):
 
 
 @externally_idempotent(False)
-class SinkTables(Check):
+class KafkaSinkTables(Check):
     """Sink and re-ingest a large transaction from a table source"""
 
     def initialize(self) -> Testdrive:
@@ -309,7 +309,7 @@ class SinkTables(Check):
 
 
 @externally_idempotent(False)
-class SinkNullDefaults(Check):
+class KafkaSinkNullDefaults(Check):
     """Check on an Avro sink with NULL DEFAULTS"""
 
     def initialize(self) -> Testdrive:
@@ -555,7 +555,7 @@ class SinkNullDefaults(Check):
 
 
 @externally_idempotent(False)
-class SinkComments(Check):
+class KafkaSinkComments(Check):
     """Check on an Avro sink with comments"""
 
     def initialize(self) -> Testdrive:
@@ -830,7 +830,7 @@ class SinkComments(Check):
 
 
 @externally_idempotent(False)
-class SinkAutoCreatedTopicConfig(Check):
+class KafkaSinkAutoCreatedTopicConfig(Check):
     """Check on a sink with auto-created topic configuration"""
 
     def initialize(self) -> Testdrive:
@@ -1443,7 +1443,7 @@ class AlterSinkOrder(Check):
 
 
 @externally_idempotent(False)
-class SinkFormat(Check):
+class KafkaSinkFormat(Check):
     """Check SINK with KEY FORMAT and VALUE FORMAT"""
 
     def initialize(self) -> Testdrive:
@@ -1506,7 +1506,7 @@ class SinkFormat(Check):
 
 
 @externally_idempotent(False)
-class SinkPartitionByDebezium(Check):
+class KafkaSinkPartitionByDebezium(Check):
     """Check SINK with ENVELOPE DEBEZIUM and PARTITION BY"""
 
     def initialize(self) -> Testdrive:

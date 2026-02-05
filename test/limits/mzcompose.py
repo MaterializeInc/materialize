@@ -29,14 +29,17 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.frontegg import FronteggMock
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import (
@@ -99,17 +102,22 @@ class Generator:
         print("$ postgres-execute connection=mz_system")
         print("DROP SCHEMA IF EXISTS public CASCADE;")
         print(f"CREATE SCHEMA public /* {cls} */;")
-        print("GRANT ALL PRIVILEGES ON SCHEMA public TO materialize")
-        print(f'GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}"')
-        print(
-            f'GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";',
-        )
-        print(
-            f'GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster TO "{ADMIN_USER}";',
-        )
-        print(
-            f'GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";',
-        )
+        for user in ["materialize", ADMIN_USER]:
+            print(f'GRANT ALL PRIVILEGES ON SCHEMA public TO "{user}"')
+            print(f'GRANT ALL PRIVILEGES ON SCHEMA public2 TO "{user}"')
+            print(
+                f'GRANT ALL PRIVILEGES ON TABLE public2.iceberg_credentials TO "{user}"'
+            )
+            print(f'GRANT ALL PRIVILEGES ON SECRET public2.iceberg_secret TO "{user}"')
+            print(
+                f'GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{user}";',
+            )
+            print(
+                f'GRANT ALL PRIVILEGES ON CLUSTER single_worker_cluster TO "{user}";',
+            )
+            print(
+                f'GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{user}";',
+            )
 
     @classmethod
     def body(cls) -> None:
@@ -664,6 +672,158 @@ class KafkaSinksSameSource(Generator):
         for i in cls.all():
             print(
                 f'$ kafka-verify-data format=avro sink=materialize.public.s{i}\n{{"before": null, "after": {{"row": {{"f1": 123}}}}}}\n'
+            )
+
+
+class IcebergSinks(Generator):
+    COUNT = min(Generator.COUNT, 100)  # polaris gets overloaded easily
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_tables = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sinks = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        for i in cls.all():
+            print(f"> CREATE TABLE t{i} (f1 INT)")
+            print(f"> INSERT INTO t{i} VALUES ({i})")
+
+        print(
+            dedent(
+                """
+            $ set-from-sql var=iceberg_user
+            SELECT user FROM public2.iceberg_credentials
+
+            $ set-from-sql var=iceberg_key
+            SELECT key FROM public2.iceberg_credentials
+
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+
+            > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');
+
+            $ duckdb-execute name=iceberg
+            CREATE SECRET s3_secret (TYPE S3, KEY_ID '${iceberg_user}', SECRET '${iceberg_key}', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+            SET unsafe_enable_version_guessing = true;
+            """
+            )
+        )
+
+        for i in cls.all():
+            print(
+                dedent(
+                    f"""
+                     > CREATE SINK s{i}
+                       IN CLUSTER single_replica_cluster
+                       FROM t{i}
+                       INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                         NAMESPACE 'default_namespace',
+                         TABLE 'sink-{i}'
+                       )
+                       USING AWS CONNECTION aws_conn
+                       KEY (f1) NOT ENFORCED
+                       MODE UPSERT
+                       WITH (COMMIT INTERVAL '1s');
+                     """
+                )
+            )
+
+        for i in cls.all():
+            print(
+                dedent(
+                    f"""
+                     > SELECT messages_committed >= 1
+                       FROM mz_internal.mz_sink_statistics
+                       JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
+                       WHERE mz_sinks.name = 's{i}';
+                     true
+
+                     $ set-from-sql var=iceberg_user
+                     SELECT user FROM public2.iceberg_credentials
+
+                     $ duckdb-query name=iceberg
+                     SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/sink-{i}')
+                     {i}
+                    """
+                )
+            )
+
+
+class IcebergSinksSameSource(Generator):
+    COUNT = min(Generator.COUNT, 100)  # polaris gets overloaded easily
+
+    @classmethod
+    def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_sinks = {cls.COUNT * 10};")
+        print("$ postgres-execute connection=mz_system")
+        print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
+        print("> CREATE TABLE t1 (f1 INT)")
+        print("> INSERT INTO t1 VALUES (1)")
+
+        print(
+            dedent(
+                """
+            $ set-from-sql var=iceberg_user
+            SELECT user FROM public2.iceberg_credentials
+
+            $ set-from-sql var=iceberg_key
+            SELECT key FROM public2.iceberg_credentials
+
+            > CREATE CONNECTION aws_conn TO AWS (ACCESS KEY ID = '{iceberg_user}', SECRET ACCESS KEY = SECRET public2.iceberg_secret, ENDPOINT = 'http://minio:9000/', REGION = 'us-east-1');
+
+            > CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://polaris:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');
+
+            $ duckdb-execute name=iceberg
+            CREATE SECRET s3_secret (TYPE S3, KEY_ID '${iceberg_user}', SECRET '${iceberg_key}', ENDPOINT 'minio:9000', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+            SET unsafe_enable_version_guessing = true;
+
+            """
+            )
+        )
+
+        for i in cls.all():
+            print(
+                dedent(
+                    f"""
+                     > CREATE SINK s{i}
+                       IN CLUSTER single_replica_cluster
+                       FROM t1
+                       INTO ICEBERG CATALOG CONNECTION polaris_conn (
+                         NAMESPACE 'default_namespace',
+                         TABLE 'sink-{i}'
+                       )
+                       USING AWS CONNECTION aws_conn
+                       KEY (f1) NOT ENFORCED
+                       MODE UPSERT
+                       WITH (COMMIT INTERVAL '1s');
+                     """
+                )
+            )
+
+        for i in cls.all():
+            print(
+                dedent(
+                    f"""
+                     > SELECT messages_committed >= 1
+                       FROM mz_internal.mz_sink_statistics
+                       JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
+                       WHERE mz_sinks.name = 's{i}';
+                     true
+
+                     $ set-from-sql var=iceberg_user
+                     SELECT user FROM public2.iceberg_credentials
+
+                     $ duckdb-query name=iceberg
+                     SELECT * FROM iceberg_scan('s3://test-bucket/default_namespace/sink-{i}')
+                     1
+                    """
+                )
             )
 
 
@@ -1559,7 +1719,7 @@ class PostgresSources(Generator):
             print(f"CREATE TABLE t{i} (c int);")
             print(f"ALTER TABLE t{i} REPLICA IDENTITY FULL;")
             print(f"INSERT INTO t{i} VALUES ({i});")
-        print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
+        print("CREATE PUBLICATION mz_source FOR TABLES IN SCHEMA public;")
         print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
         print(
             """> CREATE CONNECTION pg TO POSTGRES (
@@ -1847,6 +2007,10 @@ SERVICES = [
     ),
     MySql(),
     SqlServer(),
+    Polaris(),
+    PolarisBootstrap(),
+    Minio(),
+    Mc(),
     SchemaRegistry(),
     # We create all sources, sinks and dataflows by default with SIZE 'scale=1,workers=1'
     # The workflow_instance_size workflow is testing multi-process clusters
@@ -1932,6 +2096,7 @@ service_names = [
     "postgres",
     "mysql",
     "sql-server",
+    "minio",
     "materialized",
     "balancerd",
     "frontegg-mock",
@@ -1949,6 +2114,8 @@ service_names = [
 def setup(c: Composition, workers: int) -> None:
     c.up(*service_names)
     setup_sql_server_testing(c)
+
+    iceberg_credentials = setup_polaris_for_iceberg(c)
 
     c.sql(
         "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
@@ -2006,6 +2173,10 @@ def setup(c: Composition, workers: int) -> None:
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
         GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";
+
+        CREATE SCHEMA public2;
+        CREATE VIEW public2.iceberg_credentials AS SELECT '{iceberg_credentials[0]}' AS user, '{iceberg_credentials[1]}' AS key;
+        CREATE SECRET public2.iceberg_secret AS '{iceberg_credentials[1]}';
     """,
         port=6877,
         user="mz_system",
