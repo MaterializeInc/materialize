@@ -583,8 +583,8 @@ async fn main() {
         eprint!("+++ ");
         eprintln!("!!! Error Report");
         eprintln!("{} errors were encountered during execution", error_count);
-        if config.source.is_some() {
-            eprintln!("source: {}", config.source.unwrap());
+        if let Some(source) = &config.source {
+            eprintln!("source: {source}");
         } else if !error_files.is_empty() {
             eprintln!(
                 "files involved: {}",

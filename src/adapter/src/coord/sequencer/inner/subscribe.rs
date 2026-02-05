@@ -380,7 +380,6 @@ impl Coordinator {
                                 SubscribeStage::Explain(SubscribeExplain {
                                     validity,
                                     optimizer,
-                                    plan,
                                     df_meta,
                                     cluster_id,
                                     explain_ctx,
@@ -406,7 +405,6 @@ impl Coordinator {
                                 SubscribeStage::Explain(SubscribeExplain {
                                     validity,
                                     optimizer,
-                                    plan,
                                     df_meta: Default::default(),
                                     cluster_id,
                                     explain_ctx,
@@ -506,7 +504,6 @@ impl Coordinator {
         &self,
         session: &Session,
         SubscribeExplain {
-            plan: _,
             optimizer,
             df_meta,
             cluster_id,

@@ -1030,14 +1030,14 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         if !self.col_names.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.col_names));
-            if self.key_constraint.is_some() {
+            if let Some(key_constraint) = &self.key_constraint {
                 f.write_str(", ");
-                f.write_node(self.key_constraint.as_ref().unwrap());
+                f.write_node(key_constraint);
             }
             f.write_str(")");
-        } else if self.key_constraint.is_some() {
+        } else if let Some(key_constraint) = &self.key_constraint {
             f.write_str(" (");
-            f.write_node(self.key_constraint.as_ref().unwrap());
+            f.write_node(key_constraint);
             f.write_str(")")
         }
         if let Some(cluster) = &self.in_cluster {

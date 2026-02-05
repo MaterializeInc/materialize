@@ -905,7 +905,6 @@ pub struct SubscribeFinish {
 pub struct SubscribeExplain {
     validity: PlanValidity,
     optimizer: optimize::subscribe::Optimizer,
-    plan: plan::SubscribePlan,
     df_meta: DataflowMetainfo,
     cluster_id: ComputeInstanceId,
     explain_ctx: ExplainPlanContext,
