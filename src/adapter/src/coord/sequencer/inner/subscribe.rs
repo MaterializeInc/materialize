@@ -10,6 +10,7 @@
 use mz_ore::instrument;
 use mz_repr::explain::ExprHumanizerExt;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::{Datum, Row};
 use mz_sql::plan::{self, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;
@@ -367,6 +368,7 @@ impl Coordinator {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 SubscribeStage::Explain(SubscribeExplain {
                                     validity,
+                                    plan,
                                     df_meta,
                                     cluster_id,
                                     explain_ctx,
@@ -394,6 +396,7 @@ impl Coordinator {
                                 );
                                 SubscribeStage::Explain(SubscribeExplain {
                                     validity,
+                                    plan,
                                     df_meta: Default::default(),
                                     cluster_id,
                                     explain_ctx,
@@ -493,6 +496,7 @@ impl Coordinator {
         &self,
         session: &Session,
         SubscribeExplain {
+            plan,
             df_meta,
             cluster_id,
             explain_ctx:
@@ -530,6 +534,73 @@ impl Coordinator {
             )
             .await?;
 
+        // Add SUBSCRIBE-specific options to the explain output for TEXT format.
+        // Skip for TRACE stage (which has multi-column output) and JSON format.
+        let rows = if matches!(format, mz_repr::explain::ExplainFormat::Text)
+            && !matches!(stage, mz_sql_parser::ast::ExplainStage::Trace)
+        {
+            rows.into_iter()
+                .map(|row| {
+                    let mut output = row.iter().next().unwrap().unwrap_str().to_string();
+                    output.push_str(&Self::format_subscribe_options(&plan));
+                    Row::pack_slice(&[Datum::from(output.as_str())])
+                })
+                .collect()
+        } else {
+            rows
+        };
+
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
+    }
+
+    /// Formats SUBSCRIBE-specific options for explain output.
+    fn format_subscribe_options(plan: &plan::SubscribePlan) -> String {
+        use std::fmt::Write;
+        let mut output = String::new();
+
+        // Format AS OF
+        match &plan.when {
+            plan::QueryWhen::Immediately => {
+                // Default, don't print anything
+            }
+            plan::QueryWhen::FreshestTableWrite => {
+                writeln!(output).unwrap();
+                writeln!(output, "AS OF: AT LEAST (freshest table write)").unwrap();
+            }
+            plan::QueryWhen::AtTimestamp(ts) => {
+                writeln!(output).unwrap();
+                writeln!(output, "AS OF: {}", ts).unwrap();
+            }
+            plan::QueryWhen::AtLeastTimestamp(ts) => {
+                writeln!(output).unwrap();
+                writeln!(output, "AS OF: AT LEAST {}", ts).unwrap();
+            }
+        }
+
+        // Format UP TO
+        if let Some(up_to) = &plan.up_to {
+            if output.is_empty() {
+                writeln!(output).unwrap();
+            }
+            writeln!(output, "UP TO: {}", up_to).unwrap();
+        }
+
+        // Format SNAPSHOT
+        if !plan.with_snapshot {
+            if output.is_empty() {
+                writeln!(output).unwrap();
+            }
+            writeln!(output, "WITH SNAPSHOT: false").unwrap();
+        }
+
+        // Format PROGRESS
+        if plan.emit_progress {
+            if output.is_empty() {
+                writeln!(output).unwrap();
+            }
+            writeln!(output, "EMIT PROGRESS: true").unwrap();
+        }
+
+        output
     }
 }

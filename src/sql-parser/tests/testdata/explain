@@ -368,3 +368,96 @@ EXPLAIN ANALYZE HINTS FOR idx_top_buyers
 error: Expected one of INDEX or MATERIALIZED, found identifier "idx_top_buyers"
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
                           ^
+
+# EXPLAIN SUBSCRIBE tests
+
+parse-statement
+EXPLAIN SUBSCRIBE t
+----
+EXPLAIN SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+----
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE t
+----
+EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(PhysicalPlan), with_options: [], format: Some(VerboseText), explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
+----
+EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: Some(Json), explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE (SELECT 1)
+----
+EXPLAIN SUBSCRIBE (SELECT 1)
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Query(Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t AS OF 100
+----
+EXPLAIN SUBSCRIBE t AS OF 100
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: Some(At(Value(Number("100")))), up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t AS OF AT LEAST 100
+----
+EXPLAIN SUBSCRIBE t AS OF AT LEAST 100
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: Some(AtLeast(Value(Number("100")))), up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t UP TO 500
+----
+EXPLAIN SUBSCRIBE t UP TO 500
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: Some(Value(Number("500"))), output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t AS OF 100 UP TO 500
+----
+EXPLAIN SUBSCRIBE t AS OF 100 UP TO 500
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: Some(At(Value(Number("100")))), up_to: Some(Value(Number("500"))), output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t WITH (SNAPSHOT = false)
+----
+EXPLAIN SUBSCRIBE t WITH (SNAPSHOT = false)
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Snapshot, value: Some(Value(Boolean(false))) }], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN SUBSCRIBE t WITH (PROGRESS = true)
+----
+EXPLAIN SUBSCRIBE t WITH (PROGRESS = true)
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [SubscribeOption { name: Progress, value: Some(Value(Boolean(true))) }], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN BROKEN SUBSCRIBE t
+----
+EXPLAIN BROKEN SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, true) })
+
+parse-statement
+EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
+----
+EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(Trace), with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })

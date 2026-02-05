@@ -12,6 +12,15 @@
 mode cockroach
 
 statement ok
+CREATE VIEW intervals (a, b) AS VALUES (1, 10), (1, 2), (2, 13), (3, 1), (-3, 10), (5, 18446744073709551616)
+
+statement ok
+CREATE MATERIALIZED VIEW valid AS
+SELECT *
+FROM intervals
+WHERE mz_now() BETWEEN a AND b;
+
+statement ok
 CREATE TABLE t (a int, b text)
 
 statement ok
@@ -35,7 +44,7 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE v
 ----
-t43:
+t44:
   Filter (#0{a} > 0)
     ReadStorage materialize.public.t
 
@@ -61,7 +70,7 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE (SELECT a FROM t WHERE a > 5)
 ----
-t47:
+t48:
   Project (#0)
     Filter (#0{a} > 5)
       ReadStorage materialize.public.t
@@ -88,7 +97,7 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE (SELECT a, b FROM t WHERE a > 5)
 ----
-t51:
+t52:
   Get::Collection materialize.public.t
     raw=true
 
@@ -103,9 +112,100 @@ EOF
 statement ok
 EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
 
+# Test EXPLAIN with AS OF timestamp
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 1000
+----
+
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+AS OF: 1000
+
+EOF
+
+# Test EXPLAIN with AS OF AT LEAST timestamp
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF AT LEAST 500
+----
+
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+AS OF: AT LEAST 500
+
+EOF
+
+# Test EXPLAIN with UP TO
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid UP TO 18446744073709551615
+----
+
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+UP TO: 18446744073709551615
+
+EOF
+
+# Test EXPLAIN with AS OF and UP TO combined
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 100 UP TO 500
+----
+
+Source materialize.public.valid
+
+Target cluster: quickstart
+
+AS OF: 100
+UP TO: 500
+
+EOF
+
+
+
 # Test EXPLAIN with SUBSCRIBE options (SNAPSHOT = false)
-statement ok
+query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false)
+----
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+WITH SNAPSHOT: false
+
+EOF
+
+# Test EXPLAIN with PROGRESS option
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (PROGRESS = true)
+----
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EMIT PROGRESS: true
+
+EOF
+
+# Test EXPLAIN with multiple options (both SNAPSHOT and PROGRESS)
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false, PROGRESS = true)
+----
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+WITH SNAPSHOT: false
+EMIT PROGRESS: true
+
+EOF
 
 # Test EXPLAIN OPTIMIZER TRACE for SUBSCRIBE
 statement ok
