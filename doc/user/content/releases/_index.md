@@ -15,6 +15,12 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.10.1
+*Released to Materialize Cloud: 2026-02-05* <br>
+*Released to Materialize Self-Managed: 2026-02-06* <br>
+
+This is a patch release with no user-facing changes.
+
 ## v26.9.0
 *Released to Materialize Cloud: 2026-01-29* <br>
 *Released to Materialize Self-Managed: 2026-01-30* <br>
