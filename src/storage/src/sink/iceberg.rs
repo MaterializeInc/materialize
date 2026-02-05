@@ -611,6 +611,7 @@ where
             if !is_active_worker {
                 *capset = CapabilitySet::new();
                 *data_capset = CapabilitySet::new();
+                *table_ready_capset = CapabilitySet::new();
                 while let Some(event) = input.next().await {
                     match event {
                         Event::Data([output_cap, _], mut data) => {
@@ -1258,6 +1259,13 @@ where
                 }
 
                 let ready_events = std::iter::from_fn(|| input.next_sync()).collect_vec();
+                debug!(
+                    "{}: processing {} input events (input_frontier: {})",
+                    name_for_logging,
+                    ready_events.len(),
+                    input_frontier.pretty()
+                );
+                let mut num_rows_written = 0;
                 for event in ready_events {
                     match event {
                         Event::Data(_cap, data) => {
@@ -1282,6 +1290,13 @@ where
                                             .await
                                             .context("Failed to write row to DeltaWriter")?;
                                         written = true;
+                                        num_rows_written += 1;
+                                        if num_rows_written % 10000 == 0 {
+                                            debug!(
+                                                "{}: wrote {} rows so far",
+                                                name_for_logging, num_rows_written
+                                            );
+                                        }
                                         break;
                                     }
                                 }
@@ -1325,7 +1340,7 @@ where
                     let ready_batches: Vec<_> = in_flight_batches
                         .extract_if(|(lower, upper), _| {
                             PartialOrder::less_than(lower, &batch_description_frontier)
-                                && PartialOrder::less_equal(upper, &input_frontier)
+                                && PartialOrder::less_than(upper, &input_frontier)
                         })
                         .collect();
 
