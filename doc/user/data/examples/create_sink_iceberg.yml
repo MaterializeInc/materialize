@@ -17,10 +17,11 @@
         The name for the sink.
     - name: "**IF NOT EXISTS**"
       description: |
-        Do not throw an error if a sink with the same name already exists.
+        Optional. If specified, do not throw an error if a sink with the same name already exists.
     - name: "**IN CLUSTER** `<cluster_name>`"
       description: |
-        The [cluster](/sql/create-cluster) to maintain this sink.
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink. If
+        unspecified, defaults to the active cluster.
     - name: "`<item_name>`"
       description: |
         The name of the source, table, or materialized view to sink.
@@ -38,13 +39,31 @@
         The [AWS connection](/sql/create-connection/#aws) for object storage access.
     - name: "**KEY** ( `<key_col>` [, ...] )"
       description: |
-        **Required.** The columns that uniquely identify rows. Materialize validates that the key is unique unless `NOT ENFORCED` is specified.
+        The columns that uniquely identify rows. Materialize validates that the key is unique unless `NOT ENFORCED` is specified.
     - name: "**NOT ENFORCED**"
       description: |
-        Disable validation of key uniqueness. Use only when you have outside knowledge that the key is unique.
+        Optional. Disable validation of key uniqueness. Use only when you have outside knowledge that the key is unique.
     - name: "**MODE UPSERT**"
       description: |
-        **Required.** Specifies that the sink uses upsert semantics based on the `KEY`.
+        Indicates that the sink uses upsert semantics based on the `KEY`.
     - name: "**COMMIT INTERVAL** `'<interval>'`"
       description: |
-        **Required.** How frequently to commit snapshots to Iceberg (e.g., `'10s'`, `'1m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+        How frequently to commit snapshots to Iceberg (e.g., `'10s'`, `'1m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+
+- name: "example-create-iceberg-sink"
+  description: |
+    Using the previously created AWS and Iceberg catalog connection, the
+    following example creates an Iceberg sink with a composite key:
+  code: |
+    CREATE SINK user_events_iceberg
+      IN CLUSTER analytics_cluster
+      FROM user_events
+      INTO ICEBERG CATALOG CONNECTION s3tables_catalog (
+        NAMESPACE = 'events',
+        TABLE = 'user_events'
+      )
+      USING AWS CONNECTION aws_connection
+      KEY (user_id, event_timestamp)
+      MODE UPSERT
+      WITH (COMMIT INTERVAL = '1m');
+  testable: false

@@ -11,16 +11,16 @@ menu:
 
 {{< public-preview />}}
 
-`CREATE SINK` connects Materialize to an external system you want to write data
-to, and provides details about how to encode that data.
+Use `CREATE SINK ... INTO ICEBERG CATALOG...` to create Iceberg sinks. Iceberg sinks write data from Materialize into an Iceberg table hosted on
+AWS S3 Tables. As data changes in Materialize, your Iceberg tables are
+automatically kept up to date.
 
-To use an Iceberg table as a sink, you need:
-- An [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to
-  specify access parameters to your Iceberg catalog
+To create an Iceberg sink, you need:
+
 - An [AWS connection](/sql/create-connection/#aws) for authentication with
-  object storage
-
-Once created, connections are **reusable** across multiple `CREATE SINK` statements.
+  object storage.
+- An [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to
+  specify access parameters to your Iceberg catalog.
 
 ## Syntax
 
@@ -40,7 +40,7 @@ last committed snapshot after restarts without duplicating data.
 
 ### Unique keys
 
-The `KEY` clause is required for all Iceberg sinks. The columns you specify must
+The `KEY` clause is required for all Iceberg sinks. The Iceberg sink uses upsert semantics based on the `KEY`. The columns you specify must
 uniquely identify rows. Materialize validates that the key is unique; if it
 cannot prove uniqueness, you'll receive an error.
 
@@ -76,84 +76,47 @@ Iceberg sinks use a hybrid delete strategy:
   snapshot. Materialize writes a delete file containing the `KEY` column values.
 
 This means short-lived rows use efficient position deletes, while updates to
-older data use equality deletes. Consider running Iceberg compaction periodically
-to merge delete files and improve query performance.
+older data use equality deletes. 
+
+{{< tip >}}
+Consider running Iceberg compaction periodically to merge delete files and improve query performance.
+{{< /tip >}}
 
 ### Type mapping
 
-Materialize converts SQL types to Iceberg types:
+{{% include-headless "/headless/iceberg-sinks/type-mapping" %}}
 
-| SQL type | Iceberg type |
-|----------|--------------|
-| `boolean` | `boolean` |
-| `smallint`, `integer` | `int` |
-| `bigint` | `long` |
-| `real` | `float` |
-| `double precision` | `double` |
-| `numeric` | `decimal(38, scale)` |
-| `date` | `date` |
-| `time` | `time` (microsecond) |
-| `timestamp` | `timestamp` (microsecond) |
-| `timestamptz` | `timestamptz` (microsecond) |
-| `text`, `varchar` | `string` |
-| `bytea` | `binary` |
-| `uuid` | `fixed(16)` |
-| `jsonb` | `string` |
-| `list` | `list` |
-| `map` | `map` |
+### Restrictions and limitations
+
+{{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 
 ## Required privileges
 
-{{< include-md file="shared-content/sql-command-privileges/create-sink.md" >}}
+{{% include-headless "/headless/sql-command-privileges/create-sink" %}}
 
 ## Examples
 
 ### Prerequisites: Create connections
 
-Before creating an Iceberg sink, you need an AWS connection and an Iceberg
-catalog connection. AWS S3 Tables provides a managed Iceberg catalog.
+To create an Iceberg sink, you need an AWS connection and an Iceberg catalog
+connection.
 
-```mzsql
--- Create an AWS connection for authentication
-CREATE CONNECTION aws_connection
-  TO AWS (ASSUME ROLE ARN = 'arn:aws:iam::123456789012:role/MaterializeIceberg');
-
--- Create the Iceberg catalog connection pointing to S3 Tables
-CREATE CONNECTION s3tables_catalog TO ICEBERG CATALOG (
-    CATALOG TYPE = 's3tablesrest',
-    URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg',
-    WAREHOUSE = 'arn:aws:s3tables:us-east-1:123456789012:bucket/my-table-bucket',
-    AWS CONNECTION = aws_connection
-);
-```
+{{% include-example file="examples/create_connection"
+example="example-iceberg-catalog-connection" %}}
 
 ### Creating a sink
 
-Using the connections created above, the following example creates an Iceberg
-sink with a composite key:
-
-```mzsql
-CREATE SINK user_events_iceberg
-  IN CLUSTER analytics_cluster
-  FROM user_events
-  INTO ICEBERG CATALOG CONNECTION s3tables_catalog (
-    NAMESPACE = 'events',
-    TABLE = 'user_events'
-  )
-  USING AWS CONNECTION aws_connection
-  KEY (user_id, event_timestamp)
-  MODE UPSERT
-  WITH (COMMIT INTERVAL = '1m');
-```
+{{% include-example file="examples/create_sink_iceberg"
+example="example-create-iceberg-sink" %}}
 
 The required `KEY` clause uniquely identifies rows; in this example, it uses a
-composite key of `user_id` and `event_timestamp`. Materialize validates that this
-key is unique in the source data.
+composite key of `user_id` and `event_timestamp`. Materialize validates that
+this key is unique in the source data.
 
 ### Bypassing unique key validation
 
 If Materialize cannot prove your key is unique but you have outside knowledge
-that it is, you can bypass validation:
+that it is, you can bypass validation by including `NOT ENFORCED` option:
 
 ```mzsql
 CREATE SINK deduped_sink
@@ -174,18 +137,6 @@ If the key is not actually unique, downstream consumers may see incorrect
 results.
 {{< /warning >}}
 
-## Limitations
-
-- **Same region required**: Your S3 Tables bucket must be in the same AWS region
-  as your Materialize deployment.
-- **Schema evolution**: Materialize does not support changing the schema of an
-  existing Iceberg table. If the source schema changes, you must drop and
-  recreate the sink.
-- **Partition evolution**: Partition spec changes are not supported.
-- **Partitioning**: Materialize creates unpartitioned tables. Partitioned tables
-  are not yet supported.
-- **Record types**: Composite/record types are not supported. Use scalar types
-  or flatten your data structure.
 
 ## Related pages
 

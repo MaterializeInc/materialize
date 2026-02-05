@@ -86,10 +86,6 @@ A sink cannot be created directly on a catalog object. As a workaround you can
 create a materialized view on a catalog object and create a sink on the
 materialized view.
 
-### Kafka transaction markers
-
-{{< include-md file="shared-content/kafka-transaction-markers.md" >}}
-
 [//]: # "TODO(morsapaes) Add best practices for sizing sinks."
 
 ## Privileges
