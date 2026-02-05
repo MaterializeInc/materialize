@@ -349,17 +349,17 @@ CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv;
 query TT
 SELECT id, name FROM mz_materialized_views
 ----
-u19  mv
-u20  rp
-u21  mv2
+u23  mv
+u24  rp
+u25  mv2
 
 query TT
 SELECT d.object_id, d.referenced_object_id
 FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 ----
-u20  u19
-u21  u19
+u24  u23
+u25  u23
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
@@ -367,15 +367,15 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 query TT
 SELECT id, name FROM mz_materialized_views
 ----
-u20  mv
-u21  mv2
+u24  mv
+u25  mv2
 
 query TT
 SELECT d.object_id, d.referenced_object_id
 FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 ----
-u21  u20
+u25  u24
 
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE

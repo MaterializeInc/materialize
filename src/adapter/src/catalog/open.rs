@@ -204,8 +204,6 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let new_builtin_collections =
-                add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_config,
@@ -217,11 +215,14 @@ impl Catalog {
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
             )?;
-            add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
             add_new_remove_old_builtin_cluster_replicas_migration(
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
             )?;
+
+            let new_builtin_collections =
+                add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
+            add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             remove_pending_cluster_replicas_migration(&mut txn)?;
