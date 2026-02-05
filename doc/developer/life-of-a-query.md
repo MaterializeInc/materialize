@@ -124,10 +124,10 @@ sending results back to the client.
 
 Query planning generates a
 [Plan](https://github.com/MaterializeInc/materialize/blob/b3475aaaf96f9fae4a0d68cbb5202c224d9ce15b/src/sql/src/plan.rs#L133)
-from the AST. Glossing over some details, this binds referenced names based on
-the Catalog as of planning time and determines an execution plan. The entry
-point is
-[plan](https://github.com/MaterializeInc/materialize/blob/b3475aaaf96f9fae4a0d68cbb5202c224d9ce15b/src/sql/src/plan/statement.rs#L274).
+from the AST. Glossing over some details, this first binds referenced names
+based on the Catalog as of planning time. Then
+[plan](https://github.com/MaterializeInc/materialize/blob/b3475aaaf96f9fae4a0d68cbb5202c224d9ce15b/src/sql/src/plan/statement.rs#L274)
+determines an execution plan from the resolved AST.
 
 One of the differences between the user (SQL) commands that are input to the
 adapter and commands for the rest of the system is the use of user-defined and
