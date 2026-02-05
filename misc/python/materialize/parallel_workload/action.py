@@ -147,6 +147,27 @@ class Action:
     def run(self, exe: Executor) -> bool:
         raise NotImplementedError
 
+    def create_system_connection(
+        self, exe: Executor, num_attempts: int = 10
+    ) -> Connection:
+        try:
+            conn = psycopg.connect(
+                host=exe.db.host,
+                port=exe.db.ports[
+                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
+                ],
+                user="mz_system",
+                dbname="materialize",
+            )
+            conn.autocommit = True
+            return conn
+        except:
+            if num_attempts == 0:
+                raise
+            else:
+                time.sleep(1)
+                return self.create_system_connection(exe, num_attempts - 1)
+
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = [
             "permission denied for",
@@ -1822,27 +1843,6 @@ class FlipFlagsAction(Action):
         except Exception as e:
             raise QueryError(str(e), "FlipFlags")
 
-    def create_system_connection(
-        self, exe: Executor, num_attempts: int = 10
-    ) -> Connection:
-        try:
-            conn = psycopg.connect(
-                host=exe.db.host,
-                port=exe.db.ports[
-                    "mz_system" if exe.mz_service == "materialized" else "mz_system2"
-                ],
-                user="mz_system",
-                dbname="materialize",
-            )
-            conn.autocommit = True
-            return conn
-        except:
-            if num_attempts == 0:
-                raise
-            else:
-                time.sleep(1)
-                return self.create_system_connection(exe, num_attempts - 1)
-
     def flip_flag(self, conn: Connection, flag_name: str, flag_value: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
@@ -2952,6 +2952,32 @@ class CreateIcebergSinkAction(Action):
         return True
 
 
+class CheckSinkAction(Action):
+    def run(self, exe: Executor) -> bool:
+        try:
+            conn = self.create_system_connection(exe)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT name, type, last_status_change_at, status, error, details FROM mz_internal.mz_sink_statuses WHERE status not in ('running', 'starting', NULL)"
+                )
+                results = cur.fetchall()
+            if results:
+                results_str = "\n".join(
+                    [
+                        f"{name} ({sink_type}) changed status at {last_status_change_at} to {status}: {error} (details: {details})"
+                        for name, sink_type, last_status_change_at, status, error, details in results
+                    ]
+                )
+                raise ValueError(f"Sinks are in a bad state:\n{results_str}")
+        except:
+            if exe.db.scenario not in (
+                Scenario.Kill,
+                Scenario.ZeroDowntimeDeploy,
+            ):
+                raise
+        return True
+
+
 class DropIcebergSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
@@ -3231,6 +3257,7 @@ ddl_action_list = ActionList(
         (DropIcebergSinkAction, 4),
         (CreateKafkaSourceAction, 4),
         (DropKafkaSourceAction, 4),
+        (CheckSinkAction, 1),
         # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),
