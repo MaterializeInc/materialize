@@ -1188,6 +1188,7 @@ where
             let mut processed_input_frontier = Antichain::from_elem(Timestamp::minimum());
 
             while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
+                let mut staged_messages_since_flush: u64 = 0;
                 tokio::select! {
                     _ = batch_desc_input.ready() => {},
                     _ = input.ready() => {}
@@ -1229,6 +1230,13 @@ where
                                                 delta_writer.write(record_batch).await.context(
                                                     "Failed to write row to DeltaWriter",
                                                 )?;
+                                                staged_messages_since_flush += 1;
+                                                if staged_messages_since_flush >= 10_000 {
+                                                    statistics.inc_messages_staged_by(
+                                                        staged_messages_since_flush,
+                                                    );
+                                                    staged_messages_since_flush = 0;
+                                                }
                                             }
                                         }
                                     }
@@ -1282,6 +1290,13 @@ where
                                             .write(record_batch)
                                             .await
                                             .context("Failed to write row to DeltaWriter")?;
+                                        staged_messages_since_flush += 1;
+                                        if staged_messages_since_flush >= 10_000 {
+                                            statistics.inc_messages_staged_by(
+                                                staged_messages_since_flush,
+                                            );
+                                            staged_messages_since_flush = 0;
+                                        }
                                         written = true;
                                         break;
                                     }
@@ -1314,6 +1329,9 @@ where
                             input_frontier = frontier;
                         }
                     }
+                }
+                if staged_messages_since_flush > 0 {
+                    statistics.inc_messages_staged_by(staged_messages_since_flush);
                 }
 
                 // Check if frontiers have advanced, which may unlock batches ready to close
