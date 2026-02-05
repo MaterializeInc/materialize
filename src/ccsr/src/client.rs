@@ -9,10 +9,11 @@
 
 use std::error::Error;
 use std::fmt;
+use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use proptest_derive::Arbitrary;
 use reqwest::{Method, Response, Url};
 use serde::de::DeserializeOwned;
@@ -113,11 +114,17 @@ impl Client {
     pub async fn get_subject_with_references(
         &self,
         subject: &str,
-    ) -> Result<(Subject, Vec<String>), GetBySubjectError> {
+    ) -> Result<(Subject, Vec<SubjectVersion>), GetBySubjectError> {
         let req = self.make_request(Method::GET, &["subjects", subject, "versions", "latest"]);
         let res: GetBySubjectResponse = send_request(req).await?;
-        let referenced_subjects: Vec<String> =
-            res.references.iter().map(|r| r.subject.clone()).collect();
+        let referenced_subjects: Vec<_> = res
+            .references
+            .into_iter()
+            .map(|r| SubjectVersion {
+                subject: r.subject,
+                version: r.version,
+            })
+            .collect();
         Ok((
             Subject {
                 schema: Schema {
@@ -215,7 +222,8 @@ impl Client {
 
         let primary = subjects.remove(0);
 
-        let ordered = topological_sort(&graph)?;
+        let ordered =
+            topological_sort(&graph).map_err(|_| GetBySubjectError::SchemaReferenceCycle)?;
 
         subjects.sort_by(|a, b| {
             let a = SubjectVersion {
@@ -328,14 +336,14 @@ impl Client {
     }
 }
 
+/// Generates a topological ordering for a DAG.  If a cycle is detected in any returns an error.
+/// This can operator on a disconnected graph containing multiple DAGs.
 #[allow(clippy::disallowed_types)]
-fn topological_sort(
-    graph: &std::collections::HashMap<SubjectVersion, Vec<SubjectVersion>>,
-) -> Result<std::collections::HashMap<&SubjectVersion, i32>, GetBySubjectError> {
-    let mut referenced_by: std::collections::HashMap<
-        &SubjectVersion,
-        std::collections::HashSet<&SubjectVersion>,
-    > = std::collections::HashMap::new();
+pub fn topological_sort<T: Hash + Eq>(
+    graph: &std::collections::HashMap<T, Vec<T>>,
+) -> Result<std::collections::HashMap<&T, i32>, anyhow::Error> {
+    let mut referenced_by: std::collections::HashMap<&T, std::collections::HashSet<&T>> =
+        std::collections::HashMap::new();
     for (subject, references) in graph.iter() {
         for reference in references {
             referenced_by.entry(reference).or_default().insert(subject);
@@ -352,10 +360,6 @@ fn topological_sort(
                 .map_or(true, |subjects| subjects.is_empty())
         })
         .collect();
-
-    // Schemas should have a single root, but the queue might be empty because there is a cycle
-    // or because someone passed in an empty graph (which should be ok to do).
-    assert!(queue.len() <= 1, "schema has more than one root?");
 
     let mut ordered = std::collections::HashMap::new();
     let mut n = 0;
@@ -375,10 +379,11 @@ fn topological_sort(
         ordered.insert(subj_ver, n);
         n += 1;
     }
+
     if referenced_by.is_empty() {
         Ok(ordered)
     } else {
-        Err(GetBySubjectError::SchemaReferenceCycle)
+        Err(anyhow!("Cycled detected during topoligical sort"))
     }
 }
 
@@ -476,7 +481,7 @@ pub enum GetByIdError {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct SubjectVersion {
+pub struct SubjectVersion {
     /// The name of the subject
     pub subject: String,
     /// The version of the schema

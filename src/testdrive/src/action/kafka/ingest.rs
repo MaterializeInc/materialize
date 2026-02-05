@@ -578,8 +578,8 @@ async fn make_transcoder(
 
                     // Add newly discovered dependencies to the queue
                     for dep in ref_deps {
-                        if !seen_subjects.contains(&dep) {
-                            queue.push(dep);
+                        if !seen_subjects.contains(&dep.subject) {
+                            queue.push(dep.subject);
                         }
                     }
 
