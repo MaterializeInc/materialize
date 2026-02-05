@@ -11,10 +11,12 @@
 import re
 import subprocess
 import time
+import uuid
+from pathlib import Path
 
 import requests
 
-from materialize import ui
+from materialize import spawn, ui
 from materialize.mz_version import MzVersion
 
 CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
@@ -216,3 +218,23 @@ def image_registry() -> str:
         if ui.env_is_truthy("MZ_GHCR", "1")
         else "materialize"
     )
+
+
+def extract_file_from_image(image: str, src_path: str, dst_path: Path) -> None:
+    """Extract a file from a Docker image.
+
+    Args:
+        image: The Docker image to extract from.
+        src_path: The path to the file inside the container.
+        dst_path: The destination path on the host.
+    """
+    ui.say(f"Extracting {src_path} from {image}...")
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    container_name = f"mzbuild-extract-file-{uuid.uuid4()}"
+
+    try:
+        spawn.runv(["docker", "create", "--name", container_name, image])
+        spawn.runv(["docker", "cp", f"{container_name}:{src_path}", str(dst_path)])
+    finally:
+        spawn.runv(["docker", "rm", "-f", container_name])

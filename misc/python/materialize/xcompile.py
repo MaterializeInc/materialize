@@ -17,6 +17,8 @@ from enum import Enum
 from materialize import MZ_ROOT, spawn
 from materialize.rustc_flags import Sanitizer
 
+XCOMPILE_LIB_PATH = MZ_ROOT / "target-xcompile" / "lib"
+
 
 class Arch(Enum):
     """A CPU architecture."""
@@ -130,6 +132,7 @@ def cargo(
             f"-L{sysroot}/lib",
             "-Clink-arg=-fuse-ld=lld",
             f"-Clink-arg=-B{lld_prefix}/bin",
+            f"-Clink-arg=-L{XCOMPILE_LIB_PATH}",
         ]
         env.update(
             {
