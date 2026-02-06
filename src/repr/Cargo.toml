@@ -41,6 +41,7 @@ differential-dataflow = "0.18.0"
 enum-kinds = "0.5.1"
 hex = "0.4.3"
 itertools = "0.14.0"
+mz-catalog-types = { path = "../catalog-types", default-features = false }
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = [
     "bytes",

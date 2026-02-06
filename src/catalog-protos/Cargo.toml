@@ -12,7 +12,6 @@ workspace = true
 mz-audit-log = { path = "../audit-log" }
 mz-catalog-types = { path = "../catalog-types" }
 mz-proto = { path = "../proto" }
-mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 num_enum = "0.7.4"
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }

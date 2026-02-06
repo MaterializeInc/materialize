@@ -340,7 +340,7 @@ pub fn plan_create_table(
                     }
                 }
                 ColumnOption::Versioned { action, version } => {
-                    let version = RelationVersion::from(*version);
+                    let version = mz_repr::ast_version_to_relation_version(*version);
                     versioned = true;
 
                     let name = normalize::column_name(c.name.clone());

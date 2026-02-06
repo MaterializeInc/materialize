@@ -2114,7 +2114,7 @@ where
             handle_purpose: "alter_table_desc".to_string(),
         };
         // We map the Adapter's RelationVersion 1:1 with SchemaId.
-        let expected_schema = expected_version.into();
+        let expected_schema = mz_repr::relation_version_to_schema_id(expected_version);
         let schema_result = persist_client
             .compare_and_evolve_schema::<SourceData, (), T, StorageDiff>(
                 data_shard,

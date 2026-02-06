@@ -2243,7 +2243,7 @@ impl CatalogItem {
                     name: None,
                     option: ColumnOption::Versioned {
                         action: ColumnVersioned::Added,
-                        version: next_version.into(),
+                        version: mz_repr::relation_version_to_ast_version(next_version),
                     },
                 };
                 let column = ColumnDef {
