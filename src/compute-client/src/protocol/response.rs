@@ -240,7 +240,7 @@ impl StashedPeekResponse {
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
-        let num_inline_rows = self.inline_rows.count(offset, limit);
+        let num_inline_rows = self.inline_rows.count(0, None);
         let mut num_rows = num_stashed_rows + num_inline_rows;
 
         // Consider a possible OFFSET.
