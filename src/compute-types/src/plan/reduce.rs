@@ -271,8 +271,6 @@ pub enum BasicPlan {
 /// this aggregation.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
 pub struct SingleBasicPlan {
-    /// The index in the set of inputs that we are aggregating over.
-    pub index: usize,
     /// The aggregation that we should perform.
     pub expr: AggregateExpr,
     /// Whether we fused a `FlatMap UnnestList` with this aggregation.
@@ -320,8 +318,7 @@ impl ReducePlan {
         expected_group_size: Option<u64>,
         fused_unnest_list: bool,
     ) -> Self {
-        // We need to make sure that each list of aggregates by type forms
-        // a subsequence of the overall sequence of aggregates.
+        // We need to make sure that all aggregates have the same type.
         let mut aggregates_list = Vec::with_capacity(aggregates.len());
         let mut aggregates = aggregates.into_iter();
         if let Some(aggregate) = aggregates.next() {
@@ -329,10 +326,10 @@ impl ReducePlan {
             aggregates_list.push(aggregate);
 
             for aggregate in aggregates {
-                let this_typ = reduction_type(&aggregate.func);
                 assert_eq!(
-                    this_typ, typ,
-                    "Multiple reduction types detected: expected {typ:?}, found {this_typ:?}"
+                    typ,
+                    reduction_type(&aggregate.func),
+                    "Multiple reduction types detected"
                 );
                 aggregates_list.push(aggregate);
             }
@@ -352,8 +349,7 @@ impl ReducePlan {
     /// Generate a plan for computing the specified type of aggregations.
     ///
     /// This function assumes that all of the supplied aggregates are
-    /// actually of the correct reduction type, and are a subsequence
-    /// of the total list of requested aggregations.
+    /// actually of the correct reduction type.
     fn create_inner(
         typ: ReductionType,
         aggregates_list: Vec<AggregateExpr>,
@@ -411,17 +407,13 @@ impl ReducePlan {
                     ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
                 }
             }
-            ReductionType::Basic => {
-                if aggregates_list.len() == 1 {
-                    ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
-                        index: 0,
-                        expr: aggregates_list[0].clone(),
-                        fused_unnest_list,
-                    }))
-                } else {
-                    ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
-                }
-            }
+            ReductionType::Basic => match <_ as TryInto<[_; 1]>>::try_into(aggregates_list) {
+                Ok([expr]) => ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
+                    expr,
+                    fused_unnest_list,
+                })),
+                Err(aggregates_list) => ReducePlan::Basic(BasicPlan::Multiple(aggregates_list)),
+            },
         }
     }
 

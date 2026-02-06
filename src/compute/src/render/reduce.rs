@@ -232,7 +232,6 @@ where
                 output
             }
             ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
-                index,
                 expr,
                 fused_unnest_list,
             })) => {
@@ -242,7 +241,7 @@ where
                 let validating = !fused_unnest_list;
                 let (output, errs) = self.build_basic_aggregate(
                     collection,
-                    index,
+                    0,
                     &expr,
                     validating,
                     key_arity,

@@ -661,7 +661,7 @@ Explained Query:
       stream={ key=[#0], thinning=(#1) }
     source={ relation=0, key=[#0] }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -672,7 +672,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -713,7 +713,7 @@ Explained Query:
           stream={ key=[], thinning=(#0) }
         source={ relation=0, key=[] }
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -722,7 +722,7 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -846,7 +846,7 @@ materialize.public.collated_group_by_mv:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -857,7 +857,7 @@ materialize.public.collated_group_by_mv:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -970,7 +970,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -981,7 +981,7 @@ Explained Query:
         raw=false
         arrangements[0]={ key=[#0{a}], permutation=id, thinning=(#1) }
     Reduce::Basic
-      aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
+      aggr=(string_agg[order_by=[]](row(row((integer_to_text(#1{b}) || █), █))))
       input_key=#0{a}
       key_plan
         project=(#0)
@@ -1089,7 +1089,7 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1098,7 +1098,7 @@ materialize.public.collated_global_mv:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1220,7 +1220,7 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1229,7 +1229,7 @@ Explained Query:
           Get::PassArrangements l0
             raw=true
         Reduce::Basic
-          aggr=(0, string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
+          aggr=(string_agg[order_by=[]](row(row((integer_to_text(#0{b}) || █), █))))
           key_plan
             project=()
           val_plan
@@ -1650,7 +1650,7 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1{b}, █, █)))), fused_unnest_list=true)
+      aggr=(lead[ignore_nulls=true, order_by=[]](row(row(row(#0, #1), row(#1{b}, █, █)))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=()
@@ -1679,7 +1679,7 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(0, lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1{b}, █, █)), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
+      aggr=(lag[ignore_nulls=true, order_by=[#0 asc nulls_last, #1 asc nulls_last]](row(row(row(#0, #1), row(#1{b}, █, █)), (#1{b} + █), (#0{a} - █))), fused_unnest_list=true)
       input_key=#0{a}
       key_plan
         project=(#1, #0)

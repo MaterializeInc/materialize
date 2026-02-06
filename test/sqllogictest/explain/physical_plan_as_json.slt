@@ -3232,7 +3232,6 @@ GROUP BY a
                     "plan": {
                       "Basic": {
                         "Single": {
-                          "index": 0,
                           "expr": {
                             "func": {
                               "StringAgg": {
@@ -3492,7 +3491,6 @@ GROUP BY a
                     "plan": {
                       "Basic": {
                         "Single": {
-                          "index": 0,
                           "expr": {
                             "func": {
                               "StringAgg": {
@@ -3869,7 +3867,6 @@ FROM t
                                 "plan": {
                                   "Basic": {
                                     "Single": {
-                                      "index": 0,
                                       "expr": {
                                         "func": {
                                           "StringAgg": {
@@ -4099,7 +4096,6 @@ FROM t
                                 "plan": {
                                   "Basic": {
                                     "Single": {
-                                      "index": 0,
                                       "expr": {
                                         "func": {
                                           "StringAgg": {
@@ -4791,7 +4787,6 @@ MATERIALIZED VIEW collated_group_by_mv
                     "plan": {
                       "Basic": {
                         "Single": {
-                          "index": 0,
                           "expr": {
                             "func": {
                               "StringAgg": {
@@ -5051,7 +5046,6 @@ MATERIALIZED VIEW collated_group_by_mv
                     "plan": {
                       "Basic": {
                         "Single": {
-                          "index": 0,
                           "expr": {
                             "func": {
                               "StringAgg": {
@@ -6206,7 +6200,6 @@ SELECT * FROM collated_group_by
                     "plan": {
                       "Basic": {
                         "Single": {
-                          "index": 0,
                           "expr": {
                             "func": {
                               "StringAgg": {
@@ -6466,7 +6459,6 @@ SELECT * FROM collated_group_by
                     "plan": {
                       "Basic": {
                         "Single": {
-                          "index": 0,
                           "expr": {
                             "func": {
                               "StringAgg": {
@@ -7605,7 +7597,6 @@ MATERIALIZED VIEW collated_global_mv
                                 "plan": {
                                   "Basic": {
                                     "Single": {
-                                      "index": 0,
                                       "expr": {
                                         "func": {
                                           "StringAgg": {
@@ -7835,7 +7826,6 @@ MATERIALIZED VIEW collated_global_mv
                                 "plan": {
                                   "Basic": {
                                     "Single": {
-                                      "index": 0,
                                       "expr": {
                                         "func": {
                                           "StringAgg": {
@@ -8955,7 +8945,6 @@ SELECT * FROM collated_global
                                 "plan": {
                                   "Basic": {
                                     "Single": {
-                                      "index": 0,
                                       "expr": {
                                         "func": {
                                           "StringAgg": {
@@ -9185,7 +9174,6 @@ SELECT * FROM collated_global
                                 "plan": {
                                   "Basic": {
                                     "Single": {
-                                      "index": 0,
                                       "expr": {
                                         "func": {
                                           "StringAgg": {

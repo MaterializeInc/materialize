@@ -7679,7 +7679,7 @@ Explained Query:
     map=(record_get[0](#0))
     input_key=
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
+      aggr=(lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       key_plan
         project=()
       val_plan
@@ -7707,7 +7707,7 @@ Explained Query:
     map=(record_get[0](#1))
     input_key=#0
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
+      aggr=(lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       key_plan
         project=(#2)
         map=((#0{x} / 2))
@@ -7736,7 +7736,7 @@ Explained Query:
     map=(record_get[0](#2))
     input_key=#0, #1
     Reduce::Basic
-      aggr=(0, lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
+      aggr=(lead[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, (#1{y} - 2), 120)), #0{x})), fused_unnest_list=true)
       key_plan
         project=(#2, #1)
         map=((#0{x} / 2))
@@ -7768,7 +7768,7 @@ Explained Query:
       map=(record_get[0](record_get[1](#0)), record_get[0](#0))
       input_key=
       Reduce::Basic
-        aggr=(0, row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x})), fused_unnest_list=true)
+        aggr=(row_number[order_by=[#0 asc nulls_last]](row(list[row(#0, #1)], #0{x})), fused_unnest_list=true)
         key_plan
           project=()
         val_plan
@@ -7801,7 +7801,7 @@ Explained Query:
       map=(record_get[0](#0), record_get[1](#0), record_get[0](#2), record_get[1](#2))
       input_key=
       Reduce::Basic
-        aggr=(0, lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x})), fused_unnest_list=true)
+        aggr=(lag[order_by=[#0 asc nulls_last]](row(row(row(#0, #1), row(#0{x}, 1, null)), #0{x})), fused_unnest_list=true)
         key_plan
           project=()
         val_plan
@@ -7835,7 +7835,7 @@ Explained Query:
       map=(record_get[1](#0), record_get[0](#1), record_get[1](#1), record_get[0](#0), record_get[0](#4), record_get[1](#4))
       input_key=
       Reduce::Basic
-        aggr=(0, fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null))))), fused_unnest_list=true)
+        aggr=(fused_value_window_func[lag[order_by=[]], lag[order_by=[]] order_by=[]](row(row(row(#0, #1), row(row(#1{y}, 1, null), row(#0{x}, 1, null))))), fused_unnest_list=true)
         key_plan
           project=()
         val_plan

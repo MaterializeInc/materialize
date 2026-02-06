@@ -1540,7 +1540,6 @@ impl BasicPlan {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
             BasicPlan::Single(SingleBasicPlan {
-                index: _,
                 expr,
                 fused_unnest_list: _,
             }) => {
@@ -1570,7 +1569,6 @@ impl BasicPlan {
         let mode = HumanizedExplain::new(ctx.config.redacted);
         match self {
             BasicPlan::Single(SingleBasicPlan {
-                index,
                 expr,
                 fused_unnest_list,
             }) => {
@@ -1580,11 +1578,7 @@ impl BasicPlan {
                 } else {
                     ""
                 };
-                writeln!(
-                    f,
-                    "{}aggr=({}, {}{})",
-                    ctx.indent, index, agg, fused_unnest_list
-                )?;
+                writeln!(f, "{}aggr=({}{})", ctx.indent, agg, fused_unnest_list)?;
             }
             BasicPlan::Multiple(aggs) => {
                 for (i, agg) in aggs.iter().enumerate() {
