@@ -141,8 +141,11 @@ where
         }
 
         if self.sources.iter().any(|src| !src.is_identity()) {
-            // Render one blank line between the plans and sources.
-            writeln!(f)?;
+            // Render one blank line between the plans and sources, but only if
+            // there were plans rendered above.
+            if !self.plans.is_empty() {
+                writeln!(f)?;
+            }
             for src in self.sources.iter().filter(|src| !src.is_identity()) {
                 if self.context.config.humanized_exprs {
                     let mut cols = ctx.humanizer.column_names_for_id(src.id);

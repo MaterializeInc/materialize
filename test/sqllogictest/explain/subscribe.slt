@@ -33,7 +33,6 @@ CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
 ----
-
 Source materialize.public.t
 
 Target cluster: quickstart
@@ -44,7 +43,7 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE v
 ----
-t44:
+Explained Query:
   Filter (#0{a} > 0)
     ReadStorage materialize.public.t
 
@@ -59,7 +58,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE mv
 ----
-
 Source materialize.public.mv
 
 Target cluster: quickstart
@@ -102,7 +100,6 @@ EOF
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR SUBSCRIBE t
 ----
-
 Source materialize.public.t
 
 Target cluster: quickstart
@@ -132,7 +129,6 @@ EXPLAIN OPTIMIZED PLAN AS JSON FOR SUBSCRIBE t
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 1000
 ----
-
 Source materialize.public.valid
 
 Target cluster: quickstart
@@ -143,7 +139,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF AT LEAST 500
 ----
-
 Source materialize.public.valid
 
 Target cluster: quickstart
@@ -154,7 +149,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid UP TO 18446744073709551615
 ----
-
 Source materialize.public.valid
 
 Target cluster: quickstart
@@ -165,7 +159,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE valid AS OF 100 UP TO 500
 ----
-
 Source materialize.public.valid
 
 Target cluster: quickstart
@@ -178,7 +171,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false)
 ----
-
 Source materialize.public.t
 
 Target cluster: quickstart
@@ -189,7 +181,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (PROGRESS = true)
 ----
-
 Source materialize.public.t
 
 Target cluster: quickstart
@@ -200,7 +191,6 @@ EOF
 query T multiline
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t WITH (SNAPSHOT = false, PROGRESS = true)
 ----
-
 Source materialize.public.t
 
 Target cluster: quickstart

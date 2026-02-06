@@ -522,16 +522,12 @@ impl Coordinator {
         let session_catalog = self.catalog().for_session(session);
 
         let expr_humanizer = {
-            let transient_items = desc
-                .map(|desc| {
-                    btreemap! {
-                        optimizer.sink_id() => TransientItem::new(
-                            Some(vec![GlobalId::Explain.to_string()]),
-                            Some(desc.iter_names().map(|c| c.to_string()).collect()),
-                        )
-                    }
-                })
-                .unwrap_or_default();
+            let transient_items = btreemap! {
+                optimizer.sink_id() => TransientItem::new(
+                    Some(vec![GlobalId::Explain.to_string()]),
+                    desc.map(|d| d.iter_names().map(|c| c.to_string()).collect()),
+                )
+            };
             ExprHumanizerExt::new(transient_items, &session_catalog)
         };
 

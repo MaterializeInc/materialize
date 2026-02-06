@@ -1318,6 +1318,18 @@ Target cluster: quickstart
 
 EOF
 
+## Test default EXPLAIN for SUBSCRIBE
+
+query T multiline
+EXPLAIN WITH(humanized expressions)
+SUBSCRIBE t1
+----
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
 ## "Used indexes" tests
 
 statement ok
