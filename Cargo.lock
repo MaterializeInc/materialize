@@ -8291,6 +8291,7 @@ dependencies = [
  "mysql_async",
  "mz-aws-util",
  "mz-build-tools",
+ "mz-catalog-types",
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-dyncfg",
