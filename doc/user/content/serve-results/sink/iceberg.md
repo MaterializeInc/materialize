@@ -74,8 +74,9 @@ Materialize can assume.
 
 1. For the **Trusted entity type**, specify **Custom trust policy** with the
 following:
-    - `Principal`: Uses the AWS account ID `664411391173`, which is the
-    Materialize Cloud AWS account. For self-managed deployments and the Emulator, the AWS account ID differs.
+    - `Principal`: Uses the [Materialize Cloud IAM
+      principal](/sql/create-connection/#aws-permissions). For self-managed
+      deployments and the Emulator, the principal will differ.
     - `ExternalId`: `"PENDING"` is a placeholder and will be updated after
     creating the AWS connection in Materialize.
 
