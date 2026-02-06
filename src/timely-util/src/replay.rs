@@ -25,6 +25,7 @@ use std::time::{Duration, Instant};
 
 use timely::Container;
 use timely::communication::Push;
+use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pushers::Counter as PushCounter;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::capture::event::EventIterator;
@@ -137,14 +138,14 @@ where
                                 progress_sofar.extend(vec.into_iter());
                             }
                             Owned(Event::Messages(time, mut data)) => {
-                                output.give(time, &mut data);
+                                Message::push_at(&mut data, time, &mut output);
                             }
                             Borrowed(Event::Progress(vec)) => {
                                 progress.internals[0].extend(vec.iter().cloned());
                                 progress_sofar.extend(vec.iter().cloned());
                             }
                             Borrowed(Event::Messages(time, data)) => {
-                                output.give(time.clone(), &mut data.clone());
+                                Message::push_at(&mut data.clone(), time.clone(), &mut output);
                             }
                         }
                     }

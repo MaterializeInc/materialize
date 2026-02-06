@@ -800,13 +800,13 @@ where
         builder.build(move |_caps| {
             move |_frontiers| {
                 let mut output = output.activate();
-                while let Some((cap, data)) = input.next() {
+                input.for_each(|cap, data| {
                     for (_, ts, _) in data.iter_mut() {
                         *ts = ts.step_forward();
                     }
                     let cap = cap.delayed(&cap.time().step_forward());
                     output.session(&cap).give_container(data);
-                }
+                });
             }
         });
 

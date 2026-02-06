@@ -1536,7 +1536,7 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
         // and when one is a `PointStamp` that also means all coordinates
         // of the pointstamp.
         let inner = self.inner.clone();
-        let mut vec = inner.into_vec();
+        let mut vec = inner.into_inner();
         for item in vec.iter_mut() {
             *item = item.saturating_sub(1);
         }

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::VecDeque;
+
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
 use mz_expr::MfpPlan;
@@ -16,7 +18,7 @@ use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::InputCapability;
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
@@ -52,6 +54,7 @@ where
 
         let (oks, errs) = stream.unary_fallible(Pipeline, "FlatMapStage", move |_, info| {
             let activator = scope.activator_for(info.address);
+            let mut queue = VecDeque::new();
             Box::new(move |input, ok_output, err_output| {
                 let mut datums = DatumVec::new();
                 let mut datums_mfp = DatumVec::new();
@@ -61,11 +64,19 @@ where
 
                 let mut budget = budget;
 
-                while let Some((cap, data)) = input.next() {
-                    let mut ok_session = ok_output.session_with_builder(&cap);
-                    let mut err_session = err_output.session_with_builder(&cap);
+                input.for_each(|cap, data| {
+                    queue.push_back((
+                        cap.delayed_for_output(cap.time(), 0),
+                        cap.retain_for_output(1),
+                        std::mem::take(data),
+                    ))
+                });
 
-                    'input: for (input_row, time, diff) in data.drain(..) {
+                while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
+                    let mut ok_session = ok_output.session_with_builder(&ok_cap);
+                    let mut err_session = err_output.session_with_builder(&err_cap);
+
+                    'input: for (input_row, time, diff) in data {
                         let temp_storage = RowArena::new();
 
                         // Unpack datums for expression evaluation.
@@ -141,14 +152,14 @@ fn drain_through_mfp<T>(
         '_,
         T,
         ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
-        InputCapability<T>,
+        Capability<T>,
     >,
     err_output: &mut Session<
         '_,
         '_,
         T,
         ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
-        InputCapability<T>,
+        Capability<T>,
     >,
     budget: &mut usize,
 ) where

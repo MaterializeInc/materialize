@@ -869,7 +869,7 @@ where
                         let mut val_buf = Row::default();
                         let mut datums = DatumVec::new();
                         let mut temp_storage = RowArena::new();
-                        while let Some((time, data)) = input.next() {
+                        input.for_each(|time, data| {
                             let mut ok_session = ok.session_with_builder(&time);
                             let mut err_session = err.session(&time);
                             for (row, time, diff) in data.iter() {
@@ -887,7 +887,7 @@ where
                                     }
                                 }
                             }
-                        }
+                        });
                     })
                 },
             );

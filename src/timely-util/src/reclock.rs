@@ -275,12 +275,12 @@ where
 
             // STEP 1. Accept new bindings into `pending_remap`.
             // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
-            while let Some((_, data)) = remap_input.next() {
+            remap_input.for_each(|_, data| {
                 for (from, mut into, diff) in data.drain(..) {
                     into.advance_by(as_of.borrow());
                     remap_accum_buffer.update((into, from), diff.into_inner());
                 }
-            }
+            });
             // Drain consolidated bindings into the `pending_remap` heap.
             // Only do this once any of the `remap_input` frontier has passed `as_of`.
             // For as long as the input frontier is less-equal `as_of`, we have no finalized times.

@@ -85,11 +85,11 @@ where
     fn accept_input(&mut self) {
         let mut queue = self.queue.borrow_mut();
         let mut new_data = false;
-        while let Some((cap, data)) = self.handle.next() {
+        self.handle.for_each(|cap, data| {
             new_data = true;
             let cap = self.connection.accept(cap);
             queue.push_back(Event::Data(cap, std::mem::take(data)));
-        }
+        });
         if new_data {
             if let Some(waker) = self.waker.take() {
                 waker.wake();

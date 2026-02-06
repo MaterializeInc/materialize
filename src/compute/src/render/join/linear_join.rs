@@ -366,7 +366,7 @@ where
                             let mut key_buf = Row::default();
                             let mut val_buf = Row::default();
                             let mut datums = DatumVec::new();
-                            while let Some((time, data)) = input.next() {
+                            input.for_each(|time, data| {
                                 let mut ok_session = ok.session_with_builder(&time);
                                 let mut err_session = errs.session(&time);
                                 for (row, time, diff) in data.iter() {
@@ -388,7 +388,7 @@ where
                                         }
                                     }
                                 }
-                            }
+                            });
                         })
                     },
                 );

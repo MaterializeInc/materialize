@@ -366,7 +366,7 @@ where
                 }
                 let health_cap = health_cap.as_mut().unwrap();
 
-                while let Some((cap, data)) = input.next() {
+                input.for_each(|cap, data| {
                     for (message, _, _) in data.iter() {
                         match message {
                             Ok(message) => {
@@ -401,7 +401,7 @@ where
                     }
                     let mut output = output.activate();
                     output.session(&cap).give_container(data);
-                }
+                });
             }
         });
     }
@@ -652,12 +652,12 @@ where
 
         move |frontiers| {
             // Accept new bindings
-            while let Some((_, data)) = bindings.next() {
+            bindings.for_each(|_, data| {
                 accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
                     into.advance_by(as_of.borrow());
                     ((into, from), diff.into_inner())
                 }));
-            }
+            });
             // Extract ready bindings
             let new_upper = frontiers[0].frontier();
             if PartialOrder::less_than(&upper.borrow(), &new_upper) {
