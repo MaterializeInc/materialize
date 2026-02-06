@@ -7,6 +7,7 @@ headless: true
 
 {{% schema-changes %}}
 
+#### Source Versioning for Schema Changes
 Certain additional schema changes (such as dropping/altering existing columns) to SQL Server tables are supported as detailed by the [source versioning guide](/ingest-data/sql-server/source-versioning/)
 
 {{< note >}}
