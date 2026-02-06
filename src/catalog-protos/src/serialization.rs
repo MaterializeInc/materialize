@@ -15,8 +15,7 @@
 
 use std::time::Duration;
 
-use mz_compute_types::config::ComputeReplicaLogging;
-use mz_controller_types::ReplicaId;
+use mz_catalog_types::{ComputeReplicaLogging, ReplicaId, StorageInstanceId};
 use mz_proto::{ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
@@ -31,7 +30,6 @@ use mz_sql::plan::{
     PolicyAddress,
 };
 use mz_sql::session::vars::OwnedVarInput;
-use mz_storage_types::instances::StorageInstanceId;
 
 impl From<String> for crate::objects::StringWrapper {
     fn from(value: String) -> Self {
