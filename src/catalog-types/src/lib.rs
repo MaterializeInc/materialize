@@ -171,3 +171,149 @@ impl ComputeReplicaLogging {
         self.interval.is_some()
     }
 }
+
+/// The identifier for a database.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum DatabaseId {
+    /// A user database.
+    User(u64),
+    /// A system database.
+    System(u64),
+}
+
+impl DatabaseId {
+    /// Whether this value identifies a user database.
+    pub fn is_user(&self) -> bool {
+        matches!(self, DatabaseId::User(_))
+    }
+
+    /// Whether this value identifies a system database.
+    pub fn is_system(&self) -> bool {
+        matches!(self, DatabaseId::System(_))
+    }
+}
+
+impl fmt::Display for DatabaseId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DatabaseId::System(id) => write!(f, "s{}", id),
+            DatabaseId::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
+
+impl FromStr for DatabaseId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            bail!("couldn't parse DatabaseId {}", s);
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(DatabaseId::System(val)),
+            Some('u') => Ok(DatabaseId::User(val)),
+            _ => bail!("couldn't parse DatabaseId {}", s),
+        }
+    }
+}
+
+/// The identifier for a schema.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum SchemaId {
+    /// A user schema.
+    User(u64),
+    /// A system schema.
+    System(u64),
+}
+
+impl SchemaId {
+    /// Whether this value identifies a user schema.
+    pub fn is_user(&self) -> bool {
+        matches!(self, SchemaId::User(_))
+    }
+
+    /// Whether this value identifies a system schema.
+    pub fn is_system(&self) -> bool {
+        matches!(self, SchemaId::System(_))
+    }
+}
+
+impl fmt::Display for SchemaId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            SchemaId::System(id) => write!(f, "s{}", id),
+            SchemaId::User(id) => write!(f, "u{}", id),
+        }
+    }
+}
+
+impl FromStr for SchemaId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.len() < 2 {
+            bail!("couldn't parse SchemaId {}", s);
+        }
+        let val: u64 = s[1..].parse()?;
+        match s.chars().next() {
+            Some('s') => Ok(SchemaId::System(val)),
+            Some('u') => Ok(SchemaId::User(val)),
+            _ => bail!("couldn't parse SchemaId {}", s),
+        }
+    }
+}
+
+/// Specification for a database. Either the "ambient" database (no explicit database)
+/// or a specific database by ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ResolvedDatabaseSpecifier {
+    /// The "ambient" database, which is always present and is not named
+    /// explicitly, but by omission.
+    Ambient,
+    /// A normal database with a name.
+    Id(DatabaseId),
+}
+
+impl ResolvedDatabaseSpecifier {
+    /// Returns the database ID if this is not the ambient database.
+    pub fn id(&self) -> Option<DatabaseId> {
+        match self {
+            ResolvedDatabaseSpecifier::Ambient => None,
+            ResolvedDatabaseSpecifier::Id(id) => Some(*id),
+        }
+    }
+}
+
+/// Specification for a schema. Either a temporary schema or a specific schema by ID.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SchemaSpecifier {
+    /// A temporary schema.
+    Temporary,
+    /// A normal schema with an ID.
+    Id(SchemaId),
+}
+
+impl SchemaSpecifier {
+    /// Whether this value identifies a system schema.
+    pub fn is_system(&self) -> bool {
+        match self {
+            SchemaSpecifier::Temporary => false,
+            SchemaSpecifier::Id(id) => id.is_system(),
+        }
+    }
+
+    /// Whether this value identifies a user schema.
+    /// Note: Temporary schemas are considered user schemas.
+    pub fn is_user(&self) -> bool {
+        match self {
+            SchemaSpecifier::Temporary => true,
+            SchemaSpecifier::Id(id) => id.is_user(),
+        }
+    }
+
+    /// Whether this is a temporary schema.
+    pub fn is_temporary(&self) -> bool {
+        matches!(self, SchemaSpecifier::Temporary)
+    }
+}
