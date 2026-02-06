@@ -608,6 +608,7 @@ where
             if !is_active_worker {
                 *capset = CapabilitySet::new();
                 *data_capset = CapabilitySet::new();
+                *table_ready_capset = CapabilitySet::new();
                 while let Some(event) = input.next().await {
                     match event {
                         Event::Data([output_cap, _], mut data) => {
