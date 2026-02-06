@@ -1999,21 +1999,57 @@ pub struct RunConfig<'a> {
     pub replica_size: String,
 }
 
+/// Indentation used for verbose output of SQL statements.
+const PRINT_INDENT: usize = 4;
+
 fn print_record(config: &RunConfig<'_>, record: &Record) {
     match record {
-        Record::Statement { sql, .. } | Record::Query { sql, .. } => print_sql(config.stdout, sql),
-        _ => (),
+        Record::Statement { sql, .. } | Record::Query { sql, .. } => {
+            print_sql(config.stdout, sql, None)
+        }
+        Record::Simple { conn, sql, .. } => print_sql(config.stdout, sql, *conn),
+        Record::Copy {
+            table_name,
+            tsv_path,
+        } => {
+            writeln!(
+                config.stdout,
+                "{}slt copy {} from {}",
+                " ".repeat(PRINT_INDENT),
+                table_name,
+                tsv_path
+            )
+        }
+        Record::ResetServer => {
+            writeln!(config.stdout, "{}reset-server", " ".repeat(PRINT_INDENT))
+        }
+        Record::Halt => {
+            writeln!(config.stdout, "{}halt", " ".repeat(PRINT_INDENT))
+        }
+        Record::HashThreshold { threshold } => {
+            writeln!(
+                config.stdout,
+                "{}hash-threshold {}",
+                " ".repeat(PRINT_INDENT),
+                threshold
+            )
+        }
     }
 }
 
 fn print_sql_if<'a>(stdout: &'a dyn WriteFmt, sql: &str, cond: bool) {
     if cond {
-        print_sql(stdout, sql)
+        print_sql(stdout, sql, None)
     }
 }
 
-fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str) {
-    writeln!(stdout, "{}", crate::util::indent(sql, 4))
+fn print_sql<'a>(stdout: &'a dyn WriteFmt, sql: &str, conn: Option<&str>) {
+    let text = if let Some(conn) = conn {
+        format!("[conn={}] {}", conn, sql)
+    } else {
+        sql.to_string()
+    };
+    writeln!(stdout, "{}", util::indent(&text, PRINT_INDENT))
 }
 
 /// Regular expressions for matching error messages that should force a plan failure
