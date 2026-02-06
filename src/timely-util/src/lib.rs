@@ -28,4 +28,5 @@ pub mod panic;
 pub mod probe;
 pub mod reclock;
 pub mod replay;
+pub mod scope_label;
 pub mod temporal;
