@@ -11,6 +11,7 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
@@ -150,5 +151,23 @@ impl fmt::Display for StorageInstanceId {
             Self::System(id) => write!(f, "s{}", id),
             Self::User(id) => write!(f, "u{}", id),
         }
+    }
+}
+
+/// Logging configuration of a replica.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+pub struct ComputeReplicaLogging {
+    /// Whether to enable logging for the logging dataflows.
+    pub log_logging: bool,
+    /// The interval at which to log.
+    ///
+    /// A `None` value indicates that logging is disabled.
+    pub interval: Option<Duration>,
+}
+
+impl ComputeReplicaLogging {
+    /// Return whether logging is enabled.
+    pub fn enabled(&self) -> bool {
+        self.interval.is_some()
     }
 }

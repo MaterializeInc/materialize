@@ -6160,6 +6160,7 @@ dependencies = [
  "columnation",
  "differential-dataflow",
  "itertools 0.14.0",
+ "mz-catalog-types",
  "mz-dyncfg",
  "mz-expr",
  "mz-ore",
