@@ -2046,6 +2046,7 @@ impl Coordinator {
         let _fut = self.catalog().update_expression_cache(
             uncached_local_exprs.into_iter().collect(),
             uncached_global_exps.into_iter().collect(),
+            Default::default(),
         );
 
         // Select dataflow as-ofs. This step relies on the storage collections created by

@@ -139,6 +139,7 @@ impl Coordinator {
                     catalog.set_optimized_plan(global_id, optimized_plan);
                     catalog.set_physical_plan(global_id, physical_plan.clone());
                     catalog.set_dataflow_metainfo(global_id, metainfo);
+                    catalog.cache_expressions(global_id, None);
 
                     coord
                         .controller

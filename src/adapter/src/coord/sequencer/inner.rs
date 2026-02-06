@@ -1238,6 +1238,16 @@ impl Coordinator {
                 .add_notice(AdapterNotice::CascadeDroppedObject { objects });
         }
 
+        // Collect GlobalIds for expression cache invalidation.
+        let expr_cache_invalidate_ids: BTreeSet<_> = drop_ids
+            .iter()
+            .filter_map(|id| match id {
+                ObjectId::Item(item_id) => Some(self.catalog().get_entry(item_id).global_ids()),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
         let DropOps {
             ops,
             dropped_active_db,
@@ -1247,6 +1257,15 @@ impl Coordinator {
 
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
+
+        // Invalidate expression cache entries for dropped objects.
+        if !expr_cache_invalidate_ids.is_empty() {
+            let _fut = self.catalog().update_expression_cache(
+                Default::default(),
+                Default::default(),
+                expr_cache_invalidate_ids,
+            );
+        }
 
         fail::fail_point!("after_sequencer_drop_replica");
 

@@ -480,6 +480,8 @@ impl Coordinator {
                         .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                         .await;
 
+                    coord.catalog().cache_expressions(global_id, None);
+
                     // We're putting in place read holds, such that ship_dataflow,
                     // below, which calls update_read_capabilities, can successfully
                     // do so. Otherwise, the since of dependencies might move along

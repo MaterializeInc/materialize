@@ -649,6 +649,8 @@ impl Coordinator {
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
+        let local_mir_for_cache = local_mir_plan.expr();
+
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -701,6 +703,10 @@ impl Coordinator {
                     let notice_builtin_updates_fut = coord
                         .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                         .await;
+
+                    coord
+                        .catalog()
+                        .cache_expressions(global_id, Some(local_mir_for_cache));
 
                     df_desc.set_as_of(dataflow_as_of.clone());
                     df_desc.set_initial_as_of(initial_as_of);
