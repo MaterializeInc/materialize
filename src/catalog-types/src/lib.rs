@@ -10,12 +10,54 @@
 //! Shared types for the Materialize catalog.
 
 use std::fmt;
+use std::num::ParseIntError;
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::bail;
+use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tracing::error;
+
+/// Error returned when parsing an ID from a string fails.
+#[derive(Debug, Clone)]
+pub struct IdParseError {
+    /// The type name of the ID being parsed.
+    pub type_name: &'static str,
+    /// The input string that failed to parse.
+    pub input: String,
+    /// Optional underlying integer parse error.
+    pub int_error: Option<ParseIntError>,
+}
+
+impl fmt::Display for IdParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "couldn't parse {} {}", self.type_name, self.input)
+    }
+}
+
+impl std::error::Error for IdParseError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.int_error.as_ref().map(|e| e as _)
+    }
+}
+
+impl IdParseError {
+    fn new(type_name: &'static str, input: &str) -> Self {
+        IdParseError {
+            type_name,
+            input: input.to_string(),
+            int_error: None,
+        }
+    }
+
+    fn with_int_error(type_name: &'static str, input: &str, int_error: ParseIntError) -> Self {
+        IdParseError {
+            type_name,
+            input: input.to_string(),
+            int_error: Some(int_error),
+        }
+    }
+}
 
 /// Identifier of a replica.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
@@ -56,13 +98,15 @@ impl fmt::Display for ReplicaId {
 }
 
 impl FromStr for ReplicaId {
-    type Err = anyhow::Error;
+    type Err = IdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let first = s.chars().next();
         let rest = s.get(1..);
         if let (Some(prefix), Some(num)) = (first, rest) {
-            let id = num.parse()?;
+            let id = num
+                .parse()
+                .map_err(|e| IdParseError::with_int_error("ReplicaId", s, e))?;
             match prefix {
                 'u' => return Ok(Self::User(id)),
                 's' => return Ok(Self::System(id)),
@@ -70,7 +114,7 @@ impl FromStr for ReplicaId {
             }
         }
 
-        bail!("invalid replica ID: {}", s);
+        Err(IdParseError::new("ReplicaId", s))
     }
 }
 
@@ -130,17 +174,19 @@ impl StorageInstanceId {
 }
 
 impl FromStr for StorageInstanceId {
-    type Err = anyhow::Error;
+    type Err = IdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
-            bail!("couldn't parse compute instance id {}", s);
+            return Err(IdParseError::new("StorageInstanceId", s));
         }
-        let val: u64 = s[1..].parse()?;
+        let val: u64 = s[1..]
+            .parse()
+            .map_err(|e| IdParseError::with_int_error("StorageInstanceId", s, e))?;
         match s.chars().next().unwrap() {
             's' => Ok(Self::System(val)),
             'u' => Ok(Self::User(val)),
-            _ => bail!("couldn't parse compute instance id {}", s),
+            _ => Err(IdParseError::new("StorageInstanceId", s)),
         }
     }
 }
@@ -173,7 +219,9 @@ impl ComputeReplicaLogging {
 }
 
 /// The identifier for a database.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum DatabaseId {
     /// A user database.
     User(u64),
@@ -203,23 +251,27 @@ impl fmt::Display for DatabaseId {
 }
 
 impl FromStr for DatabaseId {
-    type Err = anyhow::Error;
+    type Err = IdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
-            bail!("couldn't parse DatabaseId {}", s);
+            return Err(IdParseError::new("DatabaseId", s));
         }
-        let val: u64 = s[1..].parse()?;
+        let val: u64 = s[1..]
+            .parse()
+            .map_err(|e| IdParseError::with_int_error("DatabaseId", s, e))?;
         match s.chars().next() {
             Some('s') => Ok(DatabaseId::System(val)),
             Some('u') => Ok(DatabaseId::User(val)),
-            _ => bail!("couldn't parse DatabaseId {}", s),
+            _ => Err(IdParseError::new("DatabaseId", s)),
         }
     }
 }
 
 /// The identifier for a schema.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+)]
 pub enum SchemaId {
     /// A user schema.
     User(u64),
@@ -249,24 +301,28 @@ impl fmt::Display for SchemaId {
 }
 
 impl FromStr for SchemaId {
-    type Err = anyhow::Error;
+    type Err = IdParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() < 2 {
-            bail!("couldn't parse SchemaId {}", s);
+            return Err(IdParseError::new("SchemaId", s));
         }
-        let val: u64 = s[1..].parse()?;
+        let val: u64 = s[1..]
+            .parse()
+            .map_err(|e| IdParseError::with_int_error("SchemaId", s, e))?;
         match s.chars().next() {
             Some('s') => Ok(SchemaId::System(val)),
             Some('u') => Ok(SchemaId::User(val)),
-            _ => bail!("couldn't parse SchemaId {}", s),
+            _ => Err(IdParseError::new("SchemaId", s)),
         }
     }
 }
 
 /// Specification for a database. Either the "ambient" database (no explicit database)
 /// or a specific database by ID.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+)]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -285,6 +341,30 @@ impl ResolvedDatabaseSpecifier {
     }
 }
 
+impl fmt::Display for ResolvedDatabaseSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Ambient => f.write_str("<none>"),
+            Self::Id(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl From<DatabaseId> for ResolvedDatabaseSpecifier {
+    fn from(id: DatabaseId) -> Self {
+        Self::Id(id)
+    }
+}
+
+impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
+    fn from(id: Option<DatabaseId>) -> Self {
+        match id {
+            Some(id) => Self::Id(id),
+            None => Self::Ambient,
+        }
+    }
+}
+
 /// Specification for a schema. Either a temporary schema or a specific schema by ID.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SchemaSpecifier {
@@ -295,6 +375,9 @@ pub enum SchemaSpecifier {
 }
 
 impl SchemaSpecifier {
+    /// The ID used for temporary schemas in display format.
+    pub const TEMPORARY_SCHEMA_ID: u64 = 0;
+
     /// Whether this value identifies a system schema.
     pub fn is_system(&self) -> bool {
         match self {
@@ -315,5 +398,43 @@ impl SchemaSpecifier {
     /// Whether this is a temporary schema.
     pub fn is_temporary(&self) -> bool {
         matches!(self, SchemaSpecifier::Temporary)
+    }
+}
+
+impl fmt::Display for SchemaSpecifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Temporary => write!(f, "{}", Self::TEMPORARY_SCHEMA_ID),
+            Self::Id(id) => write!(f, "{}", id),
+        }
+    }
+}
+
+impl From<SchemaId> for SchemaSpecifier {
+    fn from(id: SchemaId) -> SchemaSpecifier {
+        match id {
+            SchemaId::User(id) if id == SchemaSpecifier::TEMPORARY_SCHEMA_ID => {
+                SchemaSpecifier::Temporary
+            }
+            schema_id => SchemaSpecifier::Id(schema_id),
+        }
+    }
+}
+
+impl From<&SchemaSpecifier> for SchemaId {
+    fn from(schema_spec: &SchemaSpecifier) -> Self {
+        match schema_spec {
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Id(id) => *id,
+        }
+    }
+}
+
+impl From<SchemaSpecifier> for SchemaId {
+    fn from(schema_spec: SchemaSpecifier) -> Self {
+        match schema_spec {
+            SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
+            SchemaSpecifier::Id(id) => id,
+        }
     }
 }

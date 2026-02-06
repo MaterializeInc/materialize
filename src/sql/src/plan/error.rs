@@ -1031,6 +1031,12 @@ impl From<ExternalReferenceResolutionError> for PlanError {
     }
 }
 
+impl From<mz_catalog_types::IdParseError> for PlanError {
+    fn from(e: mz_catalog_types::IdParseError) -> Self {
+        PlanError::Unstructured(e.to_string())
+    }
+}
+
 struct ColumnDisplay<'a> {
     table: &'a Option<PartialItemName>,
     column: &'a ColumnName,

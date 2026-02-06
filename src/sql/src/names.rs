@@ -12,7 +12,6 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::str::FromStr;
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
@@ -28,9 +27,11 @@ use mz_repr::{ColumnName, RelationVersionSelector};
 use mz_sql_parser::ast::visit_mut::VisitMutNode;
 use mz_sql_parser::ast::{CreateContinualTaskStatement, Expr, RawNetworkPolicyName, Version};
 use mz_sql_parser::ident;
-use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
+
+// Re-export from mz-catalog-types for backwards compatibility
+pub use mz_catalog_types::{DatabaseId, SchemaId};
 
 use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
@@ -274,7 +275,7 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 
 /// An id of a database.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
@@ -390,7 +391,7 @@ impl From<&SchemaSpecifier> for SchemaId {
     fn from(schema_spec: &SchemaSpecifier) -> Self {
         match schema_spec {
             SchemaSpecifier::Temporary => SchemaId::User(SchemaSpecifier::TEMPORARY_SCHEMA_ID),
-            SchemaSpecifier::Id(id) => id.clone(),
+            SchemaSpecifier::Id(id) => *id,
         }
     }
 }
@@ -862,105 +863,7 @@ impl AstInfo for Aug {
     type NetworkPolicyName = ResolvedNetworkPolicyName;
 }
 
-/// The identifier for a schema.
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
-)]
-pub enum SchemaId {
-    User(u64),
-    System(u64),
-}
-
-impl SchemaId {
-    pub fn is_user(&self) -> bool {
-        matches!(self, SchemaId::User(_))
-    }
-
-    pub fn is_system(&self) -> bool {
-        matches!(self, SchemaId::System(_))
-    }
-}
-
-impl fmt::Display for SchemaId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            SchemaId::System(id) => write!(f, "s{}", id),
-            SchemaId::User(id) => write!(f, "u{}", id),
-        }
-    }
-}
-
-impl FromStr for SchemaId {
-    type Err = PlanError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(PlanError::Unstructured(format!(
-                "couldn't parse SchemaId {}",
-                s
-            )));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next() {
-            Some('s') => Ok(SchemaId::System(val)),
-            Some('u') => Ok(SchemaId::User(val)),
-            _ => Err(PlanError::Unstructured(format!(
-                "couldn't parse SchemaId {}",
-                s
-            ))),
-        }
-    }
-}
-
-/// The identifier for a database.
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
-)]
-pub enum DatabaseId {
-    User(u64),
-    System(u64),
-}
-
-impl DatabaseId {
-    pub fn is_user(&self) -> bool {
-        matches!(self, DatabaseId::User(_))
-    }
-
-    pub fn is_system(&self) -> bool {
-        matches!(self, DatabaseId::System(_))
-    }
-}
-
-impl fmt::Display for DatabaseId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            DatabaseId::System(id) => write!(f, "s{}", id),
-            DatabaseId::User(id) => write!(f, "u{}", id),
-        }
-    }
-}
-
-impl FromStr for DatabaseId {
-    type Err = PlanError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() < 2 {
-            return Err(PlanError::Unstructured(format!(
-                "couldn't parse DatabaseId {}",
-                s
-            )));
-        }
-        let val: u64 = s[1..].parse()?;
-        match s.chars().next() {
-            Some('s') => Ok(DatabaseId::System(val)),
-            Some('u') => Ok(DatabaseId::User(val)),
-            _ => Err(PlanError::Unstructured(format!(
-                "couldn't parse DatabaseId {}",
-                s
-            ))),
-        }
-    }
-}
+// SchemaId and DatabaseId are now re-exported from mz-catalog-types
 
 pub static PUBLIC_ROLE_NAME: LazyLock<&UncasedStr> = LazyLock::new(|| UncasedStr::new("PUBLIC"));
 

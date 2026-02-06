@@ -36,6 +36,7 @@ mysql_async = { version = "0.36.1", default-features = false, features = [
 mz-arrow-util = { path = "../arrow-util" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
+mz-catalog-types = { path = "../catalog-types" }
 mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }

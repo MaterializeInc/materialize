@@ -5914,7 +5914,8 @@ dependencies = [
 name = "mz-catalog-types"
 version = "0.0.0"
 dependencies = [
- "anyhow",
+ "proptest",
+ "proptest-derive",
  "serde",
  "tracing",
  "workspace-hack",
@@ -7822,6 +7823,7 @@ dependencies = [
  "mz-audit-log",
  "mz-auth",
  "mz-build-info",
+ "mz-catalog-types",
  "mz-ccsr",
  "mz-cloud-provider",
  "mz-cloud-resources",

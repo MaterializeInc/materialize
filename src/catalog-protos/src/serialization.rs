@@ -15,16 +15,16 @@
 
 use std::time::Duration;
 
-use mz_catalog_types::{ComputeReplicaLogging, ReplicaId, StorageInstanceId};
+use mz_catalog_types::{
+    ComputeReplicaLogging, DatabaseId, ReplicaId, SchemaId, StorageInstanceId,
+};
 use mz_proto::{ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
-use mz_sql::names::{
-    CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
-};
+use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_sql::plan::{
     ClusterSchedule, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
     PolicyAddress,
