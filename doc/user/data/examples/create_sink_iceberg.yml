@@ -33,7 +33,10 @@
         The Iceberg namespace (database) containing the table.
     - name: "**TABLE** `'<table>'`"
       description: |
-        The name of the Iceberg table to write to. If the table doesn't exist, Materialize creates it with a schema matching `<item_name>`.
+        The name of the unpartitioned Iceberg table to write to. If the table
+        doesn't exist, Materialize creates it automatically. For details, see
+        [Iceberg table
+        creation](/sql/create-sink/iceberg/#iceberg-table-creation).
     - name: "**USING AWS CONNECTION** `<aws_connection>`"
       description: |
         The [AWS connection](/sql/create-connection/#aws) for object storage access.
@@ -67,3 +70,21 @@
       MODE UPSERT
       WITH (COMMIT INTERVAL = '1m');
   testable: false
+
+- name: "restrictions-limitations-regions"
+  content: |
+    Your S3 Tables bucket must be in the same AWS region as your Materialize
+    deployment.
+
+- name: "restrictions-limitations-partitioned-tables"
+  content: |
+    Partitioned tables are not supported.
+
+- name: "restrictions-limitations-unsupported-types"
+  content: |
+    Composite/record types are not supported. Use scalar types or flatten your
+    data structure.
+
+- name: "restrictions-limitations-schema-evolution"
+  content: |
+    Schema evolution of an Iceberg table is not supported. If the sink from object's schema changes, you must drop and recreate the sink.

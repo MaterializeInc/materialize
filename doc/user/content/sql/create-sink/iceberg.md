@@ -29,24 +29,40 @@ To create an Iceberg sink, you need:
 ## Details
 
 Iceberg sinks continuously stream changes from Materialize to an Iceberg table.
-If the table doesn't exist, Materialize automatically creates it with a schema
-matching the source object.
+Specifically, Materialize writes data as Parquet files to the object storage
+backing your Iceberg catalog.
 
-At each `COMMIT INTERVAL`, a new snapshot is committed, making the data
-available to downstream query engines. See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+At each `COMMIT INTERVAL`:
 
-Iceberg sinks provide **exactly-once delivery**: Materialize resumes from the
-last committed snapshot after restarts without duplicating data.
+1. All pending writes are flushed to Parquet data files. See [Type
+   mapping](#type-mapping).
+2. Delete files are written for any updates or deletes. See [Delete handling]
+   (#delete-handling).
+3. A new Iceberg snapshot is committed atomically.
 
-### Unique keys
+When the snapshot is committed, the data is available to downstream query
+engines. See [Commit interval tradeoffs](#commit-interval-tradeoffs).
 
-The `KEY` clause is required for all Iceberg sinks. The Iceberg sink uses upsert semantics based on the `KEY`. The columns you specify must
-uniquely identify rows. Materialize validates that the key is unique; if it
-cannot prove uniqueness, you'll receive an error.
+### Iceberg table creation
 
-If you have outside knowledge that the key is unique, you can bypass validation
-using `NOT ENFORCED`. However, if the key is not actually unique, downstream
-consumers may see incorrect results.
+If the specified Iceberg table does not exist, Materialize creates the table.
+The new Iceberg table:
+- Uses the schema derived from your Materialize object.
+- Uses Iceberg format version 2.
+
+Materialize creates unpartitioned tables. {{< include-from-yaml
+data="examples/create_sink_iceberg"
+name="restrictions-limitations-partitioned-tables" >}}
+
+See also: [Restrictions and limitations](#restrictions-and-limitations).
+
+### Exactly-once delivery
+
+Iceberg sinks provide **exactly-once delivery**. After a restart, Materialize
+resumes from the last committed snapshot without duplicating data.
+
+Materialize stores progress information in Iceberg snapshot metadata properties
+(`mz-frontier` and `mz-sink-version`).
 
 ### Commit interval tradeoffs
 
@@ -65,7 +81,32 @@ The `COMMIT INTERVAL` setting involves tradeoffs between latency and efficiency:
 - If query performance degrades due to small files, increase the interval and
   run Iceberg compaction
 
-### How deletes work
+### Unique keys
+
+The Iceberg sink uses upsert semantics based on the `KEY`. The columns you
+specify as the `KEY` must uniquely identify rows. Materialize validates that the
+key is unique; if it cannot prove uniqueness, you'll receive an error.
+
+If you have outside knowledge that the key is unique, you can bypass validation
+using `NOT ENFORCED`. However, if the key is not actually unique, downstream
+consumers may see incorrect results.
+
+### Type mapping
+
+{{< note >}}
+
+{{< include-from-yaml data="examples/create_sink_iceberg"
+  name="restrictions-limitations-unsupported-types" >}}
+{{< /note >}}
+
+{{% include-headless
+  "/headless/iceberg-sinks/type-mapping" %}}
+
+### Restrictions and limitations
+
+{{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
+
+### Delete handling
 
 Iceberg sinks use a hybrid delete strategy:
 
@@ -79,20 +120,16 @@ This means short-lived rows use efficient position deletes, while updates to
 older data use equality deletes.
 
 {{< tip >}}
-Consider running Iceberg compaction periodically to merge delete files and improve query performance.
+Consider running [Iceberg compaction](https://iceberg.apache.org/docs/latest/maintenance/#compacting-data-files) periodically to merge delete files and improve query performance.
 {{< /tip >}}
-
-### Type mapping
-
-{{% include-headless "/headless/iceberg-sinks/type-mapping" %}}
-
-### Restrictions and limitations
-
-{{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 
 ## Required privileges
 
 {{% include-headless "/headless/sql-command-privileges/create-sink" %}}
+
+## Troubleshooting
+
+{{% include-headless "/headless/iceberg-sinks/troubleshooting" %}}
 
 ## Examples
 
@@ -136,7 +173,6 @@ CREATE SINK deduped_sink
 If the key is not actually unique, downstream consumers may see incorrect
 results.
 {{< /warning >}}
-
 
 ## Related pages
 

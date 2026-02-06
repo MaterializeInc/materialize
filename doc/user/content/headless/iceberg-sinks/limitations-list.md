@@ -1,13 +1,16 @@
 ---
 headless: true
 ---
-- **Same region required**: {{% include-headless
-  "/headless/iceberg-sinks/region-requirements" %}}
-- **Schema evolution**: Materialize does not support changing the schema of an
-  existing Iceberg table. If the source schema changes, you must drop and
-  recreate the sink.
-- **Partition evolution**: Partition spec changes are not supported.
-- **Partitioning**: Materialize creates unpartitioned tables. Partitioned tables
-  are not supported.
-- **Record types**: Composite/record types are not supported. Use scalar types
-  or flatten your data structure.
+
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+  name="restrictions-limitations-regions" >}}
+
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+  name="restrictions-limitations-partitioned-tables" >}}
+
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+  name="restrictions-limitations-unsupported-types" >}}  See also [Type
+  mapping](#type-mapping).
+
+- {{< include-from-yaml data="examples/create_sink_iceberg"
+  name="restrictions-limitations-schema-evolution" >}}

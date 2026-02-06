@@ -2,7 +2,7 @@
 headless: true
 ---
 
-Materialize converts SQL types to Iceberg types:
+Materialize converts SQL types to Iceberg/Parquet types:
 
 | SQL type | Iceberg type |
 |----------|--------------|
