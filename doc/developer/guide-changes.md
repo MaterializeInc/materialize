@@ -71,6 +71,9 @@ it up into commits. There are two schools of thought regarding commit hygiene.
 
     For an example of this approach, see PR [#3808].
 
+Materialize currently only uses the Semantic PRs approach, which we enforce by
+only allowing squash merging in GitHub.
+
 You should endeavor to limit each *review unit* (RU) to just one semantic
 change. When a single RU contains multiple unrelated changes, it becomes much
 harder for your reviewer to understand, and the quality of the review suffers.
