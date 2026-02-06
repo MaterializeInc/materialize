@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 mz-audit-log = { path = "../audit-log" }
+mz-catalog-types = { path = "../catalog-types" }
 mz-compute-types = { path = "../compute-types" }
 mz-controller-types = { path = "../controller-types" }
 mz-proto = { path = "../proto" }
