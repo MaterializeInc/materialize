@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 import hashlib
 import os
+from textwrap import dedent
 
 from materialize import MZ_ROOT
 from materialize.mzcompose import loader
@@ -15,6 +16,39 @@ from materialize.mzcompose.service import (
     Service,
     ServiceConfig,
     ServiceDependency,
+)
+
+STANDALONE_INIT_SCRIPT = dedent(
+    """
+    set -e
+
+    CLUSTER_FILE="${FDB_CLUSTER_FILE:-/var/fdb/fdb.cluster}"
+
+    # Function to initialize the database
+    initialize_database() {
+        echo "Checking FoundationDB status..."
+
+        # If status minimal succeeds, database is already configured
+        if fdbcli -C "$CLUSTER_FILE" --exec "status minimal" --timeout 5 2>/dev/null; then
+            echo "Database already configured"
+            return 0
+        fi
+
+        # Configure the database
+        echo "Configuring new single ssd database..."
+        fdbcli -C "$CLUSTER_FILE" --exec "configure new single ssd" --timeout 30
+        echo "Database configured successfully"
+    }
+
+    # Run initialization in background after a delay to let fdbserver start
+    (
+        sleep 1
+        initialize_database
+    ) &
+
+    # Execute the original entrypoint
+    exec /var/fdb/scripts/fdb.bash "$@"
+    """
 )
 
 
@@ -32,6 +66,7 @@ class FoundationDB(Service):
         volumes: list[str] = [],
         restart: str = "no",
         cluster_file_contents: str | None = None,
+        standalone: bool = True,
     ) -> None:
         """
         Create a FoundationDB server node service.
@@ -55,6 +90,13 @@ class FoundationDB(Service):
             env_extra.append(f"FDB_CLUSTER_FILE_CONTENTS={cluster_file_contents}")
 
         config: ServiceConfig = {"image": image} if image else {"mzbuild": mzbuild}
+
+        if standalone:
+            config.update(
+                {
+                    "entrypoint": ["bash", "-c", STANDALONE_INIT_SCRIPT],
+                }
+            )
 
         config.update(
             {
@@ -181,6 +223,7 @@ def foundationdb_services(
                 environment=environment,
                 restart=restart,
                 cluster_file_contents=cluster_file_contents,
+                standalone=False,
             )
         )
 
