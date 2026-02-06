@@ -22,10 +22,10 @@ aws-credential-types = { version = "1.2.8", features = ["hardcoded-credentials"]
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.3.9"
 bytes = "1.11.1"
-columnation = "0.1.0"
+columnation = "0.1.1"
 dec = "0.4.8"
 derivative = "2.2.0"
-differential-dataflow = "0.18.0"
+differential-dataflow = "0.19.1"
 hex = "0.4.3"
 http = "1.4.0"
 itertools = { version = "0.14.0" }
@@ -68,7 +68,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 thiserror = "2.0.18"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
-timely = "0.25.1"
+timely = "0.26.1"
 tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tracing = "0.1.44"

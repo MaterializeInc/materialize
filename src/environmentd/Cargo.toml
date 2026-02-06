@@ -160,7 +160,7 @@ reqwest = { version = "0.12.28", features = ["blocking"] }
 serde_json = "1.0.149"
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.7"
-timely = "0.25.1"
+timely = "0.26.1"
 tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4"] }
 
 [build-dependencies]

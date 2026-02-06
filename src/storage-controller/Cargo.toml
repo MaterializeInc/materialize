@@ -15,7 +15,7 @@ async-trait = "0.1.89"
 bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 derivative = "2.2.0"
-differential-dataflow = "0.18.0"
+differential-dataflow = "0.19.1"
 futures = "0.3.31"
 itertools = { version = "0.14.0" }
 mz-build-info = { path = "../build-info" }
@@ -38,7 +38,7 @@ proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149" }
-timely = "0.25.1"
+timely = "0.26.1"
 tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tokio-stream = "0.1.18"

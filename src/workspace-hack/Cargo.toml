@@ -43,7 +43,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
-bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
+bytemuck = { version = "1.25.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.11.1", features = ["serde"] }
 cast = { version = "0.3.0", default-features = false, features = ["std"] }
 chrono = { version = "0.4.41", features = ["serde"] }
@@ -118,7 +118,7 @@ proptest = { version = "1.9.0" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.16.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.14.3" }
-quote = { version = "1.0.43" }
+quote = { version = "1.0.44" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.9.0" }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
@@ -139,9 +139,9 @@ similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.10", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.111", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.114", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
-timely = { version = "0.25.1" }
+timely = { version = "0.26.1" }
 tokio = { version = "1.48.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.18", features = ["net", "sync"] }
@@ -195,7 +195,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
-bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
+bytemuck = { version = "1.25.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.11.1", features = ["serde"] }
 cast = { version = "0.3.0", default-features = false, features = ["std"] }
 cc = { version = "1.2.54", default-features = false, features = ["parallel"] }
@@ -274,7 +274,7 @@ prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-build = { version = "0.14.3", features = ["cleanup-markdown"] }
 prost-reflect = { version = "0.16.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.14.3" }
-quote = { version = "1.0.43" }
+quote = { version = "1.0.44" }
 rand = { version = "0.8.5", features = ["small_rng"] }
 rand_chacha = { version = "0.9.0" }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
@@ -296,10 +296,10 @@ smallvec = { version = "1.15.1", default-features = false, features = ["const_ne
 socket2 = { version = "0.5.10", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.109", features = ["extra-traits", "full", "visit", "visit-mut"] }
-syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.111", features = ["extra-traits", "full", "visit", "visit-mut"] }
+syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.114", features = ["extra-traits", "full", "visit", "visit-mut"] }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
-timely = { version = "0.25.1" }
+timely = { version = "0.26.1" }
 tokio = { version = "1.48.0", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.18", features = ["net", "sync"] }
