@@ -63,7 +63,7 @@ SELECT
   restart_lsn,
   confirmed_flush_lsn
 FROM pg_replication_slots
-WHERE slot_name LIKE '<slot_name>';
+WHERE slot_name = '<slot_name>';
 ```
 
 Look for:
@@ -89,7 +89,7 @@ FROM pg_stat_activity
 WHERE pid IN (
   SELECT active_pid
   FROM pg_replication_slots
-  WHERE slot_name LIKE '<slot_name>'
+  WHERE slot_name = '<slot_name>'
 );
 ```
 
@@ -118,7 +118,7 @@ SELECT
   slot_name,
   active_pid
 FROM pg_replication_slots
-WHERE slot_name LIKE '<slot_name>' AND active = true;
+WHERE slot_name = '<slot_name>' AND active = true;
 
 -- Terminate the connection (replace ### with the actual PID)
 SELECT pg_terminate_backend(###);
