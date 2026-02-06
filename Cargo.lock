@@ -6021,6 +6021,7 @@ name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-catalog-types",
  "mz-ore",
  "mz-repr",
  "prometheus",
