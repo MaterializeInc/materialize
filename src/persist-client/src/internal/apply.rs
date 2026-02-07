@@ -423,7 +423,7 @@ where
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
     ) -> ApplyCmdResult<K, V, T, D, R, E> {
-        let _permit_opt = state.lease_for_update().await;
+        let _permit_opt = state.update_semaphore.acquire().await;
         let computed_next_state = state
             .read_lock(&metrics.locks.applier_read_noncacheable, |state| {
                 Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg)
