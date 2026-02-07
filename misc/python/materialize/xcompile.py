@@ -125,9 +125,13 @@ def cargo(
     if sys.platform == "darwin":
         _bootstrap_darwin(arch)
         lld_prefix = spawn.capture(["brew", "--prefix", "lld"]).strip()
+        libfdb_c_prefix = spawn.capture(
+            ["brew", "--prefix", f"libfdb-c-{target(arch)}"]
+        ).strip()
         sysroot = spawn.capture([f"{_target}-cc", "-print-sysroot"]).strip()
         rustflags += [
             f"-L{sysroot}/lib",
+            f"-L{libfdb_c_prefix}/lib",
             "-Clink-arg=-fuse-ld=lld",
             f"-Clink-arg=-B{lld_prefix}/bin",
         ]
@@ -213,7 +217,7 @@ def _bootstrap_darwin(arch: Arch) -> None:
     # Building in Docker for Mac is painfully slow, so we install a
     # cross-compiling toolchain on the host and use that instead.
 
-    BOOTSTRAP_VERSION = "5"
+    BOOTSTRAP_VERSION = "6"
     BOOTSTRAP_FILE = MZ_ROOT / "target-xcompile" / target(arch) / ".xcompile-bootstrap"
     try:
         contents = BOOTSTRAP_FILE.read_text()
@@ -222,7 +226,15 @@ def _bootstrap_darwin(arch: Arch) -> None:
     if contents == BOOTSTRAP_VERSION:
         return
 
-    spawn.runv(["brew", "install", "lld", f"materializeinc/crosstools/{target(arch)}"])
+    spawn.runv(
+        [
+            "brew",
+            "install",
+            "lld",
+            f"materializeinc/crosstools/{target(arch)}",
+            f"materializeinc/crosstools/libfdb-c-{target(arch)}",
+        ]
+    )
     spawn.runv(["rustup", "target", "add", target(arch)])
 
     BOOTSTRAP_FILE.parent.mkdir(parents=True, exist_ok=True)
