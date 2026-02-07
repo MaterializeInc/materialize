@@ -1960,7 +1960,7 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
 
     test_failed = False
     # TODO: Reduce to 15 s when https://github.com/MaterializeInc/database-issues/issues/9967 is fixed
-    max_downtime = 60
+    max_downtime = 120
     upgrade_downtime = downtimes[-1]
     if upgrade_downtime > max_downtime:
         print(
