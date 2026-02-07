@@ -46,9 +46,9 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize.docker import extract_file_from_image, image_registry
+from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
-from materialize.xcompile import XCOMPILE_LIB_PATH, Arch, target
+from materialize.xcompile import Arch, target
 
 GHCR_PREFIX = "ghcr.io/materializeinc/"
 
@@ -593,28 +593,6 @@ class CargoBuild(CargoPreImage):
 
         if not cargo_builds:
             return {}
-
-        # Extract libfdb_c.so to cross compile on macos
-        if platform.system() == "Darwin":
-            libfdb_path = XCOMPILE_LIB_PATH / "libfdb_c.so"
-            if libfdb_path.exists():
-                libfdb_path.unlink()
-            ubuntu_base_images = [
-                img for img in docker_images() if "materialize/ubuntu-base:" in img
-            ]
-            if not ubuntu_base_images:
-                raise RuntimeError(
-                    "No ubuntu-base image found. Run a build with mzbuild first to create one."
-                )
-            extract_file_from_image(
-                ubuntu_base_images[0],
-                "/usr/lib/libfdb_c.so",
-                libfdb_path,
-            )
-            if not libfdb_path.exists():
-                raise RuntimeError(
-                    f"Failed to extract libfdb_c.so from {ubuntu_base_images[0]}"
-                )
 
         # Building all binaries and examples in the same `cargo build` command
         # allows Cargo to link in parallel with other work, which can
