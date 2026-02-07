@@ -20,7 +20,6 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
@@ -663,14 +662,6 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
     }
 }
 
-pub(crate) const STATE_UPDATE_LEASE_TIMEOUT: Config<Duration> = Config::new(
-    "persist_state_update_lease_timeout",
-    Duration::from_secs(1),
-    "The amount of time for a command to wait for a previous command to finish before executing. \
-        (If zero, commands will not wait for others to complete.) Higher values reduce database contention \
-        at the cost of higher worst-case latencies for individual requests.",
-);
-
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
     pub(crate) fn shard_id(&self) -> &ShardId {
         &self.shard_id
@@ -730,27 +721,21 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         ret
     }
 
-    /// We want to _mostly_ just attempt a single CaS against the same state at once, since
-    /// only one concurrent CaS can succeed. However, we also want to guard against a
-    /// single hung update blocking all progress globally. We manage this with a shared Tokio mutex.
-    /// Each update will grab the mutex, wait for the previous command to complete or time out,
+    /// We want to _mostly_ just attempt a single cmd against the same state at once, since
+    /// only one concurrent command can succeed. However, we also want to guard against a
+    /// single hung command blocking all progress globally. We manage this with a shared Tokio mutex.
+    /// Each command will grab the mutex, wait for the previous command to complete or time out,
     /// and record its own deadline and a completion future in the mutex. If the timeout is never hit,
     /// this behaves like a semaphore with limit 1... but if our requests _are_ timing out, future
     /// requests will only wait for a bounded time.
     pub(crate) async fn lease_for_update(&self) -> impl Drop {
-        let timeout = STATE_UPDATE_LEASE_TIMEOUT.get(&self.cfg);
-        if timeout.is_zero() {
-            let (tx, _rx) = oneshot::channel();
-            return tx;
-        }
         let mut guard = self.update_semaphore.lock().await;
-        if let Some((started_at, rx)) = guard.take() {
-            let deadline = started_at + timeout;
+        if let Some((deadline, rx)) = guard.take() {
             let _ = tokio::time::timeout_at(deadline, rx).await;
         }
-        let started_at = tokio::time::Instant::now();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
         let (tx, rx) = oneshot::channel();
-        *guard = Some((started_at, rx));
+        *guard = Some((deadline, rx));
         tx
     }
 
