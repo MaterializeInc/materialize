@@ -419,11 +419,19 @@ async fn load_or_create_table(
             Ok(table)
         }
         Err(err) => {
-            if matches!(err.kind(), ErrorKind::TableNotFound { .. })
+            // Check if the error indicates the table doesn't exist
+            // This can happen in several ways depending on the catalog type:
+            // - TableNotFound error kind
+            // - REST catalog: "Tried to load a table that does not exist"
+            // - S3 Tables catalog: "The specified table does not exist" (NotFoundException)
+            let is_table_not_found = matches!(err.kind(), ErrorKind::TableNotFound { .. })
                 || err
                     .message()
                     .contains("Tried to load a table that does not exist")
-            {
+                || err.message().contains("The specified table does not exist")
+                || err.message().contains("NotFoundException");
+
+            if is_table_not_found {
                 // Table doesn't exist, create it
                 // Note: location is not specified, letting the catalog determine the default location
                 // based on its warehouse configuration
@@ -1645,7 +1653,7 @@ where
                         .context("Failed to serialize frontier to JSON")?;
 
                     // Store the frontier in snapshot metadata so we can resume from this point
-                    let mut action = tx.row_delta().set_snapshot_properties(
+                    let mut action = tx.row_delta().with_check_duplicate(false).set_snapshot_properties(
                         vec![
                             ("mz-sink-id".to_string(), sink_id.to_string()),
                             ("mz-frontier".to_string(), frontier_json),

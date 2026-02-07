@@ -26,6 +26,7 @@ use iceberg::io::{
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
 };
+use iceberg_catalog_s3tables::{S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN, S3TablesCatalogBuilder};
 use itertools::Itertools;
 use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
@@ -568,6 +569,8 @@ impl IcebergCatalogConnection<InlinedConnection> {
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         let secret_reader = &storage_configuration.connection_context.secrets_reader;
         let aws_ref = &s3tables.aws_connection;
+
+        // Load the AWS SDK config with our custom credential chain
         let aws_config = aws_ref
             .connection
             .load_sdk_config(
@@ -583,18 +586,23 @@ impl IcebergCatalogConnection<InlinedConnection> {
             .clone()
             .unwrap_or_else(|| "us-east-1".to_string());
 
+        // Create the S3 Tables client using the configured aws_config
+        // This ensures S3 Tables API calls use our custom credential chain
+        let s3tables_client = aws_sdk_s3tables::Client::new(&aws_config);
+
+        // Properties for FileIO configuration
         let mut props = vec![
-            (S3_REGION.to_string(), aws_region),
+            (S3_REGION.to_string(), aws_region.clone()),
             (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
             (
-                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                S3TABLES_CATALOG_PROP_TABLE_BUCKET_ARN.to_string(),
                 s3tables.warehouse.clone(),
             ),
-            (REST_CATALOG_PROP_URI.to_string(), self.uri.to_string()),
         ];
 
         let aws_auth = aws_ref.connection.auth.clone();
 
+        // For static credentials, pass them to FileIO
         if let AwsAuth::Credentials(creds) = &aws_auth {
             props.push((
                 S3_ACCESS_KEY_ID.to_string(),
@@ -609,14 +617,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
             ));
         }
 
-        // Build the catalog with aws_config for REST API signing.
-        // For AssumeRole auth, we also add a FileIO extension so OpenDAL can
-        // use our credential chain for S3 object access.
-        let catalog = RestCatalogBuilder::default()
-            .with_aws_config(aws_config.clone())
+        // Build the catalog with the pre-configured client and properties
+        let catalog = S3TablesCatalogBuilder::default()
+            .with_client(s3tables_client)
             .load("IcebergCatalog", props.into_iter().collect())
             .await?;
 
+        // For AssumeRole auth, add a FileIO extension so OpenDAL can
+        // use our credential chain for S3 object access.
         let catalog = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
             let credentials_provider = aws_config
                 .credentials_provider()
