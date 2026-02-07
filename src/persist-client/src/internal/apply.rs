@@ -423,12 +423,7 @@ where
         shard_metrics: &ShardMetrics,
         state_versions: &StateVersions,
     ) -> ApplyCmdResult<K, V, T, D, R, E> {
-        // While it's safe for more than one cmd to try and update the state, only one of those
-        // concurrent requests could actually succeed. This call will wait until previous requests
-        // have completed or timed out, and holding the resulting permit will delay other cmds until
-        // this attempt completes or times out.
         let _permit_opt = state.lease_for_update().await;
-
         let computed_next_state = state
             .read_lock(&metrics.locks.applier_read_noncacheable, |state| {
                 Self::compute_next_state_locked(state, work_fn, metrics, cmd, cfg)
