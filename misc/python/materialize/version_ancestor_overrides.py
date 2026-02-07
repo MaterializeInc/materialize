@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in ("OrderBy", "FastPathFilterNoIndex"):
+        # PR#34930 (Bump differential, timely and related) increases latency
+        min_ancestor_mz_version_per_commit[
+            "c20c82119261bab23c865bdfd1841348aa0acca3"
+        ] = MzVersion.parse_mz("v26.12.0")
+
     if scenario_class_name == "SwapSchema":
         # PR#29673 (adapter: derive implications from catalog changes) increases latency
         min_ancestor_mz_version_per_commit[
