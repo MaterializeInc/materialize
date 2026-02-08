@@ -18,6 +18,7 @@ use mz_storage_types::oneshot_sources::OneshotIngestionRequest;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
+use mz_timely_util::scope_label::ScopeExt;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -171,9 +172,9 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
     let (output_tx, output_rx) = mpsc::channel();
     let activator = Rc::new(RefCell::new(None));
 
-    timely_worker.dataflow_named::<(), _, _>("command_sequencer", {
+    timely_worker.dataflow_named::<(), _, _>("command_sequencer", |scope| {
         let activator = Rc::clone(&activator);
-        move |scope| {
+        scope.region_labelled("command_sequencer", move |scope| {
             // Create a stream of commands received from `input_rx`.
             //
             // The output commands are tagged by worker ID and command index, allowing downstream
@@ -285,7 +286,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                     }
                 }
             });
-        }
+        });
     });
 
     let tx = InternalCommandSender {
