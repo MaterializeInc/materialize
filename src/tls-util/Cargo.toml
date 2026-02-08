@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 openssl = { version = "0.10.75", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 postgres-openssl = { version = "0.5.2" }

@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-aws-config = { version = "1.8.12", default-features = false }
-aws-sdk-s3 = { version = "1.120.0", default-features = false, features = [
+anyhow = "1.0.101"
+aws-config = { version = "1.8.13", default-features = false }
+aws-sdk-s3 = { version = "1.122.0", default-features = false, features = [
     "rt-tokio",
 ], optional = true }
 aws-smithy-runtime-api = "1.10.0"

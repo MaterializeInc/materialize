@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-trait = "0.1.89"
 aws-credential-types = { version = "1.2.10", features = ["hardcoded-credentials"] }
@@ -22,7 +22,7 @@ bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 duckdb = { version = "1.4.3", default-features = false, features = ["bundled", "native-tls"] }
-flate2 = "1.1.8"
+flate2 = "1.1.9"
 futures = "0.3.31"
 globset = "0.4.18"
 hex = "0.4.3"

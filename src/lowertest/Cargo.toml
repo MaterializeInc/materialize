@@ -19,7 +19,7 @@ itertools = "0.14.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 datadriven = "0.9.0"
 
 [package.metadata.cargo-udeps.ignore]

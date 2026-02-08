@@ -11,7 +11,7 @@ authors = ["Materialize, Inc."]
 workspace = true
 
 [dependencies]
-anyhow = { version = "1.0.100", optional = true }
+anyhow = { version = "1.0.101", optional = true }
 # NB: ore is meant to be an extension of the Rust stdlib. To keep it
 # lightweight, dependencies on external crates should be avoided if possible. If
 # an external crate is required, it must be optional and feature-gated.
@@ -86,7 +86,7 @@ tonic = { version = "0.14.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.1", optional = true }
 native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
-hyper-util = { version = "0.1.19", optional = true }
+hyper-util = { version = "0.1.20", optional = true }
 opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"], optional = true }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
@@ -96,8 +96,8 @@ turmoil = { version = "0.7.0", optional = true }
 yansi = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
-anyhow = { version = "1.0.100" }
-criterion = { version = "0.8.1", features = ["async_tokio"] }
+anyhow = { version = "1.0.101" }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"

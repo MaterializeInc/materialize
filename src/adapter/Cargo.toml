@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -101,7 +101,7 @@ uuid = { version = "1.19.0" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.1", features = ["async_tokio"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 datadriven = "0.9.0"
 mz-persist = { path = "../persist", features = ["turmoil"] }
 mz-persist-client = { path = "../persist-client", features = ["turmoil"] }

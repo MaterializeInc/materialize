@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 async-stream = "0.3.6"
 bytesize = "2.1.0"
 columnar = "0.11.1"

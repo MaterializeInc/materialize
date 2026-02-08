@@ -11,9 +11,9 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 backtrace = "0.3.76"
-flate2 = "1.1.8"
+flate2 = "1.1.9"
 itertools = "0.14.0"
 jemalloc_pprof = { version = "0.8.1", optional = true }
 pprof_util = "0.8"
@@ -26,7 +26,7 @@ tokio = { version = "1.48.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.14.3"
 

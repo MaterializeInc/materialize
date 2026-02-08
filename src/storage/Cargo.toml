@@ -14,7 +14,7 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }

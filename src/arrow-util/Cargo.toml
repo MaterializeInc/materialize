@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 dec = { version = "0.4.9", features = ["num-traits"] }

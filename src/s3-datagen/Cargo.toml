@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-aws-config = { version = "1.8.12", default-features = false }
+anyhow = "1.0.101"
+aws-config = { version = "1.8.13", default-features = false }
 aws-sdk-s3 = { version = "1.94.0", default-features = false, features = ["rt-tokio"] }
 bytefmt = "0.1.7"
 clap = { version = "4.5.23", features = ["derive"] }

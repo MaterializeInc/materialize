@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
 mz-ore = { path = "../ore", default-features = false, features = ["process"]}
 tracing = "0.1.44"

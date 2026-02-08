@@ -15,7 +15,7 @@ path = "benches/benches.rs"
 harness = false
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 byteorder = "1.4.3"
 bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
@@ -41,7 +41,7 @@ uuid = { version = "1.19.0", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-criterion = { version = "0.8.1", features = ["async_tokio"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
 tokio = { version = "1.48.0", features = ["macros"] }
 
 [build-dependencies]

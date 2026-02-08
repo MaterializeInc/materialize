@@ -26,16 +26,16 @@ arrow-cast = { version = "57.1.0", default-features = false, features = ["pretty
 arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
-aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
+aws-config = { version = "1.8.13", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.18", default-features = false, features = ["event-stream", "http-02x"] }
-aws-sdk-sts = { version = "1.96.0", default-features = false, features = ["rt-tokio"] }
-aws-sigv4 = { version = "1.3.7", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.8", default-features = false, features = ["rt-tokio"] }
-aws-smithy-http = { version = "0.62.6", default-features = false, features = ["event-stream"] }
-aws-smithy-runtime = { version = "1.9.8", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.11.0", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.4.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-runtime = { version = "1.6.0", default-features = false, features = ["event-stream", "http-02x", "http-1x"] }
+aws-sdk-sts = { version = "1.97.0", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = { version = "1.3.8", features = ["http0-compat", "sign-eventstream"] }
+aws-smithy-async = { version = "1.2.11", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http = { version = "0.63.3", default-features = false, features = ["event-stream"] }
+aws-smithy-runtime = { version = "1.10.0", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime-api = { version = "1.11.3", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.4.3", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.8.8", features = ["ws"] }
 axum-core = { version = "0.5.6", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
@@ -50,7 +50,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
-criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
 crossbeam-queue = { version = "0.3.12" }
@@ -64,7 +64,7 @@ either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.1" }
 event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
-flate2 = { version = "1.1.8", features = ["zlib", "zlib-rs"] }
+flate2 = { version = "1.1.9", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.2" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -80,11 +80,11 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.32", features = ["client", "http1", "http2", "stream", "tcp"] }
-hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
+hyper-util = { version = "0.1.20", features = ["client-legacy", "server-auto", "service", "tracing"] }
 indexmap = { version = "2.11.4", features = ["serde"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
-jiff = { version = "0.2.18", features = ["serde"] }
+jiff = { version = "0.2.19", features = ["serde"] }
 libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -177,16 +177,16 @@ arrow-cast = { version = "57.1.0", default-features = false, features = ["pretty
 arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
-aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
+aws-config = { version = "1.8.13", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.18", default-features = false, features = ["event-stream", "http-02x"] }
-aws-sdk-sts = { version = "1.96.0", default-features = false, features = ["rt-tokio"] }
-aws-sigv4 = { version = "1.3.7", features = ["http0-compat", "sign-eventstream"] }
-aws-smithy-async = { version = "1.2.8", default-features = false, features = ["rt-tokio"] }
-aws-smithy-http = { version = "0.62.6", default-features = false, features = ["event-stream"] }
-aws-smithy-runtime = { version = "1.9.8", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
-aws-smithy-runtime-api = { version = "1.11.0", features = ["client", "http-02x", "http-auth", "test-util"] }
-aws-smithy-types = { version = "1.4.0", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
+aws-runtime = { version = "1.6.0", default-features = false, features = ["event-stream", "http-02x", "http-1x"] }
+aws-sdk-sts = { version = "1.97.0", default-features = false, features = ["rt-tokio"] }
+aws-sigv4 = { version = "1.3.8", features = ["http0-compat", "sign-eventstream"] }
+aws-smithy-async = { version = "1.2.11", default-features = false, features = ["rt-tokio"] }
+aws-smithy-http = { version = "0.63.3", default-features = false, features = ["event-stream"] }
+aws-smithy-runtime = { version = "1.10.0", default-features = false, features = ["client", "connector-hyper-0-14-x"] }
+aws-smithy-runtime-api = { version = "1.11.3", features = ["client", "http-02x", "http-auth", "test-util"] }
+aws-smithy-types = { version = "1.4.3", default-features = false, features = ["byte-stream-poll-next", "http-body-0-4-x", "http-body-1-x", "rt-tokio", "test-util"] }
 axum = { version = "0.8.8", features = ["ws"] }
 axum-core = { version = "0.5.6", default-features = false, features = ["tracing"] }
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
@@ -198,13 +198,13 @@ bstr = { version = "1.12.1" }
 bytemuck = { version = "1.25.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.11.1", features = ["serde"] }
 cast = { version = "0.3.0", default-features = false, features = ["std"] }
-cc = { version = "1.2.54", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.55", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
-criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.2", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
 crossbeam-queue = { version = "0.3.12" }
@@ -218,7 +218,7 @@ either = { version = "1.15.0", features = ["use_std"] }
 event-listener = { version = "5.4.1" }
 event-listener-strategy = { version = "0.5.4" }
 fastrand = { version = "2.3.0" }
-flate2 = { version = "1.1.8", features = ["zlib", "zlib-rs"] }
+flate2 = { version = "1.1.9", features = ["zlib", "zlib-rs"] }
 form_urlencoded = { version = "1.2.2" }
 futures-channel = { version = "0.3.31", features = ["sink"] }
 futures-core = { version = "0.3.31" }
@@ -234,11 +234,11 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.32", features = ["client", "http1", "http2", "stream", "tcp"] }
-hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
+hyper-util = { version = "0.1.20", features = ["client-legacy", "server-auto", "service", "tracing"] }
 indexmap = { version = "2.11.4", features = ["serde"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
-jiff = { version = "0.2.18", features = ["serde"] }
+jiff = { version = "0.2.19", features = ["serde"] }
 libc = { version = "0.2.180", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -328,7 +328,7 @@ zstd-sys = { version = "2.0.16", features = ["std"] }
 [target.x86_64-unknown-linux-gnu.dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1.19", default-features = false, features = ["client-proxy", "client-proxy-system"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
@@ -344,7 +344,7 @@ tower-http = { version = "0.6.8", default-features = false, features = ["follow-
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1.19", default-features = false, features = ["client-proxy", "client-proxy-system"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
@@ -360,7 +360,7 @@ tower-http = { version = "0.6.8", default-features = false, features = ["follow-
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1.19", default-features = false, features = ["client-proxy", "client-proxy-system"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
@@ -373,7 +373,7 @@ tower-http = { version = "0.6.8", default-features = false, features = ["follow-
 [target.x86_64-apple-darwin.build-dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
-hyper-util = { version = "0.1.19", default-features = false, features = ["client-proxy", "client-proxy-system"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }

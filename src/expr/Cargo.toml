@@ -19,7 +19,7 @@ harness = false
 
 [dependencies]
 aho-corasick = "1.1.4"
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 bytes = "1.11.1"
 bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
@@ -71,7 +71,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 smallvec = { version = "1.15.1" }
 
 [dev-dependencies]
-criterion = { version = "0.8.1" }
+criterion = { version = "0.8.2" }
 datadriven = "0.9.0"
 insta = "1.45"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }

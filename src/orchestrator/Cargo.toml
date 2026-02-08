@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 async-trait = "0.1.89"
 bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["serde"] }

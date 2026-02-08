@@ -15,7 +15,7 @@ name = "sign"
 required-features = ["signing"]
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.101"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 serde = { version = "1.0.219", features = ["derive"] }
 

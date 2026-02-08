@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
-flate2 = "1.1.8"
+anyhow = "1.0.101"
+flate2 = "1.1.9"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 reqwest = { version = "0.12.28", features = ["blocking", "native-tls-vendored"] }
