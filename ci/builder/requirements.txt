@@ -44,10 +44,10 @@ psycopg==3.3.2
 psycopg-binary==3.3.2
 pydantic==2.12.5
 pyelftools==0.32
-pyjwt==2.10.1
+pyjwt==2.11.0
 PyMySQL==1.1.2
 pytest==8.4.2
-pytest-split==0.10.0
+pytest-split==0.11.0
 pyyaml==6.0.3
 requests==2.32.5
 ruamel.yaml==0.18.17
@@ -62,7 +62,7 @@ toml==0.10.2
 twine==6.2.0
 types-Markdown==3.10.0.20251106
 types-prettytable==3.4.2.6
-types-psutil==7.2.1.20260116
+types-psutil==7.2.2.20260130
 types-PyMYSQL==1.1.0.20251220
 types-PyYAML==6.0.12.20250915
 types-requests==2.32.4.20260107
