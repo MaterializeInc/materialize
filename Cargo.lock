@@ -1969,9 +1969,9 @@ dependencies = [
 
 [[package]]
 name = "columnation"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "476f5380967b71f5167003ba2207349d41f2af0d98af5ec346e9d54920975111"
+checksum = "b90b1614014f6958477dcdb77a2d489555db48ca61efe94c5cde2b0446933ed1"
 dependencies = [
  "paste",
  "smallvec",

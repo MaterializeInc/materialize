@@ -18,7 +18,7 @@ ahash = { version = "0.8.12", default-features = false }
 bincode = "1.3.3"
 bytemuck = "1.23.1"
 columnar = "0.11.1"
-columnation = "0.1.1"
+columnation = "0.1.2"
 differential-dataflow = "0.19.1"
 either = "1"
 futures-util = "0.3.31"

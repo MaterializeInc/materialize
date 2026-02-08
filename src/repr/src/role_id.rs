@@ -12,7 +12,6 @@ use std::mem::size_of;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use mz_proto::{RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -196,10 +195,6 @@ impl RustType<ProtoRoleId> for RoleId {
             None => Err(TryFromProtoError::missing_field("ProtoRoleId::kind")),
         }
     }
-}
-
-impl Columnation for RoleId {
-    type InnerRegion = CopyRegion<RoleId>;
 }
 
 #[mz_ore::test]

@@ -25,7 +25,7 @@ bytesize = "2.1.0"
 bincode = "1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
-columnation = "0.1.1"
+columnation = "0.1.2"
 crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.13" }
 dec = "0.4.8"

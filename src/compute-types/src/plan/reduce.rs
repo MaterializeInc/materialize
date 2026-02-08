@@ -85,10 +85,6 @@ pub enum ReductionType {
     Basic,
 }
 
-impl columnation::Columnation for ReductionType {
-    type InnerRegion = columnation::CopyRegion<ReductionType>;
-}
-
 impl TryFrom<&ReducePlan> for ReductionType {
     type Error = ();
 

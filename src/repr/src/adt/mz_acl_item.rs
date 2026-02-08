@@ -18,7 +18,6 @@ use std::str::FromStr;
 use crate::adt::system::Oid;
 use anyhow::{Error, anyhow};
 use bitflags::bitflags;
-use columnation::{Columnation, CopyRegion};
 use mz_ore::soft_assert_no_log;
 use mz_ore::str::StrExt;
 use mz_persist_types::columnar::FixedSizeCodec;
@@ -246,10 +245,6 @@ impl RustType<ProtoAclMode> for AclMode {
     }
 }
 
-impl Columnation for AclMode {
-    type InnerRegion = CopyRegion<AclMode>;
-}
-
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
@@ -385,10 +380,6 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
             (_, _, None) => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for MzAclItem {
-    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// An encoded packed variant of [`MzAclItem`].
@@ -644,10 +635,6 @@ impl RustType<ProtoAclItem> for AclItem {
             None => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for AclItem {
-    type InnerRegion = CopyRegion<AclItem>;
 }
 
 /// An encoded packed variant of [`AclItem`].

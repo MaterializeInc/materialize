@@ -17,7 +17,7 @@ anyhow = "1.0.100"
 async-stream = "0.3.3"
 base64 = "0.22.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-columnation = "0.1.1"
+columnation = "0.1.2"
 dec = "0.4.8"
 derivative = "2.2.0"
 futures = "0.3.31"

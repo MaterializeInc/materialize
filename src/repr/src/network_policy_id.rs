@@ -11,7 +11,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Error, anyhow};
-use columnation::{Columnation, CopyRegion};
 use mz_lowertest::MzReflect;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -87,10 +86,6 @@ impl fmt::Display for NetworkPolicyId {
             Self::User(id) => write!(f, "{USER_CHAR}{id}"),
         }
     }
-}
-
-impl Columnation for NetworkPolicyId {
-    type InnerRegion = CopyRegion<NetworkPolicyId>;
 }
 
 #[mz_ore::test]
