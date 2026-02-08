@@ -31,6 +31,9 @@ pub use crate::relation_and_scalar::{
 };
 use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 
+// Re-export RelationVersion from mz-catalog-types
+pub use mz_catalog_types::RelationVersion;
+
 /// The type of a [`Datum`].
 ///
 /// [`SqlColumnType`] bundles information about the scalar type of a datum (e.g.,
@@ -572,84 +575,34 @@ impl ColumnIndex {
     }
 }
 
-/// The version a given column was added at.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Eq,
-    PartialEq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect,
-    Arbitrary,
-)]
-pub struct RelationVersion(u64);
-
-impl RelationVersion {
-    /// Returns the "root" or "initial" version of a [`RelationDesc`].
-    pub fn root() -> Self {
-        RelationVersion(0)
-    }
-
-    /// Returns an instance of [`RelationVersion`] which is "one" higher than `self`.
-    pub fn bump(&self) -> Self {
-        let next_version = self
-            .0
-            .checked_add(1)
-            .expect("added more than u64::MAX columns?");
-        RelationVersion(next_version)
-    }
-
-    /// Consume a [`RelationVersion`] returning the raw value.
-    ///
-    /// Should __only__ be used for serialization.
-    pub fn into_raw(self) -> u64 {
-        self.0
-    }
-
-    /// Create a [`RelationVersion`] from a raw value.
-    ///
-    /// Should __only__ be used for serialization.
-    pub fn from_raw(val: u64) -> RelationVersion {
-        RelationVersion(val)
-    }
+/// Convert a [`RelationVersion`] to a [`SchemaId`].
+pub fn relation_version_to_schema_id(version: RelationVersion) -> SchemaId {
+    SchemaId(usize::cast_from(version.into_raw()))
 }
 
-impl From<RelationVersion> for SchemaId {
-    fn from(value: RelationVersion) -> Self {
-        SchemaId(usize::cast_from(value.0))
-    }
+/// Convert a [`mz_sql_parser::ast::Version`] to a [`RelationVersion`].
+pub fn ast_version_to_relation_version(
+    version: mz_sql_parser::ast::Version,
+) -> RelationVersion {
+    RelationVersion::from_raw(version.into_inner())
 }
 
-impl From<mz_sql_parser::ast::Version> for RelationVersion {
-    fn from(value: mz_sql_parser::ast::Version) -> Self {
-        RelationVersion(value.into_inner())
-    }
-}
-
-impl fmt::Display for RelationVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "v{}", self.0)
-    }
-}
-
-impl From<RelationVersion> for mz_sql_parser::ast::Version {
-    fn from(value: RelationVersion) -> Self {
-        mz_sql_parser::ast::Version::new(value.0)
-    }
+/// Convert a [`RelationVersion`] to a [`mz_sql_parser::ast::Version`].
+pub fn relation_version_to_ast_version(
+    version: RelationVersion,
+) -> mz_sql_parser::ast::Version {
+    mz_sql_parser::ast::Version::new(version.into_raw())
 }
 
 impl RustType<ProtoRelationVersion> for RelationVersion {
     fn into_proto(&self) -> ProtoRelationVersion {
-        ProtoRelationVersion { value: self.0 }
+        ProtoRelationVersion {
+            value: self.into_raw(),
+        }
     }
 
     fn from_proto(proto: ProtoRelationVersion) -> Result<Self, TryFromProtoError> {
-        Ok(RelationVersion(proto.value))
+        Ok(RelationVersion::from_raw(proto.value))
     }
 }
 
@@ -1423,7 +1376,7 @@ pub enum RelationVersionSelector {
 
 impl RelationVersionSelector {
     pub fn specific(version: u64) -> Self {
-        RelationVersionSelector::Specific(RelationVersion(version))
+        RelationVersionSelector::Specific(RelationVersion::from_raw(version))
     }
 }
 
@@ -1535,7 +1488,7 @@ impl VersionedRelationDesc {
     pub fn at_version(&self, version: RelationVersionSelector) -> RelationDesc {
         // Get all of the changes from the start, up to whatever version was requested.
         let up_to_version = match version {
-            RelationVersionSelector::Latest => RelationVersion(u64::MAX),
+            RelationVersionSelector::Latest => RelationVersion::from_raw(u64::MAX),
             RelationVersionSelector::Specific(v) => v,
         };
 
@@ -1625,7 +1578,7 @@ impl VersionedRelationDesc {
                 if col_idx.0 > desc.metadata.len() {
                     anyhow::bail!("column index out of bounds");
                 }
-                if meta.added >= meta.dropped.unwrap_or(RelationVersion(u64::MAX)) {
+                if meta.added >= meta.dropped.unwrap_or(RelationVersion::from_raw(u64::MAX)) {
                     anyhow::bail!("column was added after it was dropped?");
                 }
                 if desc.typ().columns().get(meta.typ_idx).is_none() {
@@ -1648,11 +1601,11 @@ impl VersionedRelationDesc {
             let mut max = 0;
             let mut sum = 0;
             for version in versions {
-                max = std::cmp::max(max, version.0);
-                sum += version.0;
+                max = std::cmp::max(max, version.into_raw());
+                sum += version.into_raw();
             }
 
-            // Other than RelationVersion(0), we should never have duplicate
+            // Other than RelationVersion::root(), we should never have duplicate
             // versions and they should always increase by 1. In other words, the
             // sum of all RelationVersions should be the sum of [0, max].
             //
@@ -1700,7 +1653,7 @@ impl PropRelationDescDiff {
                 let meta = ColumnMetadata {
                     name,
                     typ_idx: new_idx,
-                    added: RelationVersion(0),
+                    added: RelationVersion::root(),
                     dropped: None,
                 };
                 let prev = desc.metadata.insert(ColumnIndex(new_idx), meta);
@@ -1865,7 +1818,7 @@ mod tests {
         assert_eq!(desc, v3);
 
         let v1 = versioned_desc.add_column("b", SqlScalarType::Bytes.nullable(false));
-        assert_eq!(v1, RelationVersion(1));
+        assert_eq!(v1, RelationVersion::from_raw(1));
 
         let v1 = versioned_desc.at_version(RelationVersionSelector::Specific(v1));
         insta::assert_json_snapshot!(v1.metadata, @r###"
@@ -1896,7 +1849,7 @@ mod tests {
         assert!(v0.iter().eq(v0_b.iter()));
 
         let v2 = versioned_desc.drop_column("z");
-        assert_eq!(v2, RelationVersion(2));
+        assert_eq!(v2, RelationVersion::from_raw(2));
 
         let v2 = versioned_desc.at_version(RelationVersionSelector::Specific(v2));
         insta::assert_json_snapshot!(v2.metadata, @r###"
@@ -1962,7 +1915,7 @@ mod tests {
         versioned_desc.validate();
 
         let v1 = versioned_desc.drop_column("a");
-        assert_eq!(v1, RelationVersion(1));
+        assert_eq!(v1, RelationVersion::from_raw(1));
 
         // Make sure the key index for 'z' got remapped since 'a' was dropped.
         let v1 = versioned_desc.at_version(RelationVersionSelector::Specific(v1));

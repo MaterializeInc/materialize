@@ -34,6 +34,7 @@ mysql_async = { version = "0.36.1", default-features = false, features = [
     "native-tls-tls",
 ] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
+mz-catalog-types = { path = "../catalog-types" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-dyncfg = { path = "../dyncfg" }
