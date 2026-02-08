@@ -46,6 +46,9 @@ tower = "0.5.3"
 tracing = "0.1.44"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[build-dependencies]
+custom-labels = "0.4.5"
+
 [features]
 default = ["tokio-console", "mz-alloc-default", "workspace-hack"]
 jemalloc = ["mz-alloc/jemalloc"]
