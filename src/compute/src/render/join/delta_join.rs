@@ -385,10 +385,18 @@ where
                 datums_local.extend(stream_row.iter());
                 datums_local.extend(lookup_row.to_datum_iter());
 
-                let row = closure.apply(&mut datums_local, &temp_storage, &mut row_builder);
+                let row = closure
+                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                    .transpose();
+                let Some(row) = row else {
+                    output.clear();
+                    return;
+                };
 
                 for (time, diff2) in output.drain(..) {
-                    let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
+                    // The lint is wrong, `clone` returns `&Row` here.
+                    #[allow(clippy::useless_asref)]
+                    let row = row.as_ref().map(|&row| row.clone()).map_err(Clone::clone);
                     let diff = diff1.clone() * diff2.clone();
                     let data = ((row, time.clone()), initial.clone(), diff);
                     session.give(data);
@@ -398,15 +406,12 @@ where
         .ok_err(|(data_time, init_time, diff)| {
             // TODO(mcsherry): consider `ok_err()` for `Collection`.
             match data_time {
-                (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
+                (Ok(data), time) => Ok(((data, time), init_time, diff)),
                 (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
             }
         });
 
-        (
-            oks.as_collection().flat_map(|x| x),
-            errs.concat(&errs2.as_collection()),
-        )
+        (oks.as_collection(), errs.concat(&errs2.as_collection()))
     } else {
         let oks = differential_dogs3::operators::half_join::half_join_internal_unsafe(
             &updates,
@@ -526,7 +531,7 @@ where
                                                         Tr::owned_diff(diff),
                                                     )),
                                                     Some(Err(err)) => err_session.give((
-                                                        err,
+                                                        DataflowError::from(err),
                                                         time,
                                                         Tr::owned_diff(diff),
                                                     )),
@@ -550,8 +555,5 @@ where
                 })
             });
 
-    (
-        ok_stream.as_collection(),
-        err_stream.as_collection().map(DataflowError::from),
-    )
+    (ok_stream.as_collection(), err_stream.as_collection())
 }

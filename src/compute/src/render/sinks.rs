@@ -13,7 +13,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use differential_dataflow::VecCollection;
+use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
 use mz_ore::soft_assert_or_log;
@@ -22,7 +22,7 @@ use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::operator::{CollectionExt, UnsharedStream};
 use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
@@ -71,8 +71,11 @@ where
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
+        let (ok_collection, mut err_collection) = if let Some((ok, err)) = &bundle.collection {
+            (
+                ok.inner.unshared().as_collection(),
+                err.inner.unshared().as_collection(),
+            )
         } else {
             let (key, _arrangement) = bundle
                 .arranged

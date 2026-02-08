@@ -24,3 +24,14 @@ mod render;
 mod row_spine;
 mod sink;
 mod typedefs;
+
+pub(crate) type RcCollection<G, D, R = isize> = differential_dataflow::Collection<
+    G,
+    std::rc::Rc<
+        Vec<(
+            D,
+            <G as timely::dataflow::scopes::ScopeParent>::Timestamp,
+            R,
+        )>,
+    >,
+>;

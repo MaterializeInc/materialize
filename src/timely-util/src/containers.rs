@@ -17,6 +17,9 @@
 
 pub mod stack;
 
+use std::rc::Rc;
+use timely::container::{ContainerBuilder, PushInto};
+
 pub(crate) use alloc::alloc_aligned_zeroed;
 pub use alloc::{enable_columnar_lgalloc, set_enable_columnar_lgalloc};
 
@@ -48,5 +51,50 @@ mod alloc {
     /// Set whether columnar allocations should come from lgalloc. Applies to future allocations.
     pub fn set_enable_columnar_lgalloc(enabled: bool) {
         ENABLE_COLUMNAR_LGALLOC.set(enabled);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RcContainerBuilder<CB: ContainerBuilder> {
+    inner: CB,
+    container: Option<Rc<CB::Container>>,
+}
+
+impl<CB: ContainerBuilder> ContainerBuilder for RcContainerBuilder<CB>
+where
+    CB::Container: Default,
+{
+    type Container = Rc<CB::Container>;
+
+    fn extract(&mut self) -> Option<&mut Self::Container> {
+        if let Some(container) = self.inner.extract() {
+            let container = std::mem::take(container);
+            self.container = Some(Rc::new(container));
+        } else {
+            self.container = None;
+        }
+        self.container.as_mut()
+    }
+
+    fn finish(&mut self) -> Option<&mut Self::Container> {
+        if let Some(container) = self.inner.finish() {
+            let container = std::mem::take(container);
+            self.container = Some(Rc::new(container));
+        } else {
+            self.container = None;
+        }
+        self.container.as_mut()
+    }
+
+    fn relax(&mut self) {
+        self.inner.relax();
+        self.container = None;
+    }
+}
+
+impl<D, CB: ContainerBuilder + PushInto<D>> PushInto<D> for RcContainerBuilder<CB> {
+    #[inline(always)]
+    fn push_into(&mut self, item: D) {
+        self.inner.push_into(item);
     }
 }

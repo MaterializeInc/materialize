@@ -17,6 +17,7 @@
 
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
+use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, TimelyStack};
@@ -731,5 +732,40 @@ where
         });
 
         result
+    }
+}
+
+/// Convert a stream of shared containers into a stream of owned containers
+pub trait UnsharedStream<S: Scope, C> {
+    /// Convert a stream of shared containers into a stream of owned containers
+    ///
+    /// # Examples
+    /// ```
+    /// use timely::dataflow::operators::{ToStream, InspectCore};
+    /// use timely::dataflow::operators::rc::SharedStream;
+    /// use mz_timely_util::operators::UnsharedStream;
+    ///
+    /// timely::example(|scope| {
+    ///     (0..10).to_stream(scope)
+    ///            .shared()
+    ///            .unshared()
+    ///            .inspect_container(|x| println!("seen: {:?}", x));
+    /// });
+    /// ```
+    fn unshared(&self) -> StreamCore<S, C>;
+}
+
+impl<S: Scope, C: Container> UnsharedStream<S, C> for StreamCore<S, Rc<C>> {
+    fn unshared(&self) -> StreamCore<S, C> {
+        self.unary(Pipeline, "Unshared", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, containers| {
+                    let mut session = output.session(&time);
+                    for container in containers {
+                        session.give_container(Rc::make_mut(container));
+                    }
+                });
+            }
+        })
     }
 }

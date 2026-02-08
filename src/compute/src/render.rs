@@ -135,10 +135,9 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, SharedRow, SqlRelationType};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::{CollectionExt, StreamExt, UnsharedStream};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
-use timely::PartialOrder;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -151,6 +150,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::{Container, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -945,7 +945,10 @@ where
                 let bundle = self.render_recursive_plan(object_id, level + 1, value, binding);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
-                let (oks, mut err) = bundle.collection.clone().unwrap();
+                let (oks, err) = bundle.collection.clone().unwrap();
+                let oks = oks.inner.unshared().as_collection();
+                let mut err = err.inner.unshared().as_collection();
+
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -998,8 +1001,14 @@ where
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_collections(
-                        oks.leave_dynamic(level + 1),
-                        err.leave_dynamic(level + 1),
+                        oks.inner
+                            .unshared()
+                            .as_collection()
+                            .leave_dynamic(level + 1),
+                        err.inner
+                            .unshared()
+                            .as_collection()
+                            .leave_dynamic(level + 1),
                     ),
                 );
             }
@@ -1414,9 +1423,13 @@ where
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(
+        &self,
+        stream: &StreamCore<G, D>,
+        lir_id: LirId,
+    ) -> StreamCore<G, D>
     where
-        D: Clone + 'static,
+        D: timely::Container,
     {
         let Some(logger) = self.compute_logger.clone() else {
             return stream.clone(); // hydration logging disabled
@@ -1682,13 +1695,13 @@ where
 /// still be upstream of `arrange_core` operators when those get to know about us dropping the
 /// minimum capability. The in-flight snapshot updates would hold back the input frontiers of
 /// `arrange_core` operators to the `as_of`, which would cause them to insert empty batches.
-fn suppress_early_progress<G, D>(
-    stream: Stream<G, D>,
+fn suppress_early_progress<G, C>(
+    stream: StreamCore<G, C>,
     as_of: Antichain<G::Timestamp>,
-) -> Stream<G, D>
+) -> StreamCore<G, C>
 where
     G: Scope,
-    D: Data,
+    C: Container,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
