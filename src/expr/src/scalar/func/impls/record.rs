@@ -23,13 +23,12 @@ pub struct CastRecordToString {
 }
 
 impl LazyUnaryFunc for CastRecordToString {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -79,13 +78,12 @@ pub struct CastRecord1ToRecord2 {
 }
 
 impl LazyUnaryFunc for CastRecord1ToRecord2 {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -125,6 +123,14 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         // track enough information to make that call, though!
         false
     }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        self.cast_exprs.iter().collect()
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        self.cast_exprs.iter_mut().collect()
+    }
 }
 
 impl fmt::Display for CastRecord1ToRecord2 {
@@ -137,13 +143,12 @@ impl fmt::Display for CastRecord1ToRecord2 {
 pub struct RecordGet(pub usize);
 
 impl LazyUnaryFunc for RecordGet {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        _temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }

@@ -22,6 +22,7 @@ mod interpret;
 mod linear;
 mod relation;
 mod scalar;
+mod static_eval;
 
 pub mod explain;
 pub mod row;
@@ -49,6 +50,7 @@ pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, Variad
 pub use scalar::{
     EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError, like_pattern,
 };
+pub use static_eval::CompiledMirScalarExpr;
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

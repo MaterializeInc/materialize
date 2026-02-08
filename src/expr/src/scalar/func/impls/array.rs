@@ -21,13 +21,12 @@ use crate::{EvalError, MirScalarExpr};
 pub struct CastArrayToListOneDim;
 
 impl LazyUnaryFunc for CastArrayToListOneDim {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        _temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -93,13 +92,12 @@ pub struct CastArrayToString {
 }
 
 impl LazyUnaryFunc for CastArrayToString {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -147,11 +145,10 @@ pub struct CastArrayToJsonb {
 }
 
 impl LazyUnaryFunc for CastArrayToJsonb {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
         fn pack<'a>(
             temp_storage: &RowArena,
@@ -182,7 +179,7 @@ impl LazyUnaryFunc for CastArrayToJsonb {
             })
         }
 
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -225,6 +222,14 @@ impl LazyUnaryFunc for CastArrayToJsonb {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![&self.cast_element]
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![&mut self.cast_element]
+    }
 }
 
 impl fmt::Display for CastArrayToJsonb {
@@ -243,13 +248,12 @@ pub struct CastArrayToArray {
 }
 
 impl LazyUnaryFunc for CastArrayToArray {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -288,6 +292,14 @@ impl LazyUnaryFunc for CastArrayToArray {
 
     fn is_monotone(&self) -> bool {
         false
+    }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![&self.cast_expr]
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![&mut self.cast_expr]
     }
 }
 

@@ -162,6 +162,16 @@ macro_rules! derive_unary {
                 }
             }
 
+            pub fn eval_input<'a>(
+                &'a self,
+                temp_storage: &'a RowArena,
+                input: Result<Datum<'a>, EvalError>,
+            ) -> Result<Datum<'a>, EvalError> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::eval_input(f, temp_storage, input),)*
+                }
+            }
+
             pub fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::output_type(f, input_type),)*
@@ -195,6 +205,16 @@ macro_rules! derive_unary {
             pub fn could_error(&self) -> bool {
                 match self {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
+                }
+            }
+            pub fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::embedded_exprs(f),)*
+                }
+            }
+            pub fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::embedded_exprs_mut(f),)*
                 }
             }
         }
