@@ -150,7 +150,6 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
-use timely::{Container, PartialOrder};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -1695,13 +1694,13 @@ where
 /// still be upstream of `arrange_core` operators when those get to know about us dropping the
 /// minimum capability. The in-flight snapshot updates would hold back the input frontiers of
 /// `arrange_core` operators to the `as_of`, which would cause them to insert empty batches.
-fn suppress_early_progress<G, C>(
-    stream: StreamCore<G, C>,
+fn suppress_early_progress<G, D>(
+    stream: Stream<G, D>,
     as_of: Antichain<G::Timestamp>,
-) -> StreamCore<G, C>
+) -> Stream<G, D>
 where
     G: Scope,
-    C: Container,
+    D: Data,
 {
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);

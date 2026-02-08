@@ -16,13 +16,10 @@ use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
-use differential_dataflow::{
-    AsCollection, Collection, Data, ExchangeData, Hashable, VecCollection,
-};
+use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use timely::Container;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
-use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, ScopeParent, StreamCore};
 
 use crate::logging::compute::{
@@ -197,11 +194,7 @@ where
         Tr::Batch: Batch,
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
-        self.0
-            .inner
-            .map(|(d, t, r)| ((d.clone(), ()), t.clone(), r.clone()))
-            .as_collection()
-            .mz_arrange::<Ba, Bu, _>(name)
+        self.0.map(|d| (d, ())).mz_arrange::<Ba, Bu, _>(name)
     }
 }
 
@@ -229,9 +222,7 @@ where
         Arranged<G, TraceAgent<Tr>>: ArrangementSize,
     {
         self.0
-            .inner
-            .map(|(d, t, r)| ((d.clone(), ()), t.clone(), r.clone()))
-            .as_collection()
+            .map(|d| (d, ()))
             .mz_arrange_core::<_, Ba, Bu, _>(pact, name)
     }
 }
