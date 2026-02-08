@@ -479,7 +479,8 @@ pub mod v1alpha1 {
         pub fn meets_minimum_version(&self, minimum: &Version) -> bool {
             let version = parse_image_ref(&self.spec.environmentd_image_ref);
             match version {
-                Some(version) => &version >= minimum,
+                // Use cmp_precedence() to ignore build metadata per SemVer 2.0.0 spec
+                Some(version) => version.cmp_precedence(minimum).is_ge(),
                 // In the rare case that we see an image reference
                 // that we can't parse, we assume that it satisfies all
                 // version checks. Usually these are custom images that have
@@ -502,7 +503,8 @@ pub mod v1alpha1 {
             // Don't allow rolling back
             // Note: semver comparison handles RC versions correctly:
             // v26.0.0-rc.1 < v26.0.0-rc.2 < v26.0.0
-            if next_version < active_version {
+            // Use cmp_precedence() to ignore build metadata
+            if next_version.cmp_precedence(active_version) == std::cmp::Ordering::Less {
                 return false;
             }
 
@@ -755,6 +757,15 @@ mod tests {
             .last_completed_rollout_environmentd_image_ref =
             Some("materialize/environmentd:v0.147.20".to_owned());
         mz.spec.environmentd_image_ref = "materialize/environmentd:v26.1.0".to_owned();
+        assert!(mz.within_upgrade_window());
+
+        // Pass: upgrading from 26.11.0-dev.0+b to 26.11.0-dev.0+a (same major.minor.patch.prerelease, different build metadata)
+        mz.status
+            .as_mut()
+            .unwrap()
+            .last_completed_rollout_environmentd_image_ref =
+            Some("materialize/environmentd:v26.11.0-dev.0+b".to_owned());
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v26.11.0-dev.0+a".to_owned();
         assert!(mz.within_upgrade_window());
     }
 

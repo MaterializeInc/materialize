@@ -1095,7 +1095,12 @@ impl UnopenedPersistCatalogState {
         // higher version, it must fence this process out with one of the existing fencing
         // mechanisms.
         if let Some(found_version) = handle.get_catalog_content_version().await? {
-            if handle.catalog_content_version < found_version {
+            // Use cmp_precedence() to ignore build metadata per SemVer 2.0.0 spec
+            if handle
+                .catalog_content_version
+                .cmp_precedence(&found_version)
+                == std::cmp::Ordering::Less
+            {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
                     found_version,
                     catalog_version: handle.catalog_content_version,
