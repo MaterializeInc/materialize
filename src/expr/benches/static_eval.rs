@@ -109,6 +109,15 @@ fn expr_greatest() -> MirScalarExpr {
     }
 }
 
+/// Deep: 1024-deep left-leaning adds: ((((1 + 1) + 1) + 1) ... + 1)
+fn expr_deep_add() -> MirScalarExpr {
+    let mut expr = lit_i32(1);
+    for _ in 0..1023 {
+        expr = expr.call_binary(lit_i32(1), AddInt32);
+    }
+    expr
+}
+
 /// Nested: IF AND(Col0, Col1) THEN COALESCE(Col2, Col3, 0) ELSE Greatest(Col2, Col3)
 fn expr_nested() -> MirScalarExpr {
     MirScalarExpr::If {
@@ -308,6 +317,16 @@ fn greatest_compiled(b: &mut Bencher) {
     bench_compiled(b, &compiled, &nullable_int_rows());
 }
 
+fn deep_add_tree(b: &mut Bencher) {
+    let expr = expr_deep_add();
+    bench_tree(b, &expr, &int_rows());
+}
+fn deep_add_compiled(b: &mut Bencher) {
+    let expr = expr_deep_add();
+    let compiled = CompiledMirScalarExpr::from(&expr);
+    bench_compiled(b, &compiled, &int_rows());
+}
+
 fn nested_tree(b: &mut Bencher) {
     let expr = expr_nested();
     bench_tree(b, &expr, &bool_rows());
@@ -333,6 +352,7 @@ benchmark_group!(
     or4_tree,
     coalesce_tree,
     greatest_tree,
+    deep_add_tree,
     nested_tree,
 );
 
@@ -347,6 +367,7 @@ benchmark_group!(
     or4_compiled,
     coalesce_compiled,
     greatest_compiled,
+    deep_add_compiled,
     nested_compiled,
 );
 
