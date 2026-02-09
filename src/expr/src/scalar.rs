@@ -1229,7 +1229,7 @@ impl MirScalarExpr {
                                     let source = exprs.swap_remove(0);
                                     source.call_binary(
                                         replacement,
-                                        BinaryFunc::RegexpReplace { regex, limit },
+                                        BinaryFunc::from(func::RegexpReplace { regex, limit }),
                                     )
                                 }
                                 Err(err) => {

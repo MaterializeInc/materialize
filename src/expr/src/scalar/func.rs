@@ -30,7 +30,6 @@ use mz_ore::cast::{self, CastFrom};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
-use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_repr::adt::array::{Array, ArrayDimension};
@@ -2562,7 +2561,7 @@ pub enum BinaryFunc {
     MzAclItemContainsPrivilege(MzAclItemContainsPrivilege),
     ParseIdent(ParseIdent),
     PrettySql(PrettySql),
-    RegexpReplace { regex: Regex, limit: usize },
+    RegexpReplace(RegexpReplace),
     StartsWith(StartsWith),
 }
 
@@ -2910,9 +2909,7 @@ impl BinaryFunc {
             }
             BinaryFunc::ParseIdent(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::PrettySql(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::RegexpReplace { regex, limit } => {
-            //     regexp_replace_static(a, b, regex, *limit, temp_storage)
-            // }
+            BinaryFunc::RegexpReplace(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::StartsWith(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             _ => { /* fall through */ }
         }
@@ -2923,9 +2920,6 @@ impl BinaryFunc {
             return Ok(Datum::Null);
         }
         match self {
-            BinaryFunc::RegexpReplace { regex, limit } => {
-                regexp_replace_static(a, b, regex, *limit, temp_storage)
-            }
             _ => unreachable!(),
         }
     }
@@ -3190,7 +3184,7 @@ impl BinaryFunc {
 
             ParseIdent(s) => s.output_type(input1_type, input2_type),
             PrettySql(s) => s.output_type(input1_type, input2_type),
-            RegexpReplace { .. } => SqlScalarType::String.nullable(in_nullable),
+            RegexpReplace(s) => s.output_type(input1_type, input2_type),
 
             StartsWith(s) => s.output_type(input1_type, input2_type),
         }
@@ -3374,7 +3368,7 @@ impl BinaryFunc {
             BinaryFunc::RangeOverleft(s) => s.propagates_nulls(),
             BinaryFunc::RangeOverright(s) => s.propagates_nulls(),
             BinaryFunc::RangeUnion(s) => s.propagates_nulls(),
-            BinaryFunc::RegexpReplace { .. } => true,
+            BinaryFunc::RegexpReplace(s) => s.propagates_nulls(),
             BinaryFunc::RepeatString(s) => s.propagates_nulls(),
             BinaryFunc::Right(s) => s.propagates_nulls(),
             BinaryFunc::RoundNumeric(s) => s.propagates_nulls(),
@@ -3582,7 +3576,7 @@ impl BinaryFunc {
             RangeOverleft(s) => s.introduces_nulls(),
             RangeOverright(s) => s.introduces_nulls(),
             RangeUnion(s) => s.introduces_nulls(),
-            RegexpReplace { .. } => false,
+            RegexpReplace(s) => s.introduces_nulls(),
             RepeatString(s) => s.introduces_nulls(),
             Right(s) => s.introduces_nulls(),
             RoundNumeric(s) => s.introduces_nulls(),
@@ -3834,7 +3828,7 @@ impl BinaryFunc {
             Power(s) => s.is_infix_op(),
             PowerNumeric(s) => s.is_infix_op(),
             PrettySql(s) => s.is_infix_op(),
-            RegexpReplace { .. } => false,
+            RegexpReplace(s) => s.is_infix_op(),
             RepeatString(s) => s.is_infix_op(),
             Right(s) => s.is_infix_op(),
             RoundNumeric(s) => s.is_infix_op(),
@@ -4032,7 +4026,7 @@ impl BinaryFunc {
             BinaryFunc::RangeOverleft(s) => s.negate(),
             BinaryFunc::RangeOverright(s) => s.negate(),
             BinaryFunc::RangeUnion(s) => s.negate(),
-            BinaryFunc::RegexpReplace { .. } => None,
+            BinaryFunc::RegexpReplace(s) => s.negate(),
             BinaryFunc::RepeatString(s) => s.negate(),
             BinaryFunc::Right(s) => s.negate(),
             BinaryFunc::RoundNumeric(s) => s.negate(),
@@ -4286,7 +4280,7 @@ impl BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege(s) => s.could_error(),
             BinaryFunc::ParseIdent(s) => s.could_error(),
             BinaryFunc::PrettySql(s) => s.could_error(),
-            BinaryFunc::RegexpReplace { .. } => true,
+            BinaryFunc::RegexpReplace(s) => s.could_error(),
         }
     }
 
@@ -4518,7 +4512,7 @@ impl BinaryFunc {
             BinaryFunc::ConstantTimeEqBytes(s) => s.is_monotone(),
             BinaryFunc::ConstantTimeEqString(s) => s.is_monotone(),
             BinaryFunc::PrettySql(s) => s.is_monotone(),
-            BinaryFunc::RegexpReplace { .. } => (false, false),
+            BinaryFunc::RegexpReplace(s) => s.is_monotone(),
             BinaryFunc::StartsWith(s) => s.is_monotone(),
             BinaryFunc::Normalize(s) => s.is_monotone(),
         }
@@ -4737,13 +4731,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzAclItemContainsPrivilege(s) => s.fmt(f),
             BinaryFunc::ParseIdent(s) => s.fmt(f),
             BinaryFunc::PrettySql(s) => s.fmt(f),
-            BinaryFunc::RegexpReplace { regex, limit } => write!(
-                f,
-                "regexp_replace[{}, case_insensitive={}, limit={}]",
-                regex.pattern().escaped(),
-                regex.case_insensitive,
-                limit
-            ),
+            BinaryFunc::RegexpReplace(s) => s.fmt(f),
             BinaryFunc::StartsWith(s) => s.fmt(f),
         }
     }
@@ -4859,23 +4847,6 @@ pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<'_, str>) {
         (1, Cow::Borrowed(flags))
     };
     (limit, flags)
-}
-
-// WARNING: This function has potential OOM risk if used with an inflationary
-// replacement pattern. It is very difficult to calculate the output size ahead
-// of time because the replacement pattern may depend on capture groups.
-fn regexp_replace_static<'a>(
-    source: Datum<'a>,
-    replacement: Datum<'a>,
-    regexp: &regex::Regex,
-    limit: usize,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(s) => temp_storage.push_string(s),
-    };
-    Ok(Datum::String(replaced))
 }
 
 pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {

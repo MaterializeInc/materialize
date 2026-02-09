@@ -13,6 +13,7 @@
 
 //! Variadic functions.
 
+use std::borrow::Cow;
 use std::cmp;
 
 use chrono::NaiveDate;
@@ -38,8 +39,8 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use crate::func::{
     MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
-    regexp_match_static, regexp_replace_parse_flags, regexp_replace_static,
-    regexp_split_to_array_re, stringify_datum, timezone_time,
+    regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re, stringify_datum,
+    timezone_time,
 };
 use crate::{EvalError, MirScalarExpr};
 
@@ -790,7 +791,11 @@ fn regexp_replace_dynamic<'a>(
     };
     let (limit, flags) = regexp_replace_parse_flags(flags);
     let regexp = build_regex(pattern.unwrap_str(), &flags)?;
-    regexp_replace_static(source, replacement, &regexp, limit, temp_storage)
+    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
+        Cow::Borrowed(s) => s,
+        Cow::Owned(s) => temp_storage.push_string(s),
+    };
+    Ok(Datum::String(replaced))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {

@@ -356,7 +356,7 @@ mod derive {
         RangeOverleft,
         RangeOverright,
         RangeUnion,
-        // RegexpReplace
+        RegexpReplace,
         RepeatString,
         Right,
         RoundNumeric(RoundNumericBinary),

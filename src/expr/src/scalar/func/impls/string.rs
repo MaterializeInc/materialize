@@ -31,7 +31,7 @@ use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::func::regexp_match_static;
+use crate::func::{binary, regexp_match_static};
 use crate::scalar::func::{
     EagerUnaryFunc, LazyUnaryFunc, array_create_scalar, regexp_split_to_array_re,
 };
@@ -1110,5 +1110,55 @@ impl LazyUnaryFunc for QuoteIdent {
 impl fmt::Display for QuoteIdent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "quote_ident")
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+pub struct RegexpReplace {
+    pub regex: Regex,
+    pub limit: usize,
+}
+
+impl<'a> binary::EagerBinaryFunc<'a> for RegexpReplace {
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = Cow<'a, str>;
+
+    fn call(
+        &self,
+        source: Self::Input1,
+        replacement: Self::Input2,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output {
+        // WARNING: This function has potential OOM risk if used with an inflationary
+        // replacement pattern. It is very difficult to calculate the output size ahead
+        // of time because the replacement pattern may depend on capture groups.
+        self.regex.replacen(source, self.limit, replacement)
+    }
+
+    fn output_type(
+        &self,
+        input_type_a: SqlColumnType,
+        input_type_b: SqlColumnType,
+    ) -> SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Self::Output as AsColumnType>::as_column_type();
+        let propagates_nulls = binary::EagerBinaryFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(
+            nullable || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable)),
+        )
+    }
+}
+
+impl fmt::Display for RegexpReplace {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "regexp_replace[{}, case_insensitive={}, limit={}]",
+            self.regex.pattern().escaped(),
+            self.regex.case_insensitive,
+            self.limit
+        )
     }
 }

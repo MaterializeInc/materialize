@@ -1948,16 +1948,17 @@ impl<T> From<Vec<T>> for ArrayRustType<T> {
     }
 }
 
-impl<B: ToOwned<Owned: AsColumnType>> AsColumnType for Cow<'_, B> {
+// We define `AsColumnType` in terms of the owned type of `B`.
+impl<B: ToOwned<Owned: AsColumnType> + ?Sized> AsColumnType for Cow<'_, B> {
     fn as_column_type() -> SqlColumnType {
         <B::Owned>::as_column_type()
     }
 }
 
-impl<'a, E, B: ToOwned> DatumType<'a, E> for Cow<'a, B>
+impl<'a, E, B: ToOwned + ?Sized> DatumType<'a, E> for Cow<'a, B>
 where
-    B::Owned: DatumType<'a, E>,
-    for<'b> &'b B: DatumType<'a, E>,
+    for<'b> B::Owned: DatumType<'b, E>,
+    for<'b> &'b B: DatumType<'b, E>,
 {
     fn nullable() -> bool {
         B::Owned::nullable()
