@@ -2562,6 +2562,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "position" => Scalar {
             params!(String, String) => BinaryFunc::from(func::Position) => Int32, 849;
         },
+        "strpos" => Scalar {
+            params!(String, String) => BinaryFunc::from(func::Strpos) => Int32, 868;
+        },
         "pow" => Scalar {
             params!(Float64, Float64) => Operation::nullary(|_ecx| catalog_name_only!("pow")) => Float64, 1346;
         },
