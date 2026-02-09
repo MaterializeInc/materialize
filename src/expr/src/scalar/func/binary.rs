@@ -276,7 +276,8 @@ mod derive {
         Gte,
         IsLikeMatchCaseInsensitive,
         IsLikeMatchCaseSensitive,
-        // IsRegexpMatch
+        IsRegexpMatchCaseSensitive,
+        IsRegexpMatchCaseInsensitive,
         JsonbConcat,
         JsonbContainsJsonb,
         JsonbContainsString,

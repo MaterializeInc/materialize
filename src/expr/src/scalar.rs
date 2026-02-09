@@ -810,11 +810,17 @@ impl MirScalarExpr {
                                     ),
                                 };
                             }
-                        } else if let BinaryFunc::IsRegexpMatch { case_insensitive } = func {
+                        } else if matches!(
+                            func,
+                            BinaryFunc::IsRegexpMatchCaseSensitive(_)
+                                | BinaryFunc::IsRegexpMatchCaseInsensitive(_)
+                        ) {
+                            let case_insensitive =
+                                matches!(func, BinaryFunc::IsRegexpMatchCaseInsensitive(_));
                             if let MirScalarExpr::Literal(Ok(row), _) = &**expr2 {
                                 *e = match Regex::new(
                                     row.unpack_first().unwrap_str(),
-                                    *case_insensitive,
+                                    case_insensitive,
                                 ) {
                                     Ok(regex) => expr1.take().call_unary(UnaryFunc::IsRegexpMatch(
                                         func::IsRegexpMatch(regex),

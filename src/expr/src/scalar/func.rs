@@ -2464,7 +2464,8 @@ pub enum BinaryFunc {
     LikeEscape(LikeEscape),
     IsLikeMatchCaseInsensitive(IsLikeMatchCaseInsensitive),
     IsLikeMatchCaseSensitive(IsLikeMatchCaseSensitive),
-    IsRegexpMatch { case_insensitive: bool },
+    IsRegexpMatchCaseSensitive(IsRegexpMatchCaseSensitive),
+    IsRegexpMatchCaseInsensitive(IsRegexpMatchCaseInsensitive),
     ToCharTimestamp(ToCharTimestampFormat),
     ToCharTimestampTz(ToCharTimestampTzFormat),
     DateBinTimestamp(DateBinTimestamp),
@@ -2709,9 +2710,12 @@ impl BinaryFunc {
             BinaryFunc::IsLikeMatchCaseSensitive(s) => {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
             }
-            // BinaryFunc::IsRegexpMatch { case_insensitive } => {
-            //     is_regexp_match_dynamic(a, b, *case_insensitive)
-            // }
+            BinaryFunc::IsRegexpMatchCaseSensitive(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::IsRegexpMatchCaseInsensitive(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             BinaryFunc::ToCharTimestamp(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ToCharTimestampTz(s) => {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
@@ -2888,9 +2892,6 @@ impl BinaryFunc {
             return Ok(Datum::Null);
         }
         match self {
-            BinaryFunc::IsRegexpMatch { case_insensitive } => {
-                is_regexp_match_dynamic(a, b, *case_insensitive)
-            }
             BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
                 .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
             BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
@@ -2954,7 +2955,8 @@ impl BinaryFunc {
             // like and regexp produce errors on invalid like-strings or regexes
             IsLikeMatchCaseInsensitive(s) => s.output_type(input1_type, input2_type),
             IsLikeMatchCaseSensitive(s) => s.output_type(input1_type, input2_type),
-            IsRegexpMatch { .. } => SqlScalarType::Bool.nullable(in_nullable),
+            IsRegexpMatchCaseSensitive(s) => s.output_type(input1_type, input2_type),
+            IsRegexpMatchCaseInsensitive(s) => s.output_type(input1_type, input2_type),
 
             ToCharTimestamp(s) => s.output_type(input1_type, input2_type),
             ToCharTimestampTz(s) => s.output_type(input1_type, input2_type),
@@ -3277,7 +3279,8 @@ impl BinaryFunc {
             BinaryFunc::Gte(s) => s.propagates_nulls(),
             BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.propagates_nulls(),
             BinaryFunc::IsLikeMatchCaseSensitive(s) => s.propagates_nulls(),
-            BinaryFunc::IsRegexpMatch { .. } => true,
+            BinaryFunc::IsRegexpMatchCaseSensitive(s) => s.propagates_nulls(),
+            BinaryFunc::IsRegexpMatchCaseInsensitive(s) => s.propagates_nulls(),
             BinaryFunc::JsonbConcat(s) => s.propagates_nulls(),
             BinaryFunc::JsonbContainsJsonb(s) => s.propagates_nulls(),
             BinaryFunc::JsonbContainsString(s) => s.propagates_nulls(),
@@ -3484,7 +3487,8 @@ impl BinaryFunc {
             Gte(s) => s.introduces_nulls(),
             IsLikeMatchCaseInsensitive(s) => s.introduces_nulls(),
             IsLikeMatchCaseSensitive(s) => s.introduces_nulls(),
-            IsRegexpMatch { .. } => false,
+            IsRegexpMatchCaseSensitive(s) => s.introduces_nulls(),
+            IsRegexpMatchCaseInsensitive(s) => s.introduces_nulls(),
             JsonbContainsJsonb(s) => s.introduces_nulls(),
             JsonbContainsString(s) => s.introduces_nulls(),
             Left(s) => s.introduces_nulls(),
@@ -3666,7 +3670,8 @@ impl BinaryFunc {
             Gte(s) => s.is_infix_op(),
             IsLikeMatchCaseInsensitive(s) => s.is_infix_op(),
             IsLikeMatchCaseSensitive(s) => s.is_infix_op(),
-            IsRegexpMatch { .. } => true,
+            IsRegexpMatchCaseSensitive(s) => s.is_infix_op(),
+            IsRegexpMatchCaseInsensitive(s) => s.is_infix_op(),
             JsonbConcat(s) => s.is_infix_op(),
             JsonbContainsJsonb(s) => s.is_infix_op(),
             JsonbContainsString(s) => s.is_infix_op(),
@@ -3899,7 +3904,8 @@ impl BinaryFunc {
             BinaryFunc::Gte(s) => s.negate(),
             BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.negate(),
             BinaryFunc::IsLikeMatchCaseSensitive(s) => s.negate(),
-            BinaryFunc::IsRegexpMatch { .. } => None,
+            BinaryFunc::IsRegexpMatchCaseSensitive(s) => s.negate(),
+            BinaryFunc::IsRegexpMatchCaseInsensitive(s) => s.negate(),
             BinaryFunc::JsonbConcat(s) => s.negate(),
             BinaryFunc::JsonbContainsJsonb(s) => s.negate(),
             BinaryFunc::JsonbContainsString(s) => s.negate(),
@@ -4147,7 +4153,8 @@ impl BinaryFunc {
             BinaryFunc::LikeEscape(s) => s.could_error(),
             BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.could_error(),
             BinaryFunc::IsLikeMatchCaseSensitive(s) => s.could_error(),
-            BinaryFunc::IsRegexpMatch { .. } => true,
+            BinaryFunc::IsRegexpMatchCaseSensitive(s) => s.could_error(),
+            BinaryFunc::IsRegexpMatchCaseInsensitive(s) => s.could_error(),
             BinaryFunc::DateBinTimestamp(s) => s.could_error(),
             BinaryFunc::DateBinTimestampTz(s) => s.could_error(),
             BinaryFunc::ExtractInterval(s) => s.could_error(),
@@ -4332,7 +4339,8 @@ impl BinaryFunc {
             BinaryFunc::LikeEscape(s) => s.is_monotone(),
             BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.is_monotone(),
             BinaryFunc::IsLikeMatchCaseSensitive(s) => s.is_monotone(),
-            BinaryFunc::IsRegexpMatch { .. } => (false, false),
+            BinaryFunc::IsRegexpMatchCaseSensitive(s) => s.is_monotone(),
+            BinaryFunc::IsRegexpMatchCaseInsensitive(s) => s.is_monotone(),
             BinaryFunc::ToCharTimestamp(s) => s.is_monotone(),
             BinaryFunc::ToCharTimestampTz(s) => s.is_monotone(),
             BinaryFunc::DateBinTimestamp(s) => s.is_monotone(),
@@ -4542,12 +4550,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::LikeEscape(s) => s.fmt(f),
             BinaryFunc::IsLikeMatchCaseSensitive(s) => s.fmt(f),
             BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.fmt(f),
-            BinaryFunc::IsRegexpMatch {
-                case_insensitive: false,
-            } => f.write_str("~"),
-            BinaryFunc::IsRegexpMatch {
-                case_insensitive: true,
-            } => f.write_str("~*"),
+            BinaryFunc::IsRegexpMatchCaseSensitive(s) => s.fmt(f),
+            BinaryFunc::IsRegexpMatchCaseInsensitive(s) => s.fmt(f),
             BinaryFunc::ToCharTimestamp(s) => s.fmt(f),
             BinaryFunc::ToCharTimestampTz(s) => s.fmt(f),
             BinaryFunc::DateBinTimestamp(s) => s.fmt(f),
@@ -4698,14 +4702,16 @@ fn is_like_match_case_insensitive(haystack: &str, pattern: &str) -> Result<bool,
     like_pattern::compile(pattern, true).map(|needle| needle.is_match(haystack))
 }
 
-fn is_regexp_match_dynamic<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    case_insensitive: bool,
-) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = build_regex(b.unwrap_str(), if case_insensitive { "i" } else { "" })?;
-    Ok(Datum::from(needle.is_match(haystack)))
+#[sqlfunc(is_infix_op = true, sqlname = "~")]
+fn is_regexp_match_case_sensitive(haystack: &str, needle: &str) -> Result<bool, EvalError> {
+    let regex = build_regex(needle, "")?;
+    Ok(regex.is_match(haystack))
+}
+
+#[sqlfunc(is_infix_op = true, sqlname = "~*")]
+fn is_regexp_match_case_insensitive(haystack: &str, needle: &str) -> Result<bool, EvalError> {
+    let regex = build_regex(needle, "i")?;
+    Ok(regex.is_match(haystack))
 }
 
 fn regexp_match_static<'a>(

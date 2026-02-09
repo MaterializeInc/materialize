@@ -815,8 +815,8 @@ canonicalize-join
 
 canonicalize-join
 [
-    [(call_unary not #0) (call_binary (is_regexp_match true) #1 #2)]
-    [false (call_unary not (call_binary (is_regexp_match true) #1 #2))]
+    [(call_unary not #0) (call_binary is_regexp_match_case_insensitive #1 #2)]
+    [false (call_unary not (call_binary is_regexp_match_case_insensitive #1 #2))]
 ]
 [bool string string]
 ----

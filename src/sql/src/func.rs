@@ -4703,35 +4703,35 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(UInt16) => UnaryFunc::BitNotUint16(func::BitNotUint16) => UInt16, oid::FUNC_BIT_NOT_UINT16_OID;
             params!(UInt32) => UnaryFunc::BitNotUint32(func::BitNotUint32) => UInt32, oid::FUNC_BIT_NOT_UINT32_OID;
             params!(UInt64) => UnaryFunc::BitNotUint64(func::BitNotUint64) => UInt64, oid::FUNC_BIT_NOT_UINT64_OID;
-            params!(String, String) => BinaryFunc::IsRegexpMatch { case_insensitive: false } => Bool, 641;
+            params!(String, String) => BinaryFunc::IsRegexpMatchCaseSensitive(func::IsRegexpMatchCaseSensitive) => Bool, 641;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: false })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatchCaseSensitive(func::IsRegexpMatchCaseSensitive))
                 )
             }) => Bool, 1055;
         },
         "~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true }))
+                Ok(lhs.call_binary(rhs, BinaryFunc::IsRegexpMatchCaseInsensitive(func::IsRegexpMatchCaseInsensitive)))
             }) => Bool, 1228;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatchCaseInsensitive(func::IsRegexpMatchCaseInsensitive))
                 )
             }) => Bool, 1234;
         },
         "!~" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: false })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatchCaseSensitive(func::IsRegexpMatchCaseSensitive))
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 642;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: false })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatchCaseSensitive(func::IsRegexpMatchCaseSensitive))
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1056;
@@ -4739,13 +4739,13 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
         "!~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatchCaseInsensitive(func::IsRegexpMatchCaseInsensitive))
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1229;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BinaryFunc::IsRegexpMatch { case_insensitive: true })
+                    .call_binary(rhs, BinaryFunc::IsRegexpMatchCaseInsensitive(func::IsRegexpMatchCaseInsensitive))
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1235;
