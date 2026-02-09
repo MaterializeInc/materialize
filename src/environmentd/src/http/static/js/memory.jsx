@@ -22,6 +22,11 @@ async function query(sql) {
     throw `request failed: ${response.status} ${response.statusText}: ${text}`;
   }
   const data = await response.json();
+  for (const result of data.results) {
+    if (result.error) {
+      throw `SQL error: ${result.error.message}`;
+    }
+  }
   return data;
 }
 
