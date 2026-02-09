@@ -12,7 +12,6 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::{Arc, RwLock, TryLockError, Weak};
@@ -20,7 +19,6 @@ use std::time::{Duration, Instant};
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use mz_dyncfg::Config;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
@@ -32,7 +30,7 @@ use mz_persist::location::{
 };
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::{Mutex, OnceCell};
 use tracing::debug;
 
 use crate::async_runtime::IsolatedRuntime;
@@ -606,7 +604,6 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
-    update_semaphore: Mutex<Option<(tokio::time::Instant, oneshot::Receiver<Infallible>)>>,
     /// A [SchemaCacheMaps<K, V>], but stored as an Any so the `: Codec` bounds
     /// don't propagate to basically every struct in persist.
     schema_cache: Arc<dyn Any + Send + Sync>,
@@ -622,7 +619,6 @@ impl<K, V, T: Debug, D> Debug for LockingTypedState<K, V, T, D> {
             cfg: _cfg,
             metrics: _metrics,
             shard_metrics: _shard_metrics,
-            update_semaphore: _,
             schema_cache: _schema_cache,
             _subscription_token,
         } = self;
@@ -649,7 +645,6 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
-            update_semaphore: Mutex::new(None),
             schema_cache: Arc::new(SchemaCacheMaps::<K, V>::new(&metrics.schema)),
             metrics,
             _subscription_token: subscription_token,
@@ -662,14 +657,6 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
             .expect("K and V match")
     }
 }
-
-pub(crate) const STATE_UPDATE_LEASE_TIMEOUT: Config<Duration> = Config::new(
-    "persist_state_update_lease_timeout",
-    Duration::from_secs(1),
-    "The amount of time for a command to wait for a previous command to finish before executing. \
-        (If zero, commands will not wait for others to complete.) Higher values reduce database contention \
-        at the cost of higher worst-case latencies for individual requests.",
-);
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {
     pub(crate) fn shard_id(&self) -> &ShardId {
@@ -728,30 +715,6 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
         // this out of the lock window, see [StateWatchNotifier::notify].
         drop(state);
         ret
-    }
-
-    /// We want to _mostly_ just attempt a single CaS against the same state at once, since
-    /// only one concurrent CaS can succeed. However, we also want to guard against a
-    /// single hung update blocking all progress globally. We manage this with a shared Tokio mutex.
-    /// Each update will grab the mutex, wait for the previous command to complete or time out,
-    /// and record its own deadline and a completion future in the mutex. If the timeout is never hit,
-    /// this behaves like a semaphore with limit 1... but if our requests _are_ timing out, future
-    /// requests will only wait for a bounded time.
-    pub(crate) async fn lease_for_update(&self) -> impl Drop {
-        let timeout = STATE_UPDATE_LEASE_TIMEOUT.get(&self.cfg);
-        if timeout.is_zero() {
-            let (tx, _rx) = oneshot::channel();
-            return tx;
-        }
-        let mut guard = self.update_semaphore.lock().await;
-        if let Some((started_at, rx)) = guard.take() {
-            let deadline = started_at + timeout;
-            let _ = tokio::time::timeout_at(deadline, rx).await;
-        }
-        let started_at = tokio::time::Instant::now();
-        let (tx, rx) = oneshot::channel();
-        *guard = Some((started_at, rx));
-        tx
     }
 
     pub(crate) fn notifier(&self) -> &StateWatchNotifier {
