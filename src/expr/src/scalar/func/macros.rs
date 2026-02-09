@@ -217,22 +217,92 @@ macro_rules! derive_unary {
     }
 }
 
-/// This is not complete yet, pending conversion of all binary funcs to an implementation of
-/// `LazyBinaryFunc`.
-macro_rules! derive_binary_from {
-    ($($name:ident $( ( $variant:ident ) )?),* $(,)?) => {
-        $(
-            derive_binary_from!(from @ $name $( ( $variant ) )?);
-        )*
-    };
-    (from @ $name:ident ( $variant:ident ) ) => {
-        impl From<$variant> for crate::BinaryFunc {
-            fn from(variant: $variant) -> Self {
-                Self::$name(variant)
+/// Generates the `BinaryFunc` enum, its `impl` block (with 8 delegating methods),
+/// `Display` impl, and `From<InnerType>` impls for each variant.
+///
+/// All variants must use explicit `Name(Type)` syntax. When the variant name equals
+/// the inner type name, write e.g. `AddInt16(AddInt16)`.
+macro_rules! derive_binary {
+    ($($name:ident ( $variant:ident )),* $(,)?) => {
+        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        pub enum BinaryFunc {
+            $($name($variant),)*
+        }
+
+        impl BinaryFunc {
+            pub fn eval<'a>(
+                &'a self,
+                datums: &[Datum<'a>],
+                temp_storage: &'a RowArena,
+                a: &'a MirScalarExpr,
+                b: &'a MirScalarExpr,
+            ) -> Result<Datum<'a>, EvalError> {
+                match self {
+                    $(Self::$name(f) => f.eval(datums, temp_storage, a, b),)*
+                }
+            }
+
+            pub fn output_type(
+                &self,
+                input_type_a: SqlColumnType,
+                input_type_b: SqlColumnType,
+            ) -> SqlColumnType {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::output_type(f, input_type_a, input_type_b),)*
+                }
+            }
+
+            pub fn propagates_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::propagates_nulls(f),)*
+                }
+            }
+
+            pub fn introduces_nulls(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::introduces_nulls(f),)*
+                }
+            }
+
+            pub fn is_infix_op(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::is_infix_op(f),)*
+                }
+            }
+
+            pub fn negate(&self) -> Option<BinaryFunc> {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::negate(f),)*
+                }
+            }
+
+            pub fn could_error(&self) -> bool {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::could_error(f),)*
+                }
+            }
+
+            pub fn is_monotone(&self) -> (bool, bool) {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::is_monotone(f),)*
+                }
             }
         }
-    };
-    (from @ $name:ident) => {
-        derive_binary_from!(from @ $name ( $name ) );
-    };
+
+        impl fmt::Display for BinaryFunc {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                match self {
+                    $(Self::$name(func) => func.fmt(f),)*
+                }
+            }
+        }
+
+        $(
+            impl From<$variant> for crate::BinaryFunc {
+                fn from(variant: $variant) -> Self {
+                    Self::$name(variant)
+                }
+            }
+        )*
+    }
 }
