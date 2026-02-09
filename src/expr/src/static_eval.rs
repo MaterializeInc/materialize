@@ -65,6 +65,9 @@ pub struct CompiledMirScalarExpr {
     instructions: Vec<Instruction>,
     /// Literal values referenced by [`Instruction::Literal`] instructions.
     literals: Vec<Result<Row, EvalError>>,
+    /// Upper bound on the evaluation stack depth. Used to pre-allocate
+    /// the stack vector so that evaluation never re-allocates.
+    max_stack_depth: usize,
 }
 
 /// Instructions for the stack machine.
@@ -134,7 +137,6 @@ enum Instruction {
     /// Used by `CastRecord1ToRecord2`.
     MapRecord {
         cast_programs: Box<[CompiledMirScalarExpr]>,
-        return_ty: SqlScalarType,
     },
     /// Map a sub-program over list elements, converting SQL Null to JsonNull.
     /// Used by `CastListToJsonb`.
@@ -189,7 +191,6 @@ enum LabeledInstruction {
     MapArrayElements(CompiledMirScalarExpr),
     MapRecord {
         cast_programs: Box<[CompiledMirScalarExpr]>,
-        return_ty: SqlScalarType,
     },
     MapListToJsonb(CompiledMirScalarExpr),
     MapArrayToJsonb(CompiledMirScalarExpr),
@@ -440,10 +441,8 @@ impl From<&MirScalarExpr> for CompiledMirScalarExpr {
                 }
                 LabeledInstruction::MapRecord {
                     cast_programs,
-                    return_ty,
                 } => final_instructions.push(Instruction::MapRecord {
                     cast_programs,
-                    return_ty,
                 }),
                 LabeledInstruction::MapListToJsonb(p) => {
                     final_instructions.push(Instruction::MapListToJsonb(p))
@@ -501,9 +500,107 @@ impl From<&MirScalarExpr> for CompiledMirScalarExpr {
             current_pos += 1;
         }
 
+        let max_stack_depth = max_stack_depth(expr);
+
         CompiledMirScalarExpr {
             instructions: final_instructions,
             literals,
+            max_stack_depth,
+        }
+    }
+}
+
+/// Compute the maximum stack depth needed to evaluate an expression.
+///
+/// TODO: Rewrite this function in terms of the `Visit` trait
+/// (`MirScalarExpr` implements `VisitChildren<MirScalarExpr>`, which gives it
+/// `Visit`). The visitor infrastructure in `visit.rs` provides stack-safe
+/// traversal with `RecursionGuard` limits, whereas this manual recursive match
+/// could overflow the call stack on deeply-nested expressions.
+///
+/// Each leaf (`Column`, `Literal`, `CallUnmaterializable`) pushes 1.
+/// `CallUnary` consumes 1, produces 1 → net 0, peak = child + 0.
+/// `CallBinary` consumes 2, produces 1 → evaluate left, then right on top, then pop both.
+///   Peak = max(left, left_result + right) = max(depth_left, 1 + depth_right).
+/// `If` evaluates cond (leaves 1), then evaluates one branch (leaves 1) → peak is
+///   max(depth_cond, 1 + max(depth_then, depth_else)) but the cond result is consumed
+///   by SkipIfNotTrue (or pushed as error), so peak = max(depth_cond, depth_then, depth_else).
+///   Actually: cond pushes 1, SkipIfNotTrue pops it (or replaces with error → still 1), then
+///   branch pushes 1 → max(depth_cond, 1 + depth_then, 1 + depth_else) but error path
+///   leaves one value already. Let's be conservative: cond can leave 1 on error, then
+///   branch adds on top. So peak = max(depth_cond, 1 + max(depth_then, depth_else)).
+/// `CallVariadic(And/Or)`: accumulator(1) + each operand evaluated on top.
+///   Peak = 1 + max(depth of each operand).
+/// `CallVariadic(Coalesce)`: each operand evaluated sequentially, at most 1 on stack.
+///   Peak = max(depth of each operand).
+/// `CallVariadic(ErrorIfNull)`: value + message. Peak = max(depth_value, depth_message).
+/// `CallVariadic(Greatest/Least)`: accumulator(1) + each operand on top.
+///   Peak = 1 + max(depth of each operand).
+/// `CallVariadic(eager)`: all operands on stack simultaneously + 1 result.
+///   Peak = sum of all operand depths? No — operands are evaluated left to right, each
+///   leaving 1 value. Peak = k + depth_of_kth_operand for the k-th operand evaluated.
+///   = max over k of (k + depth_operand_k). Simplified: n + max_operand_depth would be
+///   an overcount; exact is max(i + depth_i for i in 0..n). But conservatively: n is fine
+///   since each operand is at least depth 1.
+fn max_stack_depth(expr: &MirScalarExpr) -> usize {
+    match expr {
+        MirScalarExpr::Column(_, _)
+        | MirScalarExpr::Literal(_, _)
+        | MirScalarExpr::CallUnmaterializable(_) => 1,
+        MirScalarExpr::CallUnary { expr: child, .. } => {
+            // Evaluate child (pushes 1), then apply func in-place.
+            max_stack_depth(child)
+        }
+        MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+            // Evaluate expr1 (leaves 1 on stack), then expr2 on top.
+            let d1 = max_stack_depth(expr1);
+            let d2 = max_stack_depth(expr2);
+            std::cmp::max(d1, 1 + d2)
+        }
+        MirScalarExpr::If { cond, then, els } => {
+            let dc = max_stack_depth(cond);
+            let dt = max_stack_depth(then);
+            let de = max_stack_depth(els);
+            // Cond evaluated first. On error, cond result stays on stack (1) and we skip
+            // to end, so peak during cond is dc. After cond is consumed/error-pushed,
+            // we evaluate one branch which can push up to dt or de. On the error path
+            // there's 1 value already on stack, but we skip both branches.
+            // Conservative: max(dc, 1 + max(dt, de))
+            // The 1 accounts for the error value that might remain on stack.
+            std::cmp::max(dc, 1 + std::cmp::max(dt, de))
+        }
+        MirScalarExpr::CallVariadic { func, exprs } => {
+            match func {
+                VariadicFunc::And | VariadicFunc::Or => {
+                    // Accumulator (1) + max operand depth
+                    let max_child = exprs.iter().map(max_stack_depth).max().unwrap_or(0);
+                    1 + max_child
+                }
+                VariadicFunc::Coalesce => {
+                    // Operands evaluated sequentially, each leaving at most 1.
+                    exprs.iter().map(max_stack_depth).max().unwrap_or(1)
+                }
+                VariadicFunc::ErrorIfNull => {
+                    // value, then maybe message
+                    let max_child = exprs.iter().map(max_stack_depth).max().unwrap_or(1);
+                    max_child
+                }
+                VariadicFunc::Greatest | VariadicFunc::Least => {
+                    // Accumulator (1) + max operand depth
+                    let max_child = exprs.iter().map(max_stack_depth).max().unwrap_or(0);
+                    1 + max_child
+                }
+                _ => {
+                    // Eager variadics: operands evaluated left to right, results accumulate.
+                    // When evaluating operand i, there are already i values on the stack.
+                    let mut peak = 0;
+                    for (i, child) in exprs.iter().enumerate() {
+                        peak = std::cmp::max(peak, i + max_stack_depth(child));
+                    }
+                    // After all operands, there are n values; the call replaces with 1.
+                    std::cmp::max(peak, exprs.len())
+                }
+            }
         }
     }
 }
@@ -530,7 +627,6 @@ fn compile_compound_instruction(func: &UnaryFunc) -> LabeledInstruction {
                 .collect();
             LabeledInstruction::MapRecord {
                 cast_programs,
-                return_ty: inner.return_ty.clone(),
             }
         }
         UnaryFunc::CastListToJsonb(inner) => {
@@ -575,12 +671,31 @@ fn compile_compound_instruction(func: &UnaryFunc) -> LabeledInstruction {
 
 impl CompiledMirScalarExpr {
     /// Evaluate this compiled expression against the given datum columns.
+    ///
+    /// This allocates a fresh stack on each call. For hot loops that evaluate
+    /// many rows, prefer [`Self::eval_with_stack`] to amortize the allocation.
     pub fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
     ) -> Result<Datum<'a>, EvalError> {
-        let mut stack: Vec<Result<Datum<'a>, EvalError>> = Vec::new();
+        let mut stack: Vec<Result<Datum<'a>, EvalError>> =
+            Vec::with_capacity(self.max_stack_depth);
+        self.eval_with_stack(datums, temp_storage, &mut stack)
+    }
+
+    /// Evaluate this compiled expression, reusing an externally-provided stack.
+    ///
+    /// The stack is cleared before use. By passing the same `Vec` across many
+    /// rows the caller avoids a per-row allocation — only the very first call
+    /// (or a call with a deeper expression) may need to grow the vector.
+    pub fn eval_with_stack<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        stack: &mut Vec<Result<Datum<'a>, EvalError>>,
+    ) -> Result<Datum<'a>, EvalError> {
+        stack.clear();
         let mut pc = 0usize;
 
         while pc < self.instructions.len() {
@@ -640,32 +755,32 @@ impl CompiledMirScalarExpr {
                     }
                 }
                 Instruction::AndStep(end_offset) => {
+                    // Pop operand, peek accumulator (avoid pop+push on common path).
                     let operand = stack.pop().expect("stack underflow");
-                    let accumulator = stack.pop().expect("stack underflow");
                     match operand {
                         Ok(Datum::False) => {
                             // False short-circuits And, even over accumulated errors
-                            stack.push(Ok(Datum::False));
+                            *stack.last_mut().expect("stack underflow") = Ok(Datum::False);
                             pc = (pc as isize + end_offset) as usize;
                         }
                         Ok(Datum::True) => {
-                            // True doesn't change the accumulator
-                            stack.push(accumulator);
+                            // True: accumulator unchanged
                             pc += 1;
                         }
                         Ok(Datum::Null) => {
                             // Null: upgrade accumulator (error stays, true→null)
-                            match accumulator {
-                                Err(_) => stack.push(accumulator),
-                                _ => stack.push(Ok(Datum::Null)),
+                            let acc = stack.last_mut().expect("stack underflow");
+                            if acc.is_ok() {
+                                *acc = Ok(Datum::Null);
                             }
                             pc += 1;
                         }
                         Err(e) => {
                             // Error: merge with accumulator (max of errors)
-                            match accumulator {
-                                Err(e2) => stack.push(Err(std::cmp::max(e, e2))),
-                                _ => stack.push(Err(e)),
+                            let acc = stack.last_mut().expect("stack underflow");
+                            match acc {
+                                Err(e2) if *e2 >= e => {}
+                                _ => *acc = Err(e),
                             }
                             pc += 1;
                         }
@@ -674,29 +789,28 @@ impl CompiledMirScalarExpr {
                 }
                 Instruction::OrStep(end_offset) => {
                     let operand = stack.pop().expect("stack underflow");
-                    let accumulator = stack.pop().expect("stack underflow");
                     match operand {
                         Ok(Datum::True) => {
                             // True short-circuits Or, even over accumulated errors
-                            stack.push(Ok(Datum::True));
+                            *stack.last_mut().expect("stack underflow") = Ok(Datum::True);
                             pc = (pc as isize + end_offset) as usize;
                         }
                         Ok(Datum::False) => {
-                            // False doesn't change the accumulator
-                            stack.push(accumulator);
+                            // False: accumulator unchanged
                             pc += 1;
                         }
                         Ok(Datum::Null) => {
-                            match accumulator {
-                                Err(_) => stack.push(accumulator),
-                                _ => stack.push(Ok(Datum::Null)),
+                            let acc = stack.last_mut().expect("stack underflow");
+                            if acc.is_ok() {
+                                *acc = Ok(Datum::Null);
                             }
                             pc += 1;
                         }
                         Err(e) => {
-                            match accumulator {
-                                Err(e2) => stack.push(Err(std::cmp::max(e, e2))),
-                                _ => stack.push(Err(e)),
+                            let acc = stack.last_mut().expect("stack underflow");
+                            match acc {
+                                Err(e2) if *e2 >= e => {}
+                                _ => *acc = Err(e),
                             }
                             pc += 1;
                         }
@@ -704,40 +818,35 @@ impl CompiledMirScalarExpr {
                     }
                 }
                 Instruction::SkipIfNotNull(end_offset) => {
-                    let value = stack.pop().expect("stack underflow");
-                    match value {
+                    // Peek: non-null values stay on the stack.
+                    match stack.last().expect("stack underflow") {
                         Ok(Datum::Null) => {
-                            // Null: discard and continue to next operand
+                            stack.pop();
                             pc += 1;
                         }
                         _ => {
-                            // Non-null or error: push back and jump to end
-                            stack.push(value);
                             pc = (pc as isize + end_offset) as usize;
                         }
                     }
                 }
                 Instruction::GreatestStep(end_offset) => {
+                    // Pop operand, peek accumulator.
                     let operand = stack.pop().expect("stack underflow");
-                    let accumulator = stack.pop().expect("stack underflow");
                     match operand {
                         Err(e) => {
-                            // Errors propagate immediately
-                            stack.push(Err(e));
+                            // Errors propagate immediately, replace accumulator
+                            *stack.last_mut().expect("stack underflow") = Err(e);
                             pc = (pc as isize + end_offset) as usize;
                         }
                         Ok(d) if d.is_null() => {
-                            // Null operand: keep accumulator unchanged
-                            stack.push(accumulator);
+                            // Null operand: accumulator unchanged
                             pc += 1;
                         }
                         Ok(d) => {
-                            // Non-null: update max (accumulator is always Ok)
-                            match &accumulator {
-                                Ok(acc) if !acc.is_null() && *acc >= d => {
-                                    stack.push(accumulator)
-                                }
-                                _ => stack.push(Ok(d)),
+                            let acc = stack.last_mut().expect("stack underflow");
+                            match acc {
+                                Ok(acc_d) if !acc_d.is_null() && *acc_d >= d => {}
+                                _ => *acc = Ok(d),
                             }
                             pc += 1;
                         }
@@ -745,22 +854,19 @@ impl CompiledMirScalarExpr {
                 }
                 Instruction::LeastStep(end_offset) => {
                     let operand = stack.pop().expect("stack underflow");
-                    let accumulator = stack.pop().expect("stack underflow");
                     match operand {
                         Err(e) => {
-                            stack.push(Err(e));
+                            *stack.last_mut().expect("stack underflow") = Err(e);
                             pc = (pc as isize + end_offset) as usize;
                         }
                         Ok(d) if d.is_null() => {
-                            stack.push(accumulator);
                             pc += 1;
                         }
                         Ok(d) => {
-                            match &accumulator {
-                                Ok(acc) if !acc.is_null() && *acc <= d => {
-                                    stack.push(accumulator)
-                                }
-                                _ => stack.push(Ok(d)),
+                            let acc = stack.last_mut().expect("stack underflow");
+                            match acc {
+                                Ok(acc_d) if !acc_d.is_null() && *acc_d <= d => {}
+                                _ => *acc = Ok(d),
                             }
                             pc += 1;
                         }
@@ -807,7 +913,6 @@ impl CompiledMirScalarExpr {
                 }
                 Instruction::MapRecord {
                     cast_programs,
-                    return_ty: _,
                 } => {
                     let input = stack.pop().expect("stack underflow");
                     stack.push(eval_map_record(input, cast_programs, temp_storage));
@@ -831,6 +936,12 @@ impl CompiledMirScalarExpr {
             }
         }
 
+        debug_assert!(
+            stack.capacity() == self.max_stack_depth,
+            "stack was re-allocated: capacity {} vs computed max {}",
+            stack.capacity(),
+            self.max_stack_depth,
+        );
         stack.pop().expect("stack should have one result")
     }
 }

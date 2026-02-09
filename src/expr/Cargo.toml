@@ -17,6 +17,10 @@ harness = false
 name = "window_functions"
 harness = false
 
+[[bench]]
+name = "static_eval"
+harness = false
+
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1.0.101"
@@ -71,6 +75,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 smallvec = { version = "1.15.1" }
 
 [dev-dependencies]
+bencher = "0.1.5"
 criterion = { version = "0.8.2" }
 datadriven = "0.9.0"
 insta = "1.45"
