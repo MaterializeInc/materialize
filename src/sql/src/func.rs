@@ -4817,7 +4817,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                     SqlScalarType::Numeric { .. } => BF::from(func::RangeContainsNumeric),
                     SqlScalarType::Timestamp { .. } => BF::from(func::RangeContainsTimestamp),
                     SqlScalarType::TimestampTz { .. } => BF::from(func::RangeContainsTimestampTz),
-                    _ => unreachable!("unexpected range element type: {elem_type:?}"),
+                    _ => bail_unsupported!(format!("range element type: {elem_type:?}")),
                 };
                 Ok(lhs.call_binary(rhs, f))
             }) => Bool, 3889;
@@ -4860,7 +4860,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                     SqlScalarType::Numeric { .. } => BF::from(func::RangeContainsNumericRev),
                     SqlScalarType::Timestamp { .. } => BF::from(func::RangeContainsTimestampRev),
                     SqlScalarType::TimestampTz { .. } => BF::from(func::RangeContainsTimestampTzRev),
-                    _ => unreachable!("unexpected range element type: {elem_type:?}"),
+                    _ => bail_unsupported!(format!("range element type: {elem_type:?}")),
                 };
                 Ok(rhs.call_binary(lhs, f))
             }) => Bool, 3891;
