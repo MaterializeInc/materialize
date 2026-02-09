@@ -1,0 +1,69 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(sqlname = \"timezoneitstz\")]\n/// Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.\n/// The interval is not allowed to hold months, but there are no limits on the amount of seconds.\n/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.\nfn timezone_interval_timestamp_tz_binary(\n    interval: Interval,\n    tstz: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {\n    if interval.months != 0 {\n        return Err(EvalError::InvalidTimezoneInterval);\n    }\n    match tstz.naive_utc().checked_add_signed(interval.duration_as_chrono()) {\n        Some(dt) => Ok(dt.try_into()?),\n        None => Err(EvalError::TimestampOutOfRange),\n    }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct TimezoneIntervalTimestampTzBinary;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TimezoneIntervalTimestampTzBinary {
+    type Input1 = Interval;
+    type Input2 = CheckedTimestamp<DateTime<Utc>>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        timezone_interval_timestamp_tz_binary(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+}
+impl std::fmt::Display for TimezoneIntervalTimestampTzBinary {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("timezoneitstz")
+    }
+}
+/// Converts the UTC timestamptz datum `b`, to the local timestamp of the timezone datum `a`.
+/// The interval is not allowed to hold months, but there are no limits on the amount of seconds.
+/// The interval acts like a `chrono::FixedOffset`, without the `-86,400 < x < 86,400` limitation.
+fn timezone_interval_timestamp_tz_binary(
+    interval: Interval,
+    tstz: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    if interval.months != 0 {
+        return Err(EvalError::InvalidTimezoneInterval);
+    }
+    match tstz.naive_utc().checked_add_signed(interval.duration_as_chrono()) {
+        Some(dt) => Ok(dt.try_into()?),
+        None => Err(EvalError::TimestampOutOfRange),
+    }
+}

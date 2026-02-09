@@ -2711,10 +2711,10 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                     ],
                 ))
             }) => Time, 2037;
-            params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp => TimestampTz, 2070;
-            params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz => Timestamp, 1026;
+            params!(Interval, Timestamp) => BinaryFunc::from(func::TimezoneIntervalTimestampBinary) => TimestampTz, 2070;
+            params!(Interval, TimestampTz) => BinaryFunc::from(func::TimezoneIntervalTimestampTzBinary) => Timestamp, 1026;
             // PG defines this as `interval timetz`
-            params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime => Time, 2038;
+            params!(Interval, Time) => BinaryFunc::from(func::TimezoneIntervalTimeBinary) => Time, 2038;
         },
         "to_char" => Scalar {
             params!(Timestamp, String) => BinaryFunc::from(func::ToCharTimestampFormat) => String, 2049;
