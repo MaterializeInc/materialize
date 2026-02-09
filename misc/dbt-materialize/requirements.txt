@@ -1,7 +1,7 @@
 agate==1.9.1
 annotated-types==0.7.0
 attrs==25.4.0
-babel==2.17.0
+babel==2.18.0
 certifi==2026.1.4
 charset-normalizer==3.4.4
 click==8.3.1
@@ -9,11 +9,11 @@ colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.22.5
 dbt-common==1.37.2
-dbt-core==1.11.2
+dbt-core==1.11.3
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.10.0
-dbt-protos==1.0.422
+dbt-protos==1.0.427
 dbt-semantic-interfaces==0.9.0
 dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git@f6ee73c42f1d34132ed489defb9eb9ef83221256#subdirectory=dbt-tests-adapter
 deepdiff==8.6.1
@@ -36,13 +36,13 @@ packaging==26.0
 parsedatetime==2.6
 pathspec==0.12.1
 pluggy==1.6.0
-protobuf==6.33.4
+protobuf==6.33.5
 psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic_core==2.41.5
 Pygments==2.19.2
 pytest==8.4.2
-pytest-split==0.10.0
+pytest-split==0.11.0
 python-dateutil==2.9.0.post0
 python-slugify==8.0.4
 pytimeparse==1.1.8
