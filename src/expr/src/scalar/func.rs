@@ -2508,7 +2508,7 @@ pub enum BinaryFunc {
     Left(Left),
     Position(Position),
     Right(Right),
-    RepeatString,
+    RepeatString(RepeatString),
     Normalize,
     Trim(Trim),
     TrimLeading(TrimLeading),
@@ -2827,7 +2827,7 @@ impl BinaryFunc {
             BinaryFunc::LogNumeric(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Power(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::PowerNumeric(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::RepeatString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::RepeatString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             // BinaryFunc::Normalize(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::GetBit(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::GetByte(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -2900,7 +2900,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
-            BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
             BinaryFunc::Normalize => normalize_with_form(a, b, temp_storage),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 SqlScalarType::Int32 => contains_range_elem::<i32>(a, b),
@@ -3136,7 +3135,8 @@ impl BinaryFunc {
             Encode(s) => s.output_type(input1_type, input2_type),
             Decode(s) => s.output_type(input1_type, input2_type),
             Power(s) => s.output_type(input1_type, input2_type),
-            RepeatString | Normalize => input1_type.scalar_type.nullable(in_nullable),
+            RepeatString(s) => s.output_type(input1_type, input2_type),
+            Normalize => input1_type.scalar_type.nullable(in_nullable),
 
             AddNumeric(s) => s.output_type(input1_type, input2_type),
             DivNumeric(s) => s.output_type(input1_type, input2_type),
@@ -3346,7 +3346,7 @@ impl BinaryFunc {
             BinaryFunc::RangeOverright(s) => s.propagates_nulls(),
             BinaryFunc::RangeUnion(s) => s.propagates_nulls(),
             BinaryFunc::RegexpReplace { .. } => true,
-            BinaryFunc::RepeatString => true,
+            BinaryFunc::RepeatString(s) => s.propagates_nulls(),
             BinaryFunc::Right(s) => s.propagates_nulls(),
             BinaryFunc::RoundNumeric(s) => s.propagates_nulls(),
             BinaryFunc::StartsWith(s) => s.propagates_nulls(),
@@ -3542,7 +3542,7 @@ impl BinaryFunc {
             RangeOverright(s) => s.introduces_nulls(),
             RangeUnion(s) => s.introduces_nulls(),
             RegexpReplace { .. } => false,
-            RepeatString => false,
+            RepeatString(s) => s.introduces_nulls(),
             Right(s) => s.introduces_nulls(),
             RoundNumeric(s) => s.introduces_nulls(),
             StartsWith(s) => s.introduces_nulls(),
@@ -3782,7 +3782,7 @@ impl BinaryFunc {
             PowerNumeric(s) => s.is_infix_op(),
             PrettySql(s) => s.is_infix_op(),
             RegexpReplace { .. } => false,
-            RepeatString => false,
+            RepeatString(s) => s.is_infix_op(),
             Right(s) => s.is_infix_op(),
             RoundNumeric(s) => s.is_infix_op(),
             StartsWith(s) => s.is_infix_op(),
@@ -3968,7 +3968,7 @@ impl BinaryFunc {
             BinaryFunc::RangeOverright(s) => s.negate(),
             BinaryFunc::RangeUnion(s) => s.negate(),
             BinaryFunc::RegexpReplace { .. } => None,
-            BinaryFunc::RepeatString => None,
+            BinaryFunc::RepeatString(s) => s.negate(),
             BinaryFunc::Right(s) => s.negate(),
             BinaryFunc::RoundNumeric(s) => s.negate(),
             BinaryFunc::StartsWith(s) => s.negate(),
@@ -4182,7 +4182,7 @@ impl BinaryFunc {
             BinaryFunc::Left(s) => s.could_error(),
             BinaryFunc::Position(s) => s.could_error(),
             BinaryFunc::Right(s) => s.could_error(),
-            BinaryFunc::RepeatString => true,
+            BinaryFunc::RepeatString(s) => s.could_error(),
             BinaryFunc::Normalize => true,
             BinaryFunc::EncodedBytesCharLength(s) => s.could_error(),
             BinaryFunc::ListLengthMax(s) => s.could_error(),
@@ -4380,7 +4380,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom(s) => s.is_monotone(),
             BinaryFunc::Position(s) => s.is_monotone(),
             BinaryFunc::Right(s) => s.is_monotone(),
-            BinaryFunc::RepeatString => (false, false),
+            BinaryFunc::RepeatString(s) => s.is_monotone(),
             BinaryFunc::Trim(s) => s.is_monotone(),
             BinaryFunc::TrimLeading(s) => s.is_monotone(),
             BinaryFunc::TrimTrailing(s) => s.is_monotone(),
@@ -4619,7 +4619,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::LogNumeric(s) => s.fmt(f),
             BinaryFunc::Power(s) => s.fmt(f),
             BinaryFunc::PowerNumeric(s) => s.fmt(f),
-            BinaryFunc::RepeatString => f.write_str("repeat"),
+            BinaryFunc::RepeatString(s) => s.fmt(f),
             BinaryFunc::Normalize => f.write_str("normalize"),
             BinaryFunc::GetBit(s) => s.fmt(f),
             BinaryFunc::GetByte(s) => s.fmt(f),
@@ -4799,17 +4799,13 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
     Ok(Regex::new(needle, case_insensitive)?)
 }
 
-fn repeat_string<'a>(
-    string: Datum<'a>,
-    count: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let len = usize::try_from(count.unwrap_int32()).unwrap_or(0);
-    let string = string.unwrap_str();
+#[sqlfunc(sqlname = "repeat")]
+fn repeat_string(string: &str, count: i32) -> Result<String, EvalError> {
+    let len = usize::try_from(count).unwrap_or(0);
     if (len * string.len()) > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
-    Ok(Datum::String(temp_storage.push_string(string.repeat(len))))
+    Ok(string.repeat(len))
 }
 
 /// Constructs a new zero or one dimensional array out of an arbitrary number of

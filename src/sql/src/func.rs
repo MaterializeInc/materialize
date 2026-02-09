@@ -2576,7 +2576,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Float64) => UnaryFunc::Radians(func::Radians) => Float64, 1609;
         },
         "repeat" => Scalar {
-            params!(String, Int32) => BinaryFunc::RepeatString => String, 1622;
+            params!(String, Int32) => BinaryFunc::RepeatString(func::RepeatString) => String, 1622;
         },
         "regexp_match" => Scalar {
             params!(String, String) => VariadicFunc::RegexpMatch => SqlScalarType::Array(Box::new(SqlScalarType::String)), 3396;

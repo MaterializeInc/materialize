@@ -345,7 +345,7 @@ mod derive {
         RangeOverright,
         RangeUnion,
         // RegexpReplace
-        // RepeatString,
+        RepeatString,
         Right,
         RoundNumeric(RoundNumericBinary),
         StartsWith,
