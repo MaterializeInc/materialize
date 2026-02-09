@@ -2684,8 +2684,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(TimestampTz, TimestampTz) => BinaryFunc::from(func::AgeTimestampTz) => Interval, 1199;
         },
         "timezone" => Scalar {
-            params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp => TimestampTz, 2069;
-            params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz => Timestamp, 1159;
+            params!(String, Timestamp) => BinaryFunc::TimezoneTimestampBinary(func::TimezoneTimestampBinary) => TimestampTz, 2069;
+            params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTzBinary(func::TimezoneTimestampTzBinary) => Timestamp, 1159;
             // PG defines this as `text timetz`
             params!(String, Time) => Operation::binary(|ecx, lhs, rhs| {
                 // NOTE: this overload is wrong. It should take and return a

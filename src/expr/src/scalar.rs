@@ -999,7 +999,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
+                        } else if matches!(func, BinaryFunc::TimezoneTimestampBinary(_))
+                            && expr1.is_literal()
+                        {
                             // If the timezone argument is a literal, and we're applying the function on many rows at the same
                             // time we really don't want to parse it again and again, so we parse it once and embed it into the
                             // UnaryFunc enum. The memory footprint of Timezone is small (8 bytes).
@@ -1014,7 +1016,9 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             }
-                        } else if *func == BinaryFunc::TimezoneTimestampTz && expr1.is_literal() {
+                        } else if matches!(func, BinaryFunc::TimezoneTimestampTzBinary(_))
+                            && expr1.is_literal()
+                        {
                             let tz = expr1.as_literal_str().unwrap();
                             *e = match parse_timezone(tz, TimezoneSpec::Posix) {
                                 Ok(tz) => MirScalarExpr::CallUnary {

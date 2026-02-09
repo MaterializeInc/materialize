@@ -2473,8 +2473,8 @@ pub enum BinaryFunc {
     DateTruncTimestamp(DateTruncUnitsTimestamp),
     DateTruncTimestampTz(DateTruncUnitsTimestampTz),
     DateTruncInterval(DateTruncInterval),
-    TimezoneTimestamp,
-    TimezoneTimestampTz,
+    TimezoneTimestampBinary(TimezoneTimestampBinary),
+    TimezoneTimestampTzBinary(TimezoneTimestampTzBinary),
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
@@ -2750,8 +2750,12 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestampTz(s) => {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
             }
-            // BinaryFunc::TimezoneTimestamp(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::TimezoneTimestampTz(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::TimezoneTimestampBinary(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::TimezoneTimestampTzBinary(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             // BinaryFunc::TimezoneIntervalTimestamp(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             // BinaryFunc::TimezoneIntervalTimestampTz(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             // BinaryFunc::TimezoneIntervalTime(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -2911,12 +2915,6 @@ impl BinaryFunc {
             return Ok(Datum::Null);
         }
         match self {
-            BinaryFunc::TimezoneTimestamp => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
-                .and_then(|tz| timezone_timestamp(tz, b.unwrap_timestamp().into()).map(Into::into)),
-            BinaryFunc::TimezoneTimestampTz => parse_timezone(a.unwrap_str(), TimezoneSpec::Posix)
-                .and_then(|tz| {
-                    Ok(timezone_timestamptz(tz, b.unwrap_timestamptz().into())?.try_into()?)
-                }),
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
@@ -3067,7 +3065,8 @@ impl BinaryFunc {
 
             DateTruncInterval(s) => s.output_type(input1_type, input2_type),
 
-            TimezoneTimestampTz | TimezoneIntervalTimestampTz => {
+            TimezoneTimestampTzBinary(s) => s.output_type(input1_type, input2_type),
+            TimezoneIntervalTimestampTz => {
                 SqlScalarType::Timestamp { precision: None }.nullable(in_nullable)
             }
 
@@ -3085,7 +3084,8 @@ impl BinaryFunc {
             DateBinTimestampTz(s) => s.output_type(input1_type, input2_type),
             DateTruncTimestampTz(s) => s.output_type(input1_type, input2_type),
 
-            TimezoneTimestamp | TimezoneIntervalTimestamp => {
+            TimezoneTimestampBinary(s) => s.output_type(input1_type, input2_type),
+            TimezoneIntervalTimestamp => {
                 SqlScalarType::TimestampTz { precision: None }.nullable(in_nullable)
             }
 
@@ -3402,8 +3402,8 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => true,
             BinaryFunc::TimezoneIntervalTimestampTz => true,
             BinaryFunc::TimezoneOffset(s) => s.propagates_nulls(),
-            BinaryFunc::TimezoneTimestamp => true,
-            BinaryFunc::TimezoneTimestampTz => true,
+            BinaryFunc::TimezoneTimestampBinary(s) => s.propagates_nulls(),
+            BinaryFunc::TimezoneTimestampTzBinary(s) => s.propagates_nulls(),
             BinaryFunc::ToCharTimestamp(s) => s.propagates_nulls(),
             BinaryFunc::ToCharTimestampTz(s) => s.propagates_nulls(),
             BinaryFunc::Trim(s) => s.propagates_nulls(),
@@ -3610,8 +3610,8 @@ impl BinaryFunc {
             TimezoneIntervalTimestamp => false,
             TimezoneIntervalTimestampTz => false,
             TimezoneOffset(s) => s.introduces_nulls(),
-            TimezoneTimestamp => false,
-            TimezoneTimestampTz => false,
+            TimezoneTimestampBinary(s) => s.introduces_nulls(),
+            TimezoneTimestampTzBinary(s) => s.introduces_nulls(),
             ToCharTimestamp(s) => s.introduces_nulls(),
             ToCharTimestampTz(s) => s.introduces_nulls(),
             Trim(s) => s.introduces_nulls(),
@@ -3843,8 +3843,8 @@ impl BinaryFunc {
             TimezoneIntervalTimestamp => false,
             TimezoneIntervalTimestampTz => false,
             TimezoneOffset(s) => s.is_infix_op(),
-            TimezoneTimestamp => false,
-            TimezoneTimestampTz => false,
+            TimezoneTimestampBinary(s) => s.is_infix_op(),
+            TimezoneTimestampTzBinary(s) => s.is_infix_op(),
             ToCharTimestamp(s) => s.is_infix_op(),
             ToCharTimestampTz(s) => s.is_infix_op(),
             Trim(s) => s.is_infix_op(),
@@ -4060,8 +4060,8 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => None,
             BinaryFunc::TimezoneIntervalTimestampTz => None,
             BinaryFunc::TimezoneOffset(s) => s.negate(),
-            BinaryFunc::TimezoneTimestamp => None,
-            BinaryFunc::TimezoneTimestampTz => None,
+            BinaryFunc::TimezoneTimestampBinary(s) => s.negate(),
+            BinaryFunc::TimezoneTimestampTzBinary(s) => s.negate(),
             BinaryFunc::ToCharTimestamp(s) => s.negate(),
             BinaryFunc::ToCharTimestampTz(s) => s.negate(),
             BinaryFunc::Trim(s) => s.negate(),
@@ -4239,8 +4239,8 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp(s) => s.could_error(),
             BinaryFunc::DateTruncTimestampTz(s) => s.could_error(),
             BinaryFunc::DateTruncInterval(s) => s.could_error(),
-            BinaryFunc::TimezoneTimestamp => true,
-            BinaryFunc::TimezoneTimestampTz => true,
+            BinaryFunc::TimezoneTimestampBinary(s) => s.could_error(),
+            BinaryFunc::TimezoneTimestampTzBinary(s) => s.could_error(),
             BinaryFunc::TimezoneIntervalTimestamp => true,
             BinaryFunc::TimezoneIntervalTimestampTz => true,
             BinaryFunc::TimezoneIntervalTime => true,
@@ -4433,9 +4433,9 @@ impl BinaryFunc {
             BinaryFunc::DateTruncTimestamp(s) => s.is_monotone(),
             BinaryFunc::DateTruncTimestampTz(s) => s.is_monotone(),
             BinaryFunc::DateTruncInterval(s) => s.is_monotone(),
-            BinaryFunc::TimezoneTimestamp
-            | BinaryFunc::TimezoneTimestampTz
-            | BinaryFunc::TimezoneIntervalTimestamp
+            BinaryFunc::TimezoneTimestampBinary(s) => s.is_monotone(),
+            BinaryFunc::TimezoneTimestampTzBinary(s) => s.is_monotone(),
+            BinaryFunc::TimezoneIntervalTimestamp
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime => (false, false),
             BinaryFunc::TimezoneOffset(s) => s.is_monotone(),
@@ -4649,8 +4649,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DateTruncTimestamp(s) => s.fmt(f),
             BinaryFunc::DateTruncInterval(s) => s.fmt(f),
             BinaryFunc::DateTruncTimestampTz(s) => s.fmt(f),
-            BinaryFunc::TimezoneTimestamp => f.write_str("timezonets"),
-            BinaryFunc::TimezoneTimestampTz => f.write_str("timezonetstz"),
+            BinaryFunc::TimezoneTimestampBinary(s) => s.fmt(f),
+            BinaryFunc::TimezoneTimestampTzBinary(s) => s.fmt(f),
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),

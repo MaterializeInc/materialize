@@ -1,0 +1,61 @@
+---
+source: src/expr/src/scalar/func/impls/timestamp.rs
+expression: "#[sqlfunc(sqlname = \"timezonets\")]\nfn timezone_timestamp_binary(\n    tz: &str,\n    ts: CheckedTimestamp<NaiveDateTime>,\n) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {\n    let tz = parse_timezone(tz, TimezoneSpec::Posix)?;\n    timezone_timestamp(tz, ts.into())\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct TimezoneTimestampBinary;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TimezoneTimestampBinary {
+    type Input1 = &'a str;
+    type Input2 = CheckedTimestamp<NaiveDateTime>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        timezone_timestamp_binary(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+}
+impl std::fmt::Display for TimezoneTimestampBinary {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("timezonets")
+    }
+}
+fn timezone_timestamp_binary(
+    tz: &str,
+    ts: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    let tz = parse_timezone(tz, TimezoneSpec::Posix)?;
+    timezone_timestamp(tz, ts.into())
+}

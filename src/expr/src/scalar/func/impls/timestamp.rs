@@ -15,7 +15,7 @@ use chrono::{
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
-use mz_pgtz::timezone::Timezone;
+use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
@@ -25,6 +25,7 @@ use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
+use crate::func::parse_timezone;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 
@@ -740,4 +741,22 @@ impl fmt::Display for ToCharTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "tochartstz[{}]", self.format_string)
     }
+}
+
+#[sqlfunc(sqlname = "timezonets")]
+fn timezone_timestamp_binary(
+    tz: &str,
+    ts: CheckedTimestamp<NaiveDateTime>,
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    let tz = parse_timezone(tz, TimezoneSpec::Posix)?;
+    timezone_timestamp(tz, ts.into())
+}
+
+#[sqlfunc(sqlname = "timezonetstz")]
+fn timezone_timestamp_tz_binary(
+    tz: &str,
+    tstz: CheckedTimestamp<DateTime<Utc>>,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    let tz = parse_timezone(tz, TimezoneSpec::Posix)?;
+    Ok(timezone_timestamptz(tz, tstz.into())?.try_into()?)
 }
