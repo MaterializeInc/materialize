@@ -262,6 +262,17 @@ macro_rules! derive_binary {
                 }
             }
 
+            pub fn eval_input<'a>(
+                &'a self,
+                temp_storage: &'a RowArena,
+                a: Result<Datum<'a>, EvalError>,
+                b: Result<Datum<'a>, EvalError>,
+            ) -> Result<Datum<'a>, EvalError> {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::eval_input(f, temp_storage, a, b),)*
+                }
+            }
+
             pub fn output_type(
                 &self,
                 input_type_a: SqlColumnType,

@@ -41,20 +41,11 @@
 //!   compiled sub-programs applied per collection element.
 
 use std::borrow::Cow;
-use std::sync::LazyLock;
 
-use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::{Datum, Row, RowArena, SqlScalarType, strconv};
 
 use crate::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, UnmaterializableFunc, VariadicFunc};
-
-/// Static column-reference expressions for calling `BinaryFunc::eval` with
-/// pre-evaluated datum values (avoids lifetime issues with local temporaries).
-static COL_0: LazyLock<MirScalarExpr> =
-    LazyLock::new(|| MirScalarExpr::Column(0, TreatAsEqual(None)));
-static COL_1: LazyLock<MirScalarExpr> =
-    LazyLock::new(|| MirScalarExpr::Column(1, TreatAsEqual(None)));
 
 /// A compiled representation of a [`MirScalarExpr`] for efficient evaluation.
 ///
@@ -82,8 +73,8 @@ enum Instruction {
     Literal(usize),
     /// Pop 1 value, apply unary function, push result.
     CallUnary(UnaryFunc),
-    /// Pop 2 values (first-pushed = left), apply binary function, push result.
-    /// Uses `COL_0`/`COL_1` static references to call `BinaryFunc::eval`.
+    /// Pop 2 values (first-pushed = left), apply binary function via
+    /// `eval_input`, push result.
     CallBinary(BinaryFunc),
     /// Push an error for an unmaterializable function.
     CallUnmaterializable(UnmaterializableFunc),
@@ -719,14 +710,7 @@ impl CompiledMirScalarExpr {
                 Instruction::CallBinary(func) => {
                     let b = stack.pop().expect("stack underflow");
                     let a = stack.pop().expect("stack underflow");
-                    match (a, b) {
-                        (Ok(a), Ok(b)) => {
-                            // Use static column references to call BinaryFunc::eval
-                            // with pre-evaluated datums.
-                            stack.push(func.eval(&[a, b], temp_storage, &COL_0, &COL_1));
-                        }
-                        (Err(e), _) | (_, Err(e)) => stack.push(Err(e)),
-                    }
+                    stack.push(func.eval_input(temp_storage, a, b));
                     pc += 1;
                 }
                 Instruction::CallUnmaterializable(func) => {
@@ -1181,6 +1165,7 @@ fn eval_parse_and_cast<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_ore::treat_as_equal::TreatAsEqual;
 
     /// Test that compiled evaluation produces the same result as direct evaluation
     /// for basic expressions.
