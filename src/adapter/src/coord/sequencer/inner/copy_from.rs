@@ -164,7 +164,10 @@ impl Coordinator {
         // Validate that all non-nullable columns in the target table will be populated.
         // This is a runtime check to complement the planning-time validation.
         let target_desc = dest_table.desc.latest();
-        println!("DEBUG sequence_copy_from: validating non nullable columns in target_desc = {:?}", target_name);
+        println!(
+            "DEBUG sequence_copy_from: validating non nullable columns in target_desc = {:?}",
+            target_name
+        );
         for (col_idx, col_type) in target_desc.iter_types().enumerate() {
             if !col_type.nullable {
                 // Check what value the MFP will produce for this column position.
@@ -174,7 +177,6 @@ impl Coordinator {
                     if projection_idx >= input_arity {
                         let expr_idx = projection_idx - input_arity;
                         if let Some(expr) = source_mfp.expressions.get(expr_idx) {
-
                             // Check if the expression is a NULL literal.
                             // A NULL literal is represented as Literal(Ok(empty_row), _)
                             if matches!(expr, mz_expr::MirScalarExpr::Literal(Ok(row), _) if row.iter().next().map(|d| d.is_null()).unwrap_or(false))
@@ -184,11 +186,14 @@ impl Coordinator {
                                     "column {} is NOT NULL but would be assigned a NULL value",
                                     col_name
                                 );
-                                return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                    msg
-                                ))));
+                                return ctx
+                                    .retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
                             } else {
-                                println!("DEBUG sequence_copy_from: column {} is NOT NULL and has expression: {:?}", target_desc.get_name(col_idx), expr);
+                                println!(
+                                    "DEBUG sequence_copy_from: column {} is NOT NULL and has expression: {:?}",
+                                    target_desc.get_name(col_idx),
+                                    expr
+                                );
                             }
                         }
                     }
@@ -206,7 +211,7 @@ impl Coordinator {
 
         let shape = ContentShape {
             source_desc,
-            source_mfp: source_mfp,
+            source_mfp
         };
 
         let request = OneshotIngestionRequest {

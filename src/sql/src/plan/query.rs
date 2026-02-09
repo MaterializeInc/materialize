@@ -503,7 +503,7 @@ pub fn plan_copy_item(
 > {
     let item = scx.get_item_by_resolved_name(&item_name)?;
     let fullname = scx.catalog.resolve_full_name(item.name());
-    
+
     let table_desc = match item.relation_desc() {
         Some(desc) => desc.into_owned(),
         None => {
@@ -591,10 +591,7 @@ pub fn plan_copy_item(
         let mfp = MapFilterProject::new(source_column_names.len())
             .map(default_exprs)
             .project(project_keys);
-        println!(
-            "DEBUG plan_copy_item: constructed MFP for COPY: {:?}",
-            mfp
-        );
+        println!("DEBUG plan_copy_item: constructed MFP for COPY: {:?}", mfp);
         Some(mfp)
     } else {
         None
