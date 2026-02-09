@@ -2501,7 +2501,7 @@ pub enum BinaryFunc {
     Position(Position),
     Right(Right),
     RepeatString(RepeatString),
-    Normalize,
+    Normalize(Normalize),
     Trim(Trim),
     TrimLeading(TrimLeading),
     TrimTrailing(TrimTrailing),
@@ -2834,7 +2834,7 @@ impl BinaryFunc {
             BinaryFunc::Power(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::PowerNumeric(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::RepeatString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::Normalize(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::Normalize(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::GetBit(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::GetByte(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ConstantTimeEqBytes(s) => {
@@ -2920,7 +2920,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
-            BinaryFunc::Normalize => normalize_with_form(a, b, temp_storage),
             BinaryFunc::RegexpReplace { regex, limit } => {
                 regexp_replace_static(a, b, regex, *limit, temp_storage)
             }
@@ -3142,7 +3141,7 @@ impl BinaryFunc {
             Decode(s) => s.output_type(input1_type, input2_type),
             Power(s) => s.output_type(input1_type, input2_type),
             RepeatString(s) => s.output_type(input1_type, input2_type),
-            Normalize => input1_type.scalar_type.nullable(in_nullable),
+            Normalize(s) => s.output_type(input1_type, input2_type),
 
             AddNumeric(s) => s.output_type(input1_type, input2_type),
             DivNumeric(s) => s.output_type(input1_type, input2_type),
@@ -3344,7 +3343,7 @@ impl BinaryFunc {
             BinaryFunc::MulUint64(s) => s.propagates_nulls(),
             BinaryFunc::MzAclItemContainsPrivilege(s) => s.propagates_nulls(),
             BinaryFunc::MzRenderTypmod(s) => s.propagates_nulls(),
-            BinaryFunc::Normalize => true,
+            BinaryFunc::Normalize(s) => s.propagates_nulls(),
             BinaryFunc::NotEq(s) => s.propagates_nulls(),
             BinaryFunc::ParseIdent(s) => s.propagates_nulls(),
             BinaryFunc::Position(s) => s.propagates_nulls(),
@@ -3552,7 +3551,7 @@ impl BinaryFunc {
             MulUint64(s) => s.introduces_nulls(),
             MzAclItemContainsPrivilege(s) => s.introduces_nulls(),
             MzRenderTypmod(s) => s.introduces_nulls(),
-            Normalize => false,
+            Normalize(s) => s.introduces_nulls(),
             NotEq(s) => s.introduces_nulls(),
             ParseIdent(s) => s.introduces_nulls(),
             Position(s) => s.introduces_nulls(),
@@ -3828,7 +3827,7 @@ impl BinaryFunc {
             LogNumeric(s) => s.is_infix_op(),
             MzAclItemContainsPrivilege(s) => s.is_infix_op(),
             MzRenderTypmod(s) => s.is_infix_op(),
-            Normalize => false,
+            Normalize(s) => s.is_infix_op(),
             ParseIdent(s) => s.is_infix_op(),
             Position(s) => s.is_infix_op(),
             Power(s) => s.is_infix_op(),
@@ -4002,7 +4001,7 @@ impl BinaryFunc {
             BinaryFunc::MulUint64(s) => s.negate(),
             BinaryFunc::MzAclItemContainsPrivilege(s) => s.negate(),
             BinaryFunc::MzRenderTypmod(s) => s.negate(),
-            BinaryFunc::Normalize => None,
+            BinaryFunc::Normalize(s) => s.negate(),
             BinaryFunc::NotEq(s) => s.negate(),
             BinaryFunc::ParseIdent(s) => s.negate(),
             BinaryFunc::Position(s) => s.negate(),
@@ -4260,7 +4259,7 @@ impl BinaryFunc {
             BinaryFunc::Position(s) => s.could_error(),
             BinaryFunc::Right(s) => s.could_error(),
             BinaryFunc::RepeatString(s) => s.could_error(),
-            BinaryFunc::Normalize => true,
+            BinaryFunc::Normalize(s) => s.could_error(),
             BinaryFunc::EncodedBytesCharLength(s) => s.could_error(),
             BinaryFunc::ListLengthMax(s) => s.could_error(),
             BinaryFunc::ArrayLength(s) => s.could_error(),
@@ -4520,7 +4519,7 @@ impl BinaryFunc {
             BinaryFunc::PrettySql(s) => s.is_monotone(),
             BinaryFunc::RegexpReplace { .. } => (false, false),
             BinaryFunc::StartsWith(s) => s.is_monotone(),
-            BinaryFunc::Normalize => (false, false),
+            BinaryFunc::Normalize(s) => s.is_monotone(),
         }
     }
 }
@@ -4705,7 +4704,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power(s) => s.fmt(f),
             BinaryFunc::PowerNumeric(s) => s.fmt(f),
             BinaryFunc::RepeatString(s) => s.fmt(f),
-            BinaryFunc::Normalize => f.write_str("normalize"),
+            BinaryFunc::Normalize(s) => s.fmt(f),
             BinaryFunc::GetBit(s) => s.fmt(f),
             BinaryFunc::GetByte(s) => s.fmt(f),
             BinaryFunc::ConstantTimeEqBytes(s) => s.fmt(f),

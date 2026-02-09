@@ -326,7 +326,7 @@ mod derive {
         MulUint64,
         MzAclItemContainsPrivilege,
         MzRenderTypmod,
-        // Normalize,
+        Normalize,
         NotEq,
         ParseIdent,
         Position,

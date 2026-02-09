@@ -2302,7 +2302,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "normalize" => Scalar {
             // Parser always provides two arguments (defaults second to "NFC" when omitted)
-            params!(String, String) => BinaryFunc::Normalize => String, oid::FUNC_NORMALIZE_OID;
+            params!(String, String) => BinaryFunc::Normalize(func::Normalize) => String, oid::FUNC_NORMALIZE_OID;
         },
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, 1299;

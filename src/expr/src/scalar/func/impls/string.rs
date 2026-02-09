@@ -864,29 +864,19 @@ fn lower<'a>(a: &'a str) -> String {
     a.to_lowercase()
 }
 
-pub fn normalize_with_form<'a>(
-    text: Datum<'a>,
-    form_str: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc]
+fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     use unicode_normalization::UnicodeNormalization;
 
-    let text = text.unwrap_str();
-    let form_str = form_str.unwrap_str();
-
-    let normalized = match form_str.to_uppercase().as_str() {
-        "NFC" => text.nfc().collect(),
-        "NFD" => text.nfd().collect(),
-        "NFKC" => text.nfkc().collect(),
-        "NFKD" => text.nfkd().collect(),
-        _ => {
-            return Err(EvalError::InvalidParameterValue(
-                format!("invalid normalization form: {}", form_str).into(),
-            ));
-        }
-    };
-
-    Ok(Datum::String(temp_storage.push_string(normalized)))
+    match form_str.to_uppercase().as_str() {
+        "NFC" => Ok(text.nfc().collect()),
+        "NFD" => Ok(text.nfd().collect()),
+        "NFKC" => Ok(text.nfkc().collect()),
+        "NFKD" => Ok(text.nfkd().collect()),
+        _ => Err(EvalError::InvalidParameterValue(
+            format!("invalid normalization form: {}", form_str).into(),
+        )),
+    }
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]

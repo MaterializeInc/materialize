@@ -1,0 +1,70 @@
+---
+source: src/expr/src/scalar/func/impls/string.rs
+expression: "#[sqlfunc()]\nfn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {\n    use unicode_normalization::UnicodeNormalization;\n    match form_str.to_uppercase().as_str() {\n        \"NFC\" => Ok(text.nfc().collect()),\n        \"NFD\" => Ok(text.nfd().collect()),\n        \"NFKC\" => Ok(text.nfkc().collect()),\n        \"NFKD\" => Ok(text.nfkd().collect()),\n        _ => {\n            Err(\n                EvalError::InvalidParameterValue(\n                    format!(\"invalid normalization form: {}\", form_str).into(),\n                ),\n            )\n        }\n    }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct Normalize;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Normalize {
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = Result<String, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        normalize(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+}
+impl std::fmt::Display for Normalize {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(stringify!(normalize))
+    }
+}
+fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
+    use unicode_normalization::UnicodeNormalization;
+    match form_str.to_uppercase().as_str() {
+        "NFC" => Ok(text.nfc().collect()),
+        "NFD" => Ok(text.nfd().collect()),
+        "NFKC" => Ok(text.nfkc().collect()),
+        "NFKD" => Ok(text.nfkd().collect()),
+        _ => {
+            Err(
+                EvalError::InvalidParameterValue(
+                    format!("invalid normalization form: {}", form_str).into(),
+                ),
+            )
+        }
+    }
+}
