@@ -36,7 +36,7 @@ impl Coordinator {
         target_cluster: TargetCluster,
     ) {
         let plan::CopyFromPlan {
-            target_name: _,
+            target_name,
             target_id,
             source,
             columns: _,
@@ -164,6 +164,7 @@ impl Coordinator {
         // Validate that all non-nullable columns in the target table will be populated.
         // This is a runtime check to complement the planning-time validation.
         let target_desc = dest_table.desc.latest();
+        println!("DEBUG sequence_copy_from: validating non nullable columns in target_desc = {:?}", target_name);
         for (col_idx, col_type) in target_desc.iter_types().enumerate() {
             if !col_type.nullable {
                 // Check what value the MFP will produce for this column position.
@@ -176,7 +177,7 @@ impl Coordinator {
 
                             // Check if the expression is a NULL literal.
                             // A NULL literal is represented as Literal(Ok(empty_row), _)
-                            if matches!(expr, mz_expr::MirScalarExpr::Literal(Ok(Row{[Datum::Null]}), _))
+                            if matches!(expr, mz_expr::MirScalarExpr::Literal(Ok(row), _) if row.iter().next().map(|d| d.is_null()).unwrap_or(false))
                             {
                                 let col_name = target_desc.get_name(col_idx);
                                 let msg = format!(
@@ -186,6 +187,8 @@ impl Coordinator {
                                 return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
                                     msg
                                 ))));
+                            } else {
+                                println!("DEBUG sequence_copy_from: column {} is NOT NULL and has expression: {:?}", target_desc.get_name(col_idx), expr);
                             }
                         }
                     }
