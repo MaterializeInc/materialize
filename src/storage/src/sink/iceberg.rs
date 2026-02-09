@@ -981,7 +981,7 @@ fn write_data_files<G>(
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     materialize_arrow_schema: Arc<ArrowSchema>,
-    metrics: IcebergSinkMetrics,
+    metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (
     Stream<G, BoundedDataFile>,
@@ -1358,10 +1358,12 @@ where
                         );
                         let mut max_upper = Antichain::from_elem(Timestamp::minimum());
                         for (desc, mut delta_writer) in ready_batches {
-                            let data_files = delta_writer
-                                .close()
-                                .await
-                                .context("Failed to close DeltaWriter")?;
+                            let close_started_at = Instant::now();
+                            let data_files = delta_writer.close().await;
+                            metrics
+                                .writer_close_duration_seconds
+                                .observe(close_started_at.elapsed().as_secs_f64());
+                            let data_files = data_files.context("Failed to close DeltaWriter")?;
                             debug!(
                                 "{}: closed batch [{}, {}), wrote {} files",
                                 name_for_logging,
@@ -1426,7 +1428,7 @@ fn commit_to_iceberg<G>(
     write_handle: impl Future<
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
-    metrics: IcebergSinkMetrics,
+    metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where
@@ -1597,7 +1599,7 @@ where
                         "Failed to apply data file addition to iceberg table transaction",
                     )?;
 
-                    table = Retry::default().max_tries(5).retry_async(|_| async {
+                    let commit_result = Retry::default().max_tries(5).retry_async(|_| async {
                         let new_table = tx.clone().commit(catalog.as_ref()).await;
                         match new_table {
                             Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
@@ -1640,9 +1642,12 @@ where
                             },
                             Ok(table) => RetryResult::Ok(table)
                         }
-                    }).await.context("failed to commit to iceberg")?;
-
+                    }).await.context("failed to commit to iceberg");
                     let duration = instant.elapsed();
+                    metrics
+                        .commit_duration_seconds
+                        .observe(duration.as_secs_f64());
+                    table = commit_result?;
 
                     debug!(
                         ?sink_id,
@@ -1757,9 +1762,11 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
                 }
             };
 
-        let metrics = storage_state
-            .metrics
-            .get_iceberg_sink_metrics(sink_id, scope.index());
+        let metrics = Arc::new(
+            storage_state
+                .metrics
+                .get_iceberg_sink_metrics(sink_id, scope.index()),
+        );
 
         let statistics = storage_state
             .aggregated_statistics
@@ -1789,7 +1796,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             connection_for_writer,
             storage_state.storage_configuration.clone(),
             Arc::new(arrow_schema_with_ids.clone()),
-            metrics.clone(),
+            Arc::clone(&metrics),
             statistics.clone(),
         );
 
@@ -1805,7 +1812,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             connection_for_committer,
             storage_state.storage_configuration.clone(),
             write_handle,
-            metrics.clone(),
+            Arc::clone(&metrics),
             statistics,
         );
 
