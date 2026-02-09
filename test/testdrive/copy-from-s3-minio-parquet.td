@@ -54,23 +54,6 @@ ALTER SYSTEM SET enable_copy_from_remote = true;
   uuid_col uuid
   );
 
-> COPY INTO types FROM 's3://copyfroms3/parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn);
-
-> SELECT int8_col FROM types ORDER BY int8_col desc;
-3
-2
--1
-
-> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
-<null>
-<null>
-5
-
-> SELECT (record_col).name FROM types ORDER BY 1;
-Burger
-SlimJim
-Taco
-
 $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=types_url
 
 > COPY INTO types FROM '${types_url}' (FORMAT PARQUET);
@@ -90,18 +73,130 @@ Burger
 SlimJim
 Taco
 
-> TRUNCATE TABLE types;
+> DELETE FROM types;
 > SELECT count(*) FROM types;
 0
 
 
 # gzip Compression.
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.gzip var-name=gzip_types_url
 
-# bzip2 Compression.
+> COPY INTO types FROM '${gzip_types_url}' (FORMAT PARQUET);
 
-# xz Compression.
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+> DELETE FROM types;
+> SELECT count(*) FROM types;
+0
+
+# snappy Compression.
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.snappy var-name=snappy_types_url
+
+> COPY INTO types FROM '${snappy_types_url}' (FORMAT PARQUET);
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+> DELETE FROM types;
+> SELECT count(*) FROM types;
+0
+
+# brotli Compression.
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.brotli var-name=brotli_types_url
+
+> COPY INTO types FROM '${brotli_types_url}' (FORMAT PARQUET);
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+> DELETE FROM types;
+> SELECT count(*) FROM types;
+0
 
 # zstd Compression.
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.zstd var-name=zstd_types_url
+
+> COPY INTO types FROM '${zstd_types_url}' (FORMAT PARQUET);
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+> DELETE FROM types;
+> SELECT count(*) FROM types;
+0
+
+# lz4 Compression.
+$ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.lz4 var-name=lz4_types_url
+
+> COPY INTO types FROM '${lz4_types_url}' (FORMAT PARQUET);
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+2
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+SlimJim
+Taco
+
+> DELETE FROM types;
+> SELECT count(*) FROM types;
+0
 
 # Map and Project.
 
