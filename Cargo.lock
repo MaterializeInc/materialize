@@ -6904,6 +6904,7 @@ dependencies = [
 name = "mz-materialized"
 version = "26.12.0-dev.0"
 dependencies = [
+ "custom-labels",
  "mz-clusterd",
  "mz-environmentd",
  "workspace-hack",
