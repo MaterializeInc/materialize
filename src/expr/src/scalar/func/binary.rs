@@ -335,9 +335,20 @@ mod derive {
         RangeAdjacent,
         RangeAfter,
         RangeBefore,
-        // RangeContainsElem
+        RangeContainsDate,
+        RangeContainsDateRev,
+        RangeContainsI32,
+        RangeContainsI32Rev,
+        RangeContainsI64,
+        RangeContainsI64Rev,
+        RangeContainsNumeric,
+        RangeContainsNumericRev,
         RangeContainsRange,
         RangeContainsRangeRev,
+        RangeContainsTimestamp,
+        RangeContainsTimestampRev,
+        RangeContainsTimestampTz,
+        RangeContainsTimestampTzRev,
         RangeDifference,
         RangeIntersection,
         RangeOverlaps,
@@ -386,11 +397,10 @@ mod derive {
 #[cfg(test)]
 mod test {
     use mz_expr_derive::sqlfunc;
-    use mz_repr::SqlColumnType;
     use mz_repr::SqlScalarType;
 
+    use crate::EvalError;
     use crate::scalar::func::binary::LazyBinaryFunc;
-    use crate::{BinaryFunc, EvalError, func};
 
     #[sqlfunc(sqlname = "INFALLIBLE", is_infix_op = true)]
     #[allow(dead_code)]
@@ -631,186 +641,5 @@ mod test {
             ),
             SqlScalarType::Float32.nullable(true)
         );
-    }
-
-    #[mz_ore::test]
-    fn test_equivalence_nullable() {
-        test_equivalence_inner(true);
-    }
-
-    #[mz_ore::test]
-    fn test_equivalence_non_nullable() {
-        test_equivalence_inner(false);
-    }
-
-    /// Test the equivalence of the binary functions in the `func` module with their
-    /// derived sqlfunc implementation. The `input_nullable` parameter determines
-    /// whether the input colum is marked nullable or not.
-    fn test_equivalence_inner(input_nullable: bool) {
-        #[track_caller]
-        fn check<T: LazyBinaryFunc + std::fmt::Display + std::fmt::Debug>(
-            new: T,
-            old: BinaryFunc,
-            column_a_ty: &SqlColumnType,
-            column_b_ty: &SqlColumnType,
-        ) {
-            assert_eq!(
-                new.propagates_nulls(),
-                old.propagates_nulls(),
-                "{new:?} propagates_nulls mismatch"
-            );
-            assert_eq!(
-                new.introduces_nulls(),
-                old.introduces_nulls(),
-                "{new:?} introduces_nulls mismatch"
-            );
-            assert_eq!(
-                new.could_error(),
-                old.could_error(),
-                "{new:?} could_error mismatch"
-            );
-            assert_eq!(
-                new.is_monotone(),
-                old.is_monotone(),
-                "{new:?} is_monotone mismatch"
-            );
-            assert_eq!(
-                new.is_infix_op(),
-                old.is_infix_op(),
-                "{new:?} is_infix_op mismatch"
-            );
-            assert_eq!(
-                new.output_type(column_a_ty.clone(), column_b_ty.clone()),
-                old.output_type(column_a_ty.clone(), column_b_ty.clone()),
-                "{new:?} output_type mismatch"
-            );
-            assert_eq!(new.negate(), old.negate(), "{new:?} negate mismatch");
-            assert_eq!(
-                format!("{}", new),
-                format!("{}", old),
-                "{new:?} format mismatch"
-            );
-        }
-
-        let i32_ty = SqlColumnType {
-            nullable: input_nullable,
-            scalar_type: SqlScalarType::Int32,
-        };
-
-        use BinaryFunc as BF;
-
-        // TODO: We're passing unexpected column types to the functions here,
-        //   which works because most don't look at the type. We should fix this
-        //   and pass expected column types.
-        check(
-            func::RangeContainsI32,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int32,
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsI64,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int64,
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsDate,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Date,
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsNumeric,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Numeric { max_scale: None },
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestamp,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Timestamp { precision: None },
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestampTz,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::TimestampTz { precision: None },
-                rev: false,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsI32Rev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int32,
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsI64Rev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Int64,
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsDateRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Date,
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsNumericRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Numeric { max_scale: None },
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestampRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::Timestamp { precision: None },
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsTimestampTzRev,
-            BF::RangeContainsElem {
-                elem_type: SqlScalarType::TimestampTz { precision: None },
-                rev: true,
-            },
-            &i32_ty,
-            &i32_ty,
-        );
-
-        // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
     }
 }

@@ -4810,7 +4810,16 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(MapAnyCompatible, MapAnyCompatible) => BF::from(func::MapContainsMap) => Bool, oid::OP_CONTAINS_MAP_MAP_OID;
             params!(RangeAny, AnyElement) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&lhs).unwrap_range_element_type().clone();
-                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
+                let f = match elem_type {
+                    SqlScalarType::Int32 => BF::from(func::RangeContainsI32),
+                    SqlScalarType::Int64 => BF::from(func::RangeContainsI64),
+                    SqlScalarType::Date => BF::from(func::RangeContainsDate),
+                    SqlScalarType::Numeric { .. } => BF::from(func::RangeContainsNumeric),
+                    SqlScalarType::Timestamp { .. } => BF::from(func::RangeContainsTimestamp),
+                    SqlScalarType::TimestampTz { .. } => BF::from(func::RangeContainsTimestampTz),
+                    _ => unreachable!("unexpected range element type: {elem_type:?}"),
+                };
+                Ok(lhs.call_binary(rhs, f))
             }) => Bool, 3889;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BF::from(func::RangeContainsRange)))
@@ -4844,7 +4853,16 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             }) => Bool, oid::OP_CONTAINED_MAP_MAP_OID;
             params!(AnyElement, RangeAny) => Operation::binary(|ecx, lhs, rhs| {
                 let elem_type = ecx.scalar_type(&rhs).unwrap_range_element_type().clone();
-                Ok(rhs.call_binary(lhs, BF::RangeContainsElem { elem_type, rev: true }))
+                let f = match elem_type {
+                    SqlScalarType::Int32 => BF::from(func::RangeContainsI32Rev),
+                    SqlScalarType::Int64 => BF::from(func::RangeContainsI64Rev),
+                    SqlScalarType::Date => BF::from(func::RangeContainsDateRev),
+                    SqlScalarType::Numeric { .. } => BF::from(func::RangeContainsNumericRev),
+                    SqlScalarType::Timestamp { .. } => BF::from(func::RangeContainsTimestampRev),
+                    SqlScalarType::TimestampTz { .. } => BF::from(func::RangeContainsTimestampTzRev),
+                    _ => unreachable!("unexpected range element type: {elem_type:?}"),
+                };
+                Ok(rhs.call_binary(lhs, f))
             }) => Bool, 3891;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(rhs.call_binary(lhs, BF::from(func::RangeContainsRangeRev)))
