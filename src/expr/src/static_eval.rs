@@ -7,16 +7,38 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Stack-machine-based compiled evaluation of [`MirScalarExpr`].
+//! Compiles a [`MirScalarExpr`] tree into a flat [`CompiledMirScalarExpr`]
+//! instruction sequence, evaluated by a stack machine with a program counter.
 //!
-//! [`CompiledMirScalarExpr`] is a flat instruction sequence compiled from a
-//! [`MirScalarExpr`] tree. It avoids recursive descent through the AST during
-//! evaluation, replacing it with a linear instruction sequence with branching.
+//! # Execution model
 //!
-//! Compound-cast functions (e.g., `CastList1ToList2`, `CastArrayToArray`)
-//! that iterate over collection elements and apply a sub-expression per element
-//! are represented as dedicated instructions, with the inner cast expressions
-//! compiled into sub-programs.
+//! A value stack holds `Result<Datum, EvalError>` entries. Each instruction
+//! pops its inputs, computes, and pushes its output. Branch instructions
+//! (`Skip`, `SkipIfNotTrue`, and the variadic step instructions) modify the
+//! program counter instead of always advancing by one.
+//!
+//! # Compilation
+//!
+//! The expression tree is lowered iteratively using a work stack of
+//! `PendingItem`s (either sub-expressions to recurse into, or
+//! `LabeledInstruction`s to emit). Items are pushed in **reverse execution
+//! order** because the work stack is LIFO. A label-resolution pass then
+//! converts symbolic labels to relative PC offsets.
+//!
+//! # Instruction categories
+//!
+//! - **Leaf**: `Column`, `Literal`, `CallUnmaterializable`.
+//! - **Unary/Binary**: `CallUnary`, `CallBinary` — pop operands, push result.
+//! - **Branching (If)**: `SkipIfNotTrue` (two offsets: false branch, error
+//!   escape) + `Skip` (unconditional jump past else).
+//! - **Inlined variadics**: And/Or use an accumulator on the stack with
+//!   `AndStep`/`OrStep` (short-circuit + three-way null/error merge).
+//!   `Coalesce` and `ErrorIfNull` use `SkipIfNotNull` + `RaiseIfNullError`.
+//!   `Greatest`/`Least` use `GreatestStep`/`LeastStep` with a null
+//!   accumulator. All other (eager) variadics use `CallEagerVariadic`.
+//! - **Compound casts**: `MapListElements`, `MapArrayElements`, `MapRecord`,
+//!   `MapListToJsonb`, `MapArrayToJsonb`, `ParseAndCast` — these contain
+//!   compiled sub-programs applied per collection element.
 
 use std::borrow::Cow;
 use std::sync::LazyLock;
@@ -60,10 +82,6 @@ enum Instruction {
     /// Pop 2 values (first-pushed = left), apply binary function, push result.
     /// Uses `COL_0`/`COL_1` static references to call `BinaryFunc::eval`.
     CallBinary(BinaryFunc),
-    /// Evaluate a variadic function. Non-eager variadics (And, Or, Coalesce,
-    /// etc.) receive their operands as compiled sub-programs since they may
-    /// short-circuit. Eager variadics have their operands as sub-programs too.
-    CallVariadic(Box<(VariadicFunc, Box<[CompiledMirScalarExpr]>)>),
     /// Push an error for an unmaterializable function.
     CallUnmaterializable(UnmaterializableFunc),
     /// Unconditional relative jump. `pc += offset`.
@@ -73,6 +91,33 @@ enum Instruction {
     SkipIfNotTrue {
         false_offset: isize,
         error_offset: isize,
+    },
+
+    // -- Inlined variadic instructions --
+
+    /// Pop operand and accumulator for `And`. If operand is False, push False
+    /// and jump to end. Otherwise merge into accumulator (error > null > true).
+    AndStep(isize),
+    /// Pop operand and accumulator for `Or`. If operand is True, push True
+    /// and jump to end. Otherwise merge into accumulator (error > null > false).
+    OrStep(isize),
+    /// Pop value for `Coalesce`/`ErrorIfNull`. If non-null (including errors),
+    /// push back and jump to end. If null, discard and continue.
+    SkipIfNotNull(isize),
+    /// Pop operand and accumulator for `Greatest`. If operand is an error,
+    /// push error and jump to end. If null, keep accumulator. Otherwise push
+    /// the greater of operand and accumulator.
+    GreatestStep(isize),
+    /// Pop operand and accumulator for `Least`. Same as GreatestStep but keeps
+    /// the lesser value.
+    LeastStep(isize),
+    /// Pop message from stack (for `ErrorIfNull`). Push `Err(IfNullError(msg))`.
+    RaiseIfNullError,
+    /// Pop `arity` values, apply eager variadic function, push result.
+    /// Handles null propagation if `func.propagates_nulls()`.
+    CallEagerVariadic {
+        func: VariadicFunc,
+        arity: usize,
     },
 
     // -- Compound-cast instructions --
@@ -132,8 +177,14 @@ enum LabeledInstruction {
     Literal(usize),
     CallUnary(UnaryFunc),
     CallBinary(BinaryFunc),
-    CallVariadic(Box<(VariadicFunc, Box<[CompiledMirScalarExpr]>)>),
     CallUnmaterializable(UnmaterializableFunc),
+    AndStep(usize),
+    OrStep(usize),
+    SkipIfNotNull(usize),
+    GreatestStep(usize),
+    LeastStep(usize),
+    RaiseIfNullError,
+    CallEagerVariadic { func: VariadicFunc, arity: usize },
     MapListElements(CompiledMirScalarExpr),
     MapArrayElements(CompiledMirScalarExpr),
     MapRecord {
@@ -209,13 +260,124 @@ impl From<&MirScalarExpr> for CompiledMirScalarExpr {
                         todo.push(PendingItem::Expr(expr1));
                     }
                     MirScalarExpr::CallVariadic { func, exprs } => {
-                        // Compile each operand into a sub-program.
-                        let sub_programs: Box<[CompiledMirScalarExpr]> =
-                            exprs.iter().map(CompiledMirScalarExpr::from).collect();
-                        instructions.push(LabeledInstruction::CallVariadic(Box::new((
-                            func.clone(),
-                            sub_programs,
-                        ))));
+                        match func {
+                            VariadicFunc::And => {
+                                // Literal(True), [eval expr, AndStep(end)]*, Label(end)
+                                let end_label = new_label();
+                                let lit_idx = literals.len();
+                                literals.push(Ok(Row::pack_slice(&[Datum::True])));
+                                todo.push(PendingItem::Emit(LabeledInstruction::Label(end_label)));
+                                for expr in exprs.iter().rev() {
+                                    todo.push(PendingItem::Emit(
+                                        LabeledInstruction::AndStep(end_label),
+                                    ));
+                                    todo.push(PendingItem::Expr(expr));
+                                }
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::Literal(lit_idx),
+                                ));
+                            }
+                            VariadicFunc::Or => {
+                                // Literal(False), [eval expr, OrStep(end)]*, Label(end)
+                                let end_label = new_label();
+                                let lit_idx = literals.len();
+                                literals.push(Ok(Row::pack_slice(&[Datum::False])));
+                                todo.push(PendingItem::Emit(LabeledInstruction::Label(end_label)));
+                                for expr in exprs.iter().rev() {
+                                    todo.push(PendingItem::Emit(
+                                        LabeledInstruction::OrStep(end_label),
+                                    ));
+                                    todo.push(PendingItem::Expr(expr));
+                                }
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::Literal(lit_idx),
+                                ));
+                            }
+                            VariadicFunc::Coalesce => {
+                                // [eval expr, SkipIfNotNull(end)]*, eval last, Label(end)
+                                // If no exprs, just push Null.
+                                if exprs.is_empty() {
+                                    let lit_idx = literals.len();
+                                    literals.push(Ok(Row::pack_slice(&[Datum::Null])));
+                                    instructions.push(LabeledInstruction::Literal(lit_idx));
+                                } else {
+                                    let end_label = new_label();
+                                    todo.push(PendingItem::Emit(
+                                        LabeledInstruction::Label(end_label),
+                                    ));
+                                    // Last expr: just evaluate (no SkipIfNotNull)
+                                    todo.push(PendingItem::Expr(exprs.last().unwrap()));
+                                    // All but last: eval + SkipIfNotNull
+                                    for expr in exprs[..exprs.len() - 1].iter().rev() {
+                                        todo.push(PendingItem::Emit(
+                                            LabeledInstruction::SkipIfNotNull(end_label),
+                                        ));
+                                        todo.push(PendingItem::Expr(expr));
+                                    }
+                                }
+                            }
+                            VariadicFunc::ErrorIfNull => {
+                                // eval value, SkipIfNotNull(end), eval msg, RaiseIfNullError, Label(end)
+                                assert_eq!(exprs.len(), 2);
+                                let end_label = new_label();
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::Label(end_label),
+                                ));
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::RaiseIfNullError,
+                                ));
+                                todo.push(PendingItem::Expr(&exprs[1]));
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::SkipIfNotNull(end_label),
+                                ));
+                                todo.push(PendingItem::Expr(&exprs[0]));
+                            }
+                            VariadicFunc::Greatest => {
+                                // Literal(Null), [eval expr, GreatestStep(end)]*, Label(end)
+                                let end_label = new_label();
+                                let lit_idx = literals.len();
+                                literals.push(Ok(Row::pack_slice(&[Datum::Null])));
+                                todo.push(PendingItem::Emit(LabeledInstruction::Label(end_label)));
+                                for expr in exprs.iter().rev() {
+                                    todo.push(PendingItem::Emit(
+                                        LabeledInstruction::GreatestStep(end_label),
+                                    ));
+                                    todo.push(PendingItem::Expr(expr));
+                                }
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::Literal(lit_idx),
+                                ));
+                            }
+                            VariadicFunc::Least => {
+                                // Literal(Null), [eval expr, LeastStep(end)]*, Label(end)
+                                let end_label = new_label();
+                                let lit_idx = literals.len();
+                                literals.push(Ok(Row::pack_slice(&[Datum::Null])));
+                                todo.push(PendingItem::Emit(LabeledInstruction::Label(end_label)));
+                                for expr in exprs.iter().rev() {
+                                    todo.push(PendingItem::Emit(
+                                        LabeledInstruction::LeastStep(end_label),
+                                    ));
+                                    todo.push(PendingItem::Expr(expr));
+                                }
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::Literal(lit_idx),
+                                ));
+                            }
+                            _ => {
+                                // Eager variadics: eval all operands inline, then call func
+                                let arity = exprs.len();
+                                todo.push(PendingItem::Emit(
+                                    LabeledInstruction::CallEagerVariadic {
+                                        func: func.clone(),
+                                        arity,
+                                    },
+                                ));
+                                for expr in exprs.iter().rev() {
+                                    todo.push(PendingItem::Expr(expr));
+                                }
+                            }
+                        }
                     }
                     MirScalarExpr::If { cond, then, els } => {
                         let label_else = new_label();
@@ -267,9 +429,6 @@ impl From<&MirScalarExpr> for CompiledMirScalarExpr {
                 LabeledInstruction::CallBinary(f) => {
                     final_instructions.push(Instruction::CallBinary(f))
                 }
-                LabeledInstruction::CallVariadic(f) => {
-                    final_instructions.push(Instruction::CallVariadic(f))
-                }
                 LabeledInstruction::CallUnmaterializable(f) => {
                     final_instructions.push(Instruction::CallUnmaterializable(f))
                 }
@@ -294,6 +453,32 @@ impl From<&MirScalarExpr> for CompiledMirScalarExpr {
                 }
                 LabeledInstruction::ParseAndCast(k) => {
                     final_instructions.push(Instruction::ParseAndCast(k))
+                }
+                LabeledInstruction::AndStep(label) => {
+                    let offset = label_positions[label] as isize - current_pos as isize;
+                    final_instructions.push(Instruction::AndStep(offset));
+                }
+                LabeledInstruction::OrStep(label) => {
+                    let offset = label_positions[label] as isize - current_pos as isize;
+                    final_instructions.push(Instruction::OrStep(offset));
+                }
+                LabeledInstruction::SkipIfNotNull(label) => {
+                    let offset = label_positions[label] as isize - current_pos as isize;
+                    final_instructions.push(Instruction::SkipIfNotNull(offset));
+                }
+                LabeledInstruction::GreatestStep(label) => {
+                    let offset = label_positions[label] as isize - current_pos as isize;
+                    final_instructions.push(Instruction::GreatestStep(offset));
+                }
+                LabeledInstruction::LeastStep(label) => {
+                    let offset = label_positions[label] as isize - current_pos as isize;
+                    final_instructions.push(Instruction::LeastStep(offset));
+                }
+                LabeledInstruction::RaiseIfNullError => {
+                    final_instructions.push(Instruction::RaiseIfNullError)
+                }
+                LabeledInstruction::CallEagerVariadic { func, arity } => {
+                    final_instructions.push(Instruction::CallEagerVariadic { func, arity })
                 }
                 LabeledInstruction::Skip(label) => {
                     let offset = label_positions[label] as isize - current_pos as isize;
@@ -429,11 +614,6 @@ impl CompiledMirScalarExpr {
                     }
                     pc += 1;
                 }
-                Instruction::CallVariadic(boxed) => {
-                    let (func, sub_programs) = boxed.as_ref();
-                    stack.push(eval_variadic(func, sub_programs, datums, temp_storage));
-                    pc += 1;
-                }
                 Instruction::CallUnmaterializable(func) => {
                     stack.push(Err(EvalError::Internal(
                         format!("cannot evaluate unmaterializable function: {func:?}").into(),
@@ -458,6 +638,162 @@ impl CompiledMirScalarExpr {
                             pc = (pc as isize + error_offset) as usize;
                         }
                     }
+                }
+                Instruction::AndStep(end_offset) => {
+                    let operand = stack.pop().expect("stack underflow");
+                    let accumulator = stack.pop().expect("stack underflow");
+                    match operand {
+                        Ok(Datum::False) => {
+                            // False short-circuits And, even over accumulated errors
+                            stack.push(Ok(Datum::False));
+                            pc = (pc as isize + end_offset) as usize;
+                        }
+                        Ok(Datum::True) => {
+                            // True doesn't change the accumulator
+                            stack.push(accumulator);
+                            pc += 1;
+                        }
+                        Ok(Datum::Null) => {
+                            // Null: upgrade accumulator (error stays, true→null)
+                            match accumulator {
+                                Err(_) => stack.push(accumulator),
+                                _ => stack.push(Ok(Datum::Null)),
+                            }
+                            pc += 1;
+                        }
+                        Err(e) => {
+                            // Error: merge with accumulator (max of errors)
+                            match accumulator {
+                                Err(e2) => stack.push(Err(std::cmp::max(e, e2))),
+                                _ => stack.push(Err(e)),
+                            }
+                            pc += 1;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Instruction::OrStep(end_offset) => {
+                    let operand = stack.pop().expect("stack underflow");
+                    let accumulator = stack.pop().expect("stack underflow");
+                    match operand {
+                        Ok(Datum::True) => {
+                            // True short-circuits Or, even over accumulated errors
+                            stack.push(Ok(Datum::True));
+                            pc = (pc as isize + end_offset) as usize;
+                        }
+                        Ok(Datum::False) => {
+                            // False doesn't change the accumulator
+                            stack.push(accumulator);
+                            pc += 1;
+                        }
+                        Ok(Datum::Null) => {
+                            match accumulator {
+                                Err(_) => stack.push(accumulator),
+                                _ => stack.push(Ok(Datum::Null)),
+                            }
+                            pc += 1;
+                        }
+                        Err(e) => {
+                            match accumulator {
+                                Err(e2) => stack.push(Err(std::cmp::max(e, e2))),
+                                _ => stack.push(Err(e)),
+                            }
+                            pc += 1;
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                Instruction::SkipIfNotNull(end_offset) => {
+                    let value = stack.pop().expect("stack underflow");
+                    match value {
+                        Ok(Datum::Null) => {
+                            // Null: discard and continue to next operand
+                            pc += 1;
+                        }
+                        _ => {
+                            // Non-null or error: push back and jump to end
+                            stack.push(value);
+                            pc = (pc as isize + end_offset) as usize;
+                        }
+                    }
+                }
+                Instruction::GreatestStep(end_offset) => {
+                    let operand = stack.pop().expect("stack underflow");
+                    let accumulator = stack.pop().expect("stack underflow");
+                    match operand {
+                        Err(e) => {
+                            // Errors propagate immediately
+                            stack.push(Err(e));
+                            pc = (pc as isize + end_offset) as usize;
+                        }
+                        Ok(d) if d.is_null() => {
+                            // Null operand: keep accumulator unchanged
+                            stack.push(accumulator);
+                            pc += 1;
+                        }
+                        Ok(d) => {
+                            // Non-null: update max (accumulator is always Ok)
+                            match &accumulator {
+                                Ok(acc) if !acc.is_null() && *acc >= d => {
+                                    stack.push(accumulator)
+                                }
+                                _ => stack.push(Ok(d)),
+                            }
+                            pc += 1;
+                        }
+                    }
+                }
+                Instruction::LeastStep(end_offset) => {
+                    let operand = stack.pop().expect("stack underflow");
+                    let accumulator = stack.pop().expect("stack underflow");
+                    match operand {
+                        Err(e) => {
+                            stack.push(Err(e));
+                            pc = (pc as isize + end_offset) as usize;
+                        }
+                        Ok(d) if d.is_null() => {
+                            stack.push(accumulator);
+                            pc += 1;
+                        }
+                        Ok(d) => {
+                            match &accumulator {
+                                Ok(acc) if !acc.is_null() && *acc <= d => {
+                                    stack.push(accumulator)
+                                }
+                                _ => stack.push(Ok(d)),
+                            }
+                            pc += 1;
+                        }
+                    }
+                }
+                Instruction::RaiseIfNullError => {
+                    let msg = stack.pop().expect("stack underflow");
+                    match msg {
+                        Err(e) => stack.push(Err(e)),
+                        Ok(Datum::Null) => stack.push(Err(EvalError::Internal(
+                            "unexpected NULL in error side of error_if_null".into(),
+                        ))),
+                        Ok(d) => {
+                            stack.push(Err(EvalError::IfNullError(d.unwrap_str().into())))
+                        }
+                    }
+                    pc += 1;
+                }
+                Instruction::CallEagerVariadic { func, arity } => {
+                    let start = stack.len() - arity;
+                    let args: Result<Vec<Datum<'a>>, EvalError> =
+                        stack.drain(start..).collect();
+                    match args {
+                        Err(e) => stack.push(Err(e)),
+                        Ok(ds) => {
+                            if func.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
+                                stack.push(Ok(Datum::Null));
+                            } else {
+                                stack.push(func.eval_eager(&ds, temp_storage));
+                            }
+                        }
+                    }
+                    pc += 1;
                 }
                 Instruction::MapListElements(cast_program) => {
                     let input = stack.pop().expect("stack underflow");
@@ -633,121 +969,6 @@ fn pack_array_to_jsonb<'a>(
 }
 
 // ---------------------------------------------------------------------------
-// Variadic evaluation
-// ---------------------------------------------------------------------------
-
-/// Evaluate a variadic function with compiled sub-program operands.
-fn eval_variadic<'a>(
-    func: &'a VariadicFunc,
-    sub_programs: &'a [CompiledMirScalarExpr],
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    // Non-eager variadics need to evaluate operands one at a time.
-    match func {
-        VariadicFunc::Coalesce => {
-            for prog in sub_programs {
-                let d = prog.eval(datums, temp_storage)?;
-                if !d.is_null() {
-                    return Ok(d);
-                }
-            }
-            Ok(Datum::Null)
-        }
-        VariadicFunc::Greatest => {
-            let mut max: Option<Datum<'a>> = None;
-            for prog in sub_programs {
-                let d = prog.eval(datums, temp_storage)?;
-                if !d.is_null() {
-                    max = Some(match max {
-                        Some(m) if m >= d => m,
-                        _ => d,
-                    });
-                }
-            }
-            Ok(max.unwrap_or(Datum::Null))
-        }
-        VariadicFunc::Least => {
-            let mut min: Option<Datum<'a>> = None;
-            for prog in sub_programs {
-                let d = prog.eval(datums, temp_storage)?;
-                if !d.is_null() {
-                    min = Some(match min {
-                        Some(m) if m <= d => m,
-                        _ => d,
-                    });
-                }
-            }
-            Ok(min.unwrap_or(Datum::Null))
-        }
-        VariadicFunc::And => {
-            let mut null = false;
-            let mut err = None;
-            for prog in sub_programs {
-                match prog.eval(datums, temp_storage) {
-                    Ok(Datum::False) => return Ok(Datum::False),
-                    Ok(Datum::True) => {}
-                    Ok(Datum::Null) => null = true,
-                    Err(e) => err = std::cmp::max(err.take(), Some(e)),
-                    _ => unreachable!(),
-                }
-            }
-            match (err, null) {
-                (Some(err), _) => Err(err),
-                (None, true) => Ok(Datum::Null),
-                (None, false) => Ok(Datum::True),
-            }
-        }
-        VariadicFunc::Or => {
-            let mut null = false;
-            let mut err = None;
-            for prog in sub_programs {
-                match prog.eval(datums, temp_storage) {
-                    Ok(Datum::False) => {}
-                    Ok(Datum::True) => return Ok(Datum::True),
-                    Ok(Datum::Null) => null = true,
-                    Err(e) => err = std::cmp::max(err.take(), Some(e)),
-                    _ => unreachable!(),
-                }
-            }
-            match (err, null) {
-                (Some(err), _) => Err(err),
-                (None, true) => Ok(Datum::Null),
-                (None, false) => Ok(Datum::False),
-            }
-        }
-        VariadicFunc::ErrorIfNull => {
-            let first = sub_programs[0].eval(datums, temp_storage)?;
-            match first {
-                Datum::Null => {
-                    let err_msg = match sub_programs[1].eval(datums, temp_storage)? {
-                        Datum::Null => {
-                            return Err(EvalError::Internal(
-                                "unexpected NULL in error side of error_if_null".into(),
-                            ))
-                        }
-                        o => o.unwrap_str(),
-                    };
-                    Err(EvalError::IfNullError(err_msg.into()))
-                }
-                _ => Ok(first),
-            }
-        }
-        _ => {
-            // Eager variadics: evaluate all operands, then call the function.
-            let ds = sub_programs
-                .iter()
-                .map(|p| p.eval(datums, temp_storage))
-                .collect::<Result<Vec<_>, _>>()?;
-            if func.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-                return Ok(Datum::Null);
-            }
-            func.eval_eager(&ds, temp_storage)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Parse-and-cast evaluation
 // ---------------------------------------------------------------------------
 
@@ -849,7 +1070,6 @@ fn eval_parse_and_cast<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_repr::SqlColumnType;
 
     /// Test that compiled evaluation produces the same result as direct evaluation
     /// for basic expressions.
@@ -1082,5 +1302,243 @@ mod tests {
         let direct_result = expr.eval(datums, &arena);
         assert!(compiled_result.is_err());
         assert!(direct_result.is_err());
+    }
+
+    // -- Variadic tests --
+
+    /// Helper to make a variadic expression.
+    fn variadic(func: VariadicFunc, exprs: Vec<MirScalarExpr>) -> MirScalarExpr {
+        MirScalarExpr::CallVariadic { func, exprs }
+    }
+
+    fn lit_bool(b: bool) -> MirScalarExpr {
+        MirScalarExpr::literal_ok(Datum::from(b), SqlScalarType::Bool)
+    }
+
+    fn lit_null_bool() -> MirScalarExpr {
+        MirScalarExpr::literal_ok(Datum::Null, SqlScalarType::Bool)
+    }
+
+    fn lit_i32(v: i32) -> MirScalarExpr {
+        MirScalarExpr::literal_ok(Datum::Int32(v), SqlScalarType::Int32)
+    }
+
+    fn lit_null_i32() -> MirScalarExpr {
+        MirScalarExpr::literal_ok(Datum::Null, SqlScalarType::Int32)
+    }
+
+    fn lit_err() -> MirScalarExpr {
+        MirScalarExpr::literal(
+            Err(EvalError::Internal("test error".into())),
+            SqlScalarType::Bool,
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_and_basic() {
+        // And(true, true) = true
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_bool(true), lit_bool(true)]), &[]);
+        // And(true, false) = false
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_bool(true), lit_bool(false)]), &[]);
+        // And(false, true) = false
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_bool(false), lit_bool(true)]), &[]);
+        // And(false, false) = false
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_bool(false), lit_bool(false)]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_and_null() {
+        // And(true, null) = null
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_bool(true), lit_null_bool()]), &[]);
+        // And(null, true) = null
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_null_bool(), lit_bool(true)]), &[]);
+        // And(null, false) = false (false short-circuits)
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_null_bool(), lit_bool(false)]), &[]);
+        // And(false, null) = false
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_bool(false), lit_null_bool()]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_and_error() {
+        // And(error, false) = false (false short-circuits over errors)
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_err(), lit_bool(false)]), &[]);
+        // And(error, true) = error
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_err(), lit_bool(true)]), &[]);
+        // And(error, null) = error (error > null)
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_err(), lit_null_bool()]), &[]);
+        // And(null, error) = error
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![lit_null_bool(), lit_err()]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_and_empty() {
+        // And() = true (identity element)
+        assert_eval_eq(&variadic(VariadicFunc::And, vec![]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_or_basic() {
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_bool(false), lit_bool(false)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_bool(false), lit_bool(true)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_bool(true), lit_bool(false)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_bool(true), lit_bool(true)]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_or_null() {
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_bool(false), lit_null_bool()]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_null_bool(), lit_bool(false)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_null_bool(), lit_bool(true)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_bool(true), lit_null_bool()]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_or_error() {
+        // Or(error, true) = true (true short-circuits over errors)
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_err(), lit_bool(true)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_err(), lit_bool(false)]), &[]);
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![lit_err(), lit_null_bool()]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_or_empty() {
+        // Or() = false (identity element)
+        assert_eval_eq(&variadic(VariadicFunc::Or, vec![]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_coalesce() {
+        // Coalesce(null, null, 42) = 42
+        assert_eval_eq(
+            &variadic(VariadicFunc::Coalesce, vec![lit_null_i32(), lit_null_i32(), lit_i32(42)]),
+            &[],
+        );
+        // Coalesce(1, 2) = 1
+        assert_eval_eq(
+            &variadic(VariadicFunc::Coalesce, vec![lit_i32(1), lit_i32(2)]),
+            &[],
+        );
+        // Coalesce(null) = null
+        assert_eval_eq(
+            &variadic(VariadicFunc::Coalesce, vec![lit_null_i32()]),
+            &[],
+        );
+        // Coalesce() = null
+        assert_eval_eq(&variadic(VariadicFunc::Coalesce, vec![]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_coalesce_with_columns() {
+        // Coalesce(Column(0), Column(1))
+        let expr = variadic(
+            VariadicFunc::Coalesce,
+            vec![MirScalarExpr::column(0), MirScalarExpr::column(1)],
+        );
+        assert_eval_eq(&expr, &[Datum::Null, Datum::Int32(5)]);
+        assert_eval_eq(&expr, &[Datum::Int32(3), Datum::Int32(5)]);
+        assert_eval_eq(&expr, &[Datum::Null, Datum::Null]);
+    }
+
+    #[mz_ore::test]
+    fn test_error_if_null_non_null() {
+        // ErrorIfNull(42, "oops") = 42
+        let expr = variadic(
+            VariadicFunc::ErrorIfNull,
+            vec![
+                lit_i32(42),
+                MirScalarExpr::literal_ok(Datum::String("oops"), SqlScalarType::String),
+            ],
+        );
+        assert_eval_eq(&expr, &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_error_if_null_null() {
+        // ErrorIfNull(null, "oops") = error
+        let expr = variadic(
+            VariadicFunc::ErrorIfNull,
+            vec![
+                lit_null_i32(),
+                MirScalarExpr::literal_ok(Datum::String("oops"), SqlScalarType::String),
+            ],
+        );
+        assert_eval_eq(&expr, &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_greatest() {
+        assert_eval_eq(
+            &variadic(VariadicFunc::Greatest, vec![lit_i32(1), lit_i32(3), lit_i32(2)]),
+            &[],
+        );
+        assert_eval_eq(
+            &variadic(VariadicFunc::Greatest, vec![lit_i32(5), lit_null_i32(), lit_i32(3)]),
+            &[],
+        );
+        assert_eval_eq(
+            &variadic(VariadicFunc::Greatest, vec![lit_null_i32(), lit_null_i32()]),
+            &[],
+        );
+        assert_eval_eq(&variadic(VariadicFunc::Greatest, vec![]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_least() {
+        assert_eval_eq(
+            &variadic(VariadicFunc::Least, vec![lit_i32(3), lit_i32(1), lit_i32(2)]),
+            &[],
+        );
+        assert_eval_eq(
+            &variadic(VariadicFunc::Least, vec![lit_i32(5), lit_null_i32(), lit_i32(3)]),
+            &[],
+        );
+        assert_eval_eq(
+            &variadic(VariadicFunc::Least, vec![lit_null_i32(), lit_null_i32()]),
+            &[],
+        );
+        assert_eval_eq(&variadic(VariadicFunc::Least, vec![]), &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_eager_variadic_array_create() {
+        // ArrayCreate([1, 2, 3])
+        let expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ArrayCreate {
+                elem_type: SqlScalarType::Int32,
+            },
+            exprs: vec![lit_i32(1), lit_i32(2), lit_i32(3)],
+        };
+        assert_eval_eq(&expr, &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_eager_variadic_list_create() {
+        // ListCreate([1, null, 3])
+        let expr = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::ListCreate {
+                elem_type: SqlScalarType::Int32,
+            },
+            exprs: vec![lit_i32(1), lit_null_i32(), lit_i32(3)],
+        };
+        assert_eval_eq(&expr, &[]);
+    }
+
+    #[mz_ore::test]
+    fn test_and_three_operands() {
+        // And(true, true, true) = true
+        assert_eval_eq(
+            &variadic(VariadicFunc::And, vec![lit_bool(true), lit_bool(true), lit_bool(true)]),
+            &[],
+        );
+        // And(true, null, false) = false
+        assert_eval_eq(
+            &variadic(VariadicFunc::And, vec![lit_bool(true), lit_null_bool(), lit_bool(false)]),
+            &[],
+        );
+        // And(true, null, true) = null
+        assert_eval_eq(
+            &variadic(VariadicFunc::And, vec![lit_bool(true), lit_null_bool(), lit_bool(true)]),
+            &[],
+        );
     }
 }
