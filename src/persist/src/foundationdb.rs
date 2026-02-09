@@ -461,6 +461,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/10076 is fixed
     async fn fdb_consensus() -> Result<(), ExternalError> {
         let config = FdbConsensusConfig::new(
             std::str::FromStr::from_str("foundationdb:?prefix=test/consensus").unwrap(),

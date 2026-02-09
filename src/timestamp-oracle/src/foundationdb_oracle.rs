@@ -602,6 +602,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/10076 is fixed
     async fn test_fdb_timestamp_oracle() -> Result<(), anyhow::Error> {
         let config = FdbTimestampOracleConfig::new_for_test();
 
