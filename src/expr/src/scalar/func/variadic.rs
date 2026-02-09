@@ -22,6 +22,7 @@ use itertools::Itertools;
 use md5::Md5;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
+use mz_ore::soft_assert_or_log;
 use mz_pgtz::timezone::TimezoneSpec;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
@@ -1367,12 +1368,14 @@ impl VariadicFunc {
             }
             .nullable(true),
             ArrayCreate { elem_type } => {
-                debug_assert!(
-                    input_types
-                        .iter()
-                        .all(|t| ReprScalarType::from(&t.scalar_type)
-                            == ReprScalarType::from(elem_type)),
-                    "Args to ArrayCreate should have types that are repr-compatible with the elem_type"
+                soft_assert_or_log!(
+                    input_types.iter().all(|t| {
+                        // This ensures that the types are compatiable, but nullability may vary deeply in the types.
+                        ReprScalarType::from(elem_type)
+                            .union(&ReprScalarType::from(&t.scalar_type))
+                            .is_ok()
+                    }),
+                    "Args to ArrayCreate should have types that are repr-compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
                 );
                 match elem_type {
                     SqlScalarType::Array(_) => elem_type.clone().nullable(false),
@@ -1386,12 +1389,15 @@ impl VariadicFunc {
                 .clone()
                 .nullable(true),
             ListCreate { elem_type } => {
-                // commented out to work around
-                // https://github.com/MaterializeInc/database-issues/issues/2730
-                // soft_assert!(
-                //     input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
-                //     "{}", format!("Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{:#?}\nelem_type:{:#?}", input_types, elem_type)
-                // );
+                soft_assert_or_log!(
+                    input_types.iter().all(|t| {
+                        // This ensures that the types are compatiable, but nullability may vary deeply in the types.
+                        ReprScalarType::from(elem_type)
+                            .union(&ReprScalarType::from(&t.scalar_type))
+                            .is_ok()
+                    }),
+                    "Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{elem_type:#?}"
+                );
                 SqlScalarType::List {
                     element_type: Box::new(elem_type.clone()),
                     custom_id: None,
