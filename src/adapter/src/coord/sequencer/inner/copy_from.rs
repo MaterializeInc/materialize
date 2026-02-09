@@ -161,6 +161,44 @@ impl Coordinator {
             });
         let source_mfp = return_if_err!(source_mfp, ctx);
 
+        // Validate that all non-nullable columns in the target table will be populated.
+        // This is a runtime check to complement the planning-time validation.
+        let target_desc = dest_table.desc.latest();
+        for (col_idx, col_type) in target_desc.iter_types().enumerate() {
+            if !col_type.nullable {
+                // Check what value the MFP will produce for this column position.
+                if let Some(&projection_idx) = source_mfp.projection.get(col_idx) {
+                    // If the projection index is beyond the input arity, it references an expression.
+                    let input_arity = source_mfp.input_arity;
+                    if projection_idx >= input_arity {
+                        let expr_idx = projection_idx - input_arity;
+                        if let Some(expr) = source_mfp.expressions.get(expr_idx) {
+                            // Check if the expression is a NULL literal.
+                            // A NULL literal is represented as Literal(Ok(empty_row), _)
+                            if matches!(expr, mz_expr::MirScalarExpr::Literal(Ok(row), _) if row.iter().next().map(|d| d.is_null()).unwrap_or(false))
+                            {
+                                let col_name = target_desc.get_name(col_idx);
+                                let msg = format!(
+                                    "column {} is NOT NULL but would be assigned a NULL value",
+                                    col_name
+                                );
+                                return ctx
+                                    .retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
+                            }
+                        }
+                    }
+                } else {
+                    // If there's no projection for this column, that's a validation error
+                    let col_name = target_desc.get_name(col_idx);
+                    let msg = format!(
+                        "column {} is NOT NULL but has no corresponding value in the MFP projection",
+                        col_name
+                    );
+                    return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
+                }
+            }
+        }
+
         let shape = ContentShape {
             source_desc,
             source_mfp,
