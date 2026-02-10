@@ -281,10 +281,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 def generate_parquet_files(s3: S3Client):
     import datetime
     import decimal
+    import uuid
 
     import pyarrow as pa
     import pyarrow.parquet as pq
-    import uuid
 
     record_col = pa.struct(
         [
