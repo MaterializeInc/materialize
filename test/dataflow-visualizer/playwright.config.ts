@@ -16,9 +16,10 @@ export default defineConfig({
   reporter: 'list',
   use: {
     // In Docker, the host is 'materialized'. For local testing, use 'localhost'.
+    // Use port 6878 (internal HTTP) which has all routes enabled, including /metrics.
     baseURL: process.env.MZ_HOST
-      ? `http://${process.env.MZ_HOST}:6876`
-      : 'http://localhost:6876',
+      ? `http://${process.env.MZ_HOST}:6878`
+      : 'http://localhost:6878',
     trace: 'on-first-retry',
   },
   timeout: 30000,

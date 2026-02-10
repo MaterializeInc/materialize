@@ -34,10 +34,11 @@ test.describe('/metrics-viz page', () => {
     const dropdown = page.locator('#endpoint-select');
     await expect(dropdown).toBeVisible();
 
+    // Wait for async endpoint discovery to populate the dropdown
+    // Note: <option> elements inside <select> are not "visible" in Playwright's sense,
+    // so we wait for at least one option to exist using a count check.
     const options = dropdown.locator('option');
-    const optionCount = await options.count();
-    // At least environmentd + cluster replicas
-    expect(optionCount).toBeGreaterThan(0);
+    await expect(options).not.toHaveCount(0, { timeout: 10000 });
 
     // First option should be environmentd
     const firstOption = await options.first().textContent();
@@ -51,6 +52,7 @@ test.describe('/metrics-viz page', () => {
 
     // At least one metric group should be visible
     const groups = page.locator('.metric-group');
+    await expect(groups.first()).toBeVisible({ timeout: 10000 });
     const groupCount = await groups.count();
     expect(groupCount).toBeGreaterThan(0);
   });
@@ -60,12 +62,15 @@ test.describe('/metrics-viz page', () => {
 
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
 
+    // Wait for groups to render
+    await expect(page.locator('.metric-group').first()).toBeVisible({ timeout: 10000 });
     const groupsBefore = await page.locator('.metric-group').count();
 
     // Type a search term that should filter results
     const searchBox = page.locator('.search-box');
     await searchBox.fill('mz_adapter');
 
+    // Wait a moment for the filter to take effect
     const groupsAfter = await page.locator('.metric-group').count();
     // Should have fewer groups after filtering (or same if only one matches)
     expect(groupsAfter).toBeLessThanOrEqual(groupsBefore);
@@ -76,6 +81,9 @@ test.describe('/metrics-viz page', () => {
     await page.goto('/metrics-viz');
 
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
+
+    // Wait for groups to render
+    await expect(page.locator('.metric-group').first()).toBeVisible({ timeout: 10000 });
 
     // Find the first group header and click it to expand
     const firstGroupHeader = page.locator('.metric-group > div').first();
@@ -97,6 +105,9 @@ test.describe('/metrics-viz page', () => {
 
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
 
+    // Wait for groups to render first
+    await expect(page.locator('.metric-group').first()).toBeVisible({ timeout: 10000 });
+
     // Search for histogram metrics to find them
     const searchBox = page.locator('.search-box');
     await searchBox.fill('histogram');
@@ -106,7 +117,7 @@ test.describe('/metrics-viz page', () => {
     const groupCount = await groups.count();
 
     if (groupCount === 0) {
-      // Try a different search - look for _bucket which indicates histograms
+      // Try a different search - look for duration which often has histograms
       await searchBox.fill('duration');
     }
 
@@ -126,5 +137,41 @@ test.describe('/metrics-viz page', () => {
     if (svgCount > 0) {
       await expect(chartSvg.first()).toBeVisible();
     }
+  });
+
+  test('poll button toggles polling state', async ({ page }) => {
+    await page.goto('/metrics-viz');
+
+    await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
+
+    // Find the Poll button
+    const pollButton = page.locator('button', { hasText: 'Poll' });
+    await expect(pollButton).toBeVisible();
+
+    // Click to start polling
+    await pollButton.click();
+
+    // Button should now say "Stop"
+    const stopButton = page.locator('button', { hasText: 'Stop' });
+    await expect(stopButton).toBeVisible({ timeout: 5000 });
+
+    // Poll interval selector should be visible
+    const intervalSelect = page.locator('select').nth(1); // second select after endpoint
+    await expect(intervalSelect).toBeVisible();
+
+    // Click to stop polling
+    await stopButton.click();
+
+    // Button should revert to "Poll"
+    await expect(pollButton).toBeVisible({ timeout: 5000 });
+  });
+
+  test('save button is present', async ({ page }) => {
+    await page.goto('/metrics-viz');
+
+    await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
+
+    const saveButton = page.locator('button', { hasText: 'Save' });
+    await expect(saveButton).toBeVisible();
   });
 });

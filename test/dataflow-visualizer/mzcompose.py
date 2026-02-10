@@ -9,7 +9,7 @@
 
 """
 E2E browser tests for the dataflow visualizer React components.
-Tests the /memory and /hierarchical-memory endpoints on port 6876.
+Tests the /memory, /hierarchical-memory, and /metrics-viz endpoints on port 6878.
 """
 
 from materialize import MZ_ROOT

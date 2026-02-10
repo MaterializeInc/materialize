@@ -689,7 +689,7 @@ function MetricsApp() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState(params.get('search') || '');
-  const [polling, setSubscribing] = useState(false);
+  const [polling, setPolling] = useState(false);
   const [pollInterval, setPollInterval] = useState(5000);
   const snapshotsRef = useRef([]); // [{ families, timestamp }, ...]
   const [snapshotVersion, setSnapshotVersion] = useState(0); // trigger re-render on snapshot update
@@ -825,7 +825,7 @@ function MetricsApp() {
         <button style={styles.button} onClick={() => loadMetrics(selectedUrl)}>
           Refresh
         </button>
-        <button style={pollBtnStyle} onClick={() => setSubscribing(s => !s)}>
+        <button style={pollBtnStyle} onClick={() => setPolling(s => !s)}>
           {polling ? 'Stop' : 'Poll'}
         </button>
         {polling && (
