@@ -12,7 +12,6 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
-use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::{Arc, RwLock, TryLockError, Weak};
@@ -32,7 +31,7 @@ use mz_persist::location::{
 };
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::{Mutex, OnceCell};
 use tracing::debug;
 
 use crate::async_runtime::IsolatedRuntime;
@@ -41,7 +40,7 @@ use crate::internal::cache::BlobMemCache;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
 use crate::internal::state::TypedState;
-use crate::internal::watch::StateWatchNotifier;
+use crate::internal::watch::{AwaitableState, StateWatchNotifier};
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
 use crate::schema::SchemaCacheMaps;
 use crate::{Diagnostics, PersistClient, PersistConfig, PersistLocation, ShardId};
@@ -606,7 +605,7 @@ pub(crate) struct LockingTypedState<K, V, T, D> {
     cfg: Arc<PersistConfig>,
     metrics: Arc<Metrics>,
     shard_metrics: Arc<ShardMetrics>,
-    update_semaphore: Mutex<Option<(tokio::time::Instant, oneshot::Receiver<Infallible>)>>,
+    update_semaphore: AwaitableState<Option<tokio::time::Instant>>,
     /// A [SchemaCacheMaps<K, V>], but stored as an Any so the `: Codec` bounds
     /// don't propagate to basically every struct in persist.
     schema_cache: Arc<dyn Any + Send + Sync>,
@@ -649,7 +648,7 @@ impl<K: Codec, V: Codec, T, D> LockingTypedState<K, V, T, D> {
             state: RwLock::new(initial_state),
             cfg: Arc::clone(&cfg),
             shard_metrics: metrics.shards.shard(&shard_id, &diagnostics.shard_name),
-            update_semaphore: Mutex::new(None),
+            update_semaphore: AwaitableState::new(None),
             schema_cache: Arc::new(SchemaCacheMaps::<K, V>::new(&metrics.schema)),
             metrics,
             _subscription_token: subscription_token,
@@ -738,20 +737,64 @@ impl<K, V, T, D> LockingTypedState<K, V, T, D> {
     /// requests will only wait for a bounded time before retrying, and one of those retries will
     /// be able to claim that lease and make progress.
     pub(crate) async fn lease_for_update(&self) -> impl Drop {
+        use tokio::time::Instant;
+
         let timeout = STATE_UPDATE_LEASE_TIMEOUT.get(&self.cfg);
+
+        struct DropLease(Option<(AwaitableState<Option<Instant>>, Instant)>);
+
+        impl Drop for DropLease {
+            fn drop(&mut self) {
+                if let Some((state, time)) = self.0.take() {
+                    // Clear the timeout if it hasn't changed since we set it.
+                    state.maybe_modify(|s| {
+                        if s.is_some_and(|t| t == time) {
+                            *s.get_mut() = None;
+                        }
+                    })
+                }
+            }
+        }
+
+        // Special case: if the timeout is set to zero, go ahead without taking a lease.
         if timeout.is_zero() {
-            let (tx, _rx) = oneshot::channel();
-            return tx;
+            return DropLease(None);
         }
-        let mut guard = self.update_semaphore.lock().await;
-        if let Some((started_at, rx)) = guard.take() {
-            let deadline = started_at + timeout;
-            let _ = tokio::time::timeout_at(deadline, rx).await;
+
+        let timeout_state = self.update_semaphore.clone();
+        loop {
+            let now = tokio::time::Instant::now();
+            let expires_at = now + timeout;
+            // Claim the lease if there isn't one, or if the current lease has expired.
+            let maybe_leased = timeout_state.maybe_modify(|state| {
+                if let Some(other_expires_at) = **state
+                    && other_expires_at > now
+                {
+                    // Still locked: sleep until the deadline and try again.
+                    Err(other_expires_at)
+                } else {
+                    *state.get_mut() = Some(expires_at);
+                    Ok(())
+                }
+            });
+
+            match maybe_leased {
+                Ok(()) => {
+                    break DropLease(Some((timeout_state, expires_at)));
+                }
+                Err(other_expires_at) => {
+                    // Wait until either the lease has dropped or timed out, whichever is first.
+                    // If there are a lot of clients trying to update the same state, this may
+                    // cause significant lock contention... but the lock is only briefly held,
+                    // and anyways that's still cheaper than contending on the remote database.
+                    let _ = tokio::time::timeout_at(
+                        other_expires_at,
+                        timeout_state.wait_while(|s| s.is_some()),
+                    )
+                    .await;
+                }
+            }
         }
-        let started_at = tokio::time::Instant::now();
-        let (tx, rx) = oneshot::channel();
-        *guard = Some((started_at, rx));
-        tx
     }
 
     pub(crate) fn notifier(&self) -> &StateWatchNotifier {
