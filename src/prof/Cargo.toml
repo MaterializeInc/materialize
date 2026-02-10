@@ -15,8 +15,8 @@ anyhow = "1.0.101"
 backtrace = "0.3.76"
 flate2 = "1.1.9"
 itertools = "0.14.0"
-jemalloc_pprof = { version = "0.8.1", optional = true }
-pprof_util = "0.8"
+jemalloc_pprof = { version = "0.8.2", optional = true }
+pprof_util = "0.8.2"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.15.0"
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
