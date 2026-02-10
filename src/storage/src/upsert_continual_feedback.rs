@@ -893,7 +893,6 @@ mod test {
     use mz_storage_operators::persist_source::Subtime;
     use mz_storage_types::sources::SourceEnvelope;
     use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
-    use mz_timely_util::scope_label::ScopeExt;
     use rocksdb::Env;
     use timely::dataflow::operators::capture::Extract;
     use timely::dataflow::operators::{Capture, Input, Probe};
