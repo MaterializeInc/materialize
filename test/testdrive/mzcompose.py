@@ -414,7 +414,7 @@ def generate_parquet_files(s3: S3Client):
         "decimal_col",
         "json_col",
         "record_col",
-        "uuid_col"
+        "uuid_col",
     ]
     table = pa.Table.from_arrays(arrays, names=field_names)
 
