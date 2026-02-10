@@ -917,67 +917,65 @@ mod test {
         let output_handle = timely::execute_directly(move |worker| {
             let (mut input_handle, mut persist_handle, output_handle) = worker
                 .dataflow::<MzTimestamp, _, _>(|scope| {
-                    scope.region_labelled("Upsert continual feedback test", |scope| {
-                        // Enter a subscope since the upsert operator expects to work a backpressure
-                        // enabled scope.
-                        scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
-                            let (input_handle, input) = scope.new_input();
-                            let (persist_handle, persist_input) = scope.new_input();
-                            let upsert_config = UpsertConfig {
-                                shrink_upsert_unused_buffers_by_ratio: 0,
-                            };
-                            let source_id = GlobalId::User(0);
-                            let metrics_registry = MetricsRegistry::new();
-                            let upsert_metrics_defs =
-                                UpsertMetricDefs::register_with(&metrics_registry);
-                            let upsert_metrics =
-                                UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+                    // Enter a subscope since the upsert operator expects to work a backpressure
+                    // enabled scope.
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
 
-                            let metrics_registry = MetricsRegistry::new();
-                            let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
 
-                            let metrics_registry = MetricsRegistry::new();
-                            let source_statistics_defs =
-                                SourceStatisticsMetricDefs::register_with(&metrics_registry);
-                            let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
-                                source_arity: 2,
-                                style: UpsertStyle::Default(KeyEnvelope::Flattened),
-                                key_indices: vec![0],
-                            });
-                            let source_statistics = SourceStatistics::new(
-                                source_id,
-                                0,
-                                &source_statistics_defs,
-                                source_id,
-                                &ShardId::new(),
-                                envelope,
-                                Antichain::from_elem(Timestamp::minimum()),
-                            );
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
 
-                            let source_config = SourceExportCreationConfig {
-                                id: GlobalId::User(0),
-                                worker_id: 0,
-                                metrics: storage_metrics,
-                                source_statistics,
-                            };
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
 
-                            let (output, _, _, button) = upsert_inner(
-                                &input.as_collection(),
-                                vec![0],
-                                Antichain::from_elem(Timestamp::minimum()),
-                                persist_input.as_collection(),
-                                None,
-                                upsert_metrics,
-                                source_config,
-                                || async { InMemoryHashMap::default() },
-                                upsert_config,
-                                true,
-                                None,
-                            );
-                            std::mem::forget(button);
+                        let (output, _, _, button) = upsert_inner(
+                            &input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            || async { InMemoryHashMap::default() },
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
 
-                            (input_handle, persist_handle, output.inner.capture())
-                        })
+                        (input_handle, persist_handle, output.inner.capture())
                     })
                 });
 
@@ -1073,114 +1071,111 @@ mod test {
             let tx = tx.clone();
             let (mut input_handle, mut persist_handle, output_probe, output_handle) =
                 worker.dataflow::<MzTimestamp, _, _>(|scope| {
-                    scope.region_labelled("Upsert continual feedback test", |scope| {
-                        // Enter a subscope since the upsert operator expects to work a backpressure
-                        // enabled scope.
-                        scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
-                            let (input_handle, input) = scope.new_input();
-                            let (persist_handle, persist_input) = scope.new_input();
-                            let upsert_config = UpsertConfig {
-                                shrink_upsert_unused_buffers_by_ratio: 0,
-                            };
-                            let source_id = GlobalId::User(0);
-                            let metrics_registry = MetricsRegistry::new();
-                            let upsert_metrics_defs =
-                                UpsertMetricDefs::register_with(&metrics_registry);
-                            let upsert_metrics =
-                                UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
-                            let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
-                            let rocksdb_instance_metrics =
-                                Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
+                    // Enter a subscope since the upsert operator expects to work a backpressure
+                    // enabled scope.
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+                        let rocksdb_shared_metrics = Arc::clone(&upsert_metrics.rocksdb_shared);
+                        let rocksdb_instance_metrics =
+                            Arc::clone(&upsert_metrics.rocksdb_instance_metrics);
 
-                            let metrics_registry = MetricsRegistry::new();
-                            let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
 
-                            let metrics_registry = MetricsRegistry::new();
-                            let source_statistics_defs =
-                                SourceStatisticsMetricDefs::register_with(&metrics_registry);
-                            let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
-                                source_arity: 2,
-                                style: UpsertStyle::Default(KeyEnvelope::Flattened),
-                                key_indices: vec![0],
-                            });
-                            let source_statistics = SourceStatistics::new(
-                                source_id,
-                                0,
-                                &source_statistics_defs,
-                                source_id,
-                                &ShardId::new(),
-                                envelope,
-                                Antichain::from_elem(Timestamp::minimum()),
-                            );
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
 
-                            let source_config = SourceExportCreationConfig {
-                                id: GlobalId::User(0),
-                                worker_id: 0,
-                                metrics: storage_metrics,
-                                source_statistics,
-                            };
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
 
-                            // A closure that will initialize and return a configured RocksDB instance
-                            let rocksdb_init_fn = move || async move {
-                                let merge_operator = Some((
-                                    "upsert_state_snapshot_merge_v1".to_string(),
-                                    |a: &[u8],
-                                     b: ValueIterator<
-                                        BincodeOpts,
-                                        StateValue<(MzTimestamp, Subtime), u64>,
-                                    >| {
-                                        consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
-                                            a.into(),
-                                            b,
-                                        )
-                                    },
-                                ));
-                                let rocksdb_cleanup_tries = 5;
-                                let tuning = RocksDBConfig::new(Default::default(), None);
-                                let mut rocksdb_inst = mz_rocksdb::RocksDBInstance::new(
-                                    rocksdb_dir.path(),
-                                    mz_rocksdb::InstanceOptions::new(
-                                        Env::mem_env().unwrap(),
-                                        rocksdb_cleanup_tries,
-                                        merge_operator,
-                                        // For now, just use the same config as the one used for
-                                        // merging snapshots.
-                                        upsert_bincode_opts(),
-                                    ),
-                                    tuning,
-                                    rocksdb_shared_metrics,
-                                    rocksdb_instance_metrics,
-                                )
-                                .unwrap();
-
-                                let handle =
-                                    rocksdb_inst.take_core_loop_handle().expect("join handle");
-                                tx.send(handle).expect("sent joinhandle");
-                                crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
-                            };
-
-                            let (output, _, _, button) = upsert_inner(
-                                &input.as_collection(),
-                                vec![0],
-                                Antichain::from_elem(Timestamp::minimum()),
-                                persist_input.as_collection(),
-                                None,
-                                upsert_metrics,
-                                source_config,
-                                rocksdb_init_fn,
-                                upsert_config,
-                                true,
-                                None,
-                            );
-                            std::mem::forget(button);
-
-                            (
-                                input_handle,
-                                persist_handle,
-                                output.inner.probe(),
-                                output.inner.capture(),
+                        // A closure that will initialize and return a configured RocksDB instance
+                        let rocksdb_init_fn = move || async move {
+                            let merge_operator = Some((
+                                "upsert_state_snapshot_merge_v1".to_string(),
+                                |a: &[u8],
+                                 b: ValueIterator<
+                                    BincodeOpts,
+                                    StateValue<(MzTimestamp, Subtime), u64>,
+                                >| {
+                                    consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
+                                        a.into(),
+                                        b,
+                                    )
+                                },
+                            ));
+                            let rocksdb_cleanup_tries = 5;
+                            let tuning = RocksDBConfig::new(Default::default(), None);
+                            let mut rocksdb_inst = mz_rocksdb::RocksDBInstance::new(
+                                rocksdb_dir.path(),
+                                mz_rocksdb::InstanceOptions::new(
+                                    Env::mem_env().unwrap(),
+                                    rocksdb_cleanup_tries,
+                                    merge_operator,
+                                    // For now, just use the same config as the one used for
+                                    // merging snapshots.
+                                    upsert_bincode_opts(),
+                                ),
+                                tuning,
+                                rocksdb_shared_metrics,
+                                rocksdb_instance_metrics,
                             )
-                        })
+                            .unwrap();
+
+                            let handle = rocksdb_inst.take_core_loop_handle().expect("join handle");
+                            tx.send(handle).expect("sent joinhandle");
+                            crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            &input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            rocksdb_init_fn,
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        (
+                            input_handle,
+                            persist_handle,
+                            output.inner.probe(),
+                            output.inner.capture(),
+                        )
                     })
                 });
 

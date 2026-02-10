@@ -172,9 +172,10 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
     let (output_tx, output_rx) = mpsc::channel();
     let activator = Rc::new(RefCell::new(None));
 
-    timely_worker.dataflow_named::<(), _, _>("command_sequencer", |scope| {
+    timely_worker.dataflow_named::<(), _, _>("command_sequencer", {
         let activator = Rc::clone(&activator);
-        scope.region_labelled("command_sequencer", move |scope| {
+        move |scope| {
+            let scope = &mut scope.with_label();
             // Create a stream of commands received from `input_rx`.
             //
             // The output commands are tagged by worker ID and command index, allowing downstream
@@ -286,7 +287,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                     }
                 }
             });
-        });
+        }
     });
 
     let tx = InternalCommandSender {

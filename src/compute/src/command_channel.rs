@@ -89,9 +89,11 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
     // TODO(teskje): This implementation relies on Timely channels preserving the order of their
     // inputs, which is not something they guarantee. We can avoid that by using explicit indexing,
     // like storage's command sequencer does.
-    timely_worker.dataflow_named::<u64, _, _>("command_channel", |scope| {
+    timely_worker.dataflow_named::<u64, _, _>("command_channel", {
         let activator = Arc::clone(&activator);
-        scope.region_labelled("command_channel", move |scope| {
+        move |scope| {
+            let scope = &mut scope.with_label();
+
             source(scope, "command_channel::source", |cap, info| {
                 let sync_activator = scope.sync_activator_for(info.address.to_vec());
                 *activator.lock().expect("poisoned") = Some(sync_activator);
@@ -137,7 +139,7 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
                     });
                 },
             );
-        })
+        }
     });
 
     let tx = Sender {

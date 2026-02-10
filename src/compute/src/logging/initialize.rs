@@ -115,67 +115,67 @@ pub(crate) struct LoggingTraces {
 impl<A: Allocate + 'static> LoggingContext<'_, A> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
-            scope.region_labelled("Dataflow: logging", |scope| {
-                let mut collections = BTreeMap::new();
+            let scope = &mut scope.with_label();
 
-                let super::timely::Return {
-                    collections: timely_collections,
-                } = super::timely::construct(
-                    scope.clone(),
-                    self.config,
-                    self.t_event_queue.clone(),
-                    Rc::clone(&self.shared_state),
-                );
-                collections.extend(timely_collections);
+            let mut collections = BTreeMap::new();
 
-                let super::reachability::Return {
-                    collections: reachability_collections,
-                } = super::reachability::construct(
-                    scope.clone(),
-                    self.config,
-                    self.r_event_queue.clone(),
-                );
-                collections.extend(reachability_collections);
+            let super::timely::Return {
+                collections: timely_collections,
+            } = super::timely::construct(
+                scope.clone(),
+                self.config,
+                self.t_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(timely_collections);
 
-                let super::differential::Return {
-                    collections: differential_collections,
-                } = super::differential::construct(
-                    scope.clone(),
-                    self.config,
-                    self.d_event_queue.clone(),
-                    Rc::clone(&self.shared_state),
-                );
-                collections.extend(differential_collections);
+            let super::reachability::Return {
+                collections: reachability_collections,
+            } = super::reachability::construct(
+                scope.clone(),
+                self.config,
+                self.r_event_queue.clone(),
+            );
+            collections.extend(reachability_collections);
 
-                let super::compute::Return {
-                    collections: compute_collections,
-                } = super::compute::construct(
-                    scope.clone(),
-                    scope.parent.parent.clone(),
-                    self.config,
-                    self.c_event_queue.clone(),
-                    Rc::clone(&self.shared_state),
-                );
-                collections.extend(compute_collections);
+            let super::differential::Return {
+                collections: differential_collections,
+            } = super::differential::construct(
+                scope.clone(),
+                self.config,
+                self.d_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(differential_collections);
 
-                let errs = scope.scoped("logging errors", |scope| {
-                    let collection: KeyCollection<_, DataflowError, Diff> =
-                        VecCollection::empty(scope).into();
-                    collection
-                        .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
-                        .trace
-                });
+            let super::compute::Return {
+                collections: compute_collections,
+            } = super::compute::construct(
+                scope.clone(),
+                scope.parent().clone(),
+                self.config,
+                self.c_event_queue.clone(),
+                Rc::clone(&self.shared_state),
+            );
+            collections.extend(compute_collections);
 
-                let traces = collections
-                    .into_iter()
-                    .map(|(log, collection)| {
-                        let bundle = TraceBundle::new(collection.trace, errs.clone())
-                            .with_drop(collection.token);
-                        (log, bundle)
-                    })
-                    .collect();
-                traces
-            })
+            let errs = scope.scoped("logging errors", |scope| {
+                let collection: KeyCollection<_, DataflowError, Diff> =
+                    VecCollection::empty(scope).into();
+                collection
+                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
+                    .trace
+            });
+
+            let traces = collections
+                .into_iter()
+                .map(|(log, collection)| {
+                    let bundle = TraceBundle::new(collection.trace, errs.clone())
+                        .with_drop(collection.token);
+                    (log, bundle)
+                })
+                .collect();
+            traces
         })
     }
 
