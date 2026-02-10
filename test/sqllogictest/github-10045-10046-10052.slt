@@ -44,6 +44,9 @@ FROM (SELECT DISTINCT mz_internal.mz_normalize_schema_name(NULL) AS c0,
 # 10045/10046
 
 statement ok
+SET cluster_replica = r1
+
+statement ok
 EXPLAIN RAW PLAN WITH (TYPES, NO FAST PATH) AS TEXT FOR SELECT
   (((null::int8) / (mz_catalog.datediff(
           CAST(pg_catalog.right(

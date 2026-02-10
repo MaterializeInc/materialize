@@ -194,7 +194,7 @@ def run_sqllogictest(
                 else:
                     print("Rewriting results did not result in a diff")
                 print(
-                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results {' '.join([file for step, file in failed_files])}"
+                    f"Rewrite SLT files locally with: bin/sqllogictest --optimized -- --rewrite-results --replica-size={args.replica_size} --replicas={args.replicas} {' '.join([file for step, file in failed_files])}"
                 )
                 print(f"Or apply directly: git apply <<'EOF'\n{diff}EOF")
         if errors:
