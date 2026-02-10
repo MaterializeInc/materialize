@@ -320,6 +320,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&GC_BLOB_DELETE_CONCURRENCY_LIMIT)
         .add(&STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT)
         .add(&USAGE_STATE_FETCH_CONCURRENCY_LIMIT)
+        .add(&crate::cache::STATE_UPDATE_LEASE_TIMEOUT)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_FUEL)
         .add(&crate::cli::admin::CATALOG_FORCE_COMPACTION_WAIT)
         .add(&crate::cli::admin::EXPRESSION_CACHE_FORCE_COMPACTION_FUEL)
