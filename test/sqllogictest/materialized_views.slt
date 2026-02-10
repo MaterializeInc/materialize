@@ -777,7 +777,7 @@ statement ok
 INSERT INTO t2 VALUES (10, 11, 12);
 
 statement ok
-CREATE MATERIALIZED VIEW mv_assertion_plus_refresh_every WITH (ASSERT NOT NULL x, REFRESH EVERY '8 seconds') AS SELECT * FROM t2;
+CREATE MATERIALIZED VIEW mv_assertion_plus_refresh_every WITH (ASSERT NOT NULL x, REFRESH EVERY '10 seconds') AS SELECT * FROM t2;
 
 # There should be a refresh immediately when creating the MV. This refresh should already see what we just inserted.
 query III
@@ -807,7 +807,7 @@ SELECT * FROM mv_assertion_plus_refresh_every ORDER BY x;
 # A proper solution might be to add `AS OF now()` to the following SELECT, but calling `now()` seems to not be currently
 # allowed in `AS OF`.
 statement ok
-SELECT mz_unsafe.mz_sleep(8+2);
+SELECT mz_unsafe.mz_sleep(10+2);
 
 # Now we should see the NULL that should error out the MV.
 query error db error: ERROR: Evaluation error: column "x" must not be null
@@ -1123,7 +1123,7 @@ EXPLAIN REPLAN MATERIALIZED VIEW mv8;
 ## Indexes on REFRESH MVs
 
 statement ok
-CREATE MATERIALIZED VIEW mvi1 WITH (REFRESH EVERY '8s' ALIGNED TO mz_now()::string::int8 + 2000) AS
+CREATE MATERIALIZED VIEW mvi1 WITH (REFRESH EVERY '8s' ALIGNED TO mz_now()::string::int8 + 3000) AS
 SELECT 5*x FROM t3;
 
 statement ok
@@ -1530,7 +1530,7 @@ mv_aligned_to_future  every  00:00:10  true  NULL
 mv_aligned_to_past  every  00:00:10  true  NULL
 mv_assertion_at_begin  on-commit  NULL  NULL  NULL
 mv_assertion_at_end  on-commit  NULL  NULL  NULL
-mv_assertion_plus_refresh_every  every  00:00:08  true  NULL
+mv_assertion_plus_refresh_every  every  00:00:10  true  NULL
 mv_desugar1  at  NULL  NULL  true
 mv_desugar2  every  24:00:00  true  NULL
 mv_good_assertion_on_renamed_column  on-commit  NULL  NULL  NULL

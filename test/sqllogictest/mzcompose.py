@@ -714,6 +714,8 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/typeof.slt",
         # https://github.com/MaterializeInc/database-issues/issues/9513#issuecomment-3128051157
         "test/sqllogictest/temporal.slt",
+        # The extra statements make it more flaky from timing issues, when expecting a refresh to not yet have happened.
+        "test/sqllogictest/materialized_views.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
