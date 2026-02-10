@@ -90,6 +90,7 @@ mod cluster;
 mod console;
 mod memory;
 mod metrics;
+mod metrics_viz;
 mod probe;
 mod prometheus;
 mod root;
@@ -209,6 +210,10 @@ impl HttpServer {
                 .route(
                     "/hierarchical-memory",
                     routing::get(memory::handle_hierarchical_memory),
+                )
+                .route(
+                    "/metrics-viz",
+                    routing::get(metrics_viz::handle_metrics_viz),
                 )
                 .route("/static/{*path}", routing::get(root::handle_static));
 
