@@ -51,7 +51,9 @@ use mz_repr::{
 use mz_server_core::TlsMode;
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{CopyDirection, CopyStatement, FetchDirection, Ident, Raw, Statement};
+use mz_sql::ast::{
+    CopyDirection, CopyStatement, CopyTarget, FetchDirection, Ident, Raw, Statement,
+};
 use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;

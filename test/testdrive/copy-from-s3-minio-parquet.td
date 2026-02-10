@@ -204,6 +204,69 @@ Taco
 
 
 # Test glob patterns.
+> COPY INTO types FROM 's3://copyfroms3/parquet' (FORMAT PARQUET, AWS CONNECTION = aws_conn);
 
+> SELECT COUNT(*) FROM types;
+18
+
+> SELECT int8_col FROM types ORDER BY int8_col desc;
+3
+3
+3
+3
+3
+3
+2
+2
+2
+2
+2
+2
+-1
+-1
+-1
+-1
+-1
+-1
+
+> SELECT json_col->'a' FROM types ORDER BY 1 NULLS FIRST;
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+<null>
+5
+5
+5
+5
+5
+5
+
+> SELECT (record_col).name FROM types ORDER BY 1;
+Burger
+Burger
+Burger
+Burger
+Burger
+Burger
+SlimJim
+SlimJim
+SlimJim
+SlimJim
+SlimJim
+SlimJim
+Taco
+Taco
+Taco
+Taco
+Taco
+Taco
 
 # Test explicit file lists.
