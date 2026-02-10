@@ -1,57 +1,35 @@
 <!--
-Describe the contents of the PR briefly but completely.
-
-If you write detailed commit messages, it is acceptable to copy/paste them
-here, or write "see commit messages for details." If there is only one commit
-in the PR, GitHub will have already added its commit message above.
+PR Title Guidelines:
+  - Use imperative mood: "Fix X" not "Fixed X" or "Fixes X"
+  - Be specific: "Fix panic in catalog sync when controller restarts"
+    not "Fix bug" or "Update catalog code"
+  - Prefix with area if helpful: "compute: ", "storage: ", "adapter: ", "sql: "
 -->
 
+<!--
 ### Motivation
 
-<!--
-Which of the following best describes the motivation behind this PR?
+Why does this change exist? Link to a GitHub issue, design doc, Slack
+thread, or explain the problem in a sentence or two. A reviewer who has
+no context should understand *why* after reading this section.
 
-  * This PR fixes a recognized bug.
-
-    [Ensure issue is linked somewhere.]
-
-  * This PR adds a known-desirable feature.
-
-    [Ensure issue is linked somewhere.]
-
-  * This PR fixes a previously unreported bug.
-
-    [Describe the bug in detail, as if you were filing a bug report.]
-
-  * This PR adds a feature that has not yet been specified.
-
-    [Write a brief specification for the feature, including justification
-     for its inclusion in Materialize, as if you were writing the original
-     feature specification.]
-
-   * This PR refactors existing code.
-
-    [Describe what was wrong with the existing code, if it is not obvious.]
+If this implements or addresses an existing issue, it's enough to link to that:
+Closes <issue>
+Fixes <bug>
+etc.
 -->
 
-### Tips for reviewer
-
 <!--
-Leave some tips for your reviewer, like:
+### Description
 
-    * The diff is much smaller if viewed with whitespace hidden.
-    * [Some function/module/file] deserves extra attention.
-    * [Some function/module/file] is pure code movement and only needs a skim.
-
-Delete this section if no tips.
+What does this PR actually do? Focus on the approach and any non-obvious
+decisions. The diff shows the code --- use this space to explain what the
+diff *can't* tell a reviewer.
 -->
 
-### Checklist
+<!--
+### Verification
 
-- [ ] This PR has adequate test coverage / QA involvement has been duly considered. ([trigger-ci for additional test/nightly runs](https://trigger-ci.dev.materialize.com/))
-- [ ] This PR has an associated up-to-date [design doc](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/README.md), is a design doc ([template](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/00000000_template.md)), or is sufficiently small to not require a design.
-  <!-- Reference the design in the description. -->
-- [ ] If this PR evolves [an existing `$T ⇔ Proto$T` mapping](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/command-and-response-binary-encoding.md) (possibly in a backwards-incompatible way), then it is tagged with a `T-proto` label.
-- [ ] If this PR will require changes to cloud orchestration or tests, there is a companion cloud PR to account for those changes that is tagged with the release-blocker label ([example](https://github.com/MaterializeInc/cloud/pull/5021)).
-  <!-- Ask in #team-cloud on Slack if you need help preparing the cloud PR. -->
-- [ ] If this PR includes major [user-facing behavior changes](https://github.com/MaterializeInc/materialize/blob/main/doc/developer/guide-changes.md#what-changes-require-a-release-note), I have pinged the relevant PM to schedule a changelog post.
+How do you know this change is correct? Describe new or existing automated
+tests, or manual steps you took.
+-->
