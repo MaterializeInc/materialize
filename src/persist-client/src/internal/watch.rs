@@ -11,6 +11,7 @@
 
 use mz_persist::location::SeqNo;
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{Notify, broadcast};
 use tracing::debug;
@@ -159,6 +160,28 @@ impl<T> Clone for AwaitableState<T> {
     }
 }
 
+/// A wrapper around a mutable ref that tracks whether it's ever accessed mutably. See
+/// [AwaitableState::maybe_modify] for usage.
+pub struct ModifyGuard<'a, T> {
+    mut_ref: &'a mut T,
+    modified: bool,
+}
+
+impl<'a, T> Deref for ModifyGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.mut_ref
+    }
+}
+
+impl<'a, T> ModifyGuard<'a, T> {
+    pub fn get_mut(&mut self) -> &mut T {
+        self.modified = true;
+        &mut *self.mut_ref
+    }
+}
+
 impl<T> AwaitableState<T> {
     pub fn new(value: T) -> Self {
         Self {
@@ -174,15 +197,27 @@ impl<T> AwaitableState<T> {
         read_fn(state)
     }
 
-    pub fn modify<A>(&self, write_fn: impl FnOnce(&mut T) -> A) -> A {
+    /// Conditionally modify the state. This method passes a guard to the provided function,
+    /// which only allows mutable access to the data via [ModifyGuard::get_mut]. If that method
+    /// is not called, waiters will not be woken up.
+    pub fn maybe_modify<A>(&self, write_fn: impl FnOnce(&mut ModifyGuard<T>) -> A) -> A {
         let mut guard = self.state.write().expect("not poisoned");
-        let state = &mut *guard;
-        let result = write_fn(state);
+        let mut state = ModifyGuard {
+            mut_ref: &mut *guard,
+            modified: false,
+        };
+        let result = write_fn(&mut state);
         // Notify everyone while holding the guard. This guarantees that all waiters will observe
-        // the just-updated state.
-        self.notify.notify_waiters();
+        // the just-updated state, assuming the state was accessed mutably.
+        if state.modified {
+            self.notify.notify_waiters();
+        }
         drop(guard);
         result
+    }
+
+    pub fn modify<A>(&self, write_fn: impl FnOnce(&mut T) -> A) -> A {
+        self.maybe_modify(|guard| write_fn(guard.get_mut()))
     }
 
     pub async fn wait_for<A>(&self, mut wait_fn: impl FnMut(&T) -> Option<A>) -> A {
