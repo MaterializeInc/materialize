@@ -13,7 +13,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastInto;
 use mz_persist_client::batch::ProtoBatch;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{CatalogItemId, Datum, RowArena};
+use mz_repr::{CatalogItemId, Datum, NotNullViolation, RowArena};
 use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
@@ -162,7 +162,6 @@ impl Coordinator {
         let source_mfp = return_if_err!(source_mfp, ctx);
 
         // Validate that all non-nullable columns in the target table will be populated.
-        // This is a runtime check to complement the planning-time validation.
         let target_desc = dest_table.desc.latest();
         for (col_idx, col_type) in target_desc.iter_types().enumerate() {
             if !col_type.nullable {
@@ -178,23 +177,18 @@ impl Coordinator {
                             if matches!(expr, mz_expr::MirScalarExpr::Literal(Ok(row), _) if row.iter().next().map(|d| d.is_null()).unwrap_or(false))
                             {
                                 let col_name = target_desc.get_name(col_idx);
-                                let msg = format!(
-                                    "column {} is NOT NULL but would be assigned a NULL value",
-                                    col_name
-                                );
-                                return ctx
-                                    .retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
+                                return ctx.retire(Err(AdapterError::ConstraintViolation(
+                                    NotNullViolation(col_name.clone()),
+                                )));
                             }
                         }
                     }
                 } else {
                     // If there's no projection for this column, that's a validation error
                     let col_name = target_desc.get_name(col_idx);
-                    let msg = format!(
-                        "column {} is NOT NULL but has no corresponding value in the MFP projection",
-                        col_name
-                    );
-                    return ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(msg))));
+                    return ctx.retire(Err(AdapterError::ConstraintViolation(NotNullViolation(
+                        col_name.clone(),
+                    ))));
                 }
             }
         }
