@@ -138,7 +138,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
-use tracing::{debug, trace};
+use tracing::debug;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -792,7 +792,7 @@ where
                     );
                     batch_descriptions.push(batch_description);
                     // Mint initial future batch descriptions at configurable intervals
-                    for i in 1..INITIAL_DESCRIPTIONS_TO_MINT + 1 {
+                    for i in 1..INITIAL_DESCRIPTIONS_TO_MINT {
                         let duration_millis = commit_interval.as_millis()
                             .checked_mul(u128::from(i))
                             .expect("commit interval multiplication overflow");
@@ -1173,7 +1173,7 @@ where
                 BTreeMap::new();
 
             // Track batches currently being written. When a row arrives, we check if it belongs
-            // to an in-flight batch. When frontiers advance past a batch's upper, we close the
+            // to an in-flight batch. When frontiers advance to a batch's upper, we close the
             // writer and emit its data files downstream.
             // Antichains don't implement Ord, so we use a HashMap with tuple keys instead.
             #[allow(clippy::disallowed_types)]
@@ -1354,7 +1354,6 @@ where
                                         }
                                     }
 
-                                    
                                     stashed_per_time.entry(ts).and_modify(|c| *c += 1).or_insert(1);
                                     let entry = stashed_rows.entry(row_ts).or_default();
                                     metrics.stashed_rows.inc();
@@ -1392,6 +1391,10 @@ where
                 ) || PartialOrder::less_than(&processed_input_frontier, &input_frontier)
                 {
                     // Close batches whose upper is now in the past
+                    // Upper bounds are exclusive, so we check if upper is less_equal to the frontier.
+                    // Remember: a frontier at x means all timestamps less than x have been observed.
+                    // Or, in other words we still might yet see timestamps at [x, infinity). X itself will
+                    // be covered by the _next_ batches lower inclusive bound, so we can safely close the batch if its upper is <= x.
                     let ready_batches: Vec<_> = in_flight_batches
                         .extract_if(|(lower, upper), _| {
                             PartialOrder::less_than(lower, &batch_description_frontier)
@@ -1572,6 +1575,11 @@ where
                     }
                 }
 
+                // Collect batches whose data files have all arrived.
+                // The writer emits all data files for a batch at a capability <= the batch's
+                // lower bound, then downgrades its capability to the batch's upper bound.
+                // So once the input frontier advances past lower, we know the writer has
+                // finished emitting files for this batch and dropped its capability.
                 let mut done_batches: Vec<_> = batch_descriptions
                     .keys()
                     .filter(|(lower, _upper)| {
