@@ -156,8 +156,8 @@ Plan Stage | Description
 **RAW PLAN** | Display the raw plan; this is closest to the original SQL.
 **DECORRELATED PLAN** | Display the decorrelated but not-yet-optimized plan.
 **LOCALLY OPTIMIZED** | Display the locally optimized plan (before view inlining and access path selection). This is the final stage for regular `CREATE VIEW` optimization.
-**OPTIMIZED PLAN** | _(Default)_ Display the optimized plan.
-**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping).
+**OPTIMIZED PLAN** | Display the optimized plan.
+**PHYSICAL PLAN** |  Display the physical plan; this corresponds to the operators shown in [`mz_introspection.mz_lir_mapping`](../../sql/system-catalog/mz_introspection/#mz_lir_mapping). _(Default)_
 
 ### Output modifiers
 
