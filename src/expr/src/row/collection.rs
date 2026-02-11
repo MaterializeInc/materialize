@@ -12,6 +12,7 @@
 use std::cell::RefCell;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
+use std::collections::binary_heap::PeekMut;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -201,7 +202,8 @@ impl RowCollection {
         let mut encoded = Vec::with_capacity(encoded_len);
         let mut metadata = Vec::with_capacity(metadata_len);
 
-        while let Some(Reverse(mut run)) = heap.pop() {
+        while let Some(mut peek) = heap.peek_mut() {
+            let Reverse(run) = &mut *peek;
             if let Some(next) = run.range.next() {
                 let (row, meta) = run.collection.get(next).unwrap();
                 encoded.extend(row.data());
@@ -209,8 +211,8 @@ impl RowCollection {
                     offset: encoded.len(),
                     diff: meta.diff,
                 });
-                if !run.range.is_empty() {
-                    heap.push(Reverse(run));
+                if run.range.is_empty() {
+                    PeekMut::pop(peek);
                 }
             }
         }
