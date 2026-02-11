@@ -151,9 +151,12 @@ impl PeekNotification {
     fn new(peek_response: &PeekResponse, offset: usize, limit: Option<usize>) -> Self {
         match peek_response {
             PeekResponse::Rows(rows) => {
-                let num_rows =
-                    u64::cast_from(RowCollection::offset_limit(rows.count(), offset, limit));
-                let result_size = u64::cast_from(rows.byte_len());
+                let num_rows = u64::cast_from(RowCollection::offset_limit(
+                    rows.iter().map(|r| r.count()).sum(),
+                    offset,
+                    limit,
+                ));
+                let result_size = u64::cast_from(rows.iter().map(|r| r.byte_len()).sum::<usize>());
 
                 tracing::trace!(?num_rows, ?result_size, "inline peek result");
 

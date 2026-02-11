@@ -1,8 +1,0 @@
-// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
-
-exports[`buildQueryHistoryUsersQuery > produces the expected query 1`] = `
-{
-  "parameters": [],
-  "sql": "select distinct "msh"."authenticated_user" as "email" from "mz_session_history" as "msh" where "connected_at" >= now() - INTERVAL '72 HOURS' order by "email"",
-}
-`;

@@ -236,7 +236,7 @@ where
         otel_ctx: OpenTelemetryContext,
     ) -> Option<ComputeResponse<T>> {
         let (merged, ready_shards) = self.peek_responses.entry(uuid).or_insert((
-            PeekResponse::Rows(RowCollection::default()),
+            PeekResponse::Rows(vec![RowCollection::default()]),
             BTreeSet::new(),
         ));
 
@@ -608,11 +608,11 @@ fn merge_peek_responses(
 
     match (resp1, resp2) {
         (Rows(mut rows1), Rows(rows2)) => {
-            rows1.merge(&rows2);
+            rows1.extend(rows2);
             Rows(rows1)
         }
         (Rows(rows), Stashed(mut stashed)) | (Stashed(mut stashed), Rows(rows)) => {
-            stashed.inline_rows.merge(&rows);
+            stashed.inline_rows.extend(rows);
             Stashed(stashed)
         }
         (Stashed(stashed1), Stashed(stashed2)) => {
@@ -651,7 +651,7 @@ fn merge_peek_responses(
             }
 
             batches1.append(&mut batches2);
-            inline_rows1.merge(&inline_rows2);
+            inline_rows1.extend(inline_rows2);
 
             Stashed(Box::new(StashedPeekResponse {
                 num_rows_batches: num_rows_batches1 + num_rows_batches2,

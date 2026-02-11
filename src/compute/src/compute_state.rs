@@ -1188,7 +1188,7 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(RowCollection::new(rows, &order_by)),
+                Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1600,7 +1600,7 @@ impl IndexPeek {
                         metrics
                             .row_collection_seconds
                             .observe(row_collection_start.elapsed().as_secs_f64());
-                        return PeekStatus::Ready(PeekResponse::Rows(collection));
+                        return PeekStatus::Ready(PeekResponse::Rows(vec![collection]));
                     } else {
                         // We can sort `results` and then truncate to `max_results`.
                         // This has an effect similar to a priority queue, without
@@ -1645,7 +1645,7 @@ impl IndexPeek {
         metrics
             .row_collection_seconds
             .observe(row_collection_start.elapsed().as_secs_f64());
-        PeekStatus::Ready(PeekResponse::Rows(collection))
+        PeekStatus::Ready(PeekResponse::Rows(vec![collection]))
     }
 }
 

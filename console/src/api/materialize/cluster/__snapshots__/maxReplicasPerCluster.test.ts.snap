@@ -1,8 +1,0 @@
-// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
-
-exports[`queries > buildMaxReplicasPerClusterQuery produces the expected query 1`] = `
-{
-  "parameters": [],
-  "sql": "SHOW max_replicas_per_cluster",
-}
-`;

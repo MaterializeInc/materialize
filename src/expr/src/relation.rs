@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
-use crate::row::{RowCollection, SortedRowCollectionIter};
+use crate::row::{RowCollection, RowCollectionIter};
 use crate::scalar::func::variadic::{
     JsonbBuildArray, JsonbBuildObject, ListCreate, ListIndex, MapBuild, RecordCreate,
 };
@@ -3690,7 +3690,7 @@ impl RowSetFinishing {
     /// Applies finishing actions to a [`RowCollection`], and reports the total
     /// time it took to run.
     ///
-    /// Returns a [`SortedRowCollectionIter`] that contains all of the response data, as
+    /// Returns a [`RowCollectionIter`] that contains all of the response data, as
     /// well as the size of the response in bytes.
     pub fn finish(
         &self,
@@ -3698,7 +3698,7 @@ impl RowSetFinishing {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         duration_histogram: &Histogram,
-    ) -> Result<(SortedRowCollectionIter, usize), String> {
+    ) -> Result<(RowCollectionIter, usize), String> {
         let now = Instant::now();
         let result = self.finish_inner(rows, max_result_size, max_returned_query_size);
         let duration = now.elapsed();
@@ -3713,7 +3713,7 @@ impl RowSetFinishing {
         rows: RowCollection,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<(SortedRowCollectionIter, usize), String> {
+    ) -> Result<(RowCollectionIter, usize), String> {
         // How much additional memory is required to make a sorted view.
         let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
         let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
@@ -3724,7 +3724,7 @@ impl RowSetFinishing {
             return Err(format!("result exceeds max size of {max_bytes}",));
         }
 
-        let sorted_view = rows.sorted_view(&self.order_by);
+        let sorted_view = rows;
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.offset)
@@ -3806,14 +3806,14 @@ impl RowSetFinishingIncremental {
     /// Applies finishing actions to the given [`RowCollection`], and reports
     /// the total time it took to run.
     ///
-    /// Returns a [`SortedRowCollectionIter`] that contains all of the response
+    /// Returns a [`RowCollectionIter`] that contains all of the response
     /// data.
     pub fn finish_incremental(
         &mut self,
         rows: RowCollection,
         max_result_size: u64,
         duration_histogram: &Histogram,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<RowCollectionIter, String> {
         let now = Instant::now();
         let result = self.finish_incremental_inner(rows, max_result_size);
         let duration = now.elapsed();
@@ -3826,7 +3826,7 @@ impl RowSetFinishingIncremental {
         &mut self,
         rows: RowCollection,
         max_result_size: u64,
-    ) -> Result<SortedRowCollectionIter, String> {
+    ) -> Result<RowCollectionIter, String> {
         // How much additional memory is required to make a sorted view.
         let sorted_view_mem = rows.entries().saturating_mul(std::mem::size_of::<usize>());
         let required_memory = rows.byte_len().saturating_add(sorted_view_mem);
@@ -3839,7 +3839,7 @@ impl RowSetFinishingIncremental {
 
         let batch_num_rows = rows.count();
 
-        let sorted_view = rows.sorted_view(&[]);
+        let sorted_view = rows;
         let mut iter = sorted_view
             .into_row_iter()
             .apply_offset(self.remaining_offset)

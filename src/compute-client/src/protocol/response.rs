@@ -190,7 +190,7 @@ impl<T> FrontiersResponse<T> {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
-    Rows(RowCollection),
+    Rows(Vec<RowCollection>),
     /// Results of the peek were stashed in persist batches.
     Stashed(Box<StashedPeekResponse>),
     /// Error of an unsuccessful peek.
@@ -203,8 +203,8 @@ impl PeekResponse {
     /// Return the size of row bytes stored inline in this response.
     pub fn inline_byte_len(&self) -> usize {
         match self {
-            Self::Rows(rows) => rows.byte_len(),
-            Self::Stashed(stashed) => stashed.inline_rows.byte_len(),
+            Self::Rows(rows) => rows.iter().map(|r| r.byte_len()).sum(),
+            Self::Stashed(stashed) => stashed.inline_rows.iter().map(|r| r.byte_len()).sum(),
             Self::Error(_) | Self::Canceled => 0,
         }
     }
@@ -232,7 +232,7 @@ pub struct StashedPeekResponse {
     ///
     /// We will have a mix of stashed responses and inline responses because the
     /// result sizes across different workers can and will vary.
-    pub inline_rows: RowCollection,
+    pub inline_rows: Vec<RowCollection>,
 }
 
 impl StashedPeekResponse {
@@ -240,13 +240,13 @@ impl StashedPeekResponse {
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
-        let num_inline_rows = self.inline_rows.count();
+        let num_inline_rows: usize = self.inline_rows.iter().map(|r| r.count()).sum();
         RowCollection::offset_limit(num_stashed_rows + num_inline_rows, offset, limit)
     }
 
     /// The size in bytes of the encoded rows in this result.
     pub fn size_bytes(&self) -> usize {
-        let inline_size = self.inline_rows.byte_len();
+        let inline_size: usize = self.inline_rows.iter().map(|r| r.byte_len()).sum();
 
         self.encoded_size_bytes + inline_size
     }
@@ -328,6 +328,6 @@ mod tests {
     /// Test to ensure the size of the `ComputeResponse` enum doesn't regress.
     #[mz_ore::test]
     fn test_compute_response_size() {
-        assert_eq!(std::mem::size_of::<ComputeResponse>(), 120);
+        assert_eq!(std::mem::size_of::<ComputeResponse>(), 112);
     }
 }

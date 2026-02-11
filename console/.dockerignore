@@ -1,7 +1,0 @@
-# Ignore unused files
-.vite
-.yarn
-node_modules
-
-# Ignore local build artifacts
-dist

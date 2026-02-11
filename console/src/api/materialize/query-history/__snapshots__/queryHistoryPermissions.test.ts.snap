@@ -1,8 +1,0 @@
-// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
-
-exports[`buildPermissionsQuery > produces the expected query 1`] = `
-{
-  "parameters": [],
-  "sql": "select (has_table_privilege('mz_recent_activity_log', 'select') or mz_is_superuser()) as "activityLogUsage", (has_table_privilege('mz_recent_activity_log_redacted', 'select') or mz_is_superuser()) as "activityLogRedactedUsage"",
-}
-`;

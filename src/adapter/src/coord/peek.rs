@@ -913,6 +913,7 @@ impl crate::coord::Coordinator {
 
             match rows {
                 PeekResponse::Rows(rows) => {
+                    let rows = RowCollection::merge_sorted(&rows, &finishing.order_by);
                     match finishing.finish(
                         rows,
                         max_result_size,
@@ -985,9 +986,11 @@ impl crate::coord::Coordinator {
                         // wanted to get a consistent ordering. That's not
                         // needed for correctness! But might be nice for more
                         // aesthetic reasons.
-                        let result = tx.send(response.inline_rows).await;
-                        if result.is_err() {
-                            tracing::debug!("receiver went away");
+                        for rows in response.inline_rows {
+                            let result = tx.send(rows).await;
+                            if result.is_err() {
+                                tracing::debug!("receiver went away");
+                            }
                         }
 
                         let mut current_batch = Vec::new();
