@@ -24,6 +24,7 @@ pub mod foundationdb_oracle;
 pub mod metrics;
 pub mod postgres_oracle;
 pub mod retry;
+pub mod sqlite_oracle;
 
 pub use config::TimestampOracleConfig;
 

@@ -18,6 +18,4 @@ RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
 
 USER materialize
 
-RUN /usr/lib/postgresql/18/bin/initdb -D /mzdata/postgres -U root --auth-local=trust
-
 ENTRYPOINT ["tini", "--", "entrypoint.sh"]

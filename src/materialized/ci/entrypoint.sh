@@ -52,42 +52,6 @@ else
     unset LD_PRELOAD
 fi
 
-export PGUSER=root
-
-# Start PostgreSQL, unless suppressed.
-if ! is_truthy "${MZ_NO_BUILTIN_POSTGRES:-0}"; then
-  PGDATA=/mzdata/postgres
-  export PGPORT=26257
-  export PGDATABASE=root
-
-  # Should exist already, but /mzdata might be overwritten with a fresh volume
-  if [ ! -f $PGDATA/PG_VERSION ]; then
-    mkdir -p $PGDATA
-    /usr/lib/postgresql/18/bin/initdb -D $PGDATA -U $PGUSER --auth-local=trust
-  fi
-
-  # Might have been killed hard
-  rm -f $PGDATA/postmaster.pid
-  /usr/lib/postgresql/18/bin/postgres -D $PGDATA \
-      -c listen_addresses='*' \
-      -c unix_socket_directories=/var/run/postgresql \
-      -c config_file=/etc/postgresql/postgresql.conf > /mzdata/postgres/postgres.log 2>&1 &
-  PGPID=$!
-
-  trap 'kill -INT $PGPID; wait $PGPID' SIGTERM SIGINT
-
-  until /usr/lib/postgresql/18/bin/pg_isready > /dev/null 2>&1; do
-    sleep 0.01
-  done
-
-  psql -d template1 -c "CREATE DATABASE $PGUSER OWNER $PGUSER;" > /dev/null 2>&1 || true
-  psql -c "ALTER USER $PGUSER WITH PASSWORD 'root'; \
-           CREATE SCHEMA IF NOT EXISTS consensus; \
-           CREATE SCHEMA IF NOT EXISTS storage; \
-           CREATE SCHEMA IF NOT EXISTS adapter; \
-           CREATE SCHEMA IF NOT EXISTS tsoracle;"
-fi
-
 # Start nginx to serve the console.
 if ! is_truthy "${MZ_NO_BUILTIN_CONSOLE:-0}"; then
   nginx &
@@ -108,14 +72,9 @@ export MZ_INTERNAL_SQL_LISTEN_ADDR=${MZ_INTERNAL_SQL_LISTEN_ADDR:-0.0.0.0:6877}
 export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878}
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
-if is_truthy "${MZ_NO_EXTERNAL_CLUSTERD:-0}"; then
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
-else
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@$(hostname):26257/?options=--search_path=consensus}
-fi
+export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-sqlite:///mzdata/persist/consensus.db}
 export MZ_PERSIST_BLOB_URL=${MZ_PERSIST_BLOB_URL:-file:///mzdata/persist/blob}
-export MZ_ADAPTER_STASH_URL=${MZ_ADAPTER_STASH_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=adapter}
-export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=tsoracle}
+export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-sqlite:///mzdata/persist/oracle.db}
 export MZ_ORCHESTRATOR=${MZ_ORCHESTRATOR:-process}
 export MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SECRETS_DIRECTORY:-/mzdata/secrets}
 export MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY=${MZ_ORCHESTRATOR_PROCESS_SCRATCH_DIRECTORY:-/scratch}

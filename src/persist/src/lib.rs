@@ -32,6 +32,7 @@ pub mod metrics;
 pub mod postgres;
 pub mod retry;
 pub mod s3;
+pub mod sqlite;
 #[cfg(feature = "turmoil")]
 pub mod turmoil;
 pub mod unreliable;

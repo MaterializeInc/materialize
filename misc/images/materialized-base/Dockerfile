@@ -29,7 +29,6 @@ RUN groupadd --system --gid=999 materialize \
         curl \
         gettext-base \
         nginx \
-        postgresql-18 \
         openssh-client \
         tini \
     && if [ "$CI_SANITIZER" != "none" ]; then \
@@ -37,33 +36,9 @@ RUN groupadd --system --gid=999 materialize \
        fi \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
-    && rm -rf /var/lib/postgresql \
-    # Remove unused PostgreSQL binaries (keep only postgres, initdb, pg_isready, pg_ctl, psql) \
-    && find /usr/lib/postgresql/18/bin -type f \
-        ! -name postgres ! -name initdb ! -name pg_isready ! -name pg_ctl ! -name psql \
-        -delete \
-    # Remove PostgreSQL client binaries except psql \
-    && find /usr/bin -name 'pg_*' -delete \
-    # Remove docs, man pages \
-    && rm -rf /usr/share/postgresql/18/man \
-    && rm -rf /usr/share/doc/postgresql* \
-    # Remove LLVM bitcode (PostgreSQL JIT support, not used) \
-    && rm -rf /usr/lib/postgresql/18/lib/bitcode \
-    # Remove pgxs (extension build infrastructure) \
-    && rm -rf /usr/lib/postgresql/18/lib/pgxs \
-    # Remove static libraries \
-    && find /usr/lib/postgresql -name '*.a' -delete \
-    # Remove unused extension SQL files (keep only plpgsql which is needed for initdb) \
-    && find /usr/share/postgresql/18/extension -type f \
-        ! -name 'plpgsql*' -delete \
-    # Remove nginx docs and unnecessary files \
-    && rm -rf /usr/share/doc/nginx* \
-    && rm -rf /usr/share/nginx/modules-available \
-    && mkdir -p /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx \
+    && mkdir -p /mzdata/persist /scratch /var/lib/nginx /var/log/nginx \
     && touch /run/nginx.pid \
-    && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
-
-COPY postgresql.conf pg_hba.conf /etc/postgresql/
+    && chown -R materialize /mzdata /scratch /var/lib/nginx /var/log/nginx /run/nginx.pid
 
 COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
 COPY console_nginx.template /etc/nginx/templates/default.conf.template

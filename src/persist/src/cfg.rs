@@ -30,6 +30,7 @@ use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
 use crate::s3::{S3Blob, S3BlobConfig};
+use crate::sqlite::{SqliteConsensus, SqliteConsensusConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
@@ -229,6 +230,8 @@ pub enum ConsensusConfig {
     FoundationDB(FdbConsensusConfig),
     /// Config for [PostgresConsensus].
     Postgres(PostgresConsensusConfig),
+    /// Config for [SqliteConsensus].
+    Sqlite(SqliteConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
     Mem,
     #[cfg(feature = "turmoil")]
@@ -247,6 +250,7 @@ impl ConsensusConfig {
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
+            ConsensusConfig::Sqlite(config) => Ok(Arc::new(SqliteConsensus::open(config).await?)),
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
             #[cfg(feature = "turmoil")]
             ConsensusConfig::Turmoil(config) => {
@@ -270,6 +274,9 @@ impl ConsensusConfig {
             "postgres" | "postgresql" => Ok(ConsensusConfig::Postgres(
                 PostgresConsensusConfig::new(url, knobs, metrics, dyncfg)?,
             )),
+            "sqlite" => Ok(ConsensusConfig::Sqlite(SqliteConsensusConfig::from_url(
+                url,
+            )?)),
             "mem" => {
                 if !cfg!(debug_assertions) {
                     warn!("persist unexpectedly using in-mem consensus in a release binary");

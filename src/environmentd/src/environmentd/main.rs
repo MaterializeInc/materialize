@@ -989,13 +989,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.metadata_backend_url
             .as_ref()
             .map(|metadata_backend_url| {
-                SensitiveUrl(
-                    Url::parse_with_params(
-                        metadata_backend_url.0.as_ref(),
-                        &[("options", "--search_path=consensus")],
+                if metadata_backend_url.0.scheme() == "sqlite" {
+                    metadata_backend_url.clone()
+                } else {
+                    SensitiveUrl(
+                        Url::parse_with_params(
+                            metadata_backend_url.0.as_ref(),
+                            &[("options", "--search_path=consensus")],
+                        )
+                        .unwrap(),
                     )
-                    .unwrap(),
-                )
+                }
             })
             .expect("either --persist-consensus-url or --metadata-backend-url must be provided")
     });
@@ -1003,13 +1007,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         args.metadata_backend_url
             .as_ref()
             .map(|metadata_backend_url| {
-                SensitiveUrl(
-                    Url::parse_with_params(
-                        metadata_backend_url.0.as_ref(),
-                        &[("options", "--search_path=tsoracle")],
+                if metadata_backend_url.0.scheme() == "sqlite" {
+                    metadata_backend_url.clone()
+                } else {
+                    SensitiveUrl(
+                        Url::parse_with_params(
+                            metadata_backend_url.0.as_ref(),
+                            &[("options", "--search_path=tsoracle")],
+                        )
+                        .unwrap(),
                     )
-                    .unwrap(),
-                )
+                }
             })
     });
 

@@ -278,6 +278,13 @@ class Materialized(Service):
                 min_version = MzVersion.parse_mz("v26.9.0")
                 if image_version is None or image_version >= min_version:
                     volumes += foundationdb.fdb_cluster_file(external_metadata_store)
+        else:
+            # No external metadata store: use SQLite for consensus and
+            # timestamp oracle (no internal PostgreSQL needed).
+            command += [
+                "--persist-consensus-url=sqlite:///mzdata/persist/consensus.db",
+                "--timestamp-oracle-url=sqlite:///mzdata/persist/oracle.db",
+            ]
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",

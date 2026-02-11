@@ -27,6 +27,7 @@ use crate::metrics::Metrics;
 use crate::postgres_oracle::{
     PostgresTimestampOracle, PostgresTimestampOracleConfig, TimestampOracleParameters,
 };
+use crate::sqlite_oracle::{SqliteTimestampOracle, SqliteTimestampOracleConfig};
 
 /// Unified configuration for timestamp oracles.
 ///
@@ -39,6 +40,8 @@ pub enum TimestampOracleConfig {
     /// Use a FoundationDB-backed timestamp oracle.
     #[cfg(feature = "foundationdb")]
     Fdb(FdbTimestampOracleConfig),
+    /// Use a SQLite-backed timestamp oracle.
+    Sqlite(SqliteTimestampOracleConfig),
 }
 
 impl TimestampOracleConfig {
@@ -62,10 +65,11 @@ impl TimestampOracleConfig {
             "foundationdb" => {
                 anyhow::bail!("FoundationDB timestamp oracle is not supported on this platform")
             }
+            "sqlite" => Ok(Self::new_sqlite(url, metrics_registry)?),
             _ => {
                 anyhow::bail!(
                     "unsupported timestamp oracle URL scheme: '{}'. \
-                     Supported schemes: postgres, postgresql, foundationdb",
+                     Supported schemes: postgres, postgresql, foundationdb, sqlite",
                     scheme
                 )
             }
@@ -83,12 +87,23 @@ impl TimestampOracleConfig {
         TimestampOracleConfig::Fdb(FdbTimestampOracleConfig::new(url, metrics_registry))
     }
 
+    /// Create a new SQLite-backed timestamp oracle configuration.
+    pub fn new_sqlite(
+        url: &SensitiveUrl,
+        metrics_registry: &MetricsRegistry,
+    ) -> Result<Self, anyhow::Error> {
+        Ok(TimestampOracleConfig::Sqlite(
+            SqliteTimestampOracleConfig::from_url(url, metrics_registry)?,
+        ))
+    }
+
     /// Returns the metrics for this configuration.
     pub fn metrics(&self) -> Arc<Metrics> {
         match self {
             TimestampOracleConfig::Postgres(config) => Arc::clone(config.metrics()),
             #[cfg(feature = "foundationdb")]
             TimestampOracleConfig::Fdb(config) => Arc::clone(config.metrics()),
+            TimestampOracleConfig::Sqlite(config) => Arc::clone(config.metrics()),
         }
     }
 
@@ -124,6 +139,16 @@ impl TimestampOracleConfig {
                 .expect("failed to open FdbTimestampOracle");
                 Arc::new(fdb_oracle)
             }
+            TimestampOracleConfig::Sqlite(config) => Arc::new(
+                SqliteTimestampOracle::open(
+                    config.clone(),
+                    timeline,
+                    initially,
+                    now_fn.clone(),
+                    read_only,
+                )
+                .await,
+            ),
         }
     }
 
@@ -139,6 +164,9 @@ impl TimestampOracleConfig {
             TimestampOracleConfig::Fdb(config) => {
                 FdbTimestampOracle::<NowFn>::get_all_timelines(config.clone()).await
             }
+            TimestampOracleConfig::Sqlite(config) => {
+                SqliteTimestampOracle::<NowFn>::get_all_timelines(config.clone()).await
+            }
         }
     }
 
@@ -146,8 +174,7 @@ impl TimestampOracleConfig {
     ///
     /// This is a no-op for non-Postgres backends.
     pub fn apply_parameters(&self, params: TimestampOracleParameters) {
-        // Only the Postgres oracle supports parameters for now.
-        #[allow(irrefutable_let_patterns)]
+        // Only the Postgres oracle supports dynamic parameters for now.
         if let TimestampOracleConfig::Postgres(pg_config) = self {
             params.apply(pg_config)
         }
