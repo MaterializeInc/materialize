@@ -1417,6 +1417,13 @@ impl<'a> From<&'a [u8]> for Datum<'a> {
     }
 }
 
+impl<'a, const N: usize> From<&'a [u8; N]> for Datum<'a> {
+    #[inline]
+    fn from(b: &'a [u8; N]) -> Datum<'a> {
+        Datum::Bytes(b.as_slice())
+    }
+}
+
 impl<'a> From<Date> for Datum<'a> {
     #[inline]
     fn from(d: Date) -> Datum<'a> {
