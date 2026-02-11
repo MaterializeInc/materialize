@@ -11,20 +11,6 @@
 
 const hpccWasm = window['@hpcc-js/wasm'];
 
-async function query(sql) {
-  const response = await fetch('/api/sql', {
-    method: 'POST',
-    body: JSON.stringify({ query: sql }),
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw `request failed: ${response.status} ${response.statusText}: ${text}`;
-  }
-  const data = await response.json();
-  return data;
-}
-
 function formatNameForQuery(name) {
   return `'${name.replace('\'', '\'\'')}'`;
 }

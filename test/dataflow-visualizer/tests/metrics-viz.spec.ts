@@ -51,7 +51,7 @@ test.describe('/metrics-viz page', () => {
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
 
     // At least one metric group should be visible
-    const groups = page.locator('.metric-group');
+    const groups = page.locator('[aria-label="metric-group"]');
     await expect(groups.first()).toBeVisible({ timeout: 10000 });
     const groupCount = await groups.count();
     expect(groupCount).toBeGreaterThan(0);
@@ -63,15 +63,15 @@ test.describe('/metrics-viz page', () => {
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
 
     // Wait for groups to render
-    await expect(page.locator('.metric-group').first()).toBeVisible({ timeout: 10000 });
-    const groupsBefore = await page.locator('.metric-group').count();
+    await expect(page.locator('[aria-label="metric-group"]').first()).toBeVisible({ timeout: 10000 });
+    const groupsBefore = await page.locator('[aria-label="metric-group"]').count();
 
     // Type a search term that should filter results
-    const searchBox = page.locator('.search-box');
+    const searchBox = page.locator('[aria-label="search-box"]');
     await searchBox.fill('mz_adapter');
 
     // Wait a moment for the filter to take effect
-    const groupsAfter = await page.locator('.metric-group').count();
+    const groupsAfter = await page.locator('[aria-label="metric-group"]').count();
     // Should have fewer groups after filtering (or same if only one matches)
     expect(groupsAfter).toBeLessThanOrEqual(groupsBefore);
     expect(groupsAfter).toBeGreaterThan(0);
@@ -83,14 +83,14 @@ test.describe('/metrics-viz page', () => {
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
 
     // Wait for groups to render
-    await expect(page.locator('.metric-group').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[aria-label="metric-group"]').first()).toBeVisible({ timeout: 10000 });
 
     // Find the first group header and click it to expand
-    const firstGroupHeader = page.locator('.metric-group > div').first();
+    const firstGroupHeader = page.locator('[aria-label="metric-group"] > div').first();
     await firstGroupHeader.click();
 
     // After clicking, metric families should be visible inside
-    const families = page.locator('.metric-family');
+    const families = page.locator('[aria-label="metric-family"]');
     await expect(families.first()).toBeVisible({ timeout: 5000 });
 
     // Click again to collapse
@@ -106,14 +106,14 @@ test.describe('/metrics-viz page', () => {
     await expect(page.locator('text=Loading metrics...')).toBeHidden({ timeout: 15000 });
 
     // Wait for groups to render first
-    await expect(page.locator('.metric-group').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[aria-label="metric-group"]').first()).toBeVisible({ timeout: 10000 });
 
     // Search for histogram metrics to find them
-    const searchBox = page.locator('.search-box');
+    const searchBox = page.locator('[aria-label="search-box"]');
     await searchBox.fill('histogram');
 
     // If there are histogram metrics, expand a group and check for SVG
-    const groups = page.locator('.metric-group');
+    const groups = page.locator('[aria-label="metric-group"]');
     const groupCount = await groups.count();
 
     if (groupCount === 0) {
@@ -121,17 +121,17 @@ test.describe('/metrics-viz page', () => {
       await searchBox.fill('duration');
     }
 
-    const groupCount2 = await page.locator('.metric-group').count();
+    const groupCount2 = await page.locator('[aria-label="metric-group"]').count();
     if (groupCount2 === 0) {
       test.skip();
       return;
     }
 
     // Expand the first group
-    await page.locator('.metric-group > div').first().click();
+    await page.locator('[aria-label="metric-group"] > div').first().click();
 
     // Look for histogram chart SVG
-    const chartSvg = page.locator('.histogram-chart svg');
+    const chartSvg = page.locator('[aria-label="histogram-chart"] svg');
     const svgCount = await chartSvg.count();
     // There should be at least one histogram chart if we found histogram metrics
     if (svgCount > 0) {

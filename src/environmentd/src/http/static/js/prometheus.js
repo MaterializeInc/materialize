@@ -27,14 +27,14 @@ function parsePrometheusText(text) {
       if (spaceIdx === -1) continue;
       const name = rest.slice(0, spaceIdx);
       const help = rest.slice(spaceIdx + 1);
-      ensureFamily(families, name).help = help;
+      updateFamily(families, name, { help });
     } else if (line.startsWith('# TYPE ')) {
       const rest = line.slice(7);
       const spaceIdx = rest.indexOf(' ');
       if (spaceIdx === -1) continue;
       const name = rest.slice(0, spaceIdx);
       const type = rest.slice(spaceIdx + 1);
-      ensureFamily(families, name).type = type;
+      updateFamily(families, name, { type });
     }
   }
 
@@ -63,7 +63,7 @@ function parsePrometheusText(text) {
 
     if (!familyName) {
       familyName = metricName;
-      ensureFamily(families, familyName);
+      updateFamily(families, familyName);
     }
 
     families.get(familyName).samples.push({ metricName, labels, value, raw: line });
@@ -90,11 +90,14 @@ function parsePrometheusText(text) {
   return { families, groups };
 }
 
-function ensureFamily(families, name) {
+function updateFamily(families, name, { help, type } = {}) {
   if (!families.has(name)) {
     families.set(name, { name, help: '', type: 'untyped', samples: [] });
   }
-  return families.get(name);
+  const family = families.get(name);
+  if (help !== undefined) family.help = help;
+  if (type !== undefined) family.type = type;
+  return family;
 }
 
 /**
@@ -120,7 +123,7 @@ function buildSeries(family) {
   if (isHistogram) {
     buildHistogramSeries(family);
   } else {
-    buildScalarSeries(family);
+    family.series = buildScalarSeries(family);
   }
 }
 
@@ -178,7 +181,7 @@ function buildScalarSeries(family) {
   const mainSamples = family.samples.filter(s =>
     s.metricName === family.name || s.metricName === family.name + '_total'
   );
-  family.series = mainSamples.map(s => ({ labels: s.labels, value: s.value }));
+  return mainSamples.map(s => ({ labels: s.labels, value: s.value }));
 }
 
 // --- Line parsing ---
@@ -207,29 +210,9 @@ function parseSampleLine(line) {
 function parseLabels(str) {
   const labels = {};
   if (!str) return labels;
-  let i = 0;
-  while (i < str.length) {
-    while (i < str.length && (str[i] === ',' || str[i] === ' ')) i++;
-    if (i >= str.length) break;
-    const eqIdx = str.indexOf('=', i);
-    if (eqIdx === -1) break;
-    const key = str.slice(i, eqIdx);
-    if (str[eqIdx + 1] !== '"') break;
-    let j = eqIdx + 2;
-    let value = '';
-    while (j < str.length) {
-      if (str[j] === '\\' && j + 1 < str.length) {
-        value += str[j + 1];
-        j += 2;
-      } else if (str[j] === '"') {
-        break;
-      } else {
-        value += str[j];
-        j++;
-      }
-    }
-    labels[key] = value;
-    i = j + 1;
+  const re = /(\w+)="([^"]*)"/g;
+  for (const m of str.matchAll(re)) {
+    labels[m[1]] = m[2];
   }
   return labels;
 }

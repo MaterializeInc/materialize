@@ -14,25 +14,6 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 // Max samples before requiring expand to see values
 const AUTO_SHOW_THRESHOLD = 5;
 
-async function query(sql) {
-  const response = await fetch('/api/sql', {
-    method: 'POST',
-    body: JSON.stringify({ query: sql }),
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    throw `request failed: ${response.status} ${response.statusText}: ${text}`;
-  }
-  const data = await response.json();
-  for (const result of data.results) {
-    if (result.error) {
-      throw `SQL error: ${result.error.message}`;
-    }
-  }
-  return data;
-}
-
 async function fetchMetrics(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -57,7 +38,7 @@ async function discoverEndpoints() {
         LEFT JOIN mz_catalog.mz_cluster_replica_sizes sz ON sz.size = r.size
       ORDER BY c.name, r.name
     `);
-    const rows = data.results[0].rows;
+    const rows = data.results[0]?.rows ?? [];
     for (const [clusterId, clusterName, replicaId, replicaName, processes] of rows) {
       const numProcesses = parseInt(processes, 10) || 1;
       for (let p = 0; p < numProcesses; p++) {
@@ -432,7 +413,7 @@ function HistogramChart({ buckets, width }) {
       .style('font-size', '10px');
   }, [buckets, chartWidth]);
 
-  return <div ref={ref} className="histogram-chart" />;
+  return <div ref={ref} aria-label="histogram-chart" />;
 }
 
 function HistogramSeriesDisplay({ series }) {
@@ -481,24 +462,16 @@ function HistogramDisplay({ seriesList }) {
   );
 }
 
-// --- Raw data (collapsible) ---
+// --- Expandable (collapsible) ---
 
-function RawData({ family }) {
+function Expandable({ children, type, numValues }) {
   const [expanded, setExpanded] = useState(false);
-  const rawText = family.samples.map(s => s.raw).join('\n');
   return (
     <div style={{ marginTop: '4px' }}>
       <button style={styles.rawToggle} onClick={() => setExpanded(!expanded)}>
-        {expanded ? 'hide raw' : 'show raw'} ({family.samples.length} lines)
+        {expanded ? `hide ${type}` : `show ${type}`} ({numValues} values)
       </button>
-      {expanded && (
-        <div style={{ position: 'relative' }}>
-          <div style={{ position: 'absolute', top: '4px', right: '4px' }}>
-            <CopyButton getText={() => rawText} />
-          </div>
-          <pre style={styles.rawPre}>{rawText}</pre>
-        </div>
-      )}
+      {expanded && children}
     </div>
   );
 }
@@ -554,7 +527,7 @@ function MetricFamily({ family, prevFamilies, dtSeconds }) {
   }, [aggScalar, prevFamily, dtSeconds, selectedLabels, prevLabelNames, isScalar]);
 
   return (
-    <div style={styles.familyCard} className="metric-family">
+    <div style={styles.familyCard} aria-label="metric-family">
       <div style={styles.familyHeader}>
         <TypeBadge type={family.type} />
         <span style={styles.familyName}>{family.name}</span>
@@ -575,7 +548,9 @@ function MetricFamily({ family, prevFamilies, dtSeconds }) {
         isFewValues || displayScalar.series.length <= AUTO_SHOW_THRESHOLD ? (
           <ScalarTable series={displayScalar.series} labelNames={displayScalar.labelNames} metricType={family.type} />
         ) : (
-          <CollapsibleScalarTable series={displayScalar.series} labelNames={displayScalar.labelNames} metricType={family.type} />
+          <Expandable type="table" numValues={displayScalar.series.length}>
+            <ScalarTable series={displayScalar.series} labelNames={displayScalar.labelNames} metricType={family.type} />
+          </Expandable>
         )
       )}
 
@@ -595,15 +570,17 @@ function MetricFamily({ family, prevFamilies, dtSeconds }) {
   );
 }
 
-function CollapsibleScalarTable({ series, labelNames, metricType }) {
-  const [expanded, setExpanded] = useState(false);
+function RawData({ family }) {
+  const rawText = family.samples.map(s => s.raw).join('\n');
   return (
-    <div>
-      <button style={styles.rawToggle} onClick={() => setExpanded(!expanded)}>
-        {expanded ? 'hide table' : 'show table'} ({series.length} values)
-      </button>
-      {expanded && <ScalarTable series={series} labelNames={labelNames} metricType={metricType} />}
-    </div>
+    <Expandable type="raw" numValues={family.samples.length}>
+      <div style={{ position: 'relative' }}>
+        <div style={{ position: 'absolute', top: '4px', right: '4px' }}>
+          <CopyButton getText={() => rawText} />
+        </div>
+        <pre style={styles.rawPre}>{rawText}</pre>
+      </div>
+    </Expandable>
   );
 }
 
@@ -612,7 +589,7 @@ function CollapsibleScalarTable({ series, labelNames, metricType }) {
 function MetricGroup({ prefix, names, families, defaultExpanded, prevFamilies, dtSeconds }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   return (
-    <div className="metric-group" style={{ marginBottom: '8px' }}>
+    <div aria-label="metric-group" style={{ marginBottom: '8px' }}>
       <div style={styles.groupHeader} onClick={() => setExpanded(!expanded)}>
         <span>{prefix} ({names.length} metrics)</span>
         <span>{expanded ? '\u25BC' : '\u25B6'}</span>
@@ -812,7 +789,7 @@ function MetricsApp() {
             placeholder="Search metrics..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="search-box"
+            aria-label="search-box"
           />
           {search && (
             <button
