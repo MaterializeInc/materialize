@@ -657,6 +657,7 @@ where
                 %name_for_logging,
                 resume_upper = %resume_upper.pretty(),
                 resume_version,
+                as_of = %as_of.pretty(),
                 "iceberg mint resume position loaded"
             );
 
@@ -1187,6 +1188,9 @@ where
             let mut input_frontier = Antichain::from_elem(Timestamp::minimum());
             let mut processed_input_frontier = Antichain::from_elem(Timestamp::minimum());
 
+            // Track the minimum batch lower bound to prune data that's already committed
+            let mut min_batch_lower: Option<Antichain<Timestamp>> = None;
+
             while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
                 let mut staged_messages_since_flush: u64 = 0;
                 tokio::select! {
@@ -1199,6 +1203,44 @@ where
                         Event::Data(_cap, data) => {
                             for batch_desc in data {
                                 let (lower, upper) = &batch_desc;
+
+                                // Track the minimum batch lower bound (first batch received)
+                                if min_batch_lower.is_none() {
+                                    min_batch_lower = Some(lower.clone());
+                                    debug!(
+                                        "{}: set min_batch_lower to {}",
+                                        name_for_logging,
+                                        lower.pretty()
+                                    );
+
+                                    // Prune any stashed rows that arrived before min_batch_lower (already committed)
+                                    let to_remove: Vec<_> = stashed_rows
+                                        .keys()
+                                        .filter(|ts| {
+                                            let ts_antichain = Antichain::from_elem((*ts).clone());
+                                            PartialOrder::less_than(&ts_antichain, lower)
+                                        })
+                                        .cloned()
+                                        .collect();
+
+                                    if !to_remove.is_empty() {
+                                        let mut removed_count = 0;
+                                        for ts in to_remove {
+                                            if let Some(rows) = stashed_rows.remove(&ts) {
+                                                removed_count += rows.len();
+                                                for _ in &rows {
+                                                    metrics.stashed_rows.dec();
+                                                }
+                                            }
+                                        }
+                                        debug!(
+                                            "{}: pruned {} already-committed rows (< min_batch_lower)",
+                                            name_for_logging,
+                                            removed_count
+                                        );
+                                    }
+                                }
+
                                 // Disable seen_rows tracking for snapshot batch to save memory
                                 let is_snapshot = lower == &as_of;
                                 debug!(
@@ -1270,6 +1312,8 @@ where
                 for event in ready_events {
                     match event {
                         Event::Data(_cap, data) => {
+                            let mut dropped_per_time = BTreeMap::new();
+                            let mut stashed_per_time = BTreeMap::new();
                             for ((row, diff_pair), ts, _diff) in data {
                                 let row_ts = ts.clone();
                                 let ts_antichain = Antichain::from_elem(row_ts.clone());
@@ -1302,27 +1346,34 @@ where
                                     }
                                 }
                                 if !written {
-                                    // ...otherwise stash it for later
-                                    trace!(
-                                        "{}: stashing row at timestamp {}",
-                                        name_for_logging, row_ts
-                                    );
+                                    // Drop data that's before the first batch we received (already committed)
+                                    if let Some(ref min_lower) = min_batch_lower {
+                                        if PartialOrder::less_than(&ts_antichain, min_lower) {
+                                            dropped_per_time.entry(ts_antichain.into_option().unwrap()).and_modify(|c| *c += 1).or_insert(1);
+                                            continue;
+                                        }
+                                    }
+
+                                    
+                                    stashed_per_time.entry(ts).and_modify(|c| *c += 1).or_insert(1);
                                     let entry = stashed_rows.entry(row_ts).or_default();
                                     metrics.stashed_rows.inc();
                                     entry.push((row, diff_pair));
-
-                                    // Periodically warn if stashed rows are growing
-                                    let total_stashed: usize =
-                                        stashed_rows.values().map(|v| v.len()).sum();
-                                    if total_stashed > 0 && total_stashed % 10000 == 0 {
-                                        debug!(
-                                            "{}: {} rows stashed across {} timestamps",
-                                            name_for_logging,
-                                            total_stashed,
-                                            stashed_rows.len()
-                                        );
-                                    }
                                 }
+                            }
+
+                            for (ts, count) in dropped_per_time {
+                                debug!(
+                                    "{}: dropped {} rows at timestamp {} (< min_batch_lower, already committed)",
+                                    name_for_logging, count, ts
+                                );
+                            }
+
+                            for (ts, count) in stashed_per_time {
+                                debug!(
+                                    "{}: stashed {} rows at timestamp {} (waiting for batch description)",
+                                    name_for_logging, count, ts
+                                );
                             }
                         }
                         Event::Progress(frontier) => {
