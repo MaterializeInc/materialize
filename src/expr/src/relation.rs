@@ -3837,7 +3837,7 @@ impl RowSetFinishingIncremental {
             return Err(format!("total result exceeds max size of {max_bytes}",));
         }
 
-        let batch_num_rows = rows.count(0, None);
+        let batch_num_rows = rows.count();
 
         let sorted_view = rows.sorted_view(&[]);
         let mut iter = sorted_view

@@ -85,7 +85,7 @@ impl RowCollection {
 
     /// Merge another [`RowCollection`] into `self`.
     pub fn merge(&mut self, other: &RowCollection) {
-        if other.count(0, None) == 0 {
+        if other.count() == 0 {
             return;
         }
 
@@ -105,11 +105,11 @@ impl RowCollection {
         self.runs.extend(other.runs.iter().map(|f| f + self_len));
     }
 
-    /// Total count of [`Row`]s represented by this collection, considering a
-    /// possible `OFFSET` and `LIMIT`.
-    pub fn count(&self, offset: usize, limit: Option<usize>) -> usize {
-        let mut total: usize = self.metadata.iter().map(|meta| meta.diff.get()).sum();
-
+    /// Adjust a row count for the provided offset and limit.
+    ///
+    /// This is only marginally related to row collections, but many callers need to make
+    /// this adjustment.
+    pub fn offset_limit(mut total: usize, offset: usize, limit: Option<usize>) -> usize {
         // Consider a possible OFFSET.
         total = total.saturating_sub(offset);
 
@@ -119,6 +119,11 @@ impl RowCollection {
         }
 
         total
+    }
+
+    /// Total count of [`Row`]s represented by this collection.
+    pub fn count(&self) -> usize {
+        self.metadata.iter().map(|meta| meta.diff.get()).sum()
     }
 
     /// Total count of ([`Row`], `EncodedRowMetadata`) pairs in this collection.
@@ -408,7 +413,7 @@ impl RowIterator for SortedRowCollectionIter {
     }
 
     fn count(&self) -> usize {
-        self.collection.collection.count(self.offset, self.limit)
+        RowCollection::offset_limit(self.collection.collection.count(), self.offset, self.limit)
     }
 
     fn box_clone(&self) -> Box<dyn RowIterator> {
@@ -528,7 +533,7 @@ mod tests {
 
         a_col.merge(&b_col);
 
-        assert_eq!(a_col.count(0, None), 2);
+        assert_eq!(a_col.count(), 2);
         assert_eq!(a_col.get(0).map(|(r, _)| r), Some(a.borrow()));
         assert_eq!(a_col.get(1).map(|(r, _)| r), Some(b.borrow()));
     }

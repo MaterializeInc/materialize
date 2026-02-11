@@ -240,18 +240,8 @@ impl StashedPeekResponse {
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
-        let num_inline_rows = self.inline_rows.count(0, None);
-        let mut num_rows = num_stashed_rows + num_inline_rows;
-
-        // Consider a possible OFFSET.
-        num_rows = num_rows.saturating_sub(offset);
-
-        // Consider a possible LIMIT.
-        if let Some(limit) = limit {
-            num_rows = std::cmp::min(limit, num_rows);
-        }
-
-        num_rows
+        let num_inline_rows = self.inline_rows.count();
+        RowCollection::offset_limit(num_stashed_rows + num_inline_rows, offset, limit)
     }
 
     /// The size in bytes of the encoded rows in this result.
