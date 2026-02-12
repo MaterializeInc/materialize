@@ -67,7 +67,9 @@ use crate::plan::{
     QueryContext, ReadThenWritePlan, SelectPlan, SubscribeFrom, SubscribePlan, query,
 };
 use crate::plan::{CopyFromSource, with_options};
-use crate::session::vars::{self, ENABLE_COPY_FROM_REMOTE};
+use crate::session::vars::{
+    self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF, ENABLE_COPY_FROM_REMOTE,
+};
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -275,6 +277,16 @@ fn plan_select_inner(
             .try_into()
             .expect("checked in offset_into_value that it is not negative")
     };
+
+    // Unmaterializable functions are evaluated based on various information (e.g., the catalog)
+    // during sequencing, without taking AS OF into account. This would be hard to fix, so for now
+    // we just disallow AS OF when there is an unmaterializable function in a query (except mz_now).
+    if scx.is_feature_flag_enabled(&DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF)
+        && select.as_of.is_some()
+        && expr.contains_unmaterializable_except_temporal()?
+    {
+        bail_unsupported!("unmaterializable function (except `mz_now`) in an AS OF query");
+    }
 
     let plan = SelectPlan {
         source: expr,

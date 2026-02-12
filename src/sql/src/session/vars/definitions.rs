@@ -2241,6 +2241,15 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        // Just an escape hatch for the unlikely case that we have some user who is doing such
+        // queries. Can be removed after one week in prod.
+        // https://github.com/MaterializeInc/database-issues/issues/10004
+        name: disallow_unmaterializable_functions_as_of,
+        desc: "Prohibits calling unmaterializable functions (except `mz_now`) in AS OF queries.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
