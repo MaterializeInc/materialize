@@ -16,7 +16,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.11.0
-*Released to Materialize Cloud: 2026-02-12* <br>
+*Scheduled for release to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-13* <br>
 
 This release makes replacement materialized views (ALTER MATERIALIZED VIEW)
@@ -25,37 +25,20 @@ schema references with Confluent Schema Registry, and fixes several bugs
 including issues with `IS DISTINCT FROM` typechecking and subscribe snapshot
 column ordering.
 
-### Features
-- **Replacement Materialized Views Enabled by Default**: Replacement
-  materialized views, which allow you to update a materialized view's definition
-  in place using `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT`, are now
-  enabled by default for all deployments including Self-Managed. Previously this
-  feature required a feature flag to be set on Self-Managed deployments.
-
 ### Improvements
-- Added experimental support for FoundationDB as an alternative backend for
-  consensus and the timestamp oracle in Self-Managed deployments.
-- Added support for Avro schema references when using Confluent Schema Registry,
-  allowing sources to use Avro schemas that reference other schemas.
-- `EXPLAIN` now supports `SUBSCRIBE` statements, allowing you to inspect the
-  query plan for subscribes.
-- `EXPLAIN` output now fully qualifies index names when there are
-  identically-named indexes across different schemas, resolving ambiguity.
-- Improved the error message when `INSERT INTO ... SELECT` transitively
-  references a source, now showing the specific object type and name that caused
-  the error.
-- Added indexes on `mz_hydration_statuses` and `mz_materialization_lag` system
-  views to speed up dbt-adapter "deployment ready" queries.
-- Added tutorials and updated documentation for replacement materialized views.
+- **Avro Schema References**: Sources can now use avro schemas which reference
+  other schemas when using Confluent Schema Registry.
+- **`EXPLAIN` improvements**: `EXPLAIN` now allows you to inspect the query plan
+  for `SUBSCRIBE` statements. It also fully qualifies index names if there are 
+  identically-named indexes across different schemas.
+- **More efficient dbt-adapter**: We've added indexes on `mz_hydration_statuses` and `mz_materialization_lag`.
+  This should speed up "deployment ready" queries made by our dbt-adapter.
 
 ### Bug Fixes
 - Fixed a bug where `IS DISTINCT FROM` could fail typechecking in certain cases
   involving different data types, causing query errors.
-- Fixed a bug where `SUBSCRIBE` queries using the snapshot optimization could
-  return columns in the wrong order when reading from an index with a non-default
-  column arrangement.
-- Fixed an issue where Iceberg sinks could fail on startup if the target table
-  had not yet been created, by retrying with backoff before reporting an error.
+- Improved the error message when `INSERT INTO ... SELECT` transitively
+  references a source.
 
 ## v26.10.1
 *Released to Materialize Cloud: 2026-02-05* <br>
