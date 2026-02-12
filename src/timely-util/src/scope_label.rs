@@ -43,16 +43,6 @@ where
     G: ScopeParent,
     T: Timestamp + Refines<G::Timestamp>,
 {
-    /// This worker's unique identifier.
-    ///
-    /// Ranges from `0` to `self.peers() - 1`.
-    pub fn index(&self) -> usize {
-        self.inner.index()
-    }
-    /// The total number of workers in the computation.
-    pub fn peers(&self) -> usize {
-        self.inner.peers()
-    }
     /// A reference of the child’s parent scope.
     pub fn parent(&self) -> &G {
         &self.inner.parent
@@ -280,6 +270,7 @@ impl<O: Schedule> Schedule for LabelledOperator<O> {
         self.inner.path()
     }
 
+    #[inline(always)]
     fn schedule(&mut self) -> bool {
         custom_labels::with_label("timely-scope", &self.label, || self.inner.schedule())
     }
@@ -327,6 +318,7 @@ impl<T> Schedule for BoxedOperator<T> {
         self.0.path()
     }
 
+    #[inline(always)]
     fn schedule(&mut self) -> bool {
         self.0.schedule()
     }
