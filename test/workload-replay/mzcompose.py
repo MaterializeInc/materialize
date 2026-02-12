@@ -25,8 +25,10 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -59,6 +61,10 @@ SERVICES = [
     Postgres(),
     MySql(),
     Azurite(),
+    Minio(),
+    Mc(),
+    PolarisBootstrap(),
+    Polaris(),
     Mz(app_password=""),
     Materialized(
         cluster_replica_size=cluster_replica_sizes,

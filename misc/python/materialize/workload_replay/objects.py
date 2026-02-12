@@ -24,6 +24,11 @@ from confluent_kafka.admin import AdminClient  # type: ignore
 from psycopg.sql import SQL, Identifier, Literal
 
 from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.helpers.iceberg import (
+    create_polaris_namespace,
+    get_polaris_access_token,
+    setup_polaris_for_iceberg,
+)
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.workload_replay.util import (
     get_kafka_topic,
@@ -192,6 +197,40 @@ def run_create_objects_part_1(
             )
         )
 
+    has_iceberg = any(
+        connection["type"] == "iceberg-catalog"
+        for schemas in workload["databases"].values()
+        for items in schemas.values()
+        for connection in items["connections"].values()
+    )
+    iceberg_credentials: tuple[str, str] | None = None
+    if has_iceberg:
+        print("Setting up Polaris for Iceberg sinks")
+        c.sql(
+            "ALTER SYSTEM SET enable_iceberg_sink = true",
+            user="mz_system",
+            port=6877,
+            print_statement=verbose,
+        )
+        iceberg_credentials = setup_polaris_for_iceberg(c)
+        # Create any additional namespaces referenced by iceberg sinks
+        namespaces: set[str] = set()
+        for schemas in workload["databases"].values():
+            for items in schemas.values():
+                for sink in items["sinks"].values():
+                    match = re.search(
+                        r"NAMESPACE\s*=?\s*'([^']+)'",
+                        sink.get("create_sql", ""),
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        namespaces.add(match.group(1))
+        namespaces.discard("default_namespace")
+        if namespaces:
+            access_token = get_polaris_access_token(c)
+            for ns in namespaces:
+                create_polaris_namespace(c, access_token, namespace=ns)
+
     print("Creating connections")
     existing_dbs = {"postgres": {"postgres"}, "sql-server": set()}
     for db, schemas in workload["databases"].items():
@@ -301,7 +340,64 @@ def run_create_objects_part_1(
                         port=6877,
                         print_statement=verbose,
                     )
-                elif connection["type"] in ("aws-privatelink", "aws"):
+                elif connection["type"] == "aws":
+                    if iceberg_credentials is not None:
+                        username, key = iceberg_credentials
+                        secret_name = f"{name}_secret"
+                        c.sql(
+                            SQL("CREATE SECRET {}.{}.{} AS {}").format(
+                                Identifier(db),
+                                Identifier(schema),
+                                Identifier(secret_name),
+                                Literal(key),
+                            ),
+                            user="mz_system",
+                            port=6877,
+                            print_statement=verbose,
+                        )
+                        c.sql(
+                            SQL(
+                                "CREATE CONNECTION {}.{}.{} TO AWS ("
+                                "ACCESS KEY ID = {}, "
+                                "SECRET ACCESS KEY = SECRET {}.{}.{}, "
+                                "ENDPOINT = 'http://minio:9000/', "
+                                "REGION = 'us-east-1')"
+                            ).format(
+                                Identifier(db),
+                                Identifier(schema),
+                                Identifier(name),
+                                Literal(username),
+                                Identifier(db),
+                                Identifier(schema),
+                                Identifier(secret_name),
+                            ),
+                            user="mz_system",
+                            port=6877,
+                            print_statement=verbose,
+                        )
+                    # else: skip, can't run outside of cloud
+                elif connection["type"] == "iceberg-catalog":
+                    assert (
+                        iceberg_credentials is not None
+                    ), "Iceberg catalog connection requires polaris service"
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO ICEBERG CATALOG ("
+                            "CATALOG TYPE = 'REST', "
+                            "URL = 'http://polaris:8181/api/catalog', "
+                            "CREDENTIAL = 'root:root', "
+                            "WAREHOUSE = 'default_catalog', "
+                            "SCOPE = 'PRINCIPAL_ROLE:ALL')"
+                        ).format(
+                            Identifier(db),
+                            Identifier(schema),
+                            Identifier(name),
+                        ),
+                        user="mz_system",
+                        port=6877,
+                        print_statement=verbose,
+                    )
+                elif connection["type"] == "aws-privatelink":
                     pass  # can't run outside of cloud
                 else:
                     raise ValueError(f"Unhandled connection type {connection['type']}")

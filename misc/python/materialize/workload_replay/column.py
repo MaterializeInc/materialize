@@ -334,4 +334,5 @@ class Column:
                 ]
 
         else:
-            raise ValueError(f"Unhandled data type {self.typ}")
+            # Custom data type, or not supported yet
+            return "NULL" if in_query else None

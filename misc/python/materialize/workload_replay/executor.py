@@ -86,8 +86,12 @@ def test(
                     services.update(["kafka", "schema-registry", "zookeeper"])
                 elif connection["type"] == "ssh-tunnel":
                     services.add("ssh-bastion-host")
-                elif connection["type"] in ("aws-privatelink", "aws"):
+                elif connection["type"] == "iceberg-catalog":
+                    pass  # handled by setup_polaris_for_iceberg in objects.py
+                elif connection["type"] == "aws-privatelink":
                     pass  # can't run outside of cloud
+                elif connection["type"] == "aws":
+                    pass  # handled together with iceberg-catalog when present
                 else:
                     raise ValueError(f"Unhandled connection type {connection['type']}")
 
