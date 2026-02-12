@@ -90,7 +90,7 @@ impl crate::Transform for EquivalencePropagation {
             if prior != *relation {
                 // This used to be tracing::error, but it became too common with
                 // dequadratic_eqprop_map.
-                tracing::warn!(
+                tracing::info!(
                     ?ctx.global_id,
                     "ColumnKnowledge performed work after EquivalencePropagation",
                 );
