@@ -10,6 +10,22 @@
 
 ## Current Compiler Pipeline
 
+```mermaid
+%%{init: {"flowchart": {"defaultRenderer": "elk"} } }%%
+flowchart LR
+    SQL@{ shape: doc, label="SQL" } --> IR
+    IR --> dataflow@{ shape: docs }
+
+    subgraph IR["intermediate languages"]
+      direction LR
+      HIR@{ shape: doc } --> MIR@{ shape: docs } --> LIR@{ shape: docs }
+      MIR -. optimizations .-> MIR
+    end
+
+    classDef purple fill:#472F85
+    class SQL,HIR,MIR,LIR,dataflow purple
+```
+
 Representations:
 
 * `SQL` — source language
