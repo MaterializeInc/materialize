@@ -86,7 +86,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
     service_names = [
-        "cockroach",
         "postgres",
         "mysql",
         "sql-server",
@@ -109,6 +108,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Scenario.Kill,
     )
 
+    if external:
+        service_names.append("cockroach")
+
     with c.override(
         Materialized(
             external_blob_store=external,
@@ -122,7 +124,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
-        toxiproxy_start(c)
+        toxiproxy_start(c, external)
         c.up(*service_names)
         setup_sql_server_testing(c)
 
@@ -172,20 +174,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     return
 
 
-def toxiproxy_start(c: Composition) -> None:
+def toxiproxy_start(c: Composition, external: bool) -> None:
     c.up("toxiproxy")
 
     port = c.default_port("toxiproxy")
-    r = requests.post(
-        f"http://localhost:{port}/proxies",
-        json={
-            "name": "cockroach",
-            "listen": "0.0.0.0:26257",
-            "upstream": "cockroach:26257",
-            "enabled": True,
-        },
-    )
-    assert r.status_code == 201, r
+    if external:
+        r = requests.post(
+            f"http://localhost:{port}/proxies",
+            json={
+                "name": "cockroach",
+                "listen": "0.0.0.0:26257",
+                "upstream": "cockroach:26257",
+                "enabled": True,
+            },
+        )
+        assert r.status_code == 201, r
     r = requests.post(
         f"http://localhost:{port}/proxies",
         json={
@@ -206,15 +209,16 @@ def toxiproxy_start(c: Composition) -> None:
         },
     )
     assert r.status_code == 201, r
-    r = requests.post(
-        f"http://localhost:{port}/proxies/cockroach/toxics",
-        json={
-            "name": "cockroach",
-            "type": "latency",
-            "attributes": {"latency": 0, "jitter": 10},
-        },
-    )
-    assert r.status_code == 200, r
+    if external:
+        r = requests.post(
+            f"http://localhost:{port}/proxies/cockroach/toxics",
+            json={
+                "name": "cockroach",
+                "type": "latency",
+                "attributes": {"latency": 0, "jitter": 10},
+            },
+        )
+        assert r.status_code == 200, r
     r = requests.post(
         f"http://localhost:{port}/proxies/minio/toxics",
         json={
