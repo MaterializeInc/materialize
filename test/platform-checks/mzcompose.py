@@ -41,6 +41,7 @@ from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMet
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
+from materialize.mzcompose.services.polaris import Polaris, PolarisBootstrap
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
@@ -103,6 +104,8 @@ SERVICES = [
     Postgres(),
     MySql(),
     SqlServer(),
+    Polaris(),
+    PolarisBootstrap(),
     Zookeeper(),
     Kafka(
         auto_create_topics=True,

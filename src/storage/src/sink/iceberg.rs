@@ -74,6 +74,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
+use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
@@ -137,6 +138,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
+use tracing::{debug, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -582,6 +584,7 @@ where
 {
     let scope = input.scope();
     let name_for_error = name.clone();
+    let name_for_logging = name.clone();
     let mut builder = OperatorBuilder::new(name, scope.clone());
     let sink_version = sink.version;
 
@@ -633,6 +636,13 @@ where
                 initial_schema.as_ref(),
             )
             .await?;
+            debug!(
+                ?sink_id,
+                %name_for_logging,
+                namespace = %connection.namespace,
+                table = %connection.table,
+                "iceberg mint loaded/created table"
+            );
 
             *table_ready_capset = CapabilitySet::new();
 
@@ -642,6 +652,13 @@ where
                 Some((f, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
+            debug!(
+                ?sink_id,
+                %name_for_logging,
+                resume_upper = %resume_upper.pretty(),
+                resume_version,
+                "iceberg mint resume position loaded"
+            );
 
             // The input has overcompacted if
             let overcompacted =
@@ -668,6 +685,7 @@ where
 
             let mut initialized = false;
             let mut observed_frontier;
+            let mut max_seen_ts: Option<Timestamp> = None;
             // Track minted batches to maintain a sliding window of open batch descriptions.
             // This is needed to know when to retire old batches and mint new ones.
             // It's "sortedness" is derived from the monotonicity of batch descriptions,
@@ -677,6 +695,20 @@ where
                 if let Some(event) = input.next().await {
                     match event {
                         Event::Data([output_cap, _], mut data) => {
+                            if !initialized {
+                                for (_, ts, _) in data.iter() {
+                                    match max_seen_ts.as_mut() {
+                                        Some(max) => {
+                                            if max.less_than(ts) {
+                                                *max = ts.clone();
+                                            }
+                                        }
+                                        None => {
+                                            max_seen_ts = Some(ts.clone());
+                                        }
+                                    }
+                                }
+                            }
                             output.give_container(&output_cap, &mut data);
                             continue;
                         }
@@ -689,13 +721,37 @@ where
                 }
 
                 if !initialized {
+                    if observed_frontier.is_empty() {
+                        // Bounded inputs can close (frontier becomes empty) before we finish
+                        // initialization. For example, a loadgen source configured for a finite
+                        // dataset may emit all rows at time t and then immediately close. If we
+                        // saw any data, synthesize an upper one tick past the maximum timestamp
+                        // so we can mint a snapshot batch and commit it.
+                        if let Some(max_ts) = max_seen_ts.as_ref() {
+                            let synthesized_upper =
+                                Antichain::from_elem(max_ts.step_forward());
+                            debug!(
+                                ?sink_id,
+                                %name_for_logging,
+                                max_seen_ts = %max_ts,
+                                synthesized_upper = %synthesized_upper.pretty(),
+                                "iceberg mint input closed before initialization; using max seen ts"
+                            );
+                            observed_frontier = synthesized_upper;
+                        } else {
+                            debug!(
+                                ?sink_id,
+                                %name_for_logging,
+                                "iceberg mint input closed before initialization with no data"
+                            );
+                            // Input stream closed before initialization completed and no data arrived.
+                            return Ok(());
+                        }
+                    }
+
                     // We only start minting after we've reached as_of and resume_upper to avoid
                     // minting batches that would be immediately skipped.
-                    if observed_frontier.is_empty() {
-                        // Input stream closed before initialization completed
-                        return Ok(());
-                    }
-                    if PartialOrder::less_equal(&observed_frontier, &resume_upper) || PartialOrder::less_equal(&observed_frontier, &as_of) {
+                    if PartialOrder::less_than(&observed_frontier, &resume_upper) || PartialOrder::less_than(&observed_frontier, &as_of) {
                         continue;
                     }
 
@@ -703,12 +759,37 @@ where
                     let mut current_upper = observed_frontier.clone();
                     let current_upper_ts = current_upper.as_option().expect("frontier not empty").clone();
 
-                    // If we're resuming, create a catch-up batch from resume_upper to current frontier
-                    if PartialOrder::less_than(&resume_upper, &current_upper) {
-                        let batch_description = (resume_upper.clone(), current_upper.clone());
-                        batch_descriptions.push(batch_description);
+                    // Create a catch-up batch from the later of resume_upper or as_of to current frontier.
+                    // We use the later of the two because:
+                    // - For fresh sinks: resume_upper = minimum, as_of = actual timestamp, data starts at as_of
+                    // - For resuming: as_of <= resume_upper (enforced by overcompaction check), data starts at resume_upper
+                    let batch_lower = if PartialOrder::less_than(&resume_upper, &as_of) {
+                        as_of.clone()
+                    } else {
+                        resume_upper.clone()
+                    };
+
+                    if batch_lower == current_upper {
+                        // Snapshot! as_of is exactly at the frontier. We still need to mint
+                        // a batch to create the snapshot, so we step the upper forward by one.
+                        current_upper = Antichain::from_elem(current_upper_ts.step_forward());
                     }
 
+                    let batch_description = (batch_lower.clone(), current_upper.clone());
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        batch_lower = %batch_lower.pretty(),
+                        current_upper = %current_upper.pretty(),
+                        "iceberg mint initializing (catch-up batch)"
+                    );
+                    debug!(
+                        "{}: creating catch-up batch [{}, {})",
+                        name_for_logging,
+                        batch_lower.pretty(),
+                        current_upper.pretty()
+                    );
+                    batch_descriptions.push(batch_description);
                     // Mint initial future batch descriptions at configurable intervals
                     for i in 1..INITIAL_DESCRIPTIONS_TO_MINT + 1 {
                         let duration_millis = commit_interval.as_millis()
@@ -718,7 +799,15 @@ where
                             .expect("commit interval too large for u64"));
                         let desired_batch_upper = Antichain::from_elem(current_upper_ts.step_forward_by(&duration_ts));
 
-                        let batch_description = (current_upper.clone(), desired_batch_upper);
+                        let batch_description = (current_upper.clone(), desired_batch_upper.clone());
+                        debug!(
+                            "{}: minting future batch {}/{} [{}, {})",
+                            name_for_logging,
+                            i,
+                            INITIAL_DESCRIPTIONS_TO_MINT,
+                            current_upper.pretty(),
+                            desired_batch_upper.pretty()
+                        );
                         current_upper = batch_description.1.clone();
                         batch_descriptions.push(batch_description);
                     }
@@ -733,6 +822,10 @@ where
 
                     initialized = true;
                 } else {
+                    if observed_frontier.is_empty() {
+                        // We're done!
+                        return Ok(());
+                    }
                     // Maintain a sliding window: when the oldest batch becomes ready, retire it
                     // and mint a new future batch to keep the pipeline full
                     while let Some(oldest_desc) = minted_batches.front() {
@@ -884,10 +977,11 @@ fn write_data_files<G>(
     input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
     batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     table_ready_stream: &Stream<G, Infallible>,
+    as_of: Antichain<Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     materialize_arrow_schema: Arc<ArrowSchema>,
-    metrics: IcebergSinkMetrics,
+    metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (
     Stream<G, BoundedDataFile>,
@@ -898,6 +992,7 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let scope = input.scope();
+    let name_for_logging = name.clone();
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
     let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
@@ -907,7 +1002,7 @@ where
         builder.new_input_for(&batch_desc_input.broadcast(), Pipeline, &output);
     let mut input = builder.new_disconnected_input(&input.inner, Pipeline);
 
-    let (button, errors) = builder.build_fallible(|caps| {
+    let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
             let catalog = connection
@@ -979,73 +1074,96 @@ where
 
             let writer_properties = WriterProperties::new();
 
-            let create_delta_writer = || async {
-                let data_parquet_writer = ParquetWriterBuilder::new(
-                    writer_properties.clone(),
-                    Arc::clone(&current_schema),
-                )
-                .with_arrow_schema(Arc::clone(&arrow_schema))
-                .context("Arrow schema validation failed")?;
-                let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
-                    data_parquet_writer,
-                    Arc::clone(&current_schema),
-                    file_io.clone(),
-                    location_generator.clone(),
-                    file_name_generator.clone(),
-                );
-                let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
+            let arrow_schema_for_closure = Arc::clone(&arrow_schema);
+            let current_schema_for_closure = Arc::clone(&current_schema);
+            let file_io_for_closure = file_io.clone();
+            let location_generator_for_closure = location_generator.clone();
+            let file_name_generator_for_closure = file_name_generator.clone();
+            let equality_ids_for_closure = equality_ids.clone();
+            let writer_properties_for_closure = writer_properties.clone();
 
-                let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
-                let pos_schema =
-                    Arc::new(arrow_schema_to_schema(&pos_arrow_schema).context(
+            let create_delta_writer = move |disable_seen_rows: bool| {
+                let arrow_schema = Arc::clone(&arrow_schema_for_closure);
+                let current_schema = Arc::clone(&current_schema_for_closure);
+                let file_io = file_io_for_closure.clone();
+                let location_generator = location_generator_for_closure.clone();
+                let file_name_generator = file_name_generator_for_closure.clone();
+                let equality_ids = equality_ids_for_closure.clone();
+                let writer_properties = writer_properties_for_closure.clone();
+
+                async move {
+                    let data_parquet_writer = ParquetWriterBuilder::new(
+                        writer_properties.clone(),
+                        Arc::clone(&current_schema),
+                    )
+                    .with_arrow_schema(Arc::clone(&arrow_schema))
+                    .context("Arrow schema validation failed")?;
+                    let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+                        data_parquet_writer,
+                        Arc::clone(&current_schema),
+                        file_io.clone(),
+                        location_generator.clone(),
+                        file_name_generator.clone(),
+                    );
+                    let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
+
+                    let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
+                    let pos_schema = Arc::new(arrow_schema_to_schema(&pos_arrow_schema).context(
                         "Failed to convert position delete Arrow schema to Iceberg schema",
                     )?);
-                let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
-                let pos_parquet_writer =
-                    ParquetWriterBuilder::new(writer_properties.clone(), pos_schema);
-                let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
-                    pos_parquet_writer,
-                    Arc::clone(&current_schema),
-                    file_io.clone(),
-                    location_generator.clone(),
-                    file_name_generator.clone(),
-                );
-                let pos_delete_writer_builder =
-                    PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
+                    let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
+                    let pos_parquet_writer =
+                        ParquetWriterBuilder::new(writer_properties.clone(), pos_schema);
+                    let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+                        pos_parquet_writer,
+                        Arc::clone(&current_schema),
+                        file_io.clone(),
+                        location_generator.clone(),
+                        file_name_generator.clone(),
+                    );
+                    let pos_delete_writer_builder =
+                        PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
 
-                let eq_config = EqualityDeleteWriterConfig::new(
-                    equality_ids.clone(),
-                    Arc::clone(&current_schema),
-                )
-                .context("Failed to create EqualityDeleteWriterConfig")?;
+                    let eq_config = EqualityDeleteWriterConfig::new(
+                        equality_ids.clone(),
+                        Arc::clone(&current_schema),
+                    )
+                    .context("Failed to create EqualityDeleteWriterConfig")?;
 
-                let eq_schema = Arc::new(
-                    arrow_schema_to_schema(eq_config.projected_arrow_schema_ref()).context(
-                        "Failed to convert equality delete Arrow schema to Iceberg schema",
-                    )?,
-                );
+                    let eq_schema = Arc::new(
+                        arrow_schema_to_schema(eq_config.projected_arrow_schema_ref()).context(
+                            "Failed to convert equality delete Arrow schema to Iceberg schema",
+                        )?,
+                    );
 
-                let eq_parquet_writer =
-                    ParquetWriterBuilder::new(writer_properties.clone(), eq_schema);
-                let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
-                    eq_parquet_writer,
-                    Arc::clone(&current_schema),
-                    file_io.clone(),
-                    location_generator.clone(),
-                    file_name_generator.clone(),
-                );
-                let eq_delete_writer_builder =
-                    EqualityDeleteFileWriterBuilder::new(eq_rolling_writer, eq_config);
+                    let eq_parquet_writer =
+                        ParquetWriterBuilder::new(writer_properties.clone(), eq_schema);
+                    let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+                        eq_parquet_writer,
+                        Arc::clone(&current_schema),
+                        file_io.clone(),
+                        location_generator.clone(),
+                        file_name_generator.clone(),
+                    );
+                    let eq_delete_writer_builder =
+                        EqualityDeleteFileWriterBuilder::new(eq_rolling_writer, eq_config);
 
-                DeltaWriterBuilder::new(
-                    data_writer_builder,
-                    pos_delete_writer_builder,
-                    eq_delete_writer_builder,
-                    equality_ids.clone(),
-                )
-                .build(None)
-                .await
-                .context("Failed to create DeltaWriter")
+                    let mut builder = DeltaWriterBuilder::new(
+                        data_writer_builder,
+                        pos_delete_writer_builder,
+                        eq_delete_writer_builder,
+                        equality_ids.clone(),
+                    );
+
+                    if disable_seen_rows {
+                        builder = builder.with_max_seen_rows(0);
+                    }
+
+                    builder
+                        .build(None)
+                        .await
+                        .context("Failed to create DeltaWriter")
+                }
             };
 
             // Rows can arrive before their batch description due to dataflow parallelism.
@@ -1070,6 +1188,7 @@ where
             let mut processed_input_frontier = Antichain::from_elem(Timestamp::minimum());
 
             while !(batch_description_frontier.is_empty() && input_frontier.is_empty()) {
+                let mut staged_messages_since_flush: u64 = 0;
                 tokio::select! {
                     _ = batch_desc_input.ready() => {},
                     _ = input.ready() => {}
@@ -1080,15 +1199,26 @@ where
                         Event::Data(_cap, data) => {
                             for batch_desc in data {
                                 let (lower, upper) = &batch_desc;
-                                let mut delta_writer = create_delta_writer().await?;
+                                // Disable seen_rows tracking for snapshot batch to save memory
+                                let is_snapshot = lower == &as_of;
+                                debug!(
+                                    "{}: received batch description [{}, {}), snapshot={}",
+                                    name_for_logging,
+                                    lower.pretty(),
+                                    upper.pretty(),
+                                    is_snapshot
+                                );
+                                let mut delta_writer = create_delta_writer(is_snapshot).await?;
                                 // Drain any stashed rows that belong to this batch
                                 let row_ts_keys: Vec<_> = stashed_rows.keys().cloned().collect();
+                                let mut drained_count = 0;
                                 for row_ts in row_ts_keys {
                                     let ts = Antichain::from_elem(row_ts.clone());
                                     if PartialOrder::less_equal(lower, &ts)
                                         && PartialOrder::less_than(&ts, upper)
                                     {
                                         if let Some(rows) = stashed_rows.remove(&row_ts) {
+                                            drained_count += rows.len();
                                             for (_row, diff_pair) in rows {
                                                 metrics.stashed_rows.dec();
                                                 let record_batch = row_to_recordbatch(
@@ -1100,9 +1230,25 @@ where
                                                 delta_writer.write(record_batch).await.context(
                                                     "Failed to write row to DeltaWriter",
                                                 )?;
+                                                staged_messages_since_flush += 1;
+                                                if staged_messages_since_flush >= 10_000 {
+                                                    statistics.inc_messages_staged_by(
+                                                        staged_messages_since_flush,
+                                                    );
+                                                    staged_messages_since_flush = 0;
+                                                }
                                             }
                                         }
                                     }
+                                }
+                                if drained_count > 0 {
+                                    debug!(
+                                        "{}: drained {} stashed rows into batch [{}, {})",
+                                        name_for_logging,
+                                        drained_count,
+                                        lower.pretty(),
+                                        upper.pretty()
+                                    );
                                 }
                                 let prev =
                                     in_flight_batches.insert(batch_desc.clone(), delta_writer);
@@ -1144,15 +1290,38 @@ where
                                             .write(record_batch)
                                             .await
                                             .context("Failed to write row to DeltaWriter")?;
+                                        staged_messages_since_flush += 1;
+                                        if staged_messages_since_flush >= 10_000 {
+                                            statistics.inc_messages_staged_by(
+                                                staged_messages_since_flush,
+                                            );
+                                            staged_messages_since_flush = 0;
+                                        }
                                         written = true;
                                         break;
                                     }
                                 }
                                 if !written {
                                     // ...otherwise stash it for later
+                                    trace!(
+                                        "{}: stashing row at timestamp {}",
+                                        name_for_logging, row_ts
+                                    );
                                     let entry = stashed_rows.entry(row_ts).or_default();
                                     metrics.stashed_rows.inc();
                                     entry.push((row, diff_pair));
+
+                                    // Periodically warn if stashed rows are growing
+                                    let total_stashed: usize =
+                                        stashed_rows.values().map(|v| v.len()).sum();
+                                    if total_stashed > 0 && total_stashed % 10000 == 0 {
+                                        debug!(
+                                            "{}: {} rows stashed across {} timestamps",
+                                            name_for_logging,
+                                            total_stashed,
+                                            stashed_rows.len()
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1161,9 +1330,12 @@ where
                         }
                     }
                 }
+                if staged_messages_since_flush > 0 {
+                    statistics.inc_messages_staged_by(staged_messages_since_flush);
+                }
 
                 // Check if frontiers have advanced, which may unlock batches ready to close
-                if PartialOrder::less_equal(
+                if PartialOrder::less_than(
                     &processed_batch_description_frontier,
                     &batch_description_frontier,
                 ) || PartialOrder::less_than(&processed_input_frontier, &input_frontier)
@@ -1172,17 +1344,33 @@ where
                     let ready_batches: Vec<_> = in_flight_batches
                         .extract_if(|(lower, upper), _| {
                             PartialOrder::less_than(lower, &batch_description_frontier)
-                                && PartialOrder::less_than(upper, &input_frontier)
+                                && PartialOrder::less_equal(upper, &input_frontier)
                         })
                         .collect();
 
                     if !ready_batches.is_empty() {
+                        debug!(
+                            "{}: closing {} batches (batch_frontier: {}, input_frontier: {})",
+                            name_for_logging,
+                            ready_batches.len(),
+                            batch_description_frontier.pretty(),
+                            input_frontier.pretty()
+                        );
                         let mut max_upper = Antichain::from_elem(Timestamp::minimum());
                         for (desc, mut delta_writer) in ready_batches {
-                            let data_files = delta_writer
-                                .close()
-                                .await
-                                .context("Failed to close DeltaWriter")?;
+                            let close_started_at = Instant::now();
+                            let data_files = delta_writer.close().await;
+                            metrics
+                                .writer_close_duration_seconds
+                                .observe(close_started_at.elapsed().as_secs_f64());
+                            let data_files = data_files.context("Failed to close DeltaWriter")?;
+                            debug!(
+                                "{}: closed batch [{}, {}), wrote {} files",
+                                name_for_logging,
+                                desc.0.pretty(),
+                                desc.1.pretty(),
+                                data_files.len()
+                            );
                             for data_file in data_files {
                                 match data_file.content_type() {
                                     iceberg::spec::DataContentType::Data => {
@@ -1240,7 +1428,7 @@ fn commit_to_iceberg<G>(
     write_handle: impl Future<
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
-    metrics: IcebergSinkMetrics,
+    metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where
@@ -1251,6 +1439,7 @@ where
 
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
+    let name_for_logging = format!("{sink_id}-commit-to-iceberg");
 
     let mut input = builder.new_disconnected_input(batch_input, Exchange::new(move |_| hashed_id));
     let mut batch_desc_input =
@@ -1373,6 +1562,20 @@ where
                         }
                     }
 
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        lower = %batch.0.pretty(),
+                        upper = %batch.1.pretty(),
+                        data_files = data_files.len(),
+                        delete_files = delete_files.len(),
+                        total_messages,
+                        total_bytes,
+                        "iceberg commit applying batch"
+                    );
+
+                    let instant = Instant::now();
+
                     let frontier = batch.1.clone();
                     let tx = Transaction::new(&table);
 
@@ -1396,7 +1599,7 @@ where
                         "Failed to apply data file addition to iceberg table transaction",
                     )?;
 
-                    table = Retry::default().max_tries(5).retry_async(|_| async {
+                    let commit_result = Retry::default().max_tries(5).retry_async(|_| async {
                         let new_table = tx.clone().commit(catalog.as_ref()).await;
                         match new_table {
                             Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
@@ -1439,7 +1642,23 @@ where
                             },
                             Ok(table) => RetryResult::Ok(table)
                         }
-                    }).await.context("failed to commit to iceberg")?;
+                    }).await.context("failed to commit to iceberg");
+                    let duration = instant.elapsed();
+                    metrics
+                        .commit_duration_seconds
+                        .observe(duration.as_secs_f64());
+                    table = commit_result?;
+
+                    debug!(
+                        ?sink_id,
+                        %name_for_logging,
+                        lower = %batch.0.pretty(),
+                        upper = %batch.1.pretty(),
+                        total_messages,
+                        total_bytes,
+                        ?duration,
+                        "iceberg commit applied batch"
+                    );
 
                     metrics.snapshots_committed.inc();
                     statistics.inc_messages_committed_by(total_messages);
@@ -1543,9 +1762,11 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
                 }
             };
 
-        let metrics = storage_state
-            .metrics
-            .get_iceberg_sink_metrics(sink_id, scope.index());
+        let metrics = Arc::new(
+            storage_state
+                .metrics
+                .get_iceberg_sink_metrics(sink_id, scope.index()),
+        );
 
         let statistics = storage_state
             .aggregated_statistics
@@ -1571,10 +1792,11 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             minted_input,
             &batch_descriptions,
             &table_ready,
+            sink.as_of.clone(),
             connection_for_writer,
             storage_state.storage_configuration.clone(),
             Arc::new(arrow_schema_with_ids.clone()),
-            metrics.clone(),
+            Arc::clone(&metrics),
             statistics.clone(),
         );
 
@@ -1590,7 +1812,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             connection_for_committer,
             storage_state.storage_configuration.clone(),
             write_handle,
-            metrics.clone(),
+            Arc::clone(&metrics),
             statistics,
         );
 
