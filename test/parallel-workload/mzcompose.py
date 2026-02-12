@@ -117,7 +117,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             blob_store_is_azure=args.azurite,
             external_metadata_store=("toxiproxy" if external else False),
             metadata_store=("cockroach" if external else "postgres-metadata"),
-            ports=["6975:6875", "6976:6876", "6977:6877"],
+            ports=["6975:6875", "6976:6876", "6977:6877", "27257:26257"],
             sanity_restart=sanity_restart,
             default_replication_factor=1,
             additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,

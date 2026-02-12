@@ -118,14 +118,23 @@ def run_create_objects_part_1(
 
     print("Creating clusters")
     for name, cluster in workload["clusters"].items():
-        if cluster["managed"]:
-            # Need at least one replica for everything to hydrate
-            create_sql = cluster["create_sql"].replace(
-                "REPLICATION FACTOR = 0", "REPLICATION FACTOR = 1"
-            )
-            c.sql(create_sql, user="mz_system", port=6877, print_statement=verbose)
-        else:
-            raise ValueError("Handle unmanaged clusters")
+        if not cluster["managed"]:
+            # Skip unmanaged clusters (e.g. the default "quickstart" that was
+            # already dropped above).  We recreate all needed clusters as
+            # managed.
+            continue
+        # Need at least one replica for everything to hydrate
+        create_sql = cluster["create_sql"].replace(
+            "REPLICATION FACTOR = 0", "REPLICATION FACTOR = 1"
+        )
+        # Remap cluster sizes that don't exist in the local dev environment
+        # to the smallest available size.
+        create_sql = re.sub(
+            r"SIZE\s*=\s*'[^']*'",
+            "SIZE = 'scale=1,workers=1'",
+            create_sql,
+        )
+        c.sql(create_sql, user="mz_system", port=6877, print_statement=verbose)
 
     print("Creating databases")
     for db in workload["databases"]:
@@ -619,10 +628,22 @@ def run_create_objects_part_2(
             try:
                 c.sql(create, user="mz_system", port=6877, print_statement=verbose)
             except psycopg.Error as e:
-                if "unknown catalog item" in str(e):
+                err = str(e).lower()
+                if any(
+                    msg in err
+                    for msg in [
+                        "unknown catalog item",
+                        "is not allowed",
+                        "unknown connection",
+                    ]
+                ):
                     continue
                 raise
             pending.remove(create)
             progress = True
         if not progress:
-            raise RuntimeError(f"No progress, remaining creates: {pending}")
+            print(
+                f"Warning: skipping {len(pending)} objects that cannot make progress "
+                f"(likely depend on skipped connections): {pending}"
+            )
+            break

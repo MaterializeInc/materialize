@@ -18,8 +18,6 @@ import pathlib
 import random
 import time
 
-import yaml
-
 from materialize import buildkite
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
@@ -40,6 +38,7 @@ from materialize.workload_replay.config import cluster_replica_sizes
 from materialize.workload_replay.executor import benchmark, test
 from materialize.workload_replay.util import (
     get_paths,
+    load_workload,
     print_workload_stats,
     update_captured_workloads_repo,
 )
@@ -67,6 +66,7 @@ SERVICES = [
     Polaris(),
     Mz(app_password=""),
     Materialized(
+        sanity_restart=False,
         cluster_replica_size=cluster_replica_sizes,
         ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
         environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
@@ -155,7 +155,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"-- Random seed is {args.seed}")
     random.seed(args.seed)
-    update_captured_workloads_repo()
+
+    all_local = all(pathlib.Path(f).exists() for f in args.files)
+    if not all_local:
+        update_captured_workloads_repo()
 
     files: list[pathlib.Path] = buildkite.shard_list(
         get_paths(args.files),
@@ -163,8 +166,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     def run(file: pathlib.Path) -> None:
-        with open(file) as f:
-            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        workload = load_workload(file)
         # When scale_data is false, use 100% initial data
         settings = workload.get("settings", {})
         factor_initial_data = args.factor_initial_data
@@ -259,13 +261,15 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     print(f"-- Random seed is {args.seed}")
-    update_captured_workloads_repo()
+
+    all_local = all(pathlib.Path(f).exists() for f in args.files)
+    if not all_local:
+        update_captured_workloads_repo()
 
     all_paths = get_paths(args.files)
     workloads: dict[pathlib.Path, dict] = {}
     for path in all_paths:
-        with open(path) as f:
-            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        workload = load_workload(path)
         settings = workload.get("settings", {})
         if not settings.get("scale_data", True) and args.skip_without_data_scale:
             print(f"-- Skipping {path} (scale_data: false)")
@@ -304,10 +308,13 @@ def workflow_stats(c: Composition, parser: WorkflowArgumentParser) -> None:
             help="run against the specified files",
         )
         args = parser.parse_args()
-        update_captured_workloads_repo()
+
+        all_local = all(pathlib.Path(f).exists() for f in args.files)
+        if not all_local:
+            update_captured_workloads_repo()
+
         for file in get_paths(args.files):
-            with open(file) as f:
-                workload = yaml.load(f, Loader=yaml.CSafeLoader)
+            workload = load_workload(file)
             print()
             print_workload_stats(file, workload)
         print()

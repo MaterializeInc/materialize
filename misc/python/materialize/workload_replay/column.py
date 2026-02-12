@@ -59,7 +59,9 @@ class Column:
     def avro_type(self) -> str | list[str]:
         """Return the Avro type for this column."""
         result = self.typ
-        if self.typ in ("text", "bytea", "character", "character varying"):
+        if self.typ == "bytea":
+            result = "bytes"
+        elif self.typ in ("text", "character", "character varying"):
             result = "string"
         elif self.typ in ("smallint", "integer", "uint2", "uint4"):
             result = "int"
@@ -98,7 +100,11 @@ class Column:
         elif self.typ in ("float", "double precision", "numeric"):
             return long_tail_float(-1_000_000_000.0, 1_000_000_000.0, rng=rng)
 
-        elif self.typ in ("text", "bytea"):
+        elif self.typ == "bytea":
+            text = long_tail_text(self.chars, 100, self._hot_strings, rng=rng)
+            return text.encode()
+
+        elif self.typ == "text":
             if self.data_shape == "datetime":
                 year = long_tail_choice(
                     [2023, 2024, 2025, 2022, 2021, 2020, 2019], hot_prob=0.9, rng=rng

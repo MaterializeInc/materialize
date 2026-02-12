@@ -24,6 +24,8 @@ import urllib.parse
 from collections import Counter
 from typing import Any
 
+import yaml
+
 from materialize import MZ_ROOT, spawn, ui
 from materialize.version_list import resolve_ancestor_image_tag
 from materialize.workload_replay.config import LOCATION
@@ -38,6 +40,49 @@ def p(label: str, value: Any) -> None:
     else:
         s = f"{value:,}"
     print(f"  {label:<{17}} {s:>{12}}")
+
+
+def load_workload(path: pathlib.Path) -> dict[str, Any]:
+    """Load a workload from a YAML file or a directory with objects.yml + queries.yml.
+
+    For directory-based workloads (created with --capture-data), also loads
+    capture_meta.yml and detects initial_data/ and continuous_data/ subdirectories.
+    """
+    if path.is_dir():
+        objects_path = path / "objects.yml"
+        queries_path = path / "queries.yml"
+        assert objects_path.exists(), f"Missing objects.yml in {path}"
+        with open(objects_path) as f:
+            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+        if queries_path.exists():
+            with open(queries_path) as f:
+                queries_data = yaml.load(f, Loader=yaml.CSafeLoader)
+            workload["queries"] = queries_data.get("queries", [])
+        else:
+            workload.setdefault("queries", [])
+
+        capture_meta_path = path / "capture_meta.yml"
+        if capture_meta_path.exists():
+            with open(capture_meta_path) as f:
+                workload["capture_meta"] = yaml.load(f, Loader=yaml.CSafeLoader)
+
+        initial_data_dir = path / "initial_data"
+        if initial_data_dir.is_dir() and (
+            list(initial_data_dir.glob("*.tsv"))
+            or list(initial_data_dir.glob("*.parquet"))
+        ):
+            workload["sql_initial_data_dir"] = str(initial_data_dir)
+
+        continuous_data_dir = path / "continuous_data"
+        if continuous_data_dir.is_dir() and (
+            list(continuous_data_dir.glob("*.tsv"))
+            or list(continuous_data_dir.glob("*.parquet"))
+        ):
+            workload["sql_continuous_data_dir"] = str(continuous_data_dir)
+    else:
+        with open(path) as f:
+            workload = yaml.load(f, Loader=yaml.CSafeLoader)
+    return workload
 
 
 def print_workload_stats(file: pathlib.Path, workload: dict[str, Any]) -> None:
@@ -144,19 +189,19 @@ def print_workload_stats(file: pathlib.Path, workload: dict[str, Any]) -> None:
 
     rows = (
         sum(
-            table["rows"]
+            table.get("rows", 0)
             for schemas in workload["databases"].values()
             for items in schemas.values()
             for table in items["tables"].values()
         )
         + sum(
-            source["messages_total"]
+            source.get("messages_total", 0)
             for schemas in workload["databases"].values()
             for items in schemas.values()
             for source in items["sources"].values()
         )
         + sum(
-            child["messages_total"]
+            child.get("messages_total", 0)
             for schemas in workload["databases"].values()
             for items in schemas.values()
             for source in items["sources"].values()
@@ -247,18 +292,30 @@ def update_captured_workloads_repo() -> None:
 
 
 def get_paths(globs: list[str]) -> list[pathlib.Path]:
-    """Get paths matching the given glob patterns."""
+    """Get paths matching the given glob patterns.
+
+    Each entry is first checked as a local file/directory path.  If it exists
+    on disk it is used directly; otherwise it is treated as a glob resolved
+    relative to the captured-workloads repository (LOCATION).
+    """
     paths = []
     for glob in globs:
-        new_paths = list(LOCATION.rglob(glob))
-        if not new_paths:
-            known = "\n  ".join(
-                [posixpath.relpath(file, LOCATION) for file in LOCATION.rglob("*.yml")]
-            )
-            raise ValueError(
-                f'No workload files found matching "{glob}", known:\n  {known}'
-            )
-        paths.extend(new_paths)
+        local = pathlib.Path(glob)
+        if local.exists():
+            paths.append(local.resolve())
+        else:
+            new_paths = list(LOCATION.rglob(glob))
+            if not new_paths:
+                known = "\n  ".join(
+                    [
+                        posixpath.relpath(file, LOCATION)
+                        for file in LOCATION.rglob("*.yml")
+                    ]
+                )
+                raise ValueError(
+                    f'No workload files found matching "{glob}", known:\n  {known}'
+                )
+            paths.extend(new_paths)
     paths.sort()
     return paths
 

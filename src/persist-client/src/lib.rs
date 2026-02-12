@@ -62,6 +62,7 @@ pub mod cli {
     pub mod admin;
     pub mod args;
     pub mod bench;
+    pub mod export;
     pub mod inspect;
 }
 pub mod critical;

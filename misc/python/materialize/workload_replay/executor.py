@@ -38,6 +38,8 @@ from materialize.workload_replay.data import (
     create_ingestions,
     create_initial_data_external,
     create_initial_data_requiring_mz,
+    import_sql_captured_data_initial,
+    import_sql_captured_data_streaming,
 )
 from materialize.workload_replay.objects import (
     run_create_objects_part_1,
@@ -116,6 +118,8 @@ def test(
         if not early_initial_data:
             run_create_objects_part_2(c, services, workload, verbose)
         stats["object_creation"] = time.time() - start_time
+    sql_initial_data_dir = workload.get("sql_initial_data_dir")
+    sql_continuous_data_dir = workload.get("sql_continuous_data_dir")
     created_data = False
     try:
         if initial_data:
@@ -128,24 +132,31 @@ def test(
             )
             stats_thread.start()
             start_time = time.time()
-            created_data = create_initial_data_external(
-                c,
-                workload,
-                factor_initial_data,
-                random.Random(random.randrange(SEED_RANGE)),
-            )
+            if sql_initial_data_dir:
+                print("Using SQL-captured initial data")
+                created_data = import_sql_captured_data_initial(
+                    c, workload, sql_initial_data_dir
+                )
+            else:
+                created_data = create_initial_data_external(
+                    c,
+                    workload,
+                    factor_initial_data,
+                    random.Random(random.randrange(SEED_RANGE)),
+                )
         if early_initial_data:
             start_time = time.time()
             run_create_objects_part_2(c, services, workload, verbose)
             stats["object_creation"] += time.time() - start_time
         if initial_data:
-            created_data_requiring_mz = create_initial_data_requiring_mz(
-                c,
-                workload,
-                factor_initial_data,
-                random.Random(random.randrange(SEED_RANGE)),
-            )
-            created_data = created_data or created_data_requiring_mz
+            if not sql_initial_data_dir:
+                created_data_requiring_mz = create_initial_data_requiring_mz(
+                    c,
+                    workload,
+                    factor_initial_data,
+                    random.Random(random.randrange(SEED_RANGE)),
+                )
+                created_data = created_data or created_data_requiring_mz
             stats["initial_data"]["time"] = time.time() - start_time
             if not created_data:
                 del stats["initial_data"]
@@ -185,11 +196,24 @@ def test(
         stop_event.clear()
     if run_ingestions:
         print("Starting continuous ingestions")
-        threads.extend(
-            create_ingestions(
-                c, workload, stop_event, factor_ingestions, verbose, stats["ingestions"]
+        if sql_continuous_data_dir:
+            print("Using SQL-captured continuous data")
+            threads.extend(
+                import_sql_captured_data_streaming(
+                    c, workload, sql_continuous_data_dir, factor_ingestions, stop_event
+                )
             )
-        )
+        else:
+            threads.extend(
+                create_ingestions(
+                    c,
+                    workload,
+                    stop_event,
+                    factor_ingestions,
+                    verbose,
+                    stats["ingestions"],
+                )
+            )
     if run_queries and workload["queries"]:
         print("Starting continuous queries")
         stats["queries"]["timings"] = []
