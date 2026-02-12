@@ -1108,7 +1108,7 @@ async fn tcp_proxy(
                         .context("proxying")
                 }));
             }
-            Some(Err(e)) = conns.next() => {
+            Some(result) = conns.next() => if let Err(e) = result {
                 warn!("{name}: tcp proxy connection failed: {}", e.display_with_causes());
             }
         }
