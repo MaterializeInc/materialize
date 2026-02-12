@@ -2167,6 +2167,7 @@ def run_scenarios(
                     start_time = time.time()
                     c.testdrive(f.getvalue(), quiet=True).stdout
                     wallclock = time.time() - start_time
+                    c.sanity_restart_mz()
                 except Exception as e:
                     print(
                         f"Failed scenario {scenario.__name__} with count {scenario.COUNT}: {e}"

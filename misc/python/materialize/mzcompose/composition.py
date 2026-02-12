@@ -1172,6 +1172,54 @@ class Composition:
     def sanity_restart_mz(self) -> None:
         """Restart Materialized if it is part of the composition to find
         problems with persisted objects, functions as a sanity check."""
+        if self.is_running("materialized"):
+            # Run potentially slow queries from console and verify that they are still fast
+            start_time = time.time()
+            self.sql(
+                """SELECT DISTINCT relation, privilege, "hasTablePrivilege"
+                FROM
+                    (
+                        VALUES
+                            ('mz_recent_activity_log', 'SELECT', has_table_privilege(16748, 'SELECT')),
+                            ('mz_recent_activity_log_redacted', 'SELECT', true),
+                            ('mz_statement_lifecycle_history', 'SELECT', has_table_privilege(16750, 'SELECT'))
+                    )
+                    AS _ (relation, privilege, "hasTablePrivilege");"""
+            )
+            end_time = time.time()
+            assert (
+                end_time - start_time < 1
+            ), f"Query took > 1 s: {end_time - start_time}s"
+            # self.sql(
+            #     """
+            #     SUBSCRIBE (
+            #         SELECT
+            #             ofqn.id,
+            #             ofqn.name,
+            #             ofqn.object_type AS "objectType",
+            #             ofqn.schema_id AS "schemaId",
+            #             ofqn.schema_name AS "schemaName",
+            #             ofqn.database_id AS "databaseId",
+            #             ofqn.database_name AS "databaseName",
+            #             s.type AS "sourceType",
+            #             CASE WHEN ws.id IS NOT NULL THEN true ELSE false END AS "isWebhookTable",
+            #             o.cluster_id AS "clusterId",
+            #             mc.name AS "clusterName"
+            #         FROM
+            #             mz_internal.mz_object_fully_qualified_names AS ofqn
+            #                 JOIN mz_catalog.mz_objects AS o ON o.id = ofqn.id
+            #                 LEFT JOIN mz_catalog.mz_sources AS s ON s.id = ofqn.id
+            #                 LEFT JOIN mz_internal.mz_webhook_sources AS ws ON ws.id = ofqn.id
+            #                 LEFT JOIN mz_catalog.mz_clusters AS mc ON mc.id = ofqn.cluster_id
+            #         WHERE ofqn.object_type IN ( $1, $2, $3, $4, $5, $6, $7, $8 )
+            #     )
+            #     WITH (PROGRESS)
+            #     ENVELOPE UPSERT (KEY (id));"""
+            # )
+            # assert (
+            #     end_time - start_time < 1
+            # ), f"Query took > 1 s: {end_time - start_time}s"
+
         if (
             "materialized" in self.compose["services"]
             and "labels" in self.compose["services"]["materialized"]
@@ -1253,7 +1301,7 @@ class Composition:
         """
         if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") is not None:
             self.final_preflight_check()
-        elif sanity_restart_mz and self.is_sanity_restart_mz:
+        else:
             self.sanity_restart_mz()
         self.capture_logs()
         self.invoke(
