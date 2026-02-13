@@ -29,7 +29,7 @@ column ordering.
 - **Avro Schema References**: Sources can now use avro schemas which reference
   other schemas when using Confluent Schema Registry.
 - **`EXPLAIN` improvements**: `EXPLAIN` now allows you to inspect the query plan
-  for `SUBSCRIBE` statements. It also fully qualifies index names if there are 
+  for `SUBSCRIBE` statements. It also fully qualifies index names if there are
   identically-named indexes across different schemas.
 - **More efficient dbt-adapter**: We've added indexes on `mz_hydration_statuses` and `mz_materialization_lag`.
   This should speed up "deployment ready" queries made by our dbt-adapter.
