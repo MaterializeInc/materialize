@@ -137,8 +137,16 @@ so it is executed.""",
         return (hash(deps), check)
 
     def fetch_hashes() -> None:
-        for arch in [Arch.AARCH64, Arch.X86_64]:
-            hash_check[arch] = get_hashes(arch)
+        # Resolve both architectures in parallel since they are independent
+        # and each involves expensive fingerprinting.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                pool.submit(get_hashes, arch): arch
+                for arch in [Arch.AARCH64, Arch.X86_64]
+            }
+            for future in futures:
+                arch = futures[future]
+                hash_check[arch] = future.result()
 
     trim_builds_prep_thread = threading.Thread(target=fetch_hashes)
     trim_builds_prep_thread.start()
