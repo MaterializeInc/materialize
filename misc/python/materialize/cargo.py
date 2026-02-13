@@ -256,15 +256,20 @@ class Workspace:
         """
         from materialize import spawn
 
-        crate_paths = sorted(set(str(c.path) for c in self.all_crates.values()))
+        root = next(iter(self.all_crates.values())).root
+        # Use paths relative to root for git specs and partitioning, since
+        # git --relative outputs paths relative to cwd (root). Crate paths
+        # may be absolute when MZ_ROOT is an absolute path.
+        crate_rel_paths = sorted(
+            set(str(c.path.relative_to(root)) for c in self.all_crates.values())
+        )
 
         specs = []
-        for p in crate_paths:
+        for p in crate_rel_paths:
             specs.append(f"{p}/**")
             specs.append(f":(exclude){p}/mzcompose")
             specs.append(f":(exclude){p}/mzcompose.py")
 
-        root = next(iter(self.all_crates.values())).root
         empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         diff_files = spawn.capture(
             ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--"]
@@ -280,8 +285,8 @@ class Workspace:
         )
 
         # Partition files by crate path (longest match first for nested crates)
-        crate_file_map: dict[str, set[str]] = {p: set() for p in crate_paths}
-        sorted_paths = sorted(crate_paths, key=len, reverse=True)
+        crate_file_map: dict[str, set[str]] = {p: set() for p in crate_rel_paths}
+        sorted_paths = sorted(crate_rel_paths, key=len, reverse=True)
         for f in all_files:
             for cp in sorted_paths:
                 if f.startswith(cp + "/"):
@@ -290,4 +295,5 @@ class Workspace:
 
         # Inject cached results into each Crate object
         for crate in self.all_crates.values():
-            crate._inputs_cache = crate_file_map.get(str(crate.path), set())
+            rel = str(crate.path.relative_to(root))
+            crate._inputs_cache = crate_file_map.get(rel, set())

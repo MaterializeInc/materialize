@@ -1112,9 +1112,7 @@ class ResolvedImage:
         if hasattr(self.image, "_context_files_cache"):
             resolved_inputs = sorted(inputs)
         else:
-            resolved_inputs = sorted(
-                set(git.expand_globs(self.image.rd.root, *inputs))
-            )
+            resolved_inputs = sorted(set(git.expand_globs(self.image.rd.root, *inputs)))
         for rel_path in resolved_inputs:
             abs_path = self.image.rd.root / rel_path
             file_hash = hashlib.sha1()
@@ -1537,15 +1535,17 @@ class Repository:
 
         This replaces ~41 individual pairs of git subprocess calls (one per
         image) with a single pair, then partitions the results by image path.
-        The results are injected into the expand_globs cache.
         """
-        image_paths = sorted(set(str(img.path) for img in self.images.values()))
-        specs = [f"{p}/**" for p in image_paths]
-
         root = self.rd.root
-        empty_tree = (
-            "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        # Use paths relative to root for git specs and partitioning, since
+        # git --relative outputs paths relative to cwd (root). Image paths
+        # may be absolute when MZ_ROOT is an absolute path.
+        image_rel_paths = sorted(
+            set(str(img.path.relative_to(root)) for img in self.images.values())
         )
+        specs = [f"{p}/**" for p in image_rel_paths]
+
+        empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         diff_files = spawn.capture(
             ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--"]
             + specs,
@@ -1560,21 +1560,17 @@ class Repository:
         )
 
         # Partition files by image path (longest match first for nested paths)
-        image_file_map: dict[str, set[str]] = {p: set() for p in image_paths}
-        sorted_paths = sorted(image_paths, key=len, reverse=True)
+        image_file_map: dict[str, set[str]] = {p: set() for p in image_rel_paths}
+        sorted_paths = sorted(image_rel_paths, key=len, reverse=True)
         for f in all_files:
             for ip in sorted_paths:
-                if f.startswith(ip + "/") or f.startswith(str(Path(ip)) + "/"):
+                if f.startswith(ip + "/"):
                     image_file_map[ip].add(f)
                     break
 
-        # Inject results into the expand_globs cache by calling it with
-        # the same arguments that ResolvedImage.inputs() will use.
-        # Since expand_globs is @functools.cache, we need to populate the
-        # cache with the right keys. We do this by replacing the function
-        # temporarily to return our pre-computed results.
         for img in self.images.values():
-            img._context_files_cache = image_file_map.get(str(img.path), set())
+            rel = str(img.path.relative_to(root))
+            img._context_files_cache = image_file_map.get(rel, set())
 
     def __iter__(self) -> Iterator[Image]:
         return iter(self.images.values())
