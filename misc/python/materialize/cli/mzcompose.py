@@ -390,7 +390,7 @@ class DescriptionCommand(Command):
     help = "fetch the Python code description from mzcompose.py"
 
     def run(self, args: argparse.Namespace) -> None:
-        composition = load_composition(args)
+        composition = load_composition(args, munge_services=False)
         print(composition.description)
 
 
