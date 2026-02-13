@@ -1543,6 +1543,7 @@ where
                         .collection_metadata(id)
                         .map_err(|_| CollectionMissing(id))?
                         .clone();
+                    tracing::info!("MV dataflow export: {id} {metadata:?}");
                     let conn = MaterializedViewSinkConnection {
                         value_desc: conn.value_desc,
                         storage_metadata: metadata,
@@ -1619,6 +1620,7 @@ where
                 export_ids = %augmented_dataflow.display_export_ids(),
                 as_of = ?augmented_dataflow.as_of.as_ref().unwrap().elements(),
                 until = ?augmented_dataflow.until.elements(),
+                sink_exports = ?augmented_dataflow.sink_exports,
                 "creating dataflow",
             );
         }
@@ -1895,6 +1897,10 @@ where
 
         if !advanced {
             return;
+        }
+
+        if id.is_user() && new_frontier.is_empty() {
+            tracing::info!("advanced to empty write frontier: {id}");
         }
 
         // Relax the implied read hold according to the read policy.

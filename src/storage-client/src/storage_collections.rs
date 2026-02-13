@@ -2733,6 +2733,9 @@ where
                     if id.is_user() {
                         trace!("new upper for collection {id}: {:?}", upper);
                     }
+                    if id.is_user() && upper.is_empty() {
+                        info!("new empty upper for collection {id}");
+                    }
                     let current_shard = self.shard_by_id.get(&id);
                     if let Some(shard_id) = current_shard {
                         if shard_id == &handle.shard_id() {
@@ -3071,7 +3074,7 @@ async fn finalize_shards_task<T>(
                     debug!(%shard_id, "shard is already finalized!");
                     Some(shard_id)
                 } else {
-                    debug!(%shard_id, "finalizing shard");
+                    info!(%shard_id, "finalizing shard");
                     let finalize = || async move {
                         // TODO: thread the global ID into the shard finalization WAL
                         let diagnostics = Diagnostics::from_purpose("finalizing shards");

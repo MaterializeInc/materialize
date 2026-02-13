@@ -1338,6 +1338,9 @@ mod append {
             let (lower, upper) = (desc.lower, desc.upper);
             let mut to_append: Vec<_> = self.batches.iter_mut().collect();
 
+            if upper.is_empty() && self.sink_id.is_user() {
+                tracing::info!("appending batch with empty frontier: {}", self.sink_id);
+            }
             loop {
                 let result = self
                     .persist_writer

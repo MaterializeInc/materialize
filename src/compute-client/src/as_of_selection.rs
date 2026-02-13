@@ -771,9 +771,13 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// impose as-of constraints on other compute collections.
     fn prune_sealed_persist_sinks(&mut self) {
         self.collections.retain(|id, _| {
-            self.storage_collections
+            let retain = self.storage_collections
                 .collection_frontiers(*id)
-                .map_or(true, |f| !f.write_frontier.is_empty())
+                .map_or(true, |f| !f.write_frontier.is_empty());
+            if !retain {
+                tracing::info!("prune sealed persist sink: {id}");
+            }
+            retain
         });
     }
 
