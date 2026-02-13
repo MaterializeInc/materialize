@@ -166,7 +166,9 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     args.command.invoke(args)
 
 
-def load_composition(args: argparse.Namespace) -> Composition:
+def load_composition(
+    args: argparse.Namespace, munge_services: bool = True
+) -> Composition:
     """Loads the composition specified by the command-line arguments."""
     if not args.ignore_docker_version:
         docker_local_version = Version.parse(
@@ -205,6 +207,7 @@ def load_composition(args: argparse.Namespace) -> Composition:
             project_name=args.project_name,
             sanity_restart_mz=args.sanity_restart_mz,
             host_network=args.host_network,
+            munge_services=munge_services,
         )
     except UnknownCompositionError as e:
         if args.find:
@@ -335,7 +338,7 @@ class ListWorkflowsCommand(Command):
     help = "list workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
-        composition = load_composition(args)
+        composition = load_composition(args, munge_services=False)
         for name in sorted(composition.workflows):
             print(name)
 
