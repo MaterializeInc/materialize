@@ -15,7 +15,8 @@ RUN groupadd --system --gid=999 materialize \
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install \
         ca-certificates \
-        tini
+        tini \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY mz-frontegg-mock /usr/local/bin/
 
