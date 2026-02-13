@@ -718,7 +718,24 @@ def trim_tests_pipeline(
             files = future.result()
             imported_files[path] = files
 
+    # Cache compositions loaded with munge_services=False to extract image
+    # names from their service configs. This avoids expensive fingerprinting
+    # and dependency resolution that munge_services=True triggers.
     compositions: dict[str, Composition] = {}
+
+    def get_composition_image_deps(
+        name: str,
+    ) -> list[mzbuild.ResolvedImage]:
+        """Get the mzbuild image dependencies for a composition without
+        doing expensive fingerprinting/dependency resolution."""
+        if name not in compositions:
+            compositions[name] = Composition(repo, name, munge_services=False)
+        comp = compositions[name]
+        image_names = []
+        for _svc_name, config in comp.compose.get("services", {}).items():
+            if "mzbuild" in config:
+                image_names.append(config["mzbuild"])
+        return [deps[img_name] for img_name in image_names if img_name in deps]
 
     def to_step(config: dict[str, Any]) -> PipelineStep | None:
         if "wait" in config or "group" in config:
@@ -740,9 +757,7 @@ def trim_tests_pipeline(
                 for plugin_name, plugin_config in plugin.items():
                     if plugin_name == "./ci/plugins/mzcompose":
                         name = plugin_config["composition"]
-                        if name not in compositions:
-                            compositions[name] = Composition(repo, name)
-                        for dep in compositions[name].dependencies:
+                        for dep in get_composition_image_deps(name):
                             step.image_dependencies.add(dep)
                         composition_path = str(repo.compositions[name])
                         step.extra_inputs.add(composition_path)
