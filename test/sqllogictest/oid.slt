@@ -132,6 +132,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 750  array_in
 849  position
 861  current_database
+868  strpos
 870  lower
 871  upper
 872  initcap

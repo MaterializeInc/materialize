@@ -1119,6 +1119,56 @@ SELECT position(e'\u0903\u0951' IN e'\u0930\u0903\u0951')
 ----
 2
 
+### strpos ###
+
+query I
+SELECT strpos('hello', 'lo')
+----
+4
+
+query I
+SELECT strpos('hello', 'xyz')
+----
+0
+
+query I
+SELECT strpos('hello', '')
+----
+1
+
+query I
+SELECT strpos('', 'lo')
+----
+0
+
+query I
+SELECT strpos('', '')
+----
+1
+
+# strpos with multi-byte characters
+query I
+SELECT strpos('héllo', 'lo')
+----
+4
+
+# strpos should match position with swapped args
+query B
+SELECT strpos('hello world', 'world') = position('world' IN 'hello world')
+----
+true
+
+# NULL propagation
+query T
+SELECT strpos(NULL, 'lo')
+----
+NULL
+
+query T
+SELECT strpos('hello', NULL)
+----
+NULL
+
 ### left ###
 statement ok
 CREATE TABLE lefttest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)

@@ -337,6 +337,7 @@ mod derive {
         ConvertFrom(ConvertFrom),
         Left(Left),
         Position(Position),
+        Strpos(Strpos),
         Right(Right),
         RepeatString(RepeatString),
         Normalize(Normalize),

@@ -2599,7 +2599,7 @@ where
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
+#[sqlfunc]
 fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     let char_index = string.find(substring);
 
@@ -2615,6 +2615,11 @@ fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     } else {
         Ok(0)
     }
+}
+
+#[sqlfunc]
+fn strpos(string: &str, substring: &str) -> Result<i32, EvalError> {
+    position(substring, string)
 }
 
 #[sqlfunc(

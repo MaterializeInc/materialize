@@ -2622,6 +2622,9 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         "asinh" => Scalar {
             params!(Float64) => UnaryFunc::Asinh(func::Asinh) => Float64, 2465;
         },
+        "strpos" => Scalar {
+            params!(String, String) => BinaryFunc::from(func::Strpos) => Int32, 868;
+        },
         "split_part" => Scalar {
             params!(String, String, Int32) => VariadicFunc::SplitPart => String, 2088;
         },
