@@ -9,8 +9,8 @@ _shtab_scratch_commands() {
     "create:Create a new scratch instance"
     "destroy:Destroy a scratch instance"
     "forward:Forward local ports remotely"
+    "list:List scratch instances"
     "login:Log in to AWS SSO"
-    "mine:Show active scratch instance"
     "push:Push current HEAD (or a specific git commit) to scratch instance"
     "sftp:Connect to scratch instance via sftp"
     "ssh:Connect to scratch instance via ssh"
@@ -70,14 +70,7 @@ _shtab_scratch_forward_options=(
 # guard to ensure default positional specs are added only once per session
 _shtab_scratch_forward_defaults_added=0
 
-_shtab_scratch_login_options=(
-  "(- : *)"{-h,--help}"[show this help message and exit]"
-)
-
-# guard to ensure default positional specs are added only once per session
-_shtab_scratch_login_defaults_added=0
-
-_shtab_scratch_mine_options=(
+_shtab_scratch_list_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   "--all[Show all instances]"
   "--output-format[]:output_format:(table csv)"
@@ -85,7 +78,14 @@ _shtab_scratch_mine_options=(
 )
 
 # guard to ensure default positional specs are added only once per session
-_shtab_scratch_mine_defaults_added=0
+_shtab_scratch_list_defaults_added=0
+
+_shtab_scratch_login_options=(
+  "(- : *)"{-h,--help}"[show this help message and exit]"
+)
+
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_login_defaults_added=0
 
 _shtab_scratch_push_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
@@ -136,8 +136,8 @@ _shtab_scratch() {
         create) _arguments -C -s $_shtab_scratch_create_options ;;
         destroy) _arguments -C -s $_shtab_scratch_destroy_options ;;
         forward) _arguments -C -s $_shtab_scratch_forward_options ;;
+        list) _arguments -C -s $_shtab_scratch_list_options ;;
         login) _arguments -C -s $_shtab_scratch_login_options ;;
-        mine) _arguments -C -s $_shtab_scratch_mine_options ;;
         push) _arguments -C -s $_shtab_scratch_push_options ;;
         sftp) _arguments -C -s $_shtab_scratch_sftp_options ;;
         ssh) _arguments -C -s $_shtab_scratch_ssh_options ;;

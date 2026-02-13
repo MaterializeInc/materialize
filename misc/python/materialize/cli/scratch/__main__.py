@@ -16,10 +16,12 @@ from materialize.cli.scratch import (
     destroy,
     forward,
     login,
-    mine,
     push,
     sftp,
     ssh,
+)
+from materialize.cli.scratch import (
+    list as list_cmd,
 )
 
 
@@ -36,7 +38,7 @@ def main() -> None:
             create.run,
             "Create a new scratch instance",
         ),
-        ("mine", mine.configure_parser, mine.run, "Show active scratch instance"),
+        ("list", list_cmd.configure_parser, list_cmd.run, "List scratch instances"),
         ("ssh", ssh.configure_parser, ssh.run, "Connect to scratch instance via ssh"),
         (
             "sftp",
