@@ -62,7 +62,8 @@ RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v
 # Install Python dependencies. These are necessary to run some of our base tooling.
 COPY requirements.txt /workdir/
 RUN curl -LsSf https://astral.sh/uv/0.9.10/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_UNMANAGED_INSTALL=1 sh \
-    && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt
+    && uv pip install --system --break-system-packages -r /workdir/requirements.txt && rm /workdir/requirements*.txt \
+    && rm -rf /root/.cache/uv
 
 # Install extra tools not available in apt repositories.
 
@@ -174,7 +175,8 @@ RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -rf /usr/share/doc/nodejs
 
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.11.0/shellcheck \
@@ -220,6 +222,10 @@ RUN mkdir rust \
     && mkdir -p /usr/local/lib/rustlib/src/rust \
     && tar -xzf rust-src.tar.gz -C /usr/local/lib/rustlib/src/rust --strip-components=1 \
     && rm -f rust-src.asc rust-src.tar.gz \
+    # Trim Rust source tree: only library/ is needed (for cargo miri setup). \
+    # Delete compiler/, src/, tests/, tools/, etc. to save ~500-700 MB. \
+    && find /usr/local/lib/rustlib/src/rust -mindepth 1 -maxdepth 1 \
+        -type d ! -name library -exec rm -rf {} + \
     && case $RUST_COMPONENTS in *miri*) \
     PATH=$PATH:/root/.cargo/bin cargo miri setup \
     ;; \
@@ -249,13 +255,15 @@ COPY sanshim/$ARCH_GCC /sanshim
 # so using the same command here should ensure it's installed and cached in the
 # right place
 COPY pyright-version.sh /workdir/
-RUN npx pyright@$(sh /workdir/pyright-version.sh) --help
+RUN npx pyright@$(sh /workdir/pyright-version.sh) --help \
+    && npm cache clean --force 2>/dev/null || true
 
 # Install APT repo generator.
 
 RUN curl -fsSL https://github.com/deb-s3/deb-s3/releases/download/0.11.8/deb-s3-0.11.8.gem > deb-s3.gem \
-    && gem install ./deb-s3.gem \
-    && rm deb-s3.gem
+    && gem install ./deb-s3.gem --no-document \
+    && rm deb-s3.gem \
+    && rm -rf /root/.local/share/gem/cache
 
 # Install the AWS CLI.
 
@@ -274,7 +282,12 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
     && rm gcloud.tar.gz \
     && CLOUDSDK_CORE_DISABLE_PROMPTS=1 /opt/google-cloud-sdk/install.sh --path-update false \
     && /opt/google-cloud-sdk/bin/gcloud config set disable_usage_reporting false \
-    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin
+    && /opt/google-cloud-sdk/bin/gcloud components install gke-gcloud-auth-plugin \
+    # Clean up gcloud SDK: remove backup copies, bundled Python (system Python exists), caches \
+    && rm -rf /opt/google-cloud-sdk/.install/.backup \
+    && rm -rf /opt/google-cloud-sdk/platform/bundledpythonunix \
+    && find /opt/google-cloud-sdk -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true \
+    && rm -rf /root/.cache/pip
 
 # Install docs site dependencies. These are towards the end for the same reason
 # as the Python dependencies. These are only supported on x86_64 at the moment.
@@ -364,7 +377,8 @@ RUN arch_fdb=$(echo "$ARCH_GCC" | sed -e "s/x86_64/amd64/") \
     && if [ $ARCH_GCC = x64_64 ]; then echo '695193b8c6f8af9ec083221611b5f2925ef7a5e3c5e3c1d0af65d0dfbe99d13d foundationdb-clients.deb' | sha256sum --check; fi \
     && if [ $ARCH_GCC = aarch64 ]; then echo 'db1bbb72d57685a1c212c6456e6f0dfd1266c5c10c4adbc98d23a5d91bdbaff7 foundationdb-clients.deb' | sha256sum --check; fi \
     && dpkg -i foundationdb-clients.deb \
-    && rm foundationdb-clients.deb
+    && rm foundationdb-clients.deb \
+    && rm -rf /usr/share/doc/foundationdb-clients
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.

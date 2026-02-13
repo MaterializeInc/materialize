@@ -38,9 +38,9 @@ RUN groupadd --system --gid=999 materialize \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean \
     && rm -rf /var/lib/postgresql \
-    # Remove unused PostgreSQL binaries (keep only postgres, initdb, pg_isready, pg_ctl) \
+    # Remove unused PostgreSQL binaries (keep only postgres, initdb, pg_isready, pg_ctl, psql) \
     && find /usr/lib/postgresql/18/bin -type f \
-        ! -name postgres ! -name initdb ! -name pg_isready ! -name pg_ctl \
+        ! -name postgres ! -name initdb ! -name pg_isready ! -name pg_ctl ! -name psql \
         -delete \
     # Remove PostgreSQL client binaries except psql \
     && find /usr/bin -name 'pg_*' -delete \
@@ -67,11 +67,6 @@ COPY postgresql.conf pg_hba.conf /etc/postgresql/
 
 COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
 COPY console_nginx.template /etc/nginx/templates/default.conf.template
-
-# Pre-compress console static assets (JS/CSS/SVG) for nginx gzip_static.
-# Originals are removed; nginx serves .gz files directly via gzip_static always.
-RUN find /usr/share/nginx/html -type f \( -name '*.js' -o -name '*.css' -o -name '*.svg' \) \
-    -exec gzip -9 {} \;
 
 # Configure the console to listen on port 6874 and proxy API requests through to
 # the Materialize instance that will be started and listening for requests on
