@@ -48,8 +48,11 @@ class Crate:
         examples: The names of all examples in the crate.
     """
 
+    _inputs_cache: set[str] | None
+
     def __init__(self, root: Path, path: Path):
         self.root = root
+        self._inputs_cache = None
         with open(path / "Cargo.toml") as f:
             config = toml.load(f)
         self.name = config["package"]["name"]
@@ -116,7 +119,7 @@ class Crate:
         # † As a development convenience, we omit mzcompose configuration files
         # within a crate. This is technically incorrect if someone writes
         # `include!("mzcompose.py")`, but that seems like a crazy thing to do.
-        if hasattr(self, "_inputs_cache"):
+        if self._inputs_cache is not None:
             return self._inputs_cache
         return git.expand_globs(
             self.root,

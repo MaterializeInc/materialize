@@ -758,9 +758,12 @@ class Image:
 
     _DOCKERFILE_MZFROM_RE = re.compile(rb"^MZFROM\s*(\S+)")
 
+    _context_files_cache: set[str] | None
+
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
+        self._context_files_cache = None
         self.pre_images: list[PreImage] = []
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
@@ -1074,7 +1077,7 @@ class ResolvedImage:
             inputs: A list of input files, relative to the root of the
                 repository.
         """
-        if hasattr(self.image, "_context_files_cache"):
+        if self.image._context_files_cache is not None:
             paths = set(self.image._context_files_cache)
         else:
             paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
@@ -1109,7 +1112,7 @@ class ResolvedImage:
         # batching + resolved CargoPreImage paths), they are already individual
         # file paths from git. Skip the expensive expand_globs subprocess calls.
         inputs = self.inputs()
-        if hasattr(self.image, "_context_files_cache"):
+        if self.image._context_files_cache is not None:
             resolved_inputs = sorted(inputs)
         else:
             resolved_inputs = sorted(set(git.expand_globs(self.image.rd.root, *inputs)))
