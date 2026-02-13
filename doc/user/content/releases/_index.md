@@ -19,8 +19,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Scheduled for release to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-13* <br>
 
-This release includes improvements to Avro Schema references, `EXPLAIN` commands,
-and bug fixes.
+This release includes improvements to Avro Schema references, `EXPLAIN` commands, and bug fixes.
 
 ### Improvements
 - **Avro Schema References**: Sources can now use avro schemas which reference
