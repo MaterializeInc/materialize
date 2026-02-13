@@ -122,9 +122,8 @@ impl ClusterReplicaSizeMap {
                 let Some(memory_limit) = replica.memory_limit else {
                     bail!("No memory limit found in cluster definition for {name}");
                 };
-                replica.credits_per_hour = Numeric::from(
-                    (memory_limit.0 * replica.scale.get() * u64::cast_from(replica.workers)).0,
-                ) / Numeric::from(1 * GIB);
+                let total_memory = memory_limit.0 * replica.scale.get();
+                replica.credits_per_hour = Numeric::from(total_memory.0) / Numeric::from(GIB);
             }
         }
         Ok(Self(cluster_replica_sizes))
@@ -308,5 +307,29 @@ impl AwsPrincipalContext {
             "arn:aws:iam::{}:role/mz_{}_{}",
             self.aws_account_id, self.aws_external_id_prefix, aws_external_id_suffix
         )
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
+    fn cluster_replica_size_credits_from_memory() {
+        let s = r#"{
+            "test": {
+                "memory_limit": "1000MiB",
+                "scale": 2,
+                "workers": 10,
+                "credits_per_hour": "0"
+            }
+        }"#;
+        let map = ClusterReplicaSizeMap::parse_from_str(s, true).unwrap();
+
+        let alloc = map.get_allocation_by_name("test").unwrap();
+        let expected = Numeric::from(2000) / Numeric::from(1024);
+        assert_eq!(alloc.credits_per_hour, expected);
     }
 }

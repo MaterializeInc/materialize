@@ -94,7 +94,6 @@ fn test_proto_serialization_stability() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // not an actual test
 #[ignore]
 /// This is not a real test, it is a helper to generate encoded catalog objects
 /// for other tests. When you want to generate new encodings, then run:
