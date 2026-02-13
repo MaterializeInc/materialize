@@ -19,11 +19,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Scheduled for release to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-13* <br>
 
-This release makes replacement materialized views (ALTER MATERIALIZED VIEW)
-generally available by enabling the feature by default, adds support for Avro
-schema references with Confluent Schema Registry, and fixes several bugs
-including issues with `IS DISTINCT FROM` typechecking and subscribe snapshot
-column ordering.
+This release includes improvements to Avro Schema references, `EXPLAIN` commands,
+and bug fixes.
 
 ### Improvements
 - **Avro Schema References**: Sources can now use avro schemas which reference
