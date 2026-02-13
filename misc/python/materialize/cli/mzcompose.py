@@ -349,7 +349,7 @@ class DescribeCommand(Command):
     help = "describe services and workflows in the composition"
 
     def run(self, args: argparse.Namespace) -> None:
-        composition = load_composition(args)
+        composition = load_composition(args, munge_services=False)
 
         workflows = []
         for name, fn in composition.workflows.items():
