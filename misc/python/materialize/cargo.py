@@ -116,6 +116,8 @@ class Crate:
         # † As a development convenience, we omit mzcompose configuration files
         # within a crate. This is technically incorrect if someone writes
         # `include!("mzcompose.py")`, but that seems like a crazy thing to do.
+        if hasattr(self, "_inputs_cache"):
+            return self._inputs_cache
         return git.expand_globs(
             self.root,
             f"{self.path}/**",
@@ -245,3 +247,47 @@ class Workspace:
             for d in crate.path_dev_dependencies:
                 visit(self.crates[d])
         return deps
+
+    def precompute_crate_inputs(self) -> None:
+        """Pre-fetch all crate input files in a single batched git call.
+
+        This replaces ~118 individual pairs of git subprocess calls with
+        a single pair, then partitions the results by crate path in Python.
+        """
+        from materialize import spawn
+
+        crate_paths = sorted(set(str(c.path) for c in self.all_crates.values()))
+
+        specs = []
+        for p in crate_paths:
+            specs.append(f"{p}/**")
+            specs.append(f":(exclude){p}/mzcompose")
+            specs.append(f":(exclude){p}/mzcompose.py")
+
+        root = next(iter(self.all_crates.values())).root
+        empty_tree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        diff_files = spawn.capture(
+            ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--"]
+            + specs,
+            cwd=root,
+        )
+        ls_files = spawn.capture(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"] + specs,
+            cwd=root,
+        )
+        all_files = set(
+            f for f in (diff_files + ls_files).split("\0") if f.strip() != ""
+        )
+
+        # Partition files by crate path (longest match first for nested crates)
+        crate_file_map: dict[str, set[str]] = {p: set() for p in crate_paths}
+        sorted_paths = sorted(crate_paths, key=len, reverse=True)
+        for f in all_files:
+            for cp in sorted_paths:
+                if f.startswith(cp + "/"):
+                    crate_file_map[cp].add(f)
+                    break
+
+        # Inject cached results into each Crate object
+        for crate in self.all_crates.values():
+            crate._inputs_cache = crate_file_map.get(str(crate.path), set())

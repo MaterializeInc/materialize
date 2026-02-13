@@ -1487,6 +1487,10 @@ class Repository:
            ValueError: A circular dependency was discovered in the images
                in the repository.
         """
+        # Pre-fetch all crate input files in a single batched git call,
+        # replacing ~118 individual subprocess pairs with one pair.
+        self.rd.cargo_workspace.precompute_crate_inputs()
+
         resolved = OrderedDict()
         visiting = set()
 
