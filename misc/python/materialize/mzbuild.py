@@ -468,18 +468,25 @@ class Copy(PreImage):
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
-    def inputs(self) -> set[str]:
-        inputs = {
-            "ci/builder",
-            "Cargo.toml",
-            # TODO(benesch): we could in theory fingerprint only the subset of
-            # Cargo.lock that applies to the crates at hand, but that is a
-            # *lot* of work.
-            "Cargo.lock",
-            ".cargo/config",
-        }
+    @staticmethod
+    @cache
+    def _cargo_shared_inputs() -> frozenset[str]:
+        """Resolve shared Cargo inputs once and cache the result.
 
-        return inputs
+        This expands the 'ci/builder' directory glob and filters out
+        non-existent files like '.cargo/config', avoiding repeated
+        git subprocess calls in fingerprint().
+        """
+        inputs: set[str] = set()
+        inputs |= git.expand_globs(Path("."), "ci/builder/**")
+        inputs.add("Cargo.toml")
+        inputs.add("Cargo.lock")
+        if Path(".cargo/config").exists():
+            inputs.add(".cargo/config")
+        return frozenset(inputs)
+
+    def inputs(self) -> set[str]:
+        return set(CargoPreImage._cargo_shared_inputs())
 
     def extra(self) -> str:
         # Cargo images depend on the release mode and whether
@@ -1098,9 +1105,17 @@ class ResolvedImage:
         inputs via `PreImage.inputs`.
         """
         self_hash = hashlib.sha1()
-        for rel_path in sorted(
-            set(git.expand_globs(self.image.rd.root, *self.inputs()))
-        ):
+        # When inputs come from precomputed sources (crate and image context
+        # batching + resolved CargoPreImage paths), they are already individual
+        # file paths from git. Skip the expensive expand_globs subprocess calls.
+        inputs = self.inputs()
+        if hasattr(self.image, "_context_files_cache"):
+            resolved_inputs = sorted(inputs)
+        else:
+            resolved_inputs = sorted(
+                set(git.expand_globs(self.image.rd.root, *inputs))
+            )
+        for rel_path in resolved_inputs:
             abs_path = self.image.rd.root / rel_path
             file_hash = hashlib.sha1()
             raw_file_mode = os.lstat(abs_path).st_mode
