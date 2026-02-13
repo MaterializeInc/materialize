@@ -981,11 +981,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
             }
         }
-
-        for ingestion_id in to_remove {
-            tracing::info!(?ingestion_id, "removing oneshot ingestion");
-            self.storage_state.oneshot_ingestions.remove(&ingestion_id);
-        }
     }
 
     /// Extract commands until `InitializationComplete`, and make the worker

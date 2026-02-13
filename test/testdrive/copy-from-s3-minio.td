@@ -7,13 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-arg-default replicas=1
-
 # Tests for COPY FROM expr.
-
-# TODO: Remove `skip-if` when https://github.com/MaterializeInc/database-issues/issues/10049 is fixed
-$ skip-if
-SELECT ${arg.replicas} > 1;
 
 # COPY FROM expressions should immediately succeed or fail on their first runs
 $ set-max-tries max-tries=1
