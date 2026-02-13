@@ -27,7 +27,7 @@ use timely::progress::frontier::{Antichain, MutableAntichain};
 use uuid::Uuid;
 
 use crate::controller::ComputeControllerTimestamp;
-use crate::protocol::command::ComputeCommand;
+use crate::protocol::command::{ComputeCommand, PeekTarget};
 use crate::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StashedPeekResponse,
     SubscribeBatch, SubscribeResponse,
@@ -112,6 +112,9 @@ pub struct PartitionedComputeState<T> {
     /// property ensures that a) we can eventually drop the tracking state maintained for a peek
     /// and b) we won't re-initialize tracking for a peek we have already served.
     peek_responses: BTreeMap<Uuid, (PeekResponse, BTreeSet<usize>)>,
+    /// For persist peeks that were routed to a single worker, the number of expected responses.
+    /// Peeks not present in this map default to expecting `self.parts` responses.
+    peek_expected_responses: BTreeMap<Uuid, usize>,
     /// For each in-progress copy-to the response data received so far, and the set of shards that
     /// provided responses already.
     ///
@@ -162,6 +165,7 @@ where
             max_result_size: u64::MAX,
             frontiers: BTreeMap::new(),
             peek_responses: BTreeMap::new(),
+            peek_expected_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
             copy_to_responses: BTreeMap::new(),
         }
@@ -179,6 +183,11 @@ where
                 if let Some(max_result_size) = config.max_result_size {
                     self.max_result_size = max_result_size;
                 }
+            }
+            ComputeCommand::Peek(peek) if matches!(peek.target, PeekTarget::Persist { .. }) => {
+                // Persist peeks are routed to a single worker, so we only
+                // expect 1 response instead of `self.parts`.
+                self.peek_expected_responses.insert(peek.uuid, 1);
             }
             _ => {
                 // We are not guaranteed to observe other compute commands. We
@@ -246,7 +255,13 @@ where
         let resp1 = mem::replace(merged, PeekResponse::Canceled);
         *merged = merge_peek_responses(resp1, response, self.max_result_size);
 
-        if ready_shards.len() == self.parts {
+        let expected = self
+            .peek_expected_responses
+            .get(&uuid)
+            .copied()
+            .unwrap_or(self.parts);
+        if ready_shards.len() == expected {
+            self.peek_expected_responses.remove(&uuid);
             let (response, _) = self.peek_responses.remove(&uuid).unwrap();
             Some(ComputeResponse::PeekResponse(uuid, response, otel_ctx))
         } else {

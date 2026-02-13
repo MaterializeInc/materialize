@@ -572,6 +572,22 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     #[mz_ore::instrument(level = "debug")]
     fn handle_peek(&mut self, peek: Peek) {
+        // For persist peeks, only the chosen worker does actual work.
+        // Non-active workers short-circuit with an empty response to avoid
+        // spawning a tokio task, creating a oneshot channel, cloning the MFP
+        // plan, etc.
+        if let PeekTarget::Persist { .. } = &peek.target {
+            let chosen = usize::cast_from(peek.uuid.hashed()) % self.timely_worker.peers();
+            if chosen != self.timely_worker.index() {
+                self.send_compute_response(ComputeResponse::PeekResponse(
+                    peek.uuid,
+                    PeekResponse::Rows(RowCollection::default()),
+                    OpenTelemetryContext::obtain(),
+                ));
+                return;
+            }
+        }
+
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.

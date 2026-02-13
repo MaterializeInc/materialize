@@ -25,8 +25,9 @@
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+use differential_dataflow::Hashable;
 use itertools::Itertools;
-use mz_compute_client::protocol::command::ComputeCommand;
+use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_timely_util::scope_label::ScopeExt;
@@ -160,7 +161,7 @@ fn split_command(
 ) -> impl Iterator<Item = (usize, ComputeCommand)> {
     use itertools::Either;
 
-    let commands = match command {
+    match command {
         ComputeCommand::CreateDataflow(dataflow) => {
             let dataflow = *dataflow;
 
@@ -196,14 +197,17 @@ fn split_command(
                     time_dependence: dataflow.time_dependence.clone(),
                 })
                 .map(Box::new)
-                .map(ComputeCommand::CreateDataflow);
-            Either::Left(commands)
+                .map(ComputeCommand::CreateDataflow)
+                .enumerate();
+            Either::Left(Either::Left(commands))
         }
-        command => {
-            let commands = std::iter::repeat_n(command, parts);
-            Either::Right(commands)
+        // For persist peeks, only the active worker needs the command.
+        // Other workers would just return empty results, so we skip them
+        // entirely to avoid serialization and task-spawn overhead.
+        ComputeCommand::Peek(ref peek) if matches!(peek.target, PeekTarget::Persist { .. }) => {
+            let active = usize::cast_from(peek.uuid.hashed()) % parts;
+            Either::Left(Either::Right(std::iter::once((active, command))))
         }
-    };
-
-    commands.into_iter().enumerate()
+        command => Either::Right(std::iter::repeat_n(command, parts).enumerate()),
+    }
 }
