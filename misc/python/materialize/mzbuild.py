@@ -1067,7 +1067,10 @@ class ResolvedImage:
             inputs: A list of input files, relative to the root of the
                 repository.
         """
-        paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
+        if hasattr(self.image, "_context_files_cache"):
+            paths = set(self.image._context_files_cache)
+        else:
+            paths = set(git.expand_globs(self.image.rd.root, f"{self.image.path}/**"))
         if not paths:
             # While we could find an `mzbuild.yml` file for this service, expland_globs didn't
             # return any files that matched this service. At the very least, the `mzbuild.yml`
@@ -1490,6 +1493,9 @@ class Repository:
         # Pre-fetch all crate input files in a single batched git call,
         # replacing ~118 individual subprocess pairs with one pair.
         self.rd.cargo_workspace.precompute_crate_inputs()
+        # Pre-fetch all image context files in a single batched git call,
+        # replacing ~41 individual subprocess pairs with one pair.
+        self._precompute_image_context_files()
 
         resolved = OrderedDict()
         visiting = set()
@@ -1510,6 +1516,50 @@ class Repository:
             visit(target_image)
 
         return DependencySet(resolved.values())
+
+    def _precompute_image_context_files(self) -> None:
+        """Pre-fetch all image context files in a single batched git call.
+
+        This replaces ~41 individual pairs of git subprocess calls (one per
+        image) with a single pair, then partitions the results by image path.
+        The results are injected into the expand_globs cache.
+        """
+        image_paths = sorted(set(str(img.path) for img in self.images.values()))
+        specs = [f"{p}/**" for p in image_paths]
+
+        root = self.rd.root
+        empty_tree = (
+            "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+        )
+        diff_files = spawn.capture(
+            ["git", "diff", "--name-only", "-z", "--relative", empty_tree, "--"]
+            + specs,
+            cwd=root,
+        )
+        ls_files = spawn.capture(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"] + specs,
+            cwd=root,
+        )
+        all_files = set(
+            f for f in (diff_files + ls_files).split("\0") if f.strip() != ""
+        )
+
+        # Partition files by image path (longest match first for nested paths)
+        image_file_map: dict[str, set[str]] = {p: set() for p in image_paths}
+        sorted_paths = sorted(image_paths, key=len, reverse=True)
+        for f in all_files:
+            for ip in sorted_paths:
+                if f.startswith(ip + "/") or f.startswith(str(Path(ip)) + "/"):
+                    image_file_map[ip].add(f)
+                    break
+
+        # Inject results into the expand_globs cache by calling it with
+        # the same arguments that ResolvedImage.inputs() will use.
+        # Since expand_globs is @functools.cache, we need to populate the
+        # cache with the right keys. We do this by replacing the function
+        # temporarily to return our pre-computed results.
+        for img in self.images.values():
+            img._context_files_cache = image_file_map.get(str(img.path), set())
 
     def __iter__(self) -> Iterator[Image]:
         return iter(self.images.values())
