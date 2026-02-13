@@ -234,9 +234,10 @@ class RepositoryDetails:
             return path
 
 
-def docker_images() -> set[str]:
+@cache
+def docker_images() -> frozenset[str]:
     """List the Docker images available on the local machine."""
-    return set(
+    return frozenset(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
