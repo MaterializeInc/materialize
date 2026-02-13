@@ -21,7 +21,7 @@
       {
         "name": "authenticatorKind",
         "type": "Enum",
-        "description": "How to authenticate with Materialize.\n\nValid values:\n- `Frontegg`:<br>  Authenticate users using Frontegg.\n- `Password`:<br>  Authenticate users using internally stored password hashes.\n  The backend secret must contain external_login_password_mz_system.\n- `Sasl`:<br>  Authenticate users using SASL.\n- `None` (default):<br>  Do not authenticate users. Trust they are who they say they are without verification.",
+        "description": "How to authenticate with Materialize.\n\nValid values:\n- `Frontegg`:<br>  Authenticate users using Frontegg.\n- `Password`:<br>  Authenticate users using internally stored password hashes.\n  The backend secret must contain external_login_password_mz_system.\n- `Sasl`:<br>  Authenticate users using SASL.\n- `Oidc`:<br>  Authenticate users using OIDC (JWT tokens).\n- `None` (default):<br>  Do not authenticate users. Trust they are who they say they are without verification.",
         "default": "None",
         "required": false,
         "deprecated": false
