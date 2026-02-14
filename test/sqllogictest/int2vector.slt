@@ -161,3 +161,57 @@ SELECT x::text FROM t ORDER BY x::text DESC;
 ----
 1
 (empty)
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+# Regression test for
+# https://github.com/MaterializeInc/database-issues/issues/10087 and
+# https://github.com/MaterializeInc/database-issues/issues/10088:
+# this used to panic with "Can't union types: Array(Float64) and Array(Int16)"
+# due to Int2Vector not being properly cast to the target array element type.
+
+statement ok
+CREATE  TABLE  t1(c0 FLOAT8[] , c1 INT2VECTOR DEFAULT '', c2 int);
+
+query T
+SELECT CASE WHEN c2 = 5 THEN c0 ELSE c1 END FROM t1;
+----
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT CASE WHEN c2 = 5 THEN c0 ELSE c1 END FROM t1;
+----
+Explained Query:
+  Project (#3)
+    Map (case when (#2{c2} = 5) then #0{c0} else arraytoarray(int2vectortoarray(#1{c1})) end)
+      ReadStorage materialize.public.t1
+
+Source materialize.public.t1
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+CREATE TABLE t0(c0 FLOAT8[], c1 INT2VECTOR DEFAULT '')
+
+statement error WHERE clause must have type boolean, not type double precision\[\]
+SELECT t0.c1 FROM t0 WHERE (CASE t0.c1 WHEN 'bZkESziLfXXL3G3YWk3j3FGvDHCwEkrTmYd9ANGvVBoF0J4Dpim3YrnbiF38bQo5HA3kxP4kz1F1V6DIgKdfsbDT' THEN t0.c0 ELSE t0.c1 END ) UNION ALL SELECT t0.c1 FROM t0 WHERE (NOT (CASE t0.c1 WHEN 'bZkESziLfXXL3G3YWk3j3FGvDHCwEkrTmYd9ANGvVBoF0J4Dpim3YrnbiF38bQo5HA3kxP4kz1F1V6DIgKdfsbDT' THEN t0.c0 ELSE t0.c1 END )) UNION ALL SELECT t0.c1 FROM t0 WHERE (((CASE t0.c1 WHEN 'bZkESziLfXXL3G3YWk3j3FGvDHCwEkrTmYd9ANGvVBoF0J4Dpim3YrnbiF38bQo5HA3kxP4kz1F1V6DIgKdfsbDT' THEN t0.c0 ELSE t0.c1 END )) IS NULL)
+
+statement ok
+CREATE  TABLE  t2(c0 INT DEFAULT '', c1 BPCHAR NOT NULL DEFAULT '');
+
+statement ok
+CREATE  TABLE  t3(c0 INT2VECTOR DEFAULT NULL, c1 INT8 LIST DEFAULT '');
+
+statement ok
+CREATE VIEW IF NOT EXISTS v0(c0) AS SELECT ARRAY[true,false,true] FROM t2, t3 HAVING (NOT NULL) LIMIT 670620142;
+
+statement ok
+ALTER TABLE t2 ADD COLUMN c2 OID;
+
+query error NATURAL/USING join column "c0" could not convert type int2vector to boolean\[\]
+SELECT t2.c2, t2.c0, v0.c0, t2.c1 FROM t2, v0 NATURAL FULL JOIN t3;

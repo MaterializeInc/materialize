@@ -880,11 +880,31 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
             }),
 
             // INT2VECTOR
-            (Int2Vector, Array) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, _to_type| {
-                Some(|e: HirScalarExpr| {
-                    e.call_unary(UnaryFunc::CastInt2VectorToArray(
-                        func::CastInt2VectorToArray,
-                    ))
+            (Int2Vector, Array) => Implicit: CastTemplate::new(|ecx, ccx, _from_type, to_type| {
+                let inner_to_type = to_type.unwrap_array_element_type();
+                // Int2Vector elements are Int16, so if the target element type
+                // differs we need to also cast the array elements after the
+                // Int2Vector -> Array(Int16) conversion. (Postgres seems to do the same.)
+                let element_cast = if inner_to_type != &SqlScalarType::Int16 {
+                    let cast_expr = plan_hypothetical_cast(
+                        ecx, ccx, &SqlScalarType::Int16, inner_to_type
+                    )?;
+                    Some((to_type.clone(), cast_expr))
+                } else {
+                    None
+                };
+                Some(move |e: HirScalarExpr| {
+                    let arr = e.call_unary(
+                        UnaryFunc::CastInt2VectorToArray(func::CastInt2VectorToArray)
+                    );
+                    match element_cast {
+                        Some((return_ty, cast_expr)) => {
+                            arr.call_unary(CastArrayToArray(
+                                func::CastArrayToArray { return_ty, cast_expr: Box::new(cast_expr) }
+                            ))
+                        }
+                        None => arr,
+                    }
                 })
             }),
             (Int2Vector, String) => Explicit: CastInt2VectorToString(func::CastInt2VectorToString),
