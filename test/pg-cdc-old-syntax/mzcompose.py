@@ -26,8 +26,6 @@ from materialize.mzcompose.composition import (
     Service,
     WorkflowArgumentParser,
 )
-from materialize.mzcompose.service import Service as MzComposeService
-from materialize.mzcompose.service import ServiceConfig
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
@@ -35,75 +33,18 @@ from materialize.mzcompose.services.metadata_store import (
 )
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mz import Mz
-from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.postgres_util import (
+    PostgresRecvlogical,
+    create_postgres,
+    get_targeted_pg_version,
+)
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
 from materialize.version_list import get_compatible_upgrade_from_versions
-
-# Set the max slot WAL keep size to 10MB
-DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
-
-
-class PostgresRecvlogical(MzComposeService):
-    """
-    Command to start a replication.
-    """
-
-    def __init__(self, replication_slot_name: str, publication_name: str) -> None:
-        command: list[str] = [
-            "pg_recvlogical",
-            "--start",
-            "--slot",
-            f"{replication_slot_name}",
-            "--file",
-            "-",
-            # We pass the maximum allowed fsync-interval (~24 days) to prevent
-            # this process from advancing the slot. The purpose of this reader
-            # is to just mark the slot as busy, not to move its reserved WAL
-            # forward.
-            "--fsync-interval",
-            "2147483",
-            "--dbname",
-            "postgres",
-            "--host",
-            "postgres",
-            "--port",
-            "5432",
-            "--username",
-            "postgres",
-            "--no-password",
-            "-o",
-            "proto_version=1",
-            "-o",
-            f"publication_names={publication_name}",
-        ]
-        config: ServiceConfig = {"mzbuild": "postgres"}
-
-        config.update(
-            {
-                "command": command,
-                "allow_host_ports": True,
-                "ports": ["5432"],
-                "environment": ["PGPASSWORD=postgres"],
-            }
-        )
-
-        super().__init__(name="pg_recvlogical", config=config)
-
-
-def create_postgres(
-    pg_version: str | None, extra_command: list[str] = DEFAULT_PG_EXTRA_COMMAND
-) -> Postgres:
-    if pg_version is None:
-        image = None
-    else:
-        image = f"postgres:{pg_version}"
-
-    return Postgres(image=image, extra_command=extra_command)
 
 
 def get_testdrive_ssl_args(c: Composition):
@@ -166,21 +107,6 @@ SERVICES = [
         replication_slot_name="", publication_name=""
     ),  # Overriden below
 ]
-
-
-def get_targeted_pg_version(parser: WorkflowArgumentParser) -> str | None:
-    parser.add_argument(
-        "--pg-version",
-        type=str,
-    )
-
-    args, _ = parser.parse_known_args()
-    pg_version = args.pg_version
-
-    if pg_version is not None:
-        print(f"Running with Postgres version {pg_version}")
-
-    return pg_version
 
 
 # TODO: redesign ceased status database-issues#7687

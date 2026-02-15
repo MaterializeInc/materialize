@@ -9,7 +9,12 @@
 
 from dataclasses import dataclass
 
-from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.mysql import MySql
 
 
 @dataclass
@@ -17,6 +22,35 @@ class MySqlSslContext:
     ca: str
     client_cert: str
     client_key: str
+
+
+def create_mysql(mysql_version: str) -> MySql:
+    return MySql(version=mysql_version)
+
+
+def create_mysql_replica(mysql_version: str) -> MySql:
+    return MySql(
+        name="mysql-replica",
+        version=mysql_version,
+        additional_args=[
+            "--gtid_mode=ON",
+            "--enforce_gtid_consistency=ON",
+            "--skip-replica-start",
+            "--server-id=2",
+        ],
+    )
+
+
+def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
+    parser.add_argument(
+        "--mysql-version",
+        default=MySql.DEFAULT_VERSION,
+        type=str,
+    )
+
+    args, _ = parser.parse_known_args()
+    print(f"Running with MySQL version {args.mysql_version}")
+    return args.mysql_version
 
 
 def retrieve_ssl_context_for_mysql(c: Composition) -> MySqlSslContext:

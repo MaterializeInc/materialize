@@ -15,6 +15,9 @@ import threading
 from textwrap import dedent
 
 from materialize.mysql_util import (
+    create_mysql,
+    create_mysql_replica,
+    get_targeted_mysql_version,
     retrieve_invalid_ssl_context_for_mysql,
     retrieve_ssl_context_for_mysql,
 )
@@ -37,24 +40,6 @@ from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
 
-
-def create_mysql(mysql_version: str) -> MySql:
-    return MySql(version=mysql_version)
-
-
-def create_mysql_replica(mysql_version: str) -> MySql:
-    return MySql(
-        name="mysql-replica",
-        version=mysql_version,
-        additional_args=[
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--skip-replica-start",
-            "--server-id=2",
-        ],
-    )
-
-
 SERVICES = [
     Mz(app_password=""),
     Materialized(
@@ -71,18 +56,6 @@ SERVICES = [
     Minio(setup_materialize=True),
     Testdrive(default_timeout="60s"),
 ]
-
-
-def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
-    parser.add_argument(
-        "--mysql-version",
-        default=MySql.DEFAULT_VERSION,
-        type=str,
-    )
-
-    args, _ = parser.parse_known_args()
-    print(f"Running with MySQL version {args.mysql_version}")
-    return args.mysql_version
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
