@@ -51,35 +51,23 @@ SERVICES = [
 ]
 
 
+def _kill_mysql(c: Composition) -> None:
+    # clear to avoid issues
+    c.kill("mysql")
+    c.rm("mysql")
+
+
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-
+    c.run_all_workflows(
         # TODO(def-): Reenable when database-issues#7775 is fixed
-        if name in ("bin-log-manipulations", "short-bin-log-retention"):
-            return
-
-        # clear to avoid issues
-        c.kill("mysql")
-        c.rm("mysql")
-
-        with c.test_case(name):
-            c.workflow(name)
-
-    workflows_with_internal_sharding = [
-        "disruptions",
-        "bin-log-manipulations",
-        "short-bin-log-retention",
-    ]
-    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-        [w for w in c.workflows if w not in workflows_with_internal_sharding],
-        lambda w: w,
+        exclude=["bin-log-manipulations", "short-bin-log-retention"],
+        internally_sharded=[
+            "disruptions",
+            "bin-log-manipulations",
+            "short-bin-log-retention",
+        ],
+        between_workflows=_kill_mysql,
     )
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    c.test_parts(sharded_workflows, process)
 
 
 def workflow_disruptions(c: Composition) -> None:
