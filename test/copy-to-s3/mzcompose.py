@@ -52,17 +52,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """
-    Run all workflows (including nightly and CI workflows)
-    """
-
-    def process(name: str) -> None:
-        if name == "default":
-            return
-        with c.test_case(name):
-            c.workflow(name)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    c.run_all_workflows()
 
 
 def workflow_nightly(c: Composition, parser: WorkflowArgumentParser) -> None:

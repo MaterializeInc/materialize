@@ -2053,13 +2053,7 @@ def upload_results_to_test_analytics(
 
 
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-        with c.test_case(name):
-            c.workflow(name)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    c.run_all_workflows()
 
 
 def workflow_main(c: Composition, parser: WorkflowArgumentParser) -> None:

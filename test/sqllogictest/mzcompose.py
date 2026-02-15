@@ -45,14 +45,7 @@ COCKROACH_DEFAULT_PORT = 26257
 
 
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-
-        with c.test_case(name):
-            c.workflow(name)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    c.run_all_workflows()
 
 
 def workflow_fast_tests(c: Composition, parser: WorkflowArgumentParser) -> None:

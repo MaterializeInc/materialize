@@ -43,18 +43,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """All mzcompose files should contain a default workflow
-
-    This workflow just runs all the other ones
-    """
-
-    def process(name: str) -> None:
-        if name == "default":
-            return
-        with c.test_case(name):
-            c.workflow(name)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    c.run_all_workflows()
 
 
 def workflow_start_confluents(c: Composition) -> None:

@@ -1809,6 +1809,21 @@ class Composition:
         if exceptions:
             raise exceptions[0]
 
+    def run_all_workflows(self) -> None:
+        """Run all workflows (except 'default') as test parts.
+
+        This is the standard implementation for workflow_default that runs
+        each workflow as a separate test case via test_parts.
+        """
+
+        def process(name: str) -> None:
+            if name == "default":
+                return
+            with self.test_case(name):
+                self.workflow(name)
+
+        self.test_parts(list(self.workflows.keys()), process)
+
     def verify_build_profile(self, container: str = "materialized") -> None:
         """Make sure the container is using the same build profile as we have set locally. This is mostly useful to ensure benchmarks compare using the same profile (release vs release, or optimized vs optimized)."""
         if ui.env_is_truthy("CI_IGNORE_BUILD_PROFILE"):
