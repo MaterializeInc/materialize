@@ -273,11 +273,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             Service("testdrive", idle=True),
         )
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             """

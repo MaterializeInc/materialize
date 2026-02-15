@@ -1978,12 +1978,7 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("mz_old")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas(service="mz_old")
     c.sql(
         """
          CREATE TABLE t (a int);

@@ -150,11 +150,7 @@ def workflow_clusterd(c: Composition) -> None:
     c.up("materialized", "clusterd")
     port = c.port("clusterd", 6878)
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     c.sql(
         """

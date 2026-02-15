@@ -257,11 +257,7 @@ class UseClusterdCompute(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
         c.sql(
             """
             ALTER CLUSTER quickstart SET (MANAGED = false);

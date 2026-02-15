@@ -1507,11 +1507,7 @@ def run_scenario(
             Service("testdrive", idle=True),
         )
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             """

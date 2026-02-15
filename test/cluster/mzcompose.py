@@ -318,11 +318,7 @@ def workflow_test_github_4443(c: Composition) -> None:
                 replica_dataflow_count,
             )
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         # Set up a cluster with an indexed table and an unindexed one.
         c.sql(
@@ -442,11 +438,7 @@ def workflow_test_github_4444(c: Composition) -> None:
 
     c.up("materialized", "clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     # Set up a dataflow on clusterd.
     c.sql(
@@ -501,11 +493,7 @@ def workflow_test_github_4545(c: Composition) -> None:
 
     c.up("materialized", "clusterd1", "clusterd2")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     c.sql(
         """
@@ -552,11 +540,7 @@ def workflow_test_github_4587(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             """
@@ -654,11 +638,7 @@ def workflow_test_github_4433(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
@@ -724,11 +704,7 @@ def workflow_test_github_4966(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -800,11 +776,7 @@ def workflow_test_github_5087(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
@@ -959,11 +931,7 @@ def workflow_test_github_5086(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
@@ -1051,11 +1019,7 @@ def workflow_test_github_5831(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
@@ -1157,11 +1121,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", Service("testdrive", idle=True))
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
             "ALTER SYSTEM SET enable_repeat_row = true;",
@@ -1502,11 +1462,7 @@ def workflow_test_replica_targeted_subscribe_abort(c: Composition) -> None:
 
     c.up("materialized", "clusterd1", "clusterd2")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     c.sql(
         """
@@ -1594,11 +1550,7 @@ def workflow_test_replica_targeted_select_abort(c: Composition) -> None:
 
     c.up("materialized", "clusterd1", "clusterd2")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     c.sql(
         """
@@ -1926,11 +1878,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
 
     c.up("materialized", "clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     # Set up a cluster and a number of dataflows that can be reconciled.
     c.sql(
@@ -2125,11 +2073,7 @@ def workflow_test_mz_subscriptions(c: Composition) -> None:
 
     c.up("materialized", "clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     c.sql(
         """
@@ -2222,11 +2166,7 @@ def workflow_test_mv_source_sink(c: Composition) -> None:
 
     c.up("materialized", "clusterd1")
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
 
     # Set up a dataflow on clusterd.
     c.sql(
@@ -2496,11 +2436,7 @@ def workflow_test_replica_metrics(c: Composition) -> None:
             ).stdout
             return Metrics(resp)
 
-        c.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.enable_unorchestrated_cluster_replicas()
 
         metrics = fetch_metrics()
 

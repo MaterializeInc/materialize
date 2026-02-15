@@ -1951,11 +1951,7 @@ def setup(c: Composition, workers: int) -> None:
     c.up(*service_names)
     setup_sql_server_testing(c)
 
-    c.sql(
-        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-        port=6877,
-        user="mz_system",
-    )
+    c.enable_unorchestrated_cluster_replicas()
     # Ensure the admin user exists
     c.sql(
         "SELECT 1;",
@@ -2404,11 +2400,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                     + f"], WORKERS {args.workers})"
                 )
 
-            c.sql(
-                "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-                port=6877,
-                user="mz_system",
-            )
+            c.enable_unorchestrated_cluster_replicas()
             c.sql(
                 f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                 + ",".join(replica_definitions)
