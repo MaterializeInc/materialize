@@ -79,21 +79,11 @@ def get_targeted_mysql_version(parser: WorkflowArgumentParser) -> str:
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    def process(name: str) -> None:
-        if name in ("default", "large-scale"):
-            return
-        with c.test_case(name):
-            c.workflow(name, *parser.args)
-
-    workflows_with_internal_sharding = ["cdc"]
-    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-        [w for w in c.workflows if w not in workflows_with_internal_sharding],
-        lambda w: w,
+    c.run_all_workflows(
+        exclude=["large-scale"],
+        internally_sharded=["cdc"],
+        args=parser.args,
     )
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    c.test_parts(sharded_workflows, process)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:

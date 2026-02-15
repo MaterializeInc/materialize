@@ -378,33 +378,20 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
 
+def _kill_pg_and_mz(c: Composition) -> None:
+    c.kill("postgres")
+    c.rm("postgres")
+    c.kill("materialized")
+    c.rm("materialized")
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    def process(name: str) -> None:
-        if name in ("default", "migration", "migration-multi-version-upgrade"):
-            return
-
-        c.kill("postgres")
-        c.rm("postgres")
-        c.kill("materialized")
-        c.rm("materialized")
-
-        with c.test_case(name):
-            c.workflow(name, *parser.args)
-
-    workflows_with_internal_sharding = ["cdc"]
-    sharded_workflows = workflows_with_internal_sharding + buildkite.shard_list(
-        [
-            w
-            for w in c.workflows
-            if w not in workflows_with_internal_sharding
-            and w not in ("migration", "migration-multi-version-upgrade")
-        ],
-        lambda w: w,
+    c.run_all_workflows(
+        exclude=["migration", "migration-multi-version-upgrade"],
+        internally_sharded=["cdc"],
+        args=parser.args,
+        between_workflows=_kill_pg_and_mz,
     )
-    print(
-        f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
-    )
-    c.test_parts(sharded_workflows, process)
 
 
 def get_sharded_files(filters: str) -> list[str]:

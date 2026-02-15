@@ -1813,6 +1813,9 @@ class Composition:
         self,
         exclude: list[str] | None = None,
         shard: bool = False,
+        internally_sharded: list[str] | None = None,
+        args: list[str] | None = None,
+        between_workflows: Callable[["Composition"], None] | None = None,
     ) -> None:
         """Run all workflows (except 'default') as test parts.
 
@@ -1822,20 +1825,44 @@ class Composition:
         Args:
             exclude: Additional workflow names to skip (beyond 'default').
             shard: If True, shard the workflow list using buildkite parallelism.
+            internally_sharded: Workflow names that handle their own sharding
+                internally. These always run in every shard, while the remaining
+                workflows are distributed across shards. Implies shard=True.
+            args: Extra arguments to pass to each workflow.
+            between_workflows: Callback to run before each workflow (e.g. to
+                kill/rm services between test cases).
         """
         skip = {"default"}
         if exclude:
             skip.update(exclude)
 
+        if internally_sharded:
+            shard = True
+
         def process(name: str) -> None:
             if name in skip:
                 return
+            if between_workflows:
+                between_workflows(self)
             with self.test_case(name):
-                self.workflow(name)
+                self.workflow(name, *(args or []))
 
-        workflows = list(self.workflows.keys())
-        if shard:
-            workflows = buildkite.shard_list(workflows, lambda w: w)
+        if internally_sharded:
+            remaining = [
+                w
+                for w in self.workflows
+                if w not in internally_sharded and w not in skip
+            ]
+            workflows = internally_sharded + buildkite.shard_list(
+                remaining, lambda w: w
+            )
+            print(
+                f"Workflows in shard with index {buildkite.get_parallelism_index()}: {workflows}"
+            )
+        else:
+            workflows = list(self.workflows.keys())
+            if shard:
+                workflows = buildkite.shard_list(workflows, lambda w: w)
         self.test_parts(workflows, process)
 
     def verify_build_profile(self, container: str = "materialized") -> None:
