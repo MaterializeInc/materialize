@@ -33,9 +33,7 @@ SERVICES = [
     Postgres(),
     Materialized(),
     Testdrive(
-        entrypoint_extra=[
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-        ],
+        entrypoint_extra=MySql.default_testdrive_args(),
     ),
 ]
 

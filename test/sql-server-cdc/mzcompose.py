@@ -89,8 +89,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
             f"--var=ssl-ca={ssl_ca}",
             f"--var=alt-ssl-ca={alt_ssl_ca}",
             f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            *SqlServer.default_testdrive_args(),
             "setup/setup.td",
             str(file),
         )
@@ -116,8 +115,7 @@ def workflow_no_agent(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.up("materialized", "sql-server", Service("testdrive", idle=True))
             c.run_testdrive_files(
                 "setup/setup.td",
-                f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-                f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+                *SqlServer.default_testdrive_args(),
             )
             c.kill("sql-server")
 
@@ -171,8 +169,7 @@ def workflow_snapshot_consistency(
         # Setup MS SQL server and materialize
         c.run_testdrive_files(
             "setup/setup.td",
-            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            *SqlServer.default_testdrive_args(),
         )
         c.testdrive(
             dedent(
@@ -274,8 +271,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         c.up("materialized", "sql-server", Service("testdrive", idle=True))
         c.run_testdrive_files(
             "setup/setup.td",
-            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            *SqlServer.default_testdrive_args(),
         )
         # Set up the SQL Server instance with the initial records, set up the
         # connection to the SQL Server instance in Materialize.

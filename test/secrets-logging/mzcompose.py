@@ -68,7 +68,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     def process(file: str) -> None:
         c.run_testdrive_files(
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
             *passthrough_args,
             file,
             quiet=True,  # Don't print out the secret here

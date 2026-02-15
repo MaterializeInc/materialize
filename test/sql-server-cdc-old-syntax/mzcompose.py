@@ -53,8 +53,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "--max-errors=1",
             f"--seed={seed}",
             f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            *SqlServer.default_testdrive_args(),
             "setup/setup.td",
             str(file),
         )

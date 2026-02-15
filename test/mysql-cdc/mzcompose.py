@@ -78,7 +78,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=ssl-wrong-ca={wrong_ssl_context.ca}",
                 f"--var=ssl-wrong-client-cert={wrong_ssl_context.client_cert}",
                 f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
-                f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+                *MySql.default_testdrive_args(),
                 "--var=mysql-user-password=us3rp4ssw0rd",
                 *Materialized.default_testdrive_size_args(),
                 file,
@@ -91,7 +91,7 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
     with c.override(create_mysql(mysql_version), create_mysql_replica(mysql_version)):
         c.up("materialized", "mysql", "mysql-replica")
         c.run_testdrive_files(
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
             "override/10-replica-connection.td",
         )
 
@@ -108,7 +108,7 @@ def workflow_schema_change_restart(
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
         c.run_testdrive_files(
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
             "schema-restart/before-restart.td",
         )
 
@@ -118,7 +118,7 @@ def workflow_schema_change_restart(
         c.up("materialized")
 
         c.run_testdrive_files(
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
             "schema-restart/after-restart.td",
         )
 
@@ -331,6 +331,6 @@ def workflow_source_timeouts(c: Composition, parser: WorkflowArgumentParser) -> 
     ):
         c.up("materialized", "mysql", "toxiproxy")
         c.run_testdrive_files(
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
             "proxied/*.td",
         )

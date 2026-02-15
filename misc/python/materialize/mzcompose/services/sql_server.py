@@ -17,6 +17,14 @@ class SqlServer(Service):
     DEFAULT_USER = "SA"
     DEFAULT_SA_PASSWORD = "RPSsql12345"
 
+    @staticmethod
+    def default_testdrive_args() -> list[str]:
+        """Returns testdrive --var args for the default SQL Server credentials."""
+        return [
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        ]
+
     def __init__(
         self,
         # The password must be at least 8 characters including uppercase,
@@ -57,7 +65,6 @@ def setup_sql_server_testing(c: Composition) -> None:
             f.read(),
             args=[
                 "--max-errors=1",
-                f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-                f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+                *SqlServer.default_testdrive_args(),
             ],
         )

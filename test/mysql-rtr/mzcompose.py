@@ -25,9 +25,7 @@ SERVICES = [
     Materialized(default_replication_factor=2),
     Toxiproxy(),
     Testdrive(
-        entrypoint_extra=[
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-        ],
+        entrypoint_extra=MySql.default_testdrive_args(),
     ),
 ]
 

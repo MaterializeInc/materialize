@@ -63,6 +63,6 @@ def workflow_mysql(c: Composition) -> None:
     c.up(*prerequisites, "mysql")
 
     c.run_testdrive_files(
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        *MySql.default_testdrive_args(),
         "mysql/*.td",
     )

@@ -71,9 +71,8 @@ SERVICES = [
         no_reset=True,
         entrypoint_extra=[
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
-            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            *MySql.default_testdrive_args(),
+            *SqlServer.default_testdrive_args(),
         ],
     ),
     SqlServer(),

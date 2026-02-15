@@ -24,7 +24,7 @@ from materialize.mzcompose.services.mysql import MySql
 
 def run_testdrive_files(c: Composition, *files: str, mysql_host: str = "mysql") -> None:
     c.run_testdrive_files(
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        *MySql.default_testdrive_args(),
         f"--var=mysql-host={mysql_host}",
         *files,
     )

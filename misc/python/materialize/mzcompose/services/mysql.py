@@ -37,6 +37,13 @@ class MySql(Service):
 
     DEFAULT_ADDITIONAL_ARGS = create_mysql_server_args(server_id="1", is_master=True)
 
+    @staticmethod
+    def default_testdrive_args() -> list[str]:
+        """Returns testdrive --var args for the default MySQL root password."""
+        return [
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        ]
+
     def __init__(
         self,
         root_password: str = DEFAULT_ROOT_PASSWORD,

@@ -67,10 +67,7 @@ class MzcomposeExecutor(Executor):
             input,
             caller=caller,
             mz_service=mz_service,
-            args=[
-                f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-                f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
-            ],
+            args=SqlServer.default_testdrive_args(),
         )
 
     def run_pyaction(
@@ -105,10 +102,7 @@ class MzcomposeExecutorParallel(MzcomposeExecutor):
                 input,
                 caller=caller,
                 mz_service=mz_service,
-                args=[
-                    f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-                    f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
-                ],
+                args=SqlServer.default_testdrive_args(),
                 print_prefix=(
                     f"{caller.filename.split('/')[-1]}:{caller.lineno} "
                     if caller
@@ -162,8 +156,7 @@ class CloudtestExecutor(Executor):
             mz_service is None
         ), "CloudtestExecutor not yet compatible with custom mz_service names"
         self.application.testdrive.run(
-            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+            *SqlServer.default_testdrive_args(),
             input=input,
             no_reset=True,
             seed=self.seed,

@@ -240,7 +240,7 @@ def test_upgrade_from_version(
         "--no-reset",
         f"--var=upgrade-from-version={from_version}",
         "--var=created-cluster=quickstart",
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        *MySql.default_testdrive_args(),
         "--var=mysql-user-password=us3rp4ssw0rd",
         temp_dir,
         seed,

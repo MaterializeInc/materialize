@@ -31,8 +31,7 @@ SERVICES = [
 
 def run_testdrive_files(c: Composition, *files: str) -> None:
     c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        *SqlServer.default_testdrive_args(),
         *files,
     )
 

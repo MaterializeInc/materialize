@@ -61,7 +61,7 @@ SERVICES = [
         default_timeout="3600s",
         entrypoint_extra=[
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
         ],
     ),
     Redpanda(),

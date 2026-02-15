@@ -142,7 +142,7 @@ def workflow_mysql(c: Composition) -> None:
     # Basic validation
     c.run_testdrive_files(
         "--no-reset",
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        *MySql.default_testdrive_args(),
         "mysql-source.td",
     )
 
@@ -152,7 +152,7 @@ def workflow_mysql(c: Composition) -> None:
     c.up("ssh-bastion-host")
     c.run_testdrive_files(
         "--no-reset",
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        *MySql.default_testdrive_args(),
         "mysql-source-after-ssh-restart.td",
     )
 
@@ -177,7 +177,7 @@ def workflow_mysql(c: Composition) -> None:
         f"--var=ssl-ca={ssl_ca}",
         f"--var=ssl-client-cert={ssl_client_cert}",
         f"--var=ssl-client-key={ssl_client_key}",
-        f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+        *MySql.default_testdrive_args(),
         "mysql-source-ssl.td",
     )
 
@@ -194,8 +194,7 @@ def workflow_sql_server(c: Composition) -> None:
     # Basic validation
     c.run_testdrive_files(
         "--no-reset",
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        *SqlServer.default_testdrive_args(),
         "sql-server-source.td",
     )
 
@@ -205,8 +204,7 @@ def workflow_sql_server(c: Composition) -> None:
     c.up("ssh-bastion-host")
     c.run_testdrive_files(
         "--no-reset",
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        *SqlServer.default_testdrive_args(),
         "sql-server-source-after-ssh-restart.td",
     )
 
@@ -222,8 +220,7 @@ def workflow_sql_server(c: Composition) -> None:
         "--no-reset",
         f"--var=ssl-ca={ssl_ca}",
         f"--var=alt-ssl-ca={alt_ssl_ca}",
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        *SqlServer.default_testdrive_args(),
         "sql-server-source-ssl.td",
     )
 

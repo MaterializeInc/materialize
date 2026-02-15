@@ -76,7 +76,7 @@ class Docker(Executor):
             "--initial-backoff=10ms",  # Retry every 10ms until success
             "--backoff-factor=0",
             "--consistency-checks=disable",
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
             f"--var=sql-server-sa-password={SqlServer.DEFAULT_SA_PASSWORD}",
             stdin=input,
             capture=True,
@@ -111,7 +111,7 @@ class MzCloud(Executor):
             f"--kafka-addr={self._external_addr}:9092",
             f"--schema-registry-url=http://{self._external_addr}:8081",
             f"--seed={self._seed}",
-            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            *MySql.default_testdrive_args(),
         ]
 
     def RestartMzClusterd(self) -> None:
