@@ -48,42 +48,24 @@ def workflow_with_everything(c: Composition) -> None:
     assert info["current_level_filter"] == "info"
 
     # update the stderr config
-    c.sql(
-        "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    c.alter_system_set("log_filter", "'foo=debug,info'", print_statement=False)
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "debug"
 
     # update the otel config
-    c.sql(
-        "ALTER SYSTEM SET opentelemetry_filter = 'foo=trace,info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
+    c.alter_system_set(
+        "opentelemetry_filter", "'foo=trace,info'", print_statement=False
     )
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "trace"
 
     # revert the otel config and make sure we go back
-    c.sql(
-        "ALTER SYSTEM SET opentelemetry_filter = 'off'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    c.alter_system_set("opentelemetry_filter", "'off'", print_statement=False)
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "debug"
 
     # update the sentry directives
-    c.sql(
-        "ALTER SYSTEM SET sentry_filters = 'foo=trace'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    c.alter_system_set("sentry_filters", "'foo=trace'", print_statement=False)
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "trace"
 
@@ -98,12 +80,7 @@ def workflow_with_everything(c: Composition) -> None:
     assert info["current_level_filter"] == "debug"
 
     # make sure we can go allll the way back
-    c.sql(
-        "ALTER SYSTEM SET log_filter = 'info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    c.alter_system_set("log_filter", "'info'", print_statement=False)
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "info"
 
@@ -118,22 +95,12 @@ def workflow_basic(c: Composition) -> None:
         assert info["current_level_filter"] == "info"
 
         # update the stderr config
-        c.sql(
-            "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
-            user="mz_system",
-            port=6877,
-            print_statement=False,
-        )
+        c.alter_system_set("log_filter", "'foo=debug,info'", print_statement=False)
         info = requests.get(f"http://localhost:{port}/api/tracing").json()
         assert info["current_level_filter"] == "debug"
 
         # make sure we can go back to normal
-        c.sql(
-            "ALTER SYSTEM SET log_filter = 'info'",
-            user="mz_system",
-            port=6877,
-            print_statement=False,
-        )
+        c.alter_system_set("log_filter", "'info'", print_statement=False)
         info = requests.get(f"http://localhost:{port}/api/tracing").json()
         assert info["current_level_filter"] == "info"
 
@@ -164,12 +131,7 @@ def workflow_clusterd(c: Composition) -> None:
     """
     )
 
-    c.sql(
-        "ALTER SYSTEM SET log_filter = 'foo=debug,info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    c.alter_system_set("log_filter", "'foo=debug,info'", print_statement=False)
 
     start = time.time()
     timeout = 10
@@ -186,12 +148,7 @@ def workflow_clusterd(c: Composition) -> None:
     assert is_debug
 
     # Reset
-    c.sql(
-        "ALTER SYSTEM SET log_filter = 'info'",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    c.alter_system_set("log_filter", "'info'", print_statement=False)
     port = c.port("materialized", 6878)
     info = requests.get(f"http://localhost:{port}/api/tracing").json()
     assert info["current_level_filter"] == "info"

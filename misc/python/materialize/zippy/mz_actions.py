@@ -136,11 +136,8 @@ class MzStart(Action):
         )
 
         # Make sure all eligible LIMIT queries use the PeekPersist optimization
-        c.sql(
-            "ALTER SYSTEM SET persist_fast_path_limit = 1000000000",
-            user="mz_system",
-            port=6877,
-            service=state.mz_service,
+        c.alter_system_set(
+            "persist_fast_path_limit", 1000000000, service=state.mz_service
         )
 
     def provides(self) -> list[Capability]:

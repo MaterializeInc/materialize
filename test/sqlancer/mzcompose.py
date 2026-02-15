@@ -51,16 +51,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.up("materialized")
 
-    c.sql(
-        "ALTER SYSTEM SET max_tables TO 1000",
-        user="mz_system",
-        port=6877,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_materialized_views TO 1000",
-        user="mz_system",
-        port=6877,
-    )
+    c.alter_system_set("max_tables", 1000)
+    c.alter_system_set("max_materialized_views", 1000)
 
     seed = args.seed or random.randint(0, 2**31)
 

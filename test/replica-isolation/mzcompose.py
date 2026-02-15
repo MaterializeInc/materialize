@@ -499,11 +499,7 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             #
             # TODO(database-issues#8091): Fix this by installing targeted subscribes only on the
             #               targeted replica.
-            c.sql(
-                "ALTER SYSTEM SET enable_introspection_subscribes = false;",
-                port=6877,
-                user="mz_system",
-            )
+            c.alter_system_set("enable_introspection_subscribes", "false")
 
         c.sql(
             """

@@ -89,11 +89,7 @@ def workflow_nightly(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
-        c.sql(
-            "ALTER SYSTEM SET max_clusters = 50;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("max_clusters", 50)
 
         s3 = Minio(
             f"127.0.0.1:{c.default_port('minio')}",

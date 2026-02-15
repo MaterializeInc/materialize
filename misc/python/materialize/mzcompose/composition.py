@@ -1524,17 +1524,27 @@ class Composition:
             print_prefix=print_prefix,
         )
 
+    def alter_system_set(self, name: str, value: object, **kwargs: Any) -> None:
+        """Run ``ALTER SYSTEM SET <name> = <value>`` as ``mz_system``.
+
+        Any extra keyword arguments (e.g. ``service="mz_old"``,
+        ``print_statement=False``) are forwarded to ``self.sql()``.
+        """
+        self.sql(
+            f"ALTER SYSTEM SET {name} = {value}",
+            port=6877,
+            user="mz_system",
+            **kwargs,
+        )
+
     def enable_unorchestrated_cluster_replicas(self, **kwargs: Any) -> None:
         """Enable unsafe unorchestrated cluster replicas via ALTER SYSTEM SET.
 
         Any extra keyword arguments (e.g. service="mz_old") are forwarded to
         ``self.sql()``.
         """
-        self.sql(
-            "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
-            port=6877,
-            user="mz_system",
-            **kwargs,
+        self.alter_system_set(
+            "unsafe_enable_unorchestrated_cluster_replicas", "true", **kwargs
         )
 
     def enable_minio_versioning(self) -> None:

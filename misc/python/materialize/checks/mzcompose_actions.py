@@ -410,8 +410,4 @@ class SystemVarChange(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.sql(
-            f"ALTER SYSTEM SET {self.name} = {self.value};",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set(self.name, self.value)

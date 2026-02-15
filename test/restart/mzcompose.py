@@ -77,11 +77,7 @@ def workflow_retain_history(c: Composition) -> None:
             check_retain_history(name)
 
     c.up("materialized")
-    c.sql(
-        "ALTER SYSTEM SET enable_logical_compaction_window = true",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("enable_logical_compaction_window", "true")
     c.sql("CREATE TABLE retain_t (i INT)")
     c.sql("INSERT INTO retain_t VALUES (1)")
     c.sql(
@@ -362,11 +358,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     http_port = c.port("materialized", 6876)
 
     # Ensure new user sessions are allowed.
-    c.sql(
-        "ALTER SYSTEM SET allow_user_sessions = true",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("allow_user_sessions", "true")
 
     # SQL and HTTP user sessions should work.
     assert c.sql_query("SELECT 1") == [(1,)]
@@ -378,11 +370,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     cursor = c.sql_cursor()
 
     # Disallow new user sessions.
-    c.sql(
-        "ALTER SYSTEM SET allow_user_sessions = false",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("allow_user_sessions", "false")
 
     # New SQL and HTTP user sessions should now fail.
     try:
@@ -410,11 +398,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
     assert cursor.fetchall() == [(1,)]
 
     # Re-allow new user sessions.
-    c.sql(
-        "ALTER SYSTEM SET allow_user_sessions = true",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("allow_user_sessions", "true")
 
     # SQL and HTTP user sessions should work again.
     assert c.sql_query("SELECT 1") == [(1,)]
@@ -460,11 +444,7 @@ def workflow_network_policies(c: Composition) -> None:
     assert_can_connect()
 
     # enable network policy management
-    c.sql(
-        "ALTER SYSTEM SET enable_network_policies = true",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("enable_network_policies", "true")
 
     # assert we can't change the network policy to one that doesn't exist.
     try:
@@ -489,11 +469,7 @@ def workflow_network_policies(c: Composition) -> None:
         port=6877,
         user="mz_system",
     )
-    c.sql(
-        "ALTER SYSTEM SET network_policy='closed'",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("network_policy", "'closed'")
     assert_new_connection_fails()
 
     # can't drop the actively set network policy.
@@ -531,11 +507,7 @@ def workflow_network_policies(c: Composition) -> None:
     # validate that the cursor from the beginning of the test still works.
     assert cursor.execute("SELECT 1").fetchall() == [(1,)]
 
-    c.sql(
-        "ALTER SYSTEM SET network_policy='default'",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("network_policy", "'default'")
     c.sql(
         "DROP NETWORK POLICY closed",
         port=6877,
@@ -708,11 +680,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     )
 
     # Reduce the retention interval to force a truncation.
-    c.sql(
-        "ALTER SYSTEM SET replica_metrics_history_retention_interval = '1s'",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("replica_metrics_history_retention_interval", "'1s'")
 
     c.kill("materialized")
     c.up("materialized")

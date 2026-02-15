@@ -50,65 +50,17 @@ def run_create_objects_part_1(
         port=6877,
         print_statement=verbose,
     )
-    c.sql(
-        "ALTER SYSTEM SET max_schemas_per_database = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_tables = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_materialized_views = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_sources = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_sinks = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_roles = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_clusters = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_replicas_per_cluster = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET max_secrets = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
-    )
-    c.sql(
-        "ALTER SYSTEM SET webhook_concurrent_request_limit = 1000000",
-        user="mz_system",
-        port=6877,
-        print_statement=verbose,
+    c.alter_system_set("max_schemas_per_database", 1000000, print_statement=verbose)
+    c.alter_system_set("max_tables", 1000000, print_statement=verbose)
+    c.alter_system_set("max_materialized_views", 1000000, print_statement=verbose)
+    c.alter_system_set("max_sources", 1000000, print_statement=verbose)
+    c.alter_system_set("max_sinks", 1000000, print_statement=verbose)
+    c.alter_system_set("max_roles", 1000000, print_statement=verbose)
+    c.alter_system_set("max_clusters", 1000000, print_statement=verbose)
+    c.alter_system_set("max_replicas_per_cluster", 1000000, print_statement=verbose)
+    c.alter_system_set("max_secrets", 1000000, print_statement=verbose)
+    c.alter_system_set(
+        "webhook_concurrent_request_limit", 1000000, print_statement=verbose
     )
 
     print("Creating clusters")

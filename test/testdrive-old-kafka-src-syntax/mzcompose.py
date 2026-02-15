@@ -163,11 +163,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     with c.override(testdrive, materialized):
         c.up(*dependencies)
 
-        c.sql(
-            "ALTER SYSTEM SET max_clusters = 50;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("max_clusters", 50)
 
         non_default_testdrive_vars = []
 
@@ -388,11 +384,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.down(destroy_volumes=True)
             c.up(*dependencies)
 
-            c.sql(
-                "ALTER SYSTEM SET max_clusters = 50;",
-                port=6877,
-                user="mz_system",
-            )
+            c.alter_system_set("max_clusters", 50)
 
             non_default_testdrive_vars = []
 

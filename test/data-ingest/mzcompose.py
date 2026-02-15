@@ -147,11 +147,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         setup_sql_server_testing(c)
 
         if args.replicas > 1:
-            c.sql(
-                "ALTER SYSTEM SET max_replicas_per_cluster = 32",
-                user="mz_system",
-                port=6877,
-            )
+            c.alter_system_set("max_replicas_per_cluster", 32)
             c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
             replica_names = [f"r{replica_id}" for replica_id in range(0, args.replicas)]
             replica_string = ",".join(

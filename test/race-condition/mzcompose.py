@@ -965,30 +965,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.sql(
         "CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (CATALOG TYPE = 'REST', URL = 'http://toxiproxy:8181/api/catalog', CREDENTIAL = 'root:root', WAREHOUSE = 'default_catalog', SCOPE = 'PRINCIPAL_ROLE:ALL');"
     )
-    c.sql(
-        "ALTER SYSTEM SET max_schemas_per_database = 1000000",
-        user="mz_system",
-        port=6877,
-    )
-    c.sql("ALTER SYSTEM SET max_tables = 1000000", user="mz_system", port=6877)
-    c.sql(
-        "ALTER SYSTEM SET max_materialized_views = 1000000", user="mz_system", port=6877
-    )
-    c.sql("ALTER SYSTEM SET max_sources = 1000000", user="mz_system", port=6877)
-    c.sql("ALTER SYSTEM SET max_sinks = 1000000", user="mz_system", port=6877)
-    c.sql("ALTER SYSTEM SET max_roles = 1000000", user="mz_system", port=6877)
-    c.sql("ALTER SYSTEM SET max_clusters = 1000000", user="mz_system", port=6877)
-    c.sql(
-        "ALTER SYSTEM SET max_replicas_per_cluster = 1000000",
-        user="mz_system",
-        port=6877,
-    )
-    c.sql("ALTER SYSTEM SET max_secrets = 1000000", user="mz_system", port=6877)
-    c.sql(
-        "ALTER SYSTEM SET webhook_concurrent_request_limit = 1000000",
-        user="mz_system",
-        port=6877,
-    )
+    c.alter_system_set("max_schemas_per_database", 1000000)
+    c.alter_system_set("max_tables", 1000000)
+    c.alter_system_set("max_materialized_views", 1000000)
+    c.alter_system_set("max_sources", 1000000)
+    c.alter_system_set("max_sinks", 1000000)
+    c.alter_system_set("max_roles", 1000000)
+    c.alter_system_set("max_clusters", 1000000)
+    c.alter_system_set("max_replicas_per_cluster", 1000000)
+    c.alter_system_set("max_secrets", 1000000)
+    c.alter_system_set("webhook_concurrent_request_limit", 1000000)
 
     seed = args.seed
 

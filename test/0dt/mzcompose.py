@@ -2736,12 +2736,7 @@ def workflow_stuck_collection(c: Composition) -> None:
 
     c.up("mz_old")
 
-    c.sql(
-        "ALTER SYSTEM SET with_0dt_caught_up_check_cutoff = '10s'",
-        service="mz_old",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("with_0dt_caught_up_check_cutoff", "'10s'", service="mz_old")
 
     c.sql(
         """

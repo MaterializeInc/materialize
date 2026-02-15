@@ -640,11 +640,7 @@ def workflow_test_github_4433(c: Composition) -> None:
 
         c.enable_unorchestrated_cluster_replicas()
 
-        c.sql(
-            "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("enable_repeat_row", "true")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -778,11 +774,7 @@ def workflow_test_github_5087(c: Composition) -> None:
 
         c.enable_unorchestrated_cluster_replicas()
 
-        c.sql(
-            "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("enable_repeat_row", "true")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -933,11 +925,7 @@ def workflow_test_github_5086(c: Composition) -> None:
 
         c.enable_unorchestrated_cluster_replicas()
 
-        c.sql(
-            "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("enable_repeat_row", "true")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -1021,11 +1009,7 @@ def workflow_test_github_5831(c: Composition) -> None:
 
         c.enable_unorchestrated_cluster_replicas()
 
-        c.sql(
-            "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("enable_repeat_row", "true")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -1123,11 +1107,7 @@ def workflow_test_single_time_monotonicity_enforcers(c: Composition) -> None:
 
         c.enable_unorchestrated_cluster_replicas()
 
-        c.sql(
-            "ALTER SYSTEM SET enable_repeat_row = true;",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("enable_repeat_row", "true")
 
         # set up a test cluster and run a testdrive regression script
         c.sql(
@@ -6106,11 +6086,7 @@ def workflow_test_slow_seqno_hold(c: Composition):
     c.up("materialized", "postgres")
 
     # Shorten the reader lease duration, to make the issue take less long to reproduce.
-    c.sql(
-        "ALTER SYSTEM SET persist_reader_lease_duration = '1min';",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("persist_reader_lease_duration", "'1min'")
 
     # Create a postgres source and wait until it's caught up.
     c.testdrive(
