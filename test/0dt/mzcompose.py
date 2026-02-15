@@ -19,7 +19,6 @@ from threading import Thread
 
 from psycopg.errors import OperationalError
 
-from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
@@ -84,16 +83,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-        with c.test_case(name):
-            c.workflow(name)
-
-    workflows = buildkite.shard_list(
-        list(c.workflows.keys()), lambda workflow: workflow
-    )
-    c.test_parts(workflows, process)
+    c.run_all_workflows(shard=True)
 
 
 def workflow_read_only(c: Composition) -> None:

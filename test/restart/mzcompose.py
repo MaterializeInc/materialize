@@ -23,7 +23,6 @@ from psycopg.errors import (
     OperationalError,
 )
 
-from materialize import buildkite
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -868,12 +867,4 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
 
 
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-
-        with c.test_case(name):
-            c.workflow(name)
-
-    files = buildkite.shard_list(list(c.workflows.keys()), lambda workflow: workflow)
-    c.test_parts(files, process)
+    c.run_all_workflows(shard=True)

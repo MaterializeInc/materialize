@@ -58,7 +58,7 @@ check_default_workflow_references_others() {
       if (( MATCHES_COUNT > 1 )); then
         # mzcompose file contains more than one workflow
 
-        LOOP_DETECTED=$(grep -c -E "c\.workflow\(name|c\.run_all_workflows\(\)" "$file")
+        LOOP_DETECTED=$(grep -c -E "c\.workflow\(name|c\.run_all_workflows\(" "$file")
 
         if (( LOOP_DETECTED < 1 )); then
           echo "$file contains more than one workflow but does not seem to loop over the workflows"

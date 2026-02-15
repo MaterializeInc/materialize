@@ -19,7 +19,6 @@ from textwrap import dedent
 
 from psycopg import Cursor
 
-from materialize import buildkite
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
@@ -42,17 +41,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-        # TODO: Reenable when database-issues#8657 is fixed
-        if name == "multithreaded":
-            return
-        with c.test_case(name):
-            c.workflow(name)
-
-    workflows = buildkite.shard_list(list(c.workflows), lambda w: w)
-    c.test_parts(workflows, process)
+    # TODO: Reenable "multithreaded" when database-issues#8657 is fixed
+    c.run_all_workflows(exclude=["multithreaded"], shard=True)
 
 
 #

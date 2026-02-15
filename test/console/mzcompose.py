@@ -32,15 +32,8 @@ SERVICES = [
 
 
 def workflow_default(c: Composition) -> None:
-    """
-    Run all console test workflows.
-    """
-    for name in c.workflows:
-        if name in ("default", "list-versions", "start-version"):
-            continue
-
-        with c.test_case(name):
-            c.workflow(name)
+    """Run all console test workflows."""
+    c.run_all_workflows(exclude=["list-versions", "start-version"])
 
 
 def workflow_list_versions(c: Composition) -> None:
