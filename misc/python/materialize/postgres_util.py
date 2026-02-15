@@ -10,7 +10,11 @@
 import time
 from typing import Any
 
-from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.service import ServiceConfig
 from materialize.mzcompose.services.postgres import Postgres
@@ -136,3 +140,30 @@ def verify_exactly_n_replication_slots_exist(pg_conn: Any, n: int) -> None:
     assert (
         count_slots == n
     ), f"Expected {n} replication slot(s) but found {count_slots} slot(s)"
+
+
+def get_testdrive_ssl_args(c: Composition) -> dict:
+    """Extract SSL certificates from test-certs service and return testdrive arguments related to SSL."""
+    c.up(Service("test-certs", idle=True))
+    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
+    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
+    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
+    ssl_wrong_cert = c.run(
+        "test-certs", "cat", "/secrets/postgres.crt", capture=True
+    ).stdout
+    ssl_wrong_key = c.run(
+        "test-certs", "cat", "/secrets/postgres.key", capture=True
+    ).stdout
+
+    testdrive_args = [
+        f"--var=ssl-ca={ssl_ca}",
+        f"--var=ssl-cert={ssl_cert}",
+        f"--var=ssl-key={ssl_key}",
+        f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+        f"--var=ssl-wrong-key={ssl_wrong_key}",
+    ]
+
+    return {
+        "testdrive_args": testdrive_args,
+        "volumes_extra": ["secrets:/share/secrets"],
+    }

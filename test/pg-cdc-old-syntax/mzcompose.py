@@ -21,7 +21,6 @@ from materialize.mz_0dt_upgrader import (
 )
 from materialize.mzcompose.composition import (
     Composition,
-    Service,
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.materialized import Materialized
@@ -34,46 +33,24 @@ from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.test_certs import TestCerts
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.pg_cdc import (
+    kill_pg_and_mz,
+    workflow_replication_disabled,  # noqa: F401
+    workflow_wal_level,  # noqa: F401
+)
 from materialize.postgres_util import (
     PostgresRecvlogical,
     await_postgres_replication_slot_state,
     claim_postgres_replication_slot,
     create_postgres,
     get_targeted_pg_version,
+    get_testdrive_ssl_args,
     verify_exactly_n_replication_slots_exist,
 )
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
 from materialize.version_list import get_compatible_upgrade_from_versions
-
-
-def get_testdrive_ssl_args(c: Composition):
-    """Extract SSL certificates from test-certs service and return testdrive arguments related to SSL."""
-    c.up(Service("test-certs", idle=True))
-    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
-    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
-    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
-    ssl_wrong_cert = c.run(
-        "test-certs", "cat", "/secrets/postgres.crt", capture=True
-    ).stdout
-    ssl_wrong_key = c.run(
-        "test-certs", "cat", "/secrets/postgres.key", capture=True
-    ).stdout
-
-    testdrive_args = [
-        f"--var=ssl-ca={ssl_ca}",
-        f"--var=ssl-cert={ssl_cert}",
-        f"--var=ssl-key={ssl_key}",
-        f"--var=ssl-wrong-cert={ssl_wrong_cert}",
-        f"--var=ssl-wrong-key={ssl_wrong_key}",
-    ]
-
-    return {
-        "testdrive_args": testdrive_args,
-        "volumes_extra": ["secrets:/share/secrets"],
-    }
-
 
 SERVICES = [
     Mz(app_password=""),
@@ -130,37 +107,6 @@ def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -
     ):
         c.up("materialized", "postgres")
         c.run_testdrive_files("override/replication-slots.td")
-
-
-def workflow_wal_level(c: Composition, parser: WorkflowArgumentParser) -> None:
-    pg_version = get_targeted_pg_version(parser)
-    for wal_level in ["replica", "minimal"]:
-        with c.override(
-            create_postgres(
-                pg_version=pg_version,
-                extra_command=[
-                    "-c",
-                    "max_wal_senders=0",
-                    "-c",
-                    f"wal_level={wal_level}",
-                ],
-            )
-        ):
-            c.up("materialized", "postgres")
-            c.run_testdrive_files("override/insufficient-wal-level.td")
-
-
-def workflow_replication_disabled(
-    c: Composition, parser: WorkflowArgumentParser
-) -> None:
-    pg_version = get_targeted_pg_version(parser)
-    with c.override(
-        create_postgres(
-            pg_version=pg_version, extra_command=["-c", "max_wal_senders=0"]
-        )
-    ):
-        c.up("materialized", "postgres")
-        c.run_testdrive_files("override/replication-disabled.td")
 
 
 def workflow_silent_connection_drop(
@@ -238,19 +184,12 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
 
-def _kill_pg_and_mz(c: Composition) -> None:
-    c.kill("postgres")
-    c.rm("postgres")
-    c.kill("materialized")
-    c.rm("materialized")
-
-
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.run_all_workflows(
         exclude=["migration", "migration-multi-version-upgrade"],
         internally_sharded=["cdc"],
         args=parser.args,
-        between_workflows=_kill_pg_and_mz,
+        between_workflows=kill_pg_and_mz,
     )
 
 
