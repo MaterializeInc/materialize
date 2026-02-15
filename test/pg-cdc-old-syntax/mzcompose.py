@@ -74,13 +74,6 @@ def get_testdrive_ssl_args(c: Composition):
     }
 
 
-def get_default_testdrive_size_args():
-    return [
-        f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-        f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
-    ]
-
-
 SERVICES = [
     Mz(app_password=""),
     Materialized(
@@ -278,7 +271,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     ssl_args_dict = get_testdrive_ssl_args(c)
     testdrive_ssl_args = ssl_args_dict["testdrive_args"]
 
-    testdrive_args = testdrive_ssl_args + get_default_testdrive_size_args()
+    testdrive_args = testdrive_ssl_args + Materialized.default_testdrive_size_args()
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
         c.test_parts(
@@ -314,7 +307,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     volumes_extra = ssl_args_dict["volumes_extra"]
 
     testdrive_args = (
-        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
+        testdrive_ssl_args + Materialized.default_testdrive_size_args() + ["--no-reset"]
     )
 
     pg_version = get_targeted_pg_version(parser)
@@ -407,7 +400,7 @@ def workflow_migration_multi_version_upgrade(
     volumes_extra = ssl_args_dict["volumes_extra"]
 
     testdrive_args = (
-        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
+        testdrive_ssl_args + Materialized.default_testdrive_size_args() + ["--no-reset"]
     )
 
     compatible_versions = get_compatible_upgrade_from_versions()

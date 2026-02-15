@@ -63,6 +63,14 @@ class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
 
+    @staticmethod
+    def default_testdrive_size_args() -> list[str]:
+        """Returns testdrive --var args for the default replica and storage sizes."""
+        return [
+            f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
+            f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+        ]
+
     def __init__(
         self,
         name: str | None = None,

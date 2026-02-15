@@ -89,8 +89,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
                 f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
                 "--var=mysql-user-password=us3rp4ssw0rd",
-                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-                f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+                *Materialized.default_testdrive_size_args(),
                 file,
             ),
         )
@@ -289,8 +288,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=ssl-wrong-client-key={wrong_ssl_context.client_key}",
                 f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
                 "--var=mysql-user-password=us3rp4ssw0rd",
-                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-                f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+                *Materialized.default_testdrive_size_args(),
                 "--no-reset",
                 file,
             )

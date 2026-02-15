@@ -240,8 +240,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
                 f"--var=ssl-key={ssl_key}",
                 f"--var=ssl-wrong-cert={ssl_wrong_cert}",
                 f"--var=ssl-wrong-key={ssl_wrong_key}",
-                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-                f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+                *Materialized.default_testdrive_size_args(),
                 file,
             ),
         )
