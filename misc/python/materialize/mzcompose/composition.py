@@ -17,6 +17,7 @@ documentation][user-docs].
 
 import argparse
 import copy
+import glob
 import importlib
 import importlib.abc
 import importlib.util
@@ -1808,6 +1809,45 @@ class Composition:
             print(f"Further exceptions were raised:\n{exceptions[1:]}")
         if exceptions:
             raise exceptions[0]
+
+    def shard_test_files(
+        self,
+        filters: list[str],
+        exclude: list[str] | None = None,
+    ) -> list[str]:
+        """Glob for test files in this composition's directory and shard them.
+
+        Args:
+            filters: Glob patterns to match (e.g. ``["*.td"]``).
+            exclude: File names to exclude from the result.
+        """
+        matching_files: list[str] = []
+        for f in filters:
+            matching_files.extend(glob.glob(f, root_dir=self.path))
+        sharded = buildkite.shard_list(sorted(matching_files), lambda file: file)
+        if exclude:
+            sharded = [f for f in sharded if f not in exclude]
+        print(f"Files: {sharded}")
+        return sharded
+
+    def glob_test_files(
+        self,
+        parser: argparse.ArgumentParser,
+        exclude: list[str] | None = None,
+    ) -> list[str]:
+        """Add a ``filter`` argument to *parser*, glob, and shard.
+
+        Convenience wrapper around :meth:`shard_test_files` that adds a
+        ``filter`` positional argument to the parser and parses it first.
+        """
+        parser.add_argument(
+            "filter",
+            nargs="*",
+            default=["*.td"],
+            help="limit to only the files matching filter",
+        )
+        args = parser.parse_args()
+        return self.shard_test_files(args.filter, exclude=exclude)
 
     def run_all_workflows(
         self,

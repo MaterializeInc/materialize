@@ -11,11 +11,9 @@
 Functional test for the native (non-Debezium) MySQL sources.
 """
 
-import glob
 import threading
 from textwrap import dedent
 
-from materialize import MZ_ROOT, buildkite
 from materialize.mysql_util import (
     retrieve_invalid_ssl_context_for_mysql,
     retrieve_ssl_context_for_mysql,
@@ -97,24 +95,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     mysql_version = get_targeted_mysql_version(parser)
-
-    parser.add_argument(
-        "filter",
-        nargs="*",
-        default=["*.td"],
-        help="limit to only the files matching filter",
-    )
-    args = parser.parse_args()
-
-    matching_files = []
-    for filter in args.filter:
-        matching_files.extend(
-            glob.glob(filter, root_dir=MZ_ROOT / "test" / "mysql-cdc-old-syntax")
-        )
-    sharded_files: list[str] = buildkite.shard_list(
-        sorted(matching_files), lambda file: file
-    )
-    print(f"Files: {sharded_files}")
+    sharded_files = c.glob_test_files(parser)
 
     with c.override(create_mysql(mysql_version)):
         c.up("materialized", "mysql")
@@ -289,23 +270,7 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
 
 
 def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "filter",
-        nargs="*",
-        default=["*.td"],
-        help="limit to only the files matching filter",
-    )
-    args = parser.parse_args()
-
-    matching_files = []
-    for filter in args.filter:
-        matching_files.extend(
-            glob.glob(filter, root_dir=MZ_ROOT / "test" / "mysql-cdc-old-syntax")
-        )
-    sharded_files: list[str] = buildkite.shard_list(
-        sorted(matching_files), lambda file: file
-    )
-    print(f"Files: {sharded_files}")
+    sharded_files = c.glob_test_files(parser)
 
     mysql_version = get_targeted_mysql_version(parser)
 

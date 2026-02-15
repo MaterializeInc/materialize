@@ -11,14 +11,12 @@
 Native Postgres source tests, functional.
 """
 
-import glob
 import time
 from random import Random
 
 import pg8000
 from pg8000 import Connection
 
-from materialize import MZ_ROOT, buildkite
 from materialize.mz_0dt_upgrader import (
     Materialized0dtUpgrader,
     generate_materialized_upgrade_args,
@@ -350,19 +348,7 @@ def _verify_exactly_n_replication_slots_exist(pg_conn: Connection, n: int) -> No
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     pg_version = get_targeted_pg_version(parser)
-
-    parser.add_argument(
-        "filter",
-        nargs="*",
-        default=["*.td"],
-        help="limit to only the files matching filter",
-    )
-    args = parser.parse_args()
-
-    sharded_files = [
-        file for file in get_sharded_files(args.filter) if file != "exclude-columns.td"
-    ]
-    print(f"Files: {sharded_files}")
+    sharded_files = c.glob_test_files(parser, exclude=["exclude-columns.td"])
     ssl_args_dict = get_testdrive_ssl_args(c)
     testdrive_ssl_args = ssl_args_dict["testdrive_args"]
 
@@ -394,27 +380,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
 
-def get_sharded_files(filters: str) -> list[str]:
-    matching_files = []
-    for filter in filters:
-        matching_files.extend(
-            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
-        )
-
-    return buildkite.shard_list(sorted(matching_files), lambda file: file)
-
-
 def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "filter",
-        nargs="*",
-        default=["*.td"],
-        help="limit to only the files matching filter",
-    )
-    args = parser.parse_args()
-
-    sharded_files = get_sharded_files(args.filter)
-    print(f"Files: {sharded_files}")
+    sharded_files = c.glob_test_files(parser)
 
     ssl_args_dict = get_testdrive_ssl_args(c)
     testdrive_ssl_args = ssl_args_dict["testdrive_args"]
@@ -507,10 +474,7 @@ def workflow_migration_multi_version_upgrade(
 
     args = parser.parse_args()
 
-    # Get matching files and apply sharding
-
-    sharded_files = get_sharded_files(args.filter)
-    print(f"Files: {sharded_files}")
+    sharded_files = c.shard_test_files(args.filter)
 
     ssl_args_dict = get_testdrive_ssl_args(c)
     testdrive_ssl_args = ssl_args_dict["testdrive_args"]

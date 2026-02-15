@@ -11,11 +11,9 @@
 Native SQL Server source tests, functional.
 """
 
-import glob
 import pathlib
 import random
 
-from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
@@ -39,27 +37,7 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument(
-        "filter",
-        nargs="*",
-        default=["*.td"],
-        help="limit to only the files matching filter",
-    )
-    args = parser.parse_args()
-
-    matching_files: list[str] = []
-    for filter in args.filter:
-        matching_files.extend(
-            glob.glob(
-                filter,
-                root_dir=MZ_ROOT / "test" / "sql-server-cdc-old-syntax",
-            )
-        )
-    matching_files = sorted(matching_files)
-    sharded_files: list[str] = buildkite.shard_list(
-        sorted(matching_files), lambda file: file
-    )
-    print(f"Filter: {args.filter} Files: {sharded_files}")
+    sharded_files = c.glob_test_files(parser)
 
     # Start with a fresh state
     c.kill("sql-server")

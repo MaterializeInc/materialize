@@ -11,14 +11,12 @@
 Native Postgres source tests, functional.
 """
 
-import glob
 import time
 from textwrap import dedent
 
 import psycopg
 from psycopg import Connection
 
-from materialize import MZ_ROOT, buildkite
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -294,22 +292,7 @@ def _verify_exactly_n_replication_slots_exist(pg_conn: Connection, n: int) -> No
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     pg_version = get_targeted_pg_version(parser)
-
-    parser.add_argument(
-        "filter",
-        nargs="*",
-        default=["*.td"],
-        help="limit to only the files matching filter",
-    )
-    args = parser.parse_args()
-
-    matching_files = []
-    for filter in args.filter:
-        matching_files.extend(glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc"))
-    sharded_files: list[str] = buildkite.shard_list(
-        sorted(matching_files), lambda file: file
-    )
-    print(f"Files: {sharded_files}")
+    sharded_files = c.glob_test_files(parser)
 
     c.up(Service("test-certs", idle=True))
     ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
