@@ -11,11 +11,9 @@
 Native Postgres source tests, functional.
 """
 
-import time
 from random import Random
 
 import pg8000
-from pg8000 import Connection
 
 from materialize.mz_0dt_upgrader import (
     Materialized0dtUpgrader,
@@ -38,8 +36,11 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.postgres_util import (
     PostgresRecvlogical,
+    await_postgres_replication_slot_state,
+    claim_postgres_replication_slot,
     create_postgres,
     get_targeted_pg_version,
+    verify_exactly_n_replication_slots_exist,
 )
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
@@ -188,7 +189,7 @@ def workflow_silent_connection_drop(
             port=c.default_port("postgres"),
         )
 
-        _verify_exactly_n_replication_slots_exist(pg_conn, n=0)
+        verify_exactly_n_replication_slots_exist(pg_conn, n=0)
 
         c.up("materialized")
 
@@ -198,17 +199,17 @@ def workflow_silent_connection_drop(
             "override/silent-connection-drop-part-1.td",
         )
 
-        _verify_exactly_n_replication_slots_exist(pg_conn, n=1)
+        verify_exactly_n_replication_slots_exist(pg_conn, n=1)
 
-        _await_postgres_replication_slot_state(
+        await_postgres_replication_slot_state(
             pg_conn,
             await_active=False,
             error_message="Replication slot is still active",
         )
 
-        _claim_postgres_replication_slot(c, pg_conn)
+        claim_postgres_replication_slot(c, pg_conn)
 
-        _await_postgres_replication_slot_state(
+        await_postgres_replication_slot_state(
             pg_conn,
             await_active=True,
             error_message="Replication slot has not been claimed",
@@ -216,53 +217,7 @@ def workflow_silent_connection_drop(
 
         c.run_testdrive_files("--no-reset", "override/silent-connection-drop-part-2.td")
 
-        _verify_exactly_n_replication_slots_exist(pg_conn, n=1)
-
-
-def _await_postgres_replication_slot_state(
-    pg_conn: Connection, await_active: bool, error_message: str
-) -> None:
-    for i in range(1, 5):
-        is_active = _is_postgres_activation_slot_active(pg_conn)
-
-        if is_active == await_active:
-            return
-        else:
-            time.sleep(1)
-
-    raise RuntimeError(error_message)
-
-
-def _get_postgres_replication_slot_name(pg_conn: Connection) -> str:
-    cursor = pg_conn.cursor()
-    cursor.execute("SELECT slot_name FROM pg_replication_slots;")
-    return cursor.fetchall()[0][0]
-
-
-def _claim_postgres_replication_slot(c: Composition, pg_conn: Connection) -> None:
-    replicator = PostgresRecvlogical(
-        replication_slot_name=_get_postgres_replication_slot_name(pg_conn),
-        publication_name="mz_source",
-    )
-
-    with c.override(replicator):
-        c.up(replicator.name)
-
-
-def _is_postgres_activation_slot_active(pg_conn: Connection) -> bool:
-    cursor = pg_conn.cursor()
-    cursor.execute("SELECT active FROM pg_replication_slots;")
-    is_active = cursor.fetchall()[0][0]
-    return is_active
-
-
-def _verify_exactly_n_replication_slots_exist(pg_conn: Connection, n: int) -> None:
-    cursor = pg_conn.cursor()
-    cursor.execute("SELECT count(*) FROM pg_replication_slots;")
-    count_slots = cursor.fetchall()[0][0]
-    assert (
-        count_slots == n
-    ), f"Expected {n} replication slot(s) but found {count_slots} slot(s)"
+        verify_exactly_n_replication_slots_exist(pg_conn, n=1)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:

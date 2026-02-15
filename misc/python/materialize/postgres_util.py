@@ -7,7 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from materialize.mzcompose.composition import WorkflowArgumentParser
+import time
+from typing import Any
+
+from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.service import ServiceConfig
 from materialize.mzcompose.services.postgres import Postgres
@@ -87,3 +90,49 @@ def get_targeted_pg_version(parser: WorkflowArgumentParser) -> str | None:
         print(f"Running with Postgres version {pg_version}")
 
     return pg_version
+
+
+def await_postgres_replication_slot_state(
+    pg_conn: Any, await_active: bool, error_message: str
+) -> None:
+    for i in range(1, 5):
+        is_active = is_postgres_replication_slot_active(pg_conn)
+
+        if is_active == await_active:
+            return
+        else:
+            time.sleep(1)
+
+    raise RuntimeError(error_message)
+
+
+def get_postgres_replication_slot_name(pg_conn: Any) -> str:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT slot_name FROM pg_replication_slots;")
+    return cursor.fetchall()[0][0]
+
+
+def claim_postgres_replication_slot(c: Composition, pg_conn: Any) -> None:
+    replicator = PostgresRecvlogical(
+        replication_slot_name=get_postgres_replication_slot_name(pg_conn),
+        publication_name="mz_source",
+    )
+
+    with c.override(replicator):
+        c.up(replicator.name)
+
+
+def is_postgres_replication_slot_active(pg_conn: Any) -> bool:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT active FROM pg_replication_slots;")
+    is_active = cursor.fetchall()[0][0]
+    return is_active
+
+
+def verify_exactly_n_replication_slots_exist(pg_conn: Any, n: int) -> None:
+    cursor = pg_conn.cursor()
+    cursor.execute("SELECT count(*) FROM pg_replication_slots;")
+    count_slots = cursor.fetchall()[0][0]
+    assert (
+        count_slots == n
+    ), f"Expected {n} replication slot(s) but found {count_slots} slot(s)"
