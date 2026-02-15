@@ -41,8 +41,8 @@ use mz_repr::adt::range::Range;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ArrayRustType, Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row, RowArena,
-    SqlScalarType, strconv,
+    ArrayRustType, ByteString, Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row, RowArena,
+    SqlColumnType, SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -358,13 +358,13 @@ fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
 }
 
 #[sqlfunc]
-fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
+fn decode(string: &str, format: &str) -> Result<ByteString, EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
     if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
         Err(EvalError::LengthTooLarge)
     } else {
-        Ok(out)
+        Ok(out.into())
     }
 }
 
@@ -3002,33 +3002,19 @@ fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -
     })
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_string<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(sqlname = "digest")]
+fn digest_string<'a>(a: &str, b: &str) -> Result<ByteString, EvalError> {
     let to_digest = a.as_bytes();
-    digest_inner(to_digest, b, temp_storage)
+    digest_inner(to_digest, b)
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_bytes<'a>(a: &[u8], b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(sqlname = "digest")]
+fn digest_bytes<'a>(a: &[u8], b: &str) -> Result<ByteString, EvalError> {
     let to_digest = a;
-    digest_inner(to_digest, b, temp_storage)
+    digest_inner(to_digest, b)
 }
 
-fn digest_inner<'a>(
-    bytes: &[u8],
-    digest_fn: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+fn digest_inner<'a>(bytes: &[u8], digest_fn: &str) -> Result<ByteString, EvalError> {
     let bytes = match digest_fn {
         "md5" => Md5::digest(bytes).to_vec(),
         "sha1" => Sha1::digest(bytes).to_vec(),
@@ -3038,7 +3024,7 @@ fn digest_inner<'a>(
         "sha512" => Sha512::digest(bytes).to_vec(),
         other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
     };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+    Ok(bytes.into())
 }
 
 #[sqlfunc(

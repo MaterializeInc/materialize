@@ -2396,13 +2396,32 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
     }
 }
 
-impl AsColumnType for Vec<u8> {
+/// A byte string, equivalent to `Vec<u8>`
+///
+/// Exists to avoid conflicting implementations on vectors.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
+pub struct ByteString(pub Vec<u8>);
+
+impl From<Vec<u8>> for ByteString {
+    fn from(v: Vec<u8>) -> Self {
+        Self(v)
+    }
+}
+
+impl std::ops::Deref for ByteString {
+    type Target = Vec<u8>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsColumnType for ByteString {
     fn as_column_type() -> SqlColumnType {
         SqlScalarType::Bytes.nullable(false)
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Vec<u8> {
+impl<'a, E> DatumType<'a, E> for ByteString {
     fn nullable() -> bool {
         false
     }
@@ -2413,13 +2432,13 @@ impl<'a, E> DatumType<'a, E> for Vec<u8> {
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
-            Ok(Datum::Bytes(b)) => Ok(b.to_owned()),
+            Ok(Datum::Bytes(b)) => Ok(b.to_owned().into()),
             _ => Err(res),
         }
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Bytes(temp_storage.push_bytes(self)))
+        Ok(Datum::Bytes(temp_storage.push_bytes(self.0)))
     }
 }
 

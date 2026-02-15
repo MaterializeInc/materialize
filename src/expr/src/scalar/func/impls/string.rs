@@ -27,7 +27,7 @@ use mz_repr::adt::regex::Regex;
 use mz_repr::adt::system::{Oid, PgLegacyChar};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampPrecision};
 use mz_repr::adt::varchar::{VarChar, VarCharMaxLength};
-use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{ByteString, Datum, RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -65,8 +65,8 @@ fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
     preserves_uniqueness = true,
     inverse = to_unary!(super::CastBytesToString)
 )]
-fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
-    strconv::parse_bytes(a).err_into()
+fn cast_string_to_bytes<'a>(a: &'a str) -> Result<ByteString, EvalError> {
+    strconv::parse_bytes(a).map(Into::into).err_into()
 }
 
 #[sqlfunc(
