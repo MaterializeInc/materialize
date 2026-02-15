@@ -87,70 +87,51 @@ def workflow_disruptions(c: Composition) -> None:
     disrupting replication at various stages using Toxiproxy or service restarts
     """
 
-    scenarios = [
-        mysql_out_of_disk_space,
-        disconnect_mysql_during_snapshot,
-        disconnect_mysql_during_replication,
-        restart_mysql_during_snapshot,
-        restart_mz_during_snapshot,
-        restart_mysql_during_replication,
-        restart_mz_during_replication,
-        fix_mysql_schema_while_mz_restarts,
-        verify_no_snapshot_reingestion,
-        transaction_with_rollback,
-    ]
-
-    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-    print(
-        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
-
-    for scenario in scenarios:
-        overrides = (
+    c.shard_and_run_scenarios(
+        [
+            mysql_out_of_disk_space,
+            disconnect_mysql_during_snapshot,
+            disconnect_mysql_during_replication,
+            restart_mysql_during_snapshot,
+            restart_mz_during_snapshot,
+            restart_mysql_during_replication,
+            restart_mz_during_replication,
+            fix_mysql_schema_while_mz_restarts,
+            verify_no_snapshot_reingestion,
+            transaction_with_rollback,
+        ],
+        init=initialize,
+        end=end,
+        get_overrides=lambda s: (
             [MySql(volumes=["sourcedata_512Mb:/var/lib/mysql"])]
-            if scenario == mysql_out_of_disk_space
+            if s == mysql_out_of_disk_space
             else []
-        )
-        with c.override(*overrides):
-            print(
-                f"--- Running scenario {scenario.__name__} with overrides: {overrides}"
-            )
-            initialize(c)
-            scenario(c)
-            end(c)
+        ),
+    )
 
 
 def workflow_backup_restore(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False, default_replication_factor=2),
     ):
-        scenario = backup_restore_mysql
-        print(f"--- Running scenario {scenario.__name__}")
-        initialize(c)
-        scenario(c)
-        # No end confirmation here, since we expect the source to be in a bad state
+        c.shard_and_run_scenarios(
+            [backup_restore_mysql],
+            init=initialize,
+        )
 
 
 def workflow_bin_log_manipulations(c: Composition) -> None:
     with c.override(
         Materialized(sanity_restart=False, default_replication_factor=2),
     ):
-        scenarios = [
-            reset_master_gtid,
-            corrupt_bin_log_to_stall_source,
-            corrupt_bin_log_and_add_sub_source,
-        ]
-
-        scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-        print(
-            f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+        c.shard_and_run_scenarios(
+            [
+                reset_master_gtid,
+                corrupt_bin_log_to_stall_source,
+                corrupt_bin_log_and_add_sub_source,
+            ],
+            init=initialize,
         )
-
-        for scenario in scenarios:
-            print(f"--- Running scenario {scenario.__name__}")
-            initialize(c)
-            scenario(c)
-            # No end confirmation here, since we expect the source to be in a bad state
 
 
 def workflow_short_bin_log_retention(c: Composition) -> None:

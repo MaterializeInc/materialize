@@ -1905,6 +1905,49 @@ class Composition:
                 workflows = buildkite.shard_list(workflows, lambda w: w)
         self.test_parts(workflows, process)
 
+    def shard_and_run_scenarios(
+        self,
+        scenarios: list[Callable],
+        *,
+        init: Callable[["Composition"], None] | None = None,
+        end: Callable[["Composition"], None] | None = None,
+        get_overrides: Callable[[Callable], list] | None = None,
+        testcase_name_prefix: str | None = None,
+    ) -> None:
+        """Shard a list of scenario functions via Buildkite parallelism and run them.
+
+        Each scenario is a callable that takes a Composition as its first argument.
+
+        Args:
+            scenarios: List of scenario callables to shard and run.
+            init: Optional callback to call before each scenario.
+            end: Optional callback to call after each scenario.
+            get_overrides: Optional callback that returns a list of service
+                overrides for a given scenario function.
+            testcase_name_prefix: If set, override the current testcase name
+                to "{prefix} '{scenario_name}'".
+        """
+        scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
+        print(
+            f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
+        )
+        for scenario in scenarios:
+            overrides = get_overrides(scenario) if get_overrides else []
+            with self.override(*overrides):
+                print(
+                    f"--- Running scenario {scenario.__name__}"
+                    + (f" with overrides: {overrides}" if overrides else "")
+                )
+                if testcase_name_prefix:
+                    self.override_current_testcase_name(
+                        f"{testcase_name_prefix} '{scenario.__name__}'"
+                    )
+                if init:
+                    init(self)
+                scenario(self)
+                if end:
+                    end(self)
+
     def verify_build_profile(self, container: str = "materialized") -> None:
         """Make sure the container is using the same build profile as we have set locally. This is mostly useful to ensure benchmarks compare using the same profile (release vs release, or optimized vs optimized)."""
         if ui.env_is_truthy("CI_IGNORE_BUILD_PROFILE"):

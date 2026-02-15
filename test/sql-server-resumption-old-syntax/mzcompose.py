@@ -13,7 +13,6 @@ SQL Server Source tests with interruptions, test that Materialize can recover.
 
 import time
 
-from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
@@ -50,48 +49,30 @@ def workflow_disruptions(c: Composition) -> None:
     disrupting replication at various stages using Toxiproxy or service restarts
     """
     # TODO: most of these should likely be converted to cluster tests
-    scenarios = [
-        sql_server_out_of_disk_space,
-        disconnect_sql_server_during_snapshot,
-        disconnect_sql_server_during_replication,
-        restart_sql_server_during_snapshot,
-        restart_mz_during_snapshot,
-        restart_sql_server_during_replication,
-        restart_mz_during_replication,
-        fix_sql_server_schema_while_mz_restarts,
-        verify_no_snapshot_reingestion,
-    ]
-    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-    print(
-        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
-    for scenario in scenarios:
-        overrides = (
+    c.shard_and_run_scenarios(
+        [
+            sql_server_out_of_disk_space,
+            disconnect_sql_server_during_snapshot,
+            disconnect_sql_server_during_replication,
+            restart_sql_server_during_snapshot,
+            restart_mz_during_snapshot,
+            restart_sql_server_during_replication,
+            restart_mz_during_replication,
+            fix_sql_server_schema_while_mz_restarts,
+            verify_no_snapshot_reingestion,
+        ],
+        init=initialize,
+        end=end,
+        get_overrides=lambda s: (
             [SqlServer(volumes_extra=["sourcedata_512Mb:/var/lib/mssql/data"])]
-            if scenario == sql_server_out_of_disk_space
+            if s == sql_server_out_of_disk_space
             else []
-        )
-        with c.override(*overrides):
-            print(
-                f"--- Running scenario {scenario.__name__} with overrides: {overrides}"
-            )
-            c.override_current_testcase_name(
-                f"Scenario '{scenario.__name__}' of workflow_disruptions"
-            )
-            initialize(c)
-            scenario(c)
-            end(c)
+        ),
+        testcase_name_prefix="Scenario of workflow_disruptions",
+    )
 
 
 def workflow_backup_restore(c: Composition) -> None:
-    scenarios = [
-        backup_restore_sql_server,
-    ]
-    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-    print(
-        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
-
     # Create a custom SqlServer service that runs as root to fix disk permissions for backup.
     class SqlServerWithPermissionFix(SqlServer):
         def __init__(self, **kwargs):
@@ -108,11 +89,10 @@ def workflow_backup_restore(c: Composition) -> None:
         Materialized(sanity_restart=False),
         SqlServerWithPermissionFix(volumes_extra=["mssqldata:/var/opt/mssql/data"]),
     ):
-        for scenario in scenarios:
-            print(f"--- Running scenario {scenario.__name__}")
-            initialize(c)
-            scenario(c)
-            # No end confirmation here, since we expect the source to be in a bad state
+        c.shard_and_run_scenarios(
+            [backup_restore_sql_server],
+            init=initialize,
+        )
 
 
 def initialize(c: Composition) -> None:

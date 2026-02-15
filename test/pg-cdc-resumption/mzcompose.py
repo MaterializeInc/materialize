@@ -17,7 +17,6 @@ import pg8000
 from pg8000 import Connection
 from pg8000.dbapi import ProgrammingError
 
-from materialize import buildkite
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.alpine import Alpine
 from materialize.mzcompose.services.materialized import Materialized
@@ -58,63 +57,42 @@ def workflow_disruptions(c: Composition) -> None:
 
     # TODO: most of these should likely be converted to cluster tests
 
-    scenarios = [
-        pg_out_of_disk_space,
-        disconnect_pg_during_snapshot,
-        disconnect_pg_during_replication,
-        restart_pg_during_snapshot,
-        restart_mz_during_snapshot,
-        restart_pg_during_replication,
-        restart_mz_during_replication,
-        fix_pg_schema_while_mz_restarts,
-        verify_no_snapshot_reingestion,
-        restart_mz_after_initial_snapshot,
-        restart_mz_while_cdc_changes,
-        drop_replication_slot_when_mz_is_on,
-    ]
-
-    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-    print(
-        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
-
-    for scenario in scenarios:
-        overrides = (
+    c.shard_and_run_scenarios(
+        [
+            pg_out_of_disk_space,
+            disconnect_pg_during_snapshot,
+            disconnect_pg_during_replication,
+            restart_pg_during_snapshot,
+            restart_mz_during_snapshot,
+            restart_pg_during_replication,
+            restart_mz_during_replication,
+            fix_pg_schema_while_mz_restarts,
+            verify_no_snapshot_reingestion,
+            restart_mz_after_initial_snapshot,
+            restart_mz_while_cdc_changes,
+            drop_replication_slot_when_mz_is_on,
+        ],
+        init=initialize,
+        end=end,
+        get_overrides=lambda s: (
             [Postgres(volumes=["sourcedata_512Mb:/var/lib/postgresql/data"])]
-            if scenario == pg_out_of_disk_space
+            if s == pg_out_of_disk_space
             else []
-        )
-        with c.override(*overrides):
-            print(
-                f"--- Running scenario {scenario.__name__} with overrides: {overrides}"
-            )
-            c.override_current_testcase_name(
-                f"Scenario '{scenario.__name__}' of workflow_disruptions"
-            )
-            initialize(c)
-            scenario(c)
-            end(c)
+        ),
+        testcase_name_prefix="Scenario of workflow_disruptions",
+    )
 
 
 def workflow_backup_restore(c: Composition) -> None:
-    scenarios = [
-        backup_restore_pg,
-    ]
-    scenarios = buildkite.shard_list(scenarios, lambda s: s.__name__)
-    print(
-        f"Scenarios in shard with index {buildkite.get_parallelism_index()}: {[s.__name__ for s in scenarios]}"
-    )
-
     with c.override(
         Materialized(sanity_restart=False, default_replication_factor=2),
         Alpine(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
         Postgres(volumes=["pgdata:/var/lib/postgresql/data", "tmp:/scratch"]),
     ):
-        for scenario in scenarios:
-            print(f"--- Running scenario {scenario.__name__}")
-            initialize(c)
-            scenario(c)
-            # No end confirmation here, since we expect the source to be in a bad state
+        c.shard_and_run_scenarios(
+            [backup_restore_pg],
+            init=initialize,
+        )
 
 
 def initialize(c: Composition) -> None:
