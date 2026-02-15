@@ -38,14 +38,20 @@ from materialize.pg_cdc import (
     workflow_replication_disabled,  # noqa: F401
     workflow_wal_level,  # noqa: F401
 )
+from materialize.pg_cdc import (
+    workflow_cdc as _workflow_cdc,
+)
+from materialize.pg_cdc import (
+    workflow_replication_slots as _workflow_replication_slots,
+)
+from materialize.pg_cdc import (
+    workflow_silent_connection_drop as _workflow_silent_connection_drop,
+)
 from materialize.postgres_util import (
     PostgresRecvlogical,
-    await_postgres_replication_slot_state,
-    claim_postgres_replication_slot,
     create_postgres,
     get_targeted_pg_version,
     get_testdrive_ssl_args,
-    verify_exactly_n_replication_slots_exist,
 )
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
@@ -99,89 +105,17 @@ SERVICES = [
 
 
 def workflow_replication_slots(c: Composition, parser: WorkflowArgumentParser) -> None:
-    pg_version = get_targeted_pg_version(parser)
-    with c.override(
-        create_postgres(
-            pg_version=pg_version, extra_command=["-c", "max_replication_slots=3"]
-        )
-    ):
-        c.up("materialized", "postgres")
-        c.run_testdrive_files("override/replication-slots.td")
+    _workflow_replication_slots(c, parser, max_replication_slots=3)
 
 
 def workflow_silent_connection_drop(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
-    """
-    Test that mz can regain a replication slot that is used by another service.
-    """
-
-    pg_version = get_targeted_pg_version(parser)
-    with c.override(
-        create_postgres(
-            pg_version=pg_version,
-            extra_command=[
-                "-c",
-                "wal_sender_timeout=0",
-            ],
-        ),
-    ):
-        c.up("postgres")
-
-        pg_conn = pg8000.connect(
-            host="localhost",
-            user="postgres",
-            password="postgres",
-            port=c.default_port("postgres"),
-        )
-
-        verify_exactly_n_replication_slots_exist(pg_conn, n=0)
-
-        c.up("materialized")
-
-        c.run_testdrive_files(
-            "--no-reset",
-            f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-            "override/silent-connection-drop-part-1.td",
-        )
-
-        verify_exactly_n_replication_slots_exist(pg_conn, n=1)
-
-        await_postgres_replication_slot_state(
-            pg_conn,
-            await_active=False,
-            error_message="Replication slot is still active",
-        )
-
-        claim_postgres_replication_slot(c, pg_conn)
-
-        await_postgres_replication_slot_state(
-            pg_conn,
-            await_active=True,
-            error_message="Replication slot has not been claimed",
-        )
-
-        c.run_testdrive_files("--no-reset", "override/silent-connection-drop-part-2.td")
-
-        verify_exactly_n_replication_slots_exist(pg_conn, n=1)
+    _workflow_silent_connection_drop(c, parser, connect_fn=pg8000.connect)
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
-    pg_version = get_targeted_pg_version(parser)
-    sharded_files = c.glob_test_files(parser, exclude=["exclude-columns.td"])
-    ssl_args_dict = get_testdrive_ssl_args(c)
-    testdrive_ssl_args = ssl_args_dict["testdrive_args"]
-
-    testdrive_args = testdrive_ssl_args + Materialized.default_testdrive_size_args()
-    with c.override(create_postgres(pg_version=pg_version)):
-        c.up("materialized", "test-certs", "postgres")
-        c.test_parts(
-            sharded_files,
-            lambda file: c.run_testdrive_files(
-                *testdrive_args,
-                file,
-            ),
-        )
+    _workflow_cdc(c, parser, exclude=["exclude-columns.td"])
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
