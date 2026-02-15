@@ -31,19 +31,14 @@ SERVICES = [
 ]
 
 
+def _kill_postgres(c: Composition) -> None:
+    # clear to avoid issues
+    c.kill("postgres")
+    c.rm("postgres")
+
+
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-
-        # clear to avoid issues
-        c.kill("postgres")
-        c.rm("postgres")
-
-        with c.test_case(name):
-            c.workflow(name)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    c.run_all_workflows(between_workflows=_kill_postgres)
 
 
 def workflow_disruptions(c: Composition) -> None:

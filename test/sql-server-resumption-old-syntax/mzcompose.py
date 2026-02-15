@@ -29,19 +29,22 @@ SERVICES = [
 ]
 
 
+def run_testdrive_files(c: Composition, *files: str) -> None:
+    c.run_testdrive_files(
+        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        *files,
+    )
+
+
+def _kill_sql_server(c: Composition) -> None:
+    # clear to avoid issues
+    c.kill("sql-server")
+    c.rm("sql-server")
+
+
 def workflow_default(c: Composition) -> None:
-    def process(name: str) -> None:
-        if name == "default":
-            return
-
-        # clear to avoid issues
-        c.kill("sql-server")
-        c.rm("sql-server")
-
-        with c.test_case(name):
-            c.workflow(name)
-
-    c.test_parts(list(c.workflows.keys()), process)
+    c.run_all_workflows(between_workflows=_kill_sql_server)
 
 
 def workflow_disruptions(c: Composition) -> None:
@@ -99,9 +102,8 @@ def initialize(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("materialized", "sql-server", "toxiproxy")
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "configure-toxiproxy.td",
         "configure-sql-server.td",
         "populate-tables.td",
@@ -112,9 +114,8 @@ def initialize(c: Composition) -> None:
 def restart_sql_server(c: Composition) -> None:
     c.kill("sql-server")
     c.up("sql-server")
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "sql-server-restart-dummy-writing.td",
     )
 
@@ -126,18 +127,16 @@ def restart_mz(c: Composition) -> None:
 
 def end(c: Composition) -> None:
     """Validate the data at the end."""
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "verify-data.td",
         "cleanup.td",
     )
 
 
 def disconnect_sql_server_during_snapshot(c: Composition) -> None:
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "toxiproxy-close-connection.td",
         "toxiproxy-restore-connection.td",
         "delete-rows-t1.td",
@@ -150,9 +149,8 @@ def disconnect_sql_server_during_snapshot(c: Composition) -> None:
 def restart_sql_server_during_snapshot(c: Composition) -> None:
     restart_sql_server(c)
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -164,9 +162,8 @@ def restart_mz_during_snapshot(c: Composition) -> None:
     c.run_testdrive_files("alter-mz.td")
     restart_mz(c)
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -174,9 +171,8 @@ def restart_mz_during_snapshot(c: Composition) -> None:
 
 
 def disconnect_sql_server_during_replication(c: Composition) -> None:
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "delete-rows-t2.td",
@@ -188,9 +184,8 @@ def disconnect_sql_server_during_replication(c: Composition) -> None:
 
 
 def restart_sql_server_during_replication(c: Composition) -> None:
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
@@ -199,17 +194,15 @@ def restart_sql_server_during_replication(c: Composition) -> None:
 
     restart_sql_server(c)
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t2.td",
     )
 
 
 def restart_mz_during_replication(c: Composition) -> None:
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
         "alter-table.td",
@@ -218,17 +211,15 @@ def restart_mz_during_replication(c: Composition) -> None:
 
     restart_mz(c)
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t2.td",
     )
 
 
 def fix_sql_server_schema_while_mz_restarts(c: Composition) -> None:
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -243,18 +234,16 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
     """Confirm that Mz does not reingest the entire snapshot on restart by
     revoking its SELECT privileges
     """
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "sql-server-disable-select-permission.td",
     )
 
     restart_mz(c)
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t1.td",
         "delete-rows-t2.td",
         "alter-table.td",
@@ -263,9 +252,8 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
 
 
 def sql_server_out_of_disk_space(c: Composition) -> None:
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "wait-for-snapshot.td",
         "delete-rows-t1.td",
     )
@@ -281,9 +269,8 @@ def sql_server_out_of_disk_space(c: Composition) -> None:
     time.sleep(30)
     c.exec("sql-server", "bash", "-c", f"rm {fill_file}")
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         "delete-rows-t2.td",
         "alter-table.td",
         "alter-mz.td",
@@ -293,9 +280,8 @@ def sql_server_out_of_disk_space(c: Composition) -> None:
 def backup_restore_sql_server(c: Composition) -> None:
     # Backup to persistent data directory so it survives service restarts.
     backup_dir = "/var/opt/mssql/data"
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         f"--var=backup-directory={backup_dir}",
         "sql-server-backup.td",
         "delete-rows-t1.td",
@@ -307,9 +293,8 @@ def backup_restore_sql_server(c: Composition) -> None:
     # Start new sql server service with same volume as previous.
     c.up("sql-server")
 
-    c.run_testdrive_files(
-        f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
-        f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+    run_testdrive_files(
+        c,
         f"--var=backup-directory={backup_dir}",
         "sql-server-restore.td",
         "sql-server-restart-dummy-writing.td",
