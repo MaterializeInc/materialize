@@ -1210,42 +1210,54 @@ impl VariadicFunc {
             return Ok(Datum::Null);
         }
 
-        // Evaluate eager functions
+        self.eval_eager(&ds, temp_storage)
+    }
+
+    /// Evaluate this eager variadic function with pre-evaluated datum values.
+    ///
+    /// Callers must handle null propagation before calling this method.
+    /// Panics for lazy/short-circuiting variadics (Coalesce, Greatest, Least,
+    /// And, Or, ErrorIfNull).
+    pub fn eval_eager<'a>(
+        &'a self,
+        ds: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+    ) -> Result<Datum<'a>, EvalError> {
         match self {
             VariadicFunc::Coalesce
             | VariadicFunc::Greatest
             | VariadicFunc::And
             | VariadicFunc::Or
             | VariadicFunc::ErrorIfNull
-            | VariadicFunc::Least => unreachable!(),
-            VariadicFunc::Concat => text_concat_variadic(&ds, temp_storage),
-            VariadicFunc::ConcatWs => text_concat_ws(&ds, temp_storage),
-            VariadicFunc::MakeTimestamp => make_timestamp(&ds),
-            VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
-            VariadicFunc::Substr => substr(&ds),
-            VariadicFunc::Replace => replace(&ds, temp_storage),
-            VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildObject => jsonb_build_object(&ds, temp_storage),
-            VariadicFunc::MapBuild { .. } => Ok(map_build(&ds, temp_storage)),
+            | VariadicFunc::Least => unreachable!("called eval_eager on a lazy variadic"),
+            VariadicFunc::Concat => text_concat_variadic(ds, temp_storage),
+            VariadicFunc::ConcatWs => text_concat_ws(ds, temp_storage),
+            VariadicFunc::MakeTimestamp => make_timestamp(ds),
+            VariadicFunc::PadLeading => pad_leading(ds, temp_storage),
+            VariadicFunc::Substr => substr(ds),
+            VariadicFunc::Replace => replace(ds, temp_storage),
+            VariadicFunc::Translate => Ok(translate(ds, temp_storage)),
+            VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(ds, temp_storage)),
+            VariadicFunc::JsonbBuildObject => jsonb_build_object(ds, temp_storage),
+            VariadicFunc::MapBuild { .. } => Ok(map_build(ds, temp_storage)),
             VariadicFunc::ArrayCreate {
                 elem_type: SqlScalarType::Array(_),
-            } => array_create_multidim(&ds, temp_storage),
-            VariadicFunc::ArrayCreate { .. } => array_create_scalar(&ds, temp_storage),
+            } => array_create_multidim(ds, temp_storage),
+            VariadicFunc::ArrayCreate { .. } => array_create_scalar(ds, temp_storage),
             VariadicFunc::ArrayToString { elem_type } => {
-                array_to_string(&ds, elem_type, temp_storage)
+                array_to_string(ds, elem_type, temp_storage)
             }
-            VariadicFunc::ArrayIndex { offset } => Ok(array_index(&ds, *offset)),
+            VariadicFunc::ArrayIndex { offset } => Ok(array_index(ds, *offset)),
 
             VariadicFunc::ListCreate { .. } | VariadicFunc::RecordCreate { .. } => {
-                Ok(list_create(&ds, temp_storage))
+                Ok(list_create(ds, temp_storage))
             }
-            VariadicFunc::ListIndex => Ok(list_index(&ds)),
-            VariadicFunc::ListSliceLinear => Ok(list_slice_linear(&ds, temp_storage)),
-            VariadicFunc::SplitPart => split_part(&ds),
-            VariadicFunc::RegexpMatch => regexp_match_dynamic(&ds, temp_storage),
-            VariadicFunc::HmacString => hmac_string(&ds, temp_storage),
-            VariadicFunc::HmacBytes => hmac_bytes(&ds, temp_storage),
+            VariadicFunc::ListIndex => Ok(list_index(ds)),
+            VariadicFunc::ListSliceLinear => Ok(list_slice_linear(ds, temp_storage)),
+            VariadicFunc::SplitPart => split_part(ds),
+            VariadicFunc::RegexpMatch => regexp_match_dynamic(ds, temp_storage),
+            VariadicFunc::HmacString => hmac_string(ds, temp_storage),
+            VariadicFunc::HmacBytes => hmac_bytes(ds, temp_storage),
             VariadicFunc::DateBinTimestamp => date_bin(
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamp(),
@@ -1262,11 +1274,11 @@ impl VariadicFunc {
             VariadicFunc::DateDiffTimestampTz => date_diff_timestamptz(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffTime => date_diff_time(ds[0], ds[1], ds[2]),
-            VariadicFunc::RangeCreate { .. } => create_range(&ds, temp_storage),
-            VariadicFunc::MakeAclItem => make_acl_item(&ds),
-            VariadicFunc::MakeMzAclItem => make_mz_acl_item(&ds),
-            VariadicFunc::ArrayPosition => array_position(&ds),
-            VariadicFunc::ArrayFill { .. } => array_fill(&ds, temp_storage),
+            VariadicFunc::RangeCreate { .. } => create_range(ds, temp_storage),
+            VariadicFunc::MakeAclItem => make_acl_item(ds),
+            VariadicFunc::MakeMzAclItem => make_mz_acl_item(ds),
+            VariadicFunc::ArrayPosition => array_position(ds),
+            VariadicFunc::ArrayFill { .. } => array_fill(ds, temp_storage),
             VariadicFunc::TimezoneTime => parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix)
                 .map(|tz| {
                     timezone_time(
@@ -1284,7 +1296,7 @@ impl VariadicFunc {
                 };
                 regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
             }
-            VariadicFunc::RegexpReplace => regexp_replace_dynamic(&ds, temp_storage),
+            VariadicFunc::RegexpReplace => regexp_replace_dynamic(ds, temp_storage),
             VariadicFunc::StringToArray => {
                 let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
 

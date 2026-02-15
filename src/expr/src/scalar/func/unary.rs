@@ -28,6 +28,19 @@ pub trait LazyUnaryFunc {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval_input(temp_storage, a.eval(datums, temp_storage))
+    }
+
+    /// Evaluate this function on an already-evaluated input datum.
+    ///
+    /// This is the primary evaluation entry point for compiled/stack-machine
+    /// evaluation, where the input expression has already been evaluated
+    /// before the function is applied.
+    fn eval_input<'a>(
+        &'a self,
+        temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
@@ -95,6 +108,21 @@ pub trait LazyUnaryFunc {
     /// This property describes the behaviour of the function over ranges where the function is defined:
     /// ie. the argument and the result are non-error datums.
     fn is_monotone(&self) -> bool;
+
+    /// Returns any embedded sub-expressions that this function applies
+    /// internally (e.g., element cast expressions in compound-cast functions).
+    ///
+    /// Most functions have no embedded expressions. Functions like
+    /// `CastList1ToList2` or `CastRecord1ToRecord2` contain inner
+    /// `MirScalarExpr` trees that are applied per-element of a compound value.
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![]
+    }
+
+    /// Like [`Self::embedded_exprs`], but returns mutable references.
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![]
+    }
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
@@ -139,13 +167,12 @@ pub trait EagerUnaryFunc<'a> {
 }
 
 impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        match T::Input::try_from_result(a.eval(datums, temp_storage)) {
+        match T::Input::try_from_result(input) {
             // If we can convert to the input type then we call the function
             Ok(input) => self.call(input).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner

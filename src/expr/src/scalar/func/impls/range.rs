@@ -16,7 +16,7 @@ use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
-use crate::{EvalError, MirScalarExpr};
+use crate::EvalError;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastRangeToString {
@@ -24,13 +24,12 @@ pub struct CastRangeToString {
 }
 
 impl LazyUnaryFunc for CastRangeToString {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -75,13 +74,12 @@ impl fmt::Display for CastRangeToString {
 pub struct RangeLower;
 
 impl LazyUnaryFunc for RangeLower {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        _temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -130,13 +128,12 @@ impl fmt::Display for RangeLower {
 pub struct RangeUpper;
 
 impl LazyUnaryFunc for RangeUpper {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        _temp_storage: &'a RowArena,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }

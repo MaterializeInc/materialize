@@ -23,6 +23,24 @@ pub(crate) trait LazyBinaryFunc {
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
         b: &'a MirScalarExpr,
+    ) -> Result<Datum<'a>, EvalError> {
+        self.eval_input(
+            temp_storage,
+            a.eval(datums, temp_storage),
+            b.eval(datums, temp_storage),
+        )
+    }
+
+    /// Evaluate this function on already-evaluated input datums.
+    ///
+    /// This is the primary evaluation entry point for compiled/stack-machine
+    /// evaluation, where the input expressions have already been evaluated
+    /// before the function is applied.
+    fn eval_input<'a>(
+        &'a self,
+        temp_storage: &'a RowArena,
+        a: Result<Datum<'a>, EvalError>,
+        b: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError>;
 
     /// The output SqlColumnType of this function.
@@ -112,16 +130,13 @@ pub(crate) trait EagerBinaryFunc<'a> {
 }
 
 impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-        b: &'a MirScalarExpr,
+        a: Result<Datum<'a>, EvalError>,
+        b: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        let b = b.eval(datums, temp_storage)?;
-        let a = match T::Input1::try_from_result(Ok(a)) {
+        let a = match T::Input1::try_from_result(a) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner
@@ -131,7 +146,7 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
             // Otherwise we just propagate NULLs and errors
             Err(res) => return res,
         };
-        let b = match T::Input2::try_from_result(Ok(b)) {
+        let b = match T::Input2::try_from_result(b) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
             // If we can't and we got a non-null datum something went wrong in the planner

@@ -304,13 +304,12 @@ pub struct CastStringToArray {
 }
 
 impl LazyUnaryFunc for CastStringToArray {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -359,6 +358,14 @@ impl LazyUnaryFunc for CastStringToArray {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![&self.cast_expr]
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![&mut self.cast_expr]
+    }
 }
 
 impl fmt::Display for CastStringToArray {
@@ -377,13 +384,12 @@ pub struct CastStringToList {
 }
 
 impl LazyUnaryFunc for CastStringToList {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -438,6 +444,14 @@ impl LazyUnaryFunc for CastStringToList {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![&self.cast_expr]
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![&mut self.cast_expr]
+    }
 }
 
 impl fmt::Display for CastStringToList {
@@ -456,13 +470,12 @@ pub struct CastStringToMap {
 }
 
 impl LazyUnaryFunc for CastStringToMap {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -522,6 +535,14 @@ impl LazyUnaryFunc for CastStringToMap {
 
     fn is_monotone(&self) -> bool {
         false
+    }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![&self.cast_expr]
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![&mut self.cast_expr]
     }
 }
 
@@ -595,13 +616,12 @@ pub struct CastStringToRange {
 }
 
 impl LazyUnaryFunc for CastStringToRange {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -653,6 +673,14 @@ impl LazyUnaryFunc for CastStringToRange {
 
     fn is_monotone(&self) -> bool {
         false
+    }
+
+    fn embedded_exprs(&self) -> Vec<&MirScalarExpr> {
+        vec![&self.cast_expr]
+    }
+
+    fn embedded_exprs_mut(&mut self) -> Vec<&mut MirScalarExpr> {
+        vec![&mut self.cast_expr]
     }
 }
 
@@ -732,13 +760,12 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
 pub struct CastStringToInt2Vector;
 
 impl LazyUnaryFunc for CastStringToInt2Vector {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
+        let a = input?;
         if a.is_null() {
             return Ok(Datum::Null);
         }
@@ -937,13 +964,12 @@ impl fmt::Display for IsRegexpMatch {
 pub struct RegexpMatch(pub Regex);
 
 impl LazyUnaryFunc for RegexpMatch {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let haystack = a.eval(datums, temp_storage)?;
+        let haystack = input?;
         if haystack.is_null() {
             return Ok(Datum::Null);
         }
@@ -995,13 +1021,12 @@ impl fmt::Display for RegexpMatch {
 pub struct RegexpSplitToArray(pub Regex);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let haystack = a.eval(datums, temp_storage)?;
+        let haystack = input?;
         if haystack.is_null() {
             return Ok(Datum::Null);
         }
@@ -1058,13 +1083,12 @@ fn panic<'a>(a: &'a str) -> String {
 pub struct QuoteIdent;
 
 impl LazyUnaryFunc for QuoteIdent {
-    fn eval<'a>(
+    fn eval_input<'a>(
         &'a self,
-        datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
+        input: Result<Datum<'a>, EvalError>,
     ) -> Result<Datum<'a>, EvalError> {
-        let d = a.eval(datums, temp_storage)?;
+        let d = input?;
         if d.is_null() {
             return Ok(Datum::Null);
         }
