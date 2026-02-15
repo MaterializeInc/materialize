@@ -10,7 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 
 INCREMENTS = 100000
 
@@ -20,7 +20,7 @@ class UpsertManyUpdates(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=upsert-many-updates
@@ -53,7 +53,7 @@ class UpsertManyUpdates(Check):
 
         return [
             Testdrive(
-                dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+                KAFKA_SCHEMA
                 + dedent(
                     """
                     $ kafka-ingest format=avro key-format=avro topic=upsert-many-updates key-schema=${keyschema} schema=${schema}
@@ -62,7 +62,7 @@ class UpsertManyUpdates(Check):
                 + increment1
             ),
             Testdrive(
-                dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+                KAFKA_SCHEMA
                 + dedent(
                     """
                     $ kafka-ingest format=avro key-format=avro topic=upsert-many-updates key-schema=${keyschema} schema=${schema}

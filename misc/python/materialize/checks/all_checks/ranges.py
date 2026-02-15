@@ -10,17 +10,13 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-
-
-def schema() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+from materialize.checks.common import KAFKA_SCHEMA
 
 
 class Range(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schema()
+            KAFKA_SCHEMA
             + dedent(
                 """
             > CREATE TABLE range_table (

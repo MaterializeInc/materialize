@@ -6,19 +6,14 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 
 # This duration needs to be long enough for running all scenarios and the CI build!
 RETAIN_HISTORY_DURATION = "60m"
-
-
-def schemas() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 @disabled(
@@ -265,7 +260,7 @@ class RetainHistoryOnMv(Check):
 class RetainHistoryOnKafkaSource(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 f"""
                 > CREATE TABLE time_for_source (time_index INT, t TIMESTAMP);
@@ -315,7 +310,7 @@ class RetainHistoryOnKafkaSource(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ kafka-ingest format=avro key-format=avro topic=retain-history key-schema=${keyschema} schema=${schema} repeat=2
@@ -435,7 +430,3 @@ class RetainHistoryOnKafkaSource(Check):
                 """
             )
         )
-
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

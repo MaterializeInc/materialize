@@ -10,19 +10,15 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
-
-
-def schemas() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class Webhook(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 >[version>=14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 2, SIZE 'scale=1,workers=1'
@@ -50,7 +46,7 @@ class Webhook(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ webhook-append database=materialize schema=public name=webhook_text
@@ -148,7 +144,7 @@ class WebhookTable(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE CLUSTER webhook_table_cluster REPLICATION FACTOR 2, SIZE 'scale=1,workers=1'
@@ -164,7 +160,7 @@ class WebhookTable(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ webhook-append database=materialize schema=public name=webhook_table_text

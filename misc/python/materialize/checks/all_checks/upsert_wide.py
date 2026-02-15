@@ -10,7 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 
 PAD_100K = "X" * (100 * 1024)
 PAD_500K = "Y" * (500 * 1024)
@@ -23,7 +23,7 @@ class UpsertWideValue(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+            KAFKA_SCHEMA
             + dedent(
                 f"""
                 $ kafka-create-topic topic=upsert-wide-value
@@ -47,7 +47,7 @@ class UpsertWideValue(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 f"""
                 $ kafka-ingest format=avro key-format=avro topic=upsert-wide-value key-schema=${{keyschema}} schema=${{schema}}
@@ -91,7 +91,7 @@ class UpsertWideKey(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+            KAFKA_SCHEMA
             + dedent(
                 f"""
                 $ kafka-create-topic topic=upsert-wide-key
@@ -117,7 +117,7 @@ class UpsertWideKey(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 f"""
                 $ kafka-ingest format=avro key-format=avro topic=upsert-wide-key key-schema=${{keyschema}} schema=${{schema}}

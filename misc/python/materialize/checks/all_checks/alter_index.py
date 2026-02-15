@@ -10,18 +10,14 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-
-
-def schema() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+from materialize.checks.common import KAFKA_SCHEMA
 
 
 @externally_idempotent(False)
 class AlterIndex(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schema()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE alter_index_table (f1 STRING);
@@ -46,7 +42,7 @@ class AlterIndex(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schema() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

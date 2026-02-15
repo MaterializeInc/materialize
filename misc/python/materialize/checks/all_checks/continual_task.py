@@ -10,13 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
-
-
-def schemas() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class AuditLogCT(Check):
@@ -27,7 +23,7 @@ class AuditLogCT(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE t_input (key INT);
@@ -42,7 +38,7 @@ class AuditLogCT(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 > INSERT INTO t_input VALUES (2), (3);
@@ -74,7 +70,7 @@ class StreamTableJoinCT(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE big (key INT);
@@ -94,7 +90,7 @@ class StreamTableJoinCT(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 > UPDATE small SET val = 'v' || val;
@@ -140,7 +136,7 @@ class UpsertCT(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE append_only (key INT, val INT);
@@ -155,7 +151,7 @@ class UpsertCT(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 > INSERT INTO append_only VALUES (1, 3), (2, 4)

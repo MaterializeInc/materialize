@@ -10,11 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
-
-
-def schemas() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+from materialize.checks.common import KAFKA_SCHEMA
 
 
 class UpsertInsert(Check):
@@ -22,7 +18,7 @@ class UpsertInsert(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=upsert-insert
@@ -43,7 +39,7 @@ class UpsertInsert(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} repeat=10000
@@ -73,7 +69,7 @@ class UpsertInsert(Check):
 class UpsertUpdate(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=upsert-update
@@ -94,7 +90,7 @@ class UpsertUpdate(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update key-schema=${keyschema} schema=${schema} repeat=10000
@@ -121,7 +117,7 @@ class UpsertUpdate(Check):
 class UpsertDelete(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=upsert-delete
@@ -142,7 +138,7 @@ class UpsertDelete(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ kafka-ingest format=avro key-format=avro topic=upsert-delete key-schema=${keyschema} schema=${schema} repeat=10000
@@ -175,7 +171,7 @@ class UpsertLegacy(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=upsert-legacy-syntax
@@ -195,7 +191,7 @@ class UpsertLegacy(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ kafka-ingest format=avro key-format=avro topic=upsert-legacy-syntax key-schema=${keyschema} schema=${schema} repeat=10000

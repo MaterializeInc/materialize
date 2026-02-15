@@ -14,7 +14,7 @@ from pg8000.converters import literal  # type: ignore
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.mz_version import MzVersion
 from materialize.util import naughty_strings
 
@@ -32,10 +32,6 @@ def dq_print(ident: str) -> str:
 
 def sq(ident: str) -> Any:
     return literal(ident)
-
-
-def schemas() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 def cluster() -> str:
@@ -126,7 +122,7 @@ class Identifiers(Check):
             > COMMENT ON COLUMN {dq(self.ident["schema"])}.{dq(self.ident["table"])}.{dq(self.ident["column"])} IS {sq(self.ident["comment_column"])};
             """
 
-        return Testdrive(schemas() + cluster() + dedent(cmds))
+        return Testdrive(KAFKA_SCHEMA + cluster() + dedent(cmds))
 
     def manipulate(self) -> list[Testdrive]:
         cmds = [

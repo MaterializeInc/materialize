@@ -10,13 +10,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, disabled, externally_idempotent
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
-
-
-def schemas() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 def schemas_null() -> str:
@@ -48,7 +44,7 @@ class SinkUpsert(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=sink-source
@@ -83,7 +79,7 @@ class SinkUpsert(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
@@ -210,7 +206,7 @@ class SinkTables(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE sink_large_transaction_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
@@ -237,7 +233,7 @@ class SinkTables(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 > UPDATE sink_large_transaction_table SET f2 = REPEAT('y', 1024)
@@ -1448,7 +1444,7 @@ class SinkFormat(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE sink_format_table (f1 INTEGER, f2 TEXT, f3 INT, PRIMARY KEY (f1));
@@ -1470,7 +1466,7 @@ class SinkFormat(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 > INSERT INTO sink_format_table VALUES (2, 'B', 20);
@@ -1511,7 +1507,7 @@ class SinkPartitionByDebezium(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            schemas()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 > CREATE TABLE sink_partition_by_debezium_table (f1 INTEGER, f2 TEXT, PRIMARY KEY (f1));
@@ -1540,7 +1536,7 @@ class SinkPartitionByDebezium(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(schemas() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 > UPDATE sink_partition_by_debezium_table SET f2 = REPEAT('y', 1024)

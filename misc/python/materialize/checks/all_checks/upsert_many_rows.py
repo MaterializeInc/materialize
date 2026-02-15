@@ -10,7 +10,7 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
@@ -24,7 +24,7 @@ class UpsertManyRows(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
+            KAFKA_SCHEMA
             + dedent(
                 """
                 $ kafka-create-topic topic=upsert-many-rows
@@ -49,7 +49,7 @@ class UpsertManyRows(Check):
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD) + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 """
                 # Update the As

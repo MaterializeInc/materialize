@@ -14,13 +14,9 @@ from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
 from materialize.checks.checks import Check, externally_idempotent
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
-
-
-def schema() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
 
 
 class SshChange(Enum):
@@ -50,7 +46,7 @@ class AlterConnectionSshChangeBase(Check):
         i = self.index
 
         return Testdrive(
-            schema()
+            KAFKA_SCHEMA
             + dedent(
                 f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
@@ -95,7 +91,7 @@ class AlterConnectionSshChangeBase(Check):
         i = self.index
 
         return [
-            Testdrive(schema() + dedent(s))
+            Testdrive(KAFKA_SCHEMA + dedent(s))
             for s in [
                 f"""
                 $ kafka-ingest topic=alter-connection-{i}a format=bytes
