@@ -66,12 +66,17 @@ pub(crate) trait LazyBinaryFunc {
 }
 
 #[allow(unused)]
-pub(crate) trait EagerBinaryFunc<'a> {
-    type Input1: InputDatumType<'a, EvalError>;
-    type Input2: InputDatumType<'a, EvalError>;
-    type Output: OutputDatumType<'a, EvalError>;
+pub(crate) trait EagerBinaryFunc {
+    type Input1<'a>: InputDatumType<'a, EvalError>;
+    type Input2<'a>: InputDatumType<'a, EvalError>;
+    type Output<'a>: OutputDatumType<'a, EvalError>;
 
-    fn call(&self, a: Self::Input1, b: Self::Input2, temp_storage: &'a RowArena) -> Self::Output;
+    fn call<'a>(
+        &self,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
     fn output_type(
@@ -111,7 +116,7 @@ pub(crate) trait EagerBinaryFunc<'a> {
     }
 }
 
-impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
+impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],

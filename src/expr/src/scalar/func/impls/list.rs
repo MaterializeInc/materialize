@@ -259,13 +259,18 @@ pub struct ListLengthMax {
     /// Maximal allowed layer to query.
     pub max_layer: usize,
 }
-impl<'a> EagerBinaryFunc<'a> for ListLengthMax {
-    type Input1 = DatumList<'a>;
-    type Input2 = i64;
-    type Output = Result<Option<i32>, EvalError>;
+impl EagerBinaryFunc for ListLengthMax {
+    type Input1<'a> = DatumList<'a>;
+    type Input2<'a> = i64;
+    type Output<'a> = Result<Option<i32>, EvalError>;
     // TODO(benesch): remove potentially dangerous usage of `as`.
     #[allow(clippy::as_conversions)]
-    fn call(&self, a: Self::Input1, b: Self::Input2, _: &'a RowArena) -> Self::Output {
+    fn call<'a>(
+        &self,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
+        _: &'a RowArena,
+    ) -> Self::Output<'a> {
         fn max_len_on_layer(i: DatumList<'_>, on_layer: i64) -> Option<usize> {
             let mut i = i.iter();
             if on_layer > 1 {

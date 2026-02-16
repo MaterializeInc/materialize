@@ -1119,17 +1119,17 @@ pub struct RegexpReplace {
     pub limit: usize,
 }
 
-impl<'a> binary::EagerBinaryFunc<'a> for RegexpReplace {
-    type Input1 = &'a str;
-    type Input2 = &'a str;
-    type Output = Cow<'a, str>;
+impl binary::EagerBinaryFunc for RegexpReplace {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = &'a str;
+    type Output<'a> = Cow<'a, str>;
 
-    fn call(
+    fn call<'a>(
         &self,
-        source: Self::Input1,
-        replacement: Self::Input2,
+        source: Self::Input1<'a>,
+        replacement: Self::Input2<'a>,
         _temp_storage: &'a RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         // WARNING: This function has potential OOM risk if used with an inflationary
         // replacement pattern. It is very difficult to calculate the output size ahead
         // of time because the replacement pattern may depend on capture groups.
@@ -1142,7 +1142,7 @@ impl<'a> binary::EagerBinaryFunc<'a> for RegexpReplace {
         input_type_b: SqlColumnType,
     ) -> SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Self::Output as AsColumnType>::as_column_type();
+        let output = <Self::Output<'_> as AsColumnType>::as_column_type();
         let propagates_nulls = binary::EagerBinaryFunc::propagates_nulls(self);
         let nullable = output.nullable;
         output.nullable(

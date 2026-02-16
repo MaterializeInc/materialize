@@ -476,12 +476,12 @@ fn binary_func(
         #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
         pub struct #struct_name;
 
-        impl<'a> crate::func::binary::EagerBinaryFunc<'a> for #struct_name {
-            type Input1 = #input1_ty;
-            type Input2 = #input2_ty;
-            type Output = #output_ty;
+        impl crate::func::binary::EagerBinaryFunc for #struct_name {
+            type Input1<'a> = #input1_ty;
+            type Input2<'a> = #input2_ty;
+            type Output<'a> = #output_ty;
 
-            fn call(&self, a: Self::Input1, b: Self::Input2, temp_storage: &'a mz_repr::RowArena) -> Self::Output {
+            fn call<'a>(&self, a: Self::Input1<'a>, b: Self::Input2<'a>, temp_storage: &'a mz_repr::RowArena) -> Self::Output<'a> {
                 #fn_name(a, b #arena)
             }
 
