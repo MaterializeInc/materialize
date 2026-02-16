@@ -149,7 +149,9 @@ impl RowCollection {
         };
 
         let slice = &self.encoded[lower_offset..upper.offset];
-        let row = RowRef::from_slice(slice);
+        // SAFETY: self.encoded contains only valid row data, and the metadata delimits only ranges
+        // that correspond to the original rows.
+        let row = unsafe { RowRef::from_slice(slice) };
 
         Some((row, upper))
     }

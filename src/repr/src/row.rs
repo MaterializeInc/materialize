@@ -253,7 +253,8 @@ impl Row {
     /// Extracts a Row slice containing the entire [`Row`].
     #[inline]
     pub fn as_row_ref(&self) -> &RowRef {
-        RowRef::from_slice(self.data.as_slice())
+        // SAFETY: `Row` contains valid row data, by construction.
+        unsafe { RowRef::from_slice(self.data.as_slice()) }
     }
 
     /// Clear the contents of the [`Row`], leaving any allocation in place.
@@ -436,9 +437,9 @@ mod columnar {
     #[derive(Copy, Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
     pub struct Rows<BC = Vec<u64>, VC = Vec<u8>> {
         /// Bounds container; provides indexed access to offsets.
-        pub bounds: BC,
+        bounds: BC,
         /// Values container; provides slice access to bytes.
-        pub values: VC,
+        values: VC,
     }
 
     impl Columnar for Row {
@@ -568,7 +569,9 @@ mod columnar {
             let upper = self.bounds.index_as(index);
             let lower = usize::cast_from(lower);
             let upper = usize::cast_from(upper);
-            RowRef::from_slice(&self.values[lower..upper])
+            // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
+            // that correspond to the original rows.
+            unsafe { RowRef::from_slice(&self.values[lower..upper]) }
         }
     }
     impl<'a, BC: Len + IndexAs<u64>> Index for &'a Rows<BC, Vec<u8>> {
@@ -583,7 +586,9 @@ mod columnar {
             let upper = self.bounds.index_as(index);
             let lower = usize::cast_from(lower);
             let upper = usize::cast_from(upper);
-            RowRef::from_slice(&self.values[lower..upper])
+            // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
+            // that correspond to the original rows.
+            unsafe { RowRef::from_slice(&self.values[lower..upper]) }
         }
     }
 
@@ -628,9 +633,11 @@ pub struct RowRef([u8]);
 impl RowRef {
     /// Create a [`RowRef`] from a slice of data.
     ///
-    /// We do not check that the provided slice is valid [`Row`] data, will panic on read
-    /// if the data is invalid.
-    pub fn from_slice(row: &[u8]) -> &RowRef {
+    /// # Safety
+    ///
+    /// We do not check that the provided slice is valid [`Row`] data; the caller is required to
+    /// ensure this.
+    pub unsafe fn from_slice(row: &[u8]) -> &RowRef {
         #[allow(clippy::as_conversions)]
         let ptr = row as *const [u8] as *const RowRef;
         // SAFETY: We know `ptr` is non-null and aligned because it came from a &[u8].
