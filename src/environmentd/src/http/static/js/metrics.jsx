@@ -91,7 +91,7 @@ const styles = {
 
 // --- Copy to clipboard ---
 
-function CopyButton({ getText, style: extraStyle }) {
+function CopyButton({ getText }) {
   const [copied, setCopied] = useState(false);
   const onClick = () => {
     navigator.clipboard.writeText(getText()).then(() => {
@@ -103,7 +103,7 @@ function CopyButton({ getText, style: extraStyle }) {
     <button
       onClick={onClick}
       title="Copy to clipboard"
-      style={{ ...styles.copyBtn, ...extraStyle }}
+      style={styles.copyBtn}
     >
       {copied ? 'copied' : 'copy'}
     </button>
@@ -173,7 +173,7 @@ function aggregateHistogramSeries(histogramSeries, labelNames, selectedLabels) {
     }
     const group = groups.get(key);
     for (const b of series.deCumulatedBuckets) {
-      const leKey = b.le === Infinity ? '+Inf' : String(b.le);
+      const leKey = String(b.le);
       group.bucketSums[leKey] = (group.bucketSums[leKey] || 0) + b.count;
     }
     if (series.sum !== null) group.sum += series.sum;
@@ -182,7 +182,7 @@ function aggregateHistogramSeries(histogramSeries, labelNames, selectedLabels) {
 
   return [...groups.values()].map(g => {
     const deCumulatedBuckets = Object.entries(g.bucketSums).map(([le, count]) => ({
-      le: le === '+Inf' ? Infinity : parseFloat(le),
+      le: parseFloat(le),
       count,
     })).sort((a, b) => a.le - b.le);
     return {
@@ -662,14 +662,12 @@ function MetricsApp() {
   const params = new URLSearchParams(location.search);
   const [endpoints, setEndpoints] = useState([]);
   const [selectedUrl, setSelectedUrl] = useState(params.get('endpoint') || '/metrics');
-  const [data, setData] = useState(null);
+  const [snapshots, setSnapshots] = useState([]); // [{ families, groups, timestamp }, ...] (max 2)
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [search, setSearch] = useState(params.get('search') || '');
   const [polling, setPolling] = useState(false);
   const [pollInterval, setPollInterval] = useState(5000);
-  const snapshotsRef = useRef([]); // [{ families, timestamp }, ...]
-  const [snapshotVersion, setSnapshotVersion] = useState(0); // trigger re-render on snapshot update
   const rawTextRef = useRef('');
   const fileInputRef = useRef(null);
 
@@ -682,10 +680,15 @@ function MetricsApp() {
     window.history.replaceState({}, '', qs ? `${location.pathname}?${qs}` : location.pathname);
   }, [selectedUrl, search]);
 
+  // Derive current data and previous snapshot for delta computation
+  const data = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
+  const prevFamilies = snapshots.length >= 2 ? snapshots[0].families : null;
+  const dtSeconds = snapshots.length >= 2 ? (snapshots[1].timestamp - snapshots[0].timestamp) / 1000 : null;
+
   // Reset snapshots on endpoint change
   useEffect(() => {
-    snapshotsRef.current = [];
-    setSnapshotVersion(0);
+    setSnapshots([]);
+    setLoading(true);
   }, [selectedUrl]);
 
   useEffect(() => {
@@ -695,16 +698,13 @@ function MetricsApp() {
   }, []);
 
   const loadMetrics = useCallback((url) => {
-    if (!snapshotsRef.current.length) setLoading(true);
     setError(null);
     fetchMetrics(url)
       .then(text => {
         rawTextRef.current = text;
         const parsed = parsePrometheusText(text);
-        snapshotsRef.current.push({ families: parsed.families, timestamp: Date.now() });
-        if (snapshotsRef.current.length > 2) snapshotsRef.current.shift();
-        setSnapshotVersion(v => v + 1);
-        setData(parsed);
+        const snap = { ...parsed, timestamp: Date.now() };
+        setSnapshots(prev => prev.length >= 2 ? [prev[1], snap] : [...prev, snap]);
         setLoading(false);
       })
       .catch(err => {
@@ -724,11 +724,6 @@ function MetricsApp() {
     const id = setInterval(() => loadMetrics(selectedUrl), pollInterval);
     return () => clearInterval(id);
   }, [polling, pollInterval, selectedUrl, loadMetrics]);
-
-  // Derive prev snapshot for delta computation
-  const snaps = snapshotsRef.current;
-  const prevFamilies = snaps.length >= 2 ? snaps[0].families : null;
-  const dtSeconds = snaps.length >= 2 ? (snaps[1].timestamp - snaps[0].timestamp) / 1000 : null;
 
   const saveToFile = useCallback(() => {
     const text = rawTextRef.current;
@@ -753,9 +748,7 @@ function MetricsApp() {
       const text = reader.result;
       rawTextRef.current = text;
       const parsed = parsePrometheusText(text);
-      snapshotsRef.current = [{ families: parsed.families, timestamp: Date.now() }];
-      setSnapshotVersion(v => v + 1);
-      setData(parsed);
+      setSnapshots([{ ...parsed, timestamp: Date.now() }]);
       setLoading(false);
       setError(null);
     };
