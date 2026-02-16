@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"pg_size_pretty\", preserves_uniqueness = fals
     mz_lowertest::MzReflect
 )]
 pub struct PgSizePretty;
-impl<'a> crate::func::EagerUnaryFunc<'a> for PgSizePretty {
-    type Input = Numeric;
-    type Output = Result<String, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for PgSizePretty {
+    type Input<'a> = Numeric;
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         pg_size_pretty(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

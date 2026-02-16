@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"bit_count\")]\nfn bit_count_bytes<'a>(a: &'a 
     mz_lowertest::MzReflect
 )]
 pub struct BitCountBytes;
-impl<'a> crate::func::EagerUnaryFunc<'a> for BitCountBytes {
-    type Input = &'a [u8];
-    type Output = Result<i64, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for BitCountBytes {
+    type Input<'a> = &'a [u8];
+    type Output<'a> = Result<i64, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         bit_count_bytes(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

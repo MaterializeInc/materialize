@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"crc32_string\")]\nfn crc32_string<'a>(a: &'a 
     mz_lowertest::MzReflect
 )]
 pub struct Crc32String;
-impl<'a> crate::func::EagerUnaryFunc<'a> for Crc32String {
-    type Input = &'a str;
-    type Output = u32;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for Crc32String {
+    type Input<'a> = &'a str;
+    type Output<'a> = u32;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         crc32_string(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

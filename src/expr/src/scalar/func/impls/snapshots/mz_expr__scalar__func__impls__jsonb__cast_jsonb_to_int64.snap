@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"jsonb_to_bigint\", is_monotone = true)]\nfn c
     mz_lowertest::MzReflect
 )]
 pub struct CastJsonbToInt64;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastJsonbToInt64 {
-    type Input = JsonbRef<'a>;
-    type Output = Result<i64, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastJsonbToInt64 {
+    type Input<'a> = JsonbRef<'a>;
+    type Output<'a> = Result<i64, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_jsonb_to_int64(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

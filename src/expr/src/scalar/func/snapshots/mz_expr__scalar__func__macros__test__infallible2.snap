@@ -16,10 +16,10 @@ expression: "#[sqlfunc()]\nfn infallible2(a: Option<f32>) -> f32 {\n    a.unwrap
     mz_lowertest::MzReflect
 )]
 pub struct Infallible2;
-impl<'a> crate::func::EagerUnaryFunc<'a> for Infallible2 {
-    type Input = Option<f32>;
-    type Output = f32;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for Infallible2 {
+    type Input<'a> = Option<f32>;
+    type Output<'a> = f32;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         infallible2(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

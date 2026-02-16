@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"uint2_to_real\",\n    preserves_uniquen
     mz_lowertest::MzReflect
 )]
 pub struct CastUint16ToFloat32;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastUint16ToFloat32 {
-    type Input = u16;
-    type Output = f32;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastUint16ToFloat32 {
+    type Input<'a> = u16;
+    type Output<'a> = f32;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_uint16_to_float32(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"kafka_murmur2_bytes\")]\nfn kafka_murmur2_byt
     mz_lowertest::MzReflect
 )]
 pub struct KafkaMurmur2Bytes;
-impl<'a> crate::func::EagerUnaryFunc<'a> for KafkaMurmur2Bytes {
-    type Input = &'a [u8];
-    type Output = i32;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for KafkaMurmur2Bytes {
+    type Input<'a> = &'a [u8];
+    type Output<'a> = i32;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         kafka_murmur2_bytes(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

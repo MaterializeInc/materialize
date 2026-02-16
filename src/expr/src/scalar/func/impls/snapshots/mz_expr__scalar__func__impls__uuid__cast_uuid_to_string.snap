@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"uuid_to_text\",\n    preserves_uniquene
     mz_lowertest::MzReflect
 )]
 pub struct CastUuidToString;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastUuidToString {
-    type Input = Uuid;
-    type Output = String;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastUuidToString {
+    type Input<'a> = Uuid;
+    type Output<'a> = String;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_uuid_to_string(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"time_to_interval\",\n    preserves_uniq
     mz_lowertest::MzReflect
 )]
 pub struct CastTimeToInterval;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimeToInterval {
-    type Input = NaiveTime;
-    type Output = Interval;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastTimeToInterval {
+    type Input<'a> = NaiveTime;
+    type Output<'a> = Interval;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_time_to_interval(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

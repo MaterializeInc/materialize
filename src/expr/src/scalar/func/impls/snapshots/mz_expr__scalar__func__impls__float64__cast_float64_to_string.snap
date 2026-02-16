@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"double_to_text\",\n    preserves_unique
     mz_lowertest::MzReflect
 )]
 pub struct CastFloat64ToString;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastFloat64ToString {
-    type Input = f64;
-    type Output = String;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastFloat64ToString {
+    type Input<'a> = f64;
+    type Output<'a> = String;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_float64_to_string(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

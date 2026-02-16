@@ -16,10 +16,10 @@ expression: "#[sqlfunc()]\nfn cosh(a: f64) -> f64 {\n    a.cosh()\n}\n"
     mz_lowertest::MzReflect
 )]
 pub struct Cosh;
-impl<'a> crate::func::EagerUnaryFunc<'a> for Cosh {
-    type Input = f64;
-    type Output = f64;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for Cosh {
+    type Input<'a> = f64;
+    type Output<'a> = f64;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cosh(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

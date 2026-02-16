@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"regclasstooid\",\n    preserves_uniquen
     mz_lowertest::MzReflect
 )]
 pub struct CastRegClassToOid;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastRegClassToOid {
-    type Input = RegClass;
-    type Output = Oid;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastRegClassToOid {
+    type Input<'a> = RegClass;
+    type Output<'a> = Oid;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_reg_class_to_oid(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

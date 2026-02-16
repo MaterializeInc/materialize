@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"bigint_to_smallint\",\n    preserves_un
     mz_lowertest::MzReflect
 )]
 pub struct CastInt64ToInt16;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToInt16 {
-    type Input = i64;
-    type Output = Result<i16, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastInt64ToInt16 {
+    type Input<'a> = i64;
+    type Output<'a> = Result<i16, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_int64_to_int16(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"bigint_to_mz_timestamp\",\n    preserve
     mz_lowertest::MzReflect
 )]
 pub struct CastInt64ToMzTimestamp;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt64ToMzTimestamp {
-    type Input = i64;
-    type Output = Result<Timestamp, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastInt64ToMzTimestamp {
+    type Input<'a> = i64;
+    type Output<'a> = Result<Timestamp, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_int64_to_mz_timestamp(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

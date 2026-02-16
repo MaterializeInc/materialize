@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"expnumeric\")]\nfn exp_numeric(mut a: Numeric
     mz_lowertest::MzReflect
 )]
 pub struct ExpNumeric;
-impl<'a> crate::func::EagerUnaryFunc<'a> for ExpNumeric {
-    type Input = Numeric;
-    type Output = Result<Numeric, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for ExpNumeric {
+    type Input<'a> = Numeric;
+    type Output<'a> = Result<Numeric, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         exp_numeric(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

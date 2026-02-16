@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"NOT\",\n    preserves_uniqueness = true
     mz_lowertest::MzReflect
 )]
 pub struct Not;
-impl<'a> crate::func::EagerUnaryFunc<'a> for Not {
-    type Input = bool;
-    type Output = bool;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for Not {
+    type Input<'a> = bool;
+    type Output<'a> = bool;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         not(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

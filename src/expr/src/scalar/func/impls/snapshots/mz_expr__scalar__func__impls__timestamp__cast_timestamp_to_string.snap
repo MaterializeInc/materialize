@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"timestamp_to_text\",\n    preserves_uni
     mz_lowertest::MzReflect
 )]
 pub struct CastTimestampToString;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToString {
-    type Input = CheckedTimestamp<NaiveDateTime>;
-    type Output = String;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastTimestampToString {
+    type Input<'a> = CheckedTimestamp<NaiveDateTime>;
+    type Output<'a> = String;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_timestamp_to_string(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

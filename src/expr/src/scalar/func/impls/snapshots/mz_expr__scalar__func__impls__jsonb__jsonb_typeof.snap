@@ -16,10 +16,10 @@ expression: "#[sqlfunc()]\nfn jsonb_typeof<'a>(a: JsonbRef<'a>) -> &'a str {\n  
     mz_lowertest::MzReflect
 )]
 pub struct JsonbTypeof;
-impl<'a> crate::func::EagerUnaryFunc<'a> for JsonbTypeof {
-    type Input = JsonbRef<'a>;
-    type Output = &'a str;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for JsonbTypeof {
+    type Input<'a> = JsonbRef<'a>;
+    type Output<'a> = &'a str;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         jsonb_typeof(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

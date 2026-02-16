@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"aclitem_grantor\")]\nfn acl_item_grantor(acl_
     mz_lowertest::MzReflect
 )]
 pub struct AclItemGrantor;
-impl<'a> crate::func::EagerUnaryFunc<'a> for AclItemGrantor {
-    type Input = AclItem;
-    type Output = Oid;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for AclItemGrantor {
+    type Input<'a> = AclItem;
+    type Output<'a> = Oid;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         acl_item_grantor(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

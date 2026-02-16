@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"abs\")]\nfn abs_int16(a: i16) -> Result<i16, 
     mz_lowertest::MzReflect
 )]
 pub struct AbsInt16;
-impl<'a> crate::func::EagerUnaryFunc<'a> for AbsInt16 {
-    type Input = i16;
-    type Output = Result<i16, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for AbsInt16 {
+    type Input<'a> = i16;
+    type Output<'a> = Result<i16, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         abs_int16(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

@@ -16,10 +16,10 @@ expression: "#[sqlfunc(\n    sqlname = \"char_to_text\",\n    preserves_uniquene
     mz_lowertest::MzReflect
 )]
 pub struct CastCharToString;
-impl<'a> crate::func::EagerUnaryFunc<'a> for CastCharToString {
-    type Input = Char<&'a str>;
-    type Output = &'a str;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for CastCharToString {
+    type Input<'a> = Char<&'a str>;
+    type Output<'a> = &'a str;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         cast_char_to_string(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

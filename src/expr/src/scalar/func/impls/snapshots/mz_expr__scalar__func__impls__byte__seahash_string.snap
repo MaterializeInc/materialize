@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"seahash_string\")]\nfn seahash_string<'a>(a: 
     mz_lowertest::MzReflect
 )]
 pub struct SeahashString;
-impl<'a> crate::func::EagerUnaryFunc<'a> for SeahashString {
-    type Input = &'a str;
-    type Output = u64;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for SeahashString {
+    type Input<'a> = &'a str;
+    type Output<'a> = u64;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         seahash_string(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

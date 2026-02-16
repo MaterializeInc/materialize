@@ -16,10 +16,10 @@ expression: "#[sqlfunc(sqlname = \"justify_hours\")]\nfn justify_hours(i: Interv
     mz_lowertest::MzReflect
 )]
 pub struct JustifyHours;
-impl<'a> crate::func::EagerUnaryFunc<'a> for JustifyHours {
-    type Input = Interval;
-    type Output = Result<Interval, EvalError>;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for JustifyHours {
+    type Input<'a> = Interval;
+    type Output<'a> = Result<Interval, EvalError>;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         justify_hours(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {
