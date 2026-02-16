@@ -145,6 +145,11 @@ def main() -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--foundationdb",
+        help="Build with the foundationdb feature, enabling FoundationDB as a consensus and timestamp oracle backend",
+        action="store_true",
+    )
+    parser.add_argument(
         "-p",
         "--package",
         help="Package to run tests for",
@@ -464,6 +469,8 @@ def _cargo_build(
             + " "
             + " ".join(rustc_flags.sanitizer_cflags[args.sanitizer])
         )
+    if args.foundationdb:
+        features.append("foundationdb")
     if args.features:
         features.extend(args.features.split(","))
     if features:
