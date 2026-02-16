@@ -41,8 +41,8 @@ use mz_repr::adt::range::Range;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ArrayRustType, ByteString, Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row, RowArena,
-    SqlColumnType, SqlScalarType, strconv,
+    ArrayRustType, ByteStr, ByteString, Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row,
+    RowArena, SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -329,7 +329,7 @@ fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeri
 }
 
 #[sqlfunc(sqlname = "convert_from", propagates_nulls = true)]
-fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
+fn convert_from<'a>(a: &'a ByteStr, b: &str) -> Result<&'a str, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
@@ -342,7 +342,7 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
         return Err(EvalError::InvalidEncodingName(encoding_name));
     }
 
-    match str::from_utf8(a) {
+    match str::from_utf8(a.into()) {
         Ok(from) => Ok(from),
         Err(e) => Err(EvalError::InvalidByteSequence {
             byte_sequence: e.to_string().into(),
@@ -352,9 +352,9 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
 }
 
 #[sqlfunc]
-fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
+fn encode(bytes: &ByteStr, format: &str) -> Result<String, EvalError> {
     let format = encoding::lookup_format(format)?;
-    Ok(format.encode(bytes))
+    Ok(format.encode(&*bytes))
 }
 
 #[sqlfunc]
@@ -369,7 +369,7 @@ fn decode(string: &str, format: &str) -> Result<ByteString, EvalError> {
 }
 
 #[sqlfunc(sqlname = "length", propagates_nulls = true)]
-fn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {
+fn encoded_bytes_char_length(a: &ByteStr, b: &str) -> Result<i32, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
     // [1]: https://www.postgresql.org/docs/9.5/multibyte.html
@@ -382,7 +382,7 @@ fn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {
         None => return Err(EvalError::InvalidEncodingName(encoding_name)),
     };
 
-    let decoded_string = match enc.decode(a, DecoderTrap::Strict) {
+    let decoded_string = match enc.decode(&*a, DecoderTrap::Strict) {
         Ok(s) => s,
         Err(e) => {
             return Err(EvalError::InvalidByteSequence {
@@ -1378,7 +1378,7 @@ fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
 }
 
 #[sqlfunc(propagates_nulls = true)]
-fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
+fn get_bit(bytes: &ByteStr, index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,
@@ -1398,7 +1398,7 @@ fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
 }
 
 #[sqlfunc(propagates_nulls = true)]
-fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
+fn get_byte(bytes: &ByteStr, index: i32) -> Result<i32, EvalError> {
     let err = EvalError::IndexOutOfRange {
         provided: index,
         valid_end: i32::try_from(bytes.len()).unwrap() - 1,
@@ -1410,8 +1410,8 @@ fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
 }
 
 #[sqlfunc(sqlname = "constant_time_compare_bytes", propagates_nulls = true)]
-pub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
-    bool::from(a.ct_eq(b))
+pub fn constant_time_eq_bytes(a: &ByteStr, b: &ByteStr) -> bool {
+    bool::from(a.ct_eq(&*b))
 }
 
 #[sqlfunc(sqlname = "constant_time_compare_strings", propagates_nulls = true)]
@@ -3003,18 +3003,17 @@ fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -
 }
 
 #[sqlfunc(sqlname = "digest")]
-fn digest_string<'a>(a: &str, b: &str) -> Result<ByteString, EvalError> {
+fn digest_string(a: &str, b: &str) -> Result<ByteString, EvalError> {
     let to_digest = a.as_bytes();
     digest_inner(to_digest, b)
 }
 
 #[sqlfunc(sqlname = "digest")]
-fn digest_bytes<'a>(a: &[u8], b: &str) -> Result<ByteString, EvalError> {
-    let to_digest = a;
-    digest_inner(to_digest, b)
+fn digest_bytes(to_digest: &ByteStr, b: &str) -> Result<ByteString, EvalError> {
+    digest_inner(&*to_digest, b)
 }
 
-fn digest_inner<'a>(bytes: &[u8], digest_fn: &str) -> Result<ByteString, EvalError> {
+fn digest_inner(bytes: &[u8], digest_fn: &str) -> Result<ByteString, EvalError> {
     let bytes = match digest_fn {
         "md5" => Md5::digest(bytes).to_vec(),
         "sha1" => Sha1::digest(bytes).to_vec(),

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"crc32_bytes\")]\nfn crc32_bytes<'a>(a: &'a [u8]) -> u32 {\n    crc32fast::hash(a)\n}\n"
+expression: "#[sqlfunc(sqlname = \"crc32_bytes\")]\nfn crc32_bytes(a: &ByteStr) -> u32 {\n    crc32fast::hash(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(sqlname = \"crc32_bytes\")]\nfn crc32_bytes<'a>(a: &'a [u
 )]
 pub struct Crc32Bytes;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Crc32Bytes {
-    type Input = &'a [u8];
+    type Input = &'a ByteStr;
     type Output = u32;
     fn call(&self, a: Self::Input) -> Self::Output {
         crc32_bytes(a)
@@ -35,6 +35,6 @@ impl std::fmt::Display for Crc32Bytes {
         f.write_str("crc32_bytes")
     }
 }
-fn crc32_bytes<'a>(a: &'a [u8]) -> u32 {
+fn crc32_bytes(a: &ByteStr) -> u32 {
     crc32fast::hash(a)
 }

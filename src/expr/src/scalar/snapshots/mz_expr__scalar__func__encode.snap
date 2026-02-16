@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc()]\nfn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    Ok(format.encode(bytes))\n}\n"
+expression: "#[sqlfunc()]\nfn encode(bytes: &ByteStr, format: &str) -> Result<String, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    Ok(format.encode(&*bytes))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc()]\nfn encode(bytes: &[u8], format: &str) -> Result<Strin
 )]
 pub struct Encode;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
-    type Input1 = &'a [u8];
+    type Input1 = &'a ByteStr;
     type Input2 = &'a str;
     type Output = Result<String, EvalError>;
     fn call(
@@ -52,7 +52,7 @@ impl std::fmt::Display for Encode {
         f.write_str(stringify!(encode))
     }
 }
-fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
+fn encode(bytes: &ByteStr, format: &str) -> Result<String, EvalError> {
     let format = encoding::lookup_format(format)?;
-    Ok(format.encode(bytes))
+    Ok(format.encode(&*bytes))
 }

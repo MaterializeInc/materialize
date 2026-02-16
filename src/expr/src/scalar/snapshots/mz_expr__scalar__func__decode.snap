@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc()]\nfn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        Err(EvalError::LengthTooLarge)\n    } else {\n        Ok(out)\n    }\n}\n"
+expression: "#[sqlfunc()]\nfn decode(string: &str, format: &str) -> Result<ByteString, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        Err(EvalError::LengthTooLarge)\n    } else {\n        Ok(out.into())\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct Decode;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
     type Input1 = &'a str;
     type Input2 = &'a str;
-    type Output = Result<Vec<u8>, EvalError>;
+    type Output = Result<ByteString, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -52,12 +52,12 @@ impl std::fmt::Display for Decode {
         f.write_str(stringify!(decode))
     }
 }
-fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
+fn decode(string: &str, format: &str) -> Result<ByteString, EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
     if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
         Err(EvalError::LengthTooLarge)
     } else {
-        Ok(out)
+        Ok(out.into())
     }
 }

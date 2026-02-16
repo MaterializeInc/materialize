@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"seahash_bytes\")]\nfn seahash_bytes<'a>(a: &'a [u8]) -> u64 {\n    seahash::hash(a)\n}\n"
+expression: "#[sqlfunc(sqlname = \"seahash_bytes\")]\nfn seahash_bytes(a: &ByteStr) -> u64 {\n    seahash::hash(a.into())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(sqlname = \"seahash_bytes\")]\nfn seahash_bytes<'a>(a: &'
 )]
 pub struct SeahashBytes;
 impl<'a> crate::func::EagerUnaryFunc<'a> for SeahashBytes {
-    type Input = &'a [u8];
+    type Input = &'a ByteStr;
     type Output = u64;
     fn call(&self, a: Self::Input) -> Self::Output {
         seahash_bytes(a)
@@ -35,6 +35,6 @@ impl std::fmt::Display for SeahashBytes {
         f.write_str("seahash_bytes")
     }
 }
-fn seahash_bytes<'a>(a: &'a [u8]) -> u64 {
-    seahash::hash(a)
+fn seahash_bytes(a: &ByteStr) -> u64 {
+    seahash::hash(a.into())
 }

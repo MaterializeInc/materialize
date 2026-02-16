@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(\n    sqlname = \"bytea_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToBytes)\n)]\nfn cast_bytes_to_string(a: &[u8]) -> String {\n    let mut buf = String::new();\n    strconv::format_bytes(&mut buf, a);\n    buf\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"bytea_to_text\",\n    preserves_uniqueness = true,\n    inverse = to_unary!(super::CastStringToBytes)\n)]\nfn cast_bytes_to_string(a: &ByteStr) -> String {\n    let mut buf = String::new();\n    strconv::format_bytes(&mut buf, &*a);\n    buf\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(\n    sqlname = \"bytea_to_text\",\n    preserves_uniquen
 )]
 pub struct CastBytesToString;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastBytesToString {
-    type Input = &'a [u8];
+    type Input = &'a ByteStr;
     type Output = String;
     fn call(&self, a: Self::Input) -> Self::Output {
         cast_bytes_to_string(a)
@@ -41,8 +41,8 @@ impl std::fmt::Display for CastBytesToString {
         f.write_str("bytea_to_text")
     }
 }
-fn cast_bytes_to_string(a: &[u8]) -> String {
+fn cast_bytes_to_string(a: &ByteStr) -> String {
     let mut buf = String::new();
-    strconv::format_bytes(&mut buf, a);
+    strconv::format_bytes(&mut buf, &*a);
     buf
 }

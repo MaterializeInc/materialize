@@ -2122,7 +2122,7 @@ impl_datum_type_copy!(Date, Date);
 impl_datum_type_copy!(NaiveTime, Time);
 impl_datum_type_copy!(Uuid, Uuid);
 impl_datum_type_copy!('a, &'a str, String);
-impl_datum_type_copy!('a, &'a [u8], Bytes);
+impl_datum_type_copy!('a, &'a ByteStr, Bytes);
 impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
 impl<'a, E> DatumType<'a, E> for Datum<'a> {
@@ -2396,6 +2396,35 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
     }
 }
 
+/// A byte string reference, equivalent to `&[u8]`
+///
+/// Exists to avoid conflicting implementations on vectors.
+#[derive(Debug, Eq, PartialEq, Hash, Ord, PartialOrd, bytemuck::TransparentWrapper)]
+#[repr(transparent)]
+pub struct ByteStr([u8]);
+
+impl<'a> From<&'a [u8]> for &'a ByteStr {
+    #[inline(always)]
+    fn from(v: &'a [u8]) -> Self {
+        <_ as bytemuck::TransparentWrapper<_>>::wrap_ref(v)
+    }
+}
+
+impl<'a> From<&'a ByteStr> for &'a [u8] {
+    #[inline(always)]
+    fn from(v: &'a ByteStr) -> &'a [u8] {
+        &v.0
+    }
+}
+
+impl std::ops::Deref for ByteStr {
+    type Target = [u8];
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// A byte string, equivalent to `Vec<u8>`
 ///
 /// Exists to avoid conflicting implementations on vectors.
@@ -2403,6 +2432,7 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
 pub struct ByteString(pub Vec<u8>);
 
 impl From<Vec<u8>> for ByteString {
+    #[inline(always)]
     fn from(v: Vec<u8>) -> Self {
         Self(v)
     }
@@ -2410,6 +2440,7 @@ impl From<Vec<u8>> for ByteString {
 
 impl std::ops::Deref for ByteString {
     type Target = Vec<u8>;
+    #[inline(always)]
     fn deref(&self) -> &Self::Target {
         &self.0
     }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"seahash_string\")]\nfn seahash_string<'a>(a: &'a str) -> u64 {\n    seahash_bytes(a.as_bytes())\n}\n"
+expression: "#[sqlfunc(sqlname = \"seahash_string\")]\nfn seahash_string(a: &str) -> u64 {\n    seahash_bytes(a.as_bytes().into())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -35,6 +35,6 @@ impl std::fmt::Display for SeahashString {
         f.write_str("seahash_string")
     }
 }
-fn seahash_string<'a>(a: &'a str) -> u64 {
-    seahash_bytes(a.as_bytes())
+fn seahash_string(a: &str) -> u64 {
+    seahash_bytes(a.as_bytes().into())
 }

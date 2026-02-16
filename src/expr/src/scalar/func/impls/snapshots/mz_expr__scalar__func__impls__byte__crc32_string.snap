@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"crc32_string\")]\nfn crc32_string<'a>(a: &'a str) -> u32 {\n    crc32_bytes(a.as_bytes())\n}\n"
+expression: "#[sqlfunc(sqlname = \"crc32_string\")]\nfn crc32_string(a: &str) -> u32 {\n    crc32_bytes(a.as_bytes().into())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -35,6 +35,6 @@ impl std::fmt::Display for Crc32String {
         f.write_str("crc32_string")
     }
 }
-fn crc32_string<'a>(a: &'a str) -> u32 {
-    crc32_bytes(a.as_bytes())
+fn crc32_string(a: &str) -> u32 {
+    crc32_bytes(a.as_bytes().into())
 }

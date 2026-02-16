@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"kafka_murmur2_bytes\")]\nfn kafka_murmur2_bytes<'a>(a: &'a [u8]) -> i32 {\n    i32::from_ne_bytes(\n        (murmur2::murmur2(a, murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes(),\n    )\n}\n"
+expression: "#[sqlfunc(sqlname = \"kafka_murmur2_bytes\")]\nfn kafka_murmur2_bytes(a: &ByteStr) -> i32 {\n    i32::from_ne_bytes(\n        (murmur2::murmur2(a.into(), murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes(),\n    )\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(sqlname = \"kafka_murmur2_bytes\")]\nfn kafka_murmur2_byt
 )]
 pub struct KafkaMurmur2Bytes;
 impl<'a> crate::func::EagerUnaryFunc<'a> for KafkaMurmur2Bytes {
-    type Input = &'a [u8];
+    type Input = &'a ByteStr;
     type Output = i32;
     fn call(&self, a: Self::Input) -> Self::Output {
         kafka_murmur2_bytes(a)
@@ -35,8 +35,8 @@ impl std::fmt::Display for KafkaMurmur2Bytes {
         f.write_str("kafka_murmur2_bytes")
     }
 }
-fn kafka_murmur2_bytes<'a>(a: &'a [u8]) -> i32 {
+fn kafka_murmur2_bytes(a: &ByteStr) -> i32 {
     i32::from_ne_bytes(
-        (murmur2::murmur2(a, murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes(),
+        (murmur2::murmur2(a.into(), murmur2::KAFKA_SEED) & 0x7fffffff).to_ne_bytes(),
     )
 }

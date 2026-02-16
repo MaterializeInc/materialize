@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"bit_count\")]\nfn bit_count_bytes<'a>(a: &'a [u8]) -> Result<i64, EvalError> {\n    let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();\n    i64::try_from(count)\n        .or_else(|_| Err(EvalError::Int64OutOfRange(count.to_string().into())))\n}\n"
+expression: "#[sqlfunc(sqlname = \"bit_count\")]\nfn bit_count_bytes(a: &ByteStr) -> Result<i64, EvalError> {\n    let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();\n    i64::try_from(count)\n        .or_else(|_| Err(EvalError::Int64OutOfRange(count.to_string().into())))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(sqlname = \"bit_count\")]\nfn bit_count_bytes<'a>(a: &'a 
 )]
 pub struct BitCountBytes;
 impl<'a> crate::func::EagerUnaryFunc<'a> for BitCountBytes {
-    type Input = &'a [u8];
+    type Input = &'a ByteStr;
     type Output = Result<i64, EvalError>;
     fn call(&self, a: Self::Input) -> Self::Output {
         bit_count_bytes(a)
@@ -35,7 +35,7 @@ impl std::fmt::Display for BitCountBytes {
         f.write_str("bit_count")
     }
 }
-fn bit_count_bytes<'a>(a: &'a [u8]) -> Result<i64, EvalError> {
+fn bit_count_bytes(a: &ByteStr) -> Result<i64, EvalError> {
     let count: u64 = a.iter().map(|b| u64::cast_from(b.count_ones())).sum();
     i64::try_from(count)
         .or_else(|_| Err(EvalError::Int64OutOfRange(count.to_string().into())))

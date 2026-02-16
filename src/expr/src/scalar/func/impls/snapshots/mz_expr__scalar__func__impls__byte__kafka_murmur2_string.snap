@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/byte.rs
-expression: "#[sqlfunc(sqlname = \"kafka_murmur2_string\")]\nfn kafka_murmur2_string<'a>(a: &'a str) -> i32 {\n    kafka_murmur2_bytes(a.as_bytes())\n}\n"
+expression: "#[sqlfunc(sqlname = \"kafka_murmur2_string\")]\nfn kafka_murmur2_string(a: &str) -> i32 {\n    kafka_murmur2_bytes(a.as_bytes().into())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -35,6 +35,6 @@ impl std::fmt::Display for KafkaMurmur2String {
         f.write_str("kafka_murmur2_string")
     }
 }
-fn kafka_murmur2_string<'a>(a: &'a str) -> i32 {
-    kafka_murmur2_bytes(a.as_bytes())
+fn kafka_murmur2_string(a: &str) -> i32 {
+    kafka_murmur2_bytes(a.as_bytes().into())
 }

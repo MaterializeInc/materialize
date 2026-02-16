@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"constant_time_compare_bytes\", propagates_nulls = true)]\npub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {\n    bool::from(a.ct_eq(b))\n}\n"
+expression: "#[sqlfunc(sqlname = \"constant_time_compare_bytes\", propagates_nulls = true)]\npub fn constant_time_eq_bytes(a: &ByteStr, b: &ByteStr) -> bool {\n    bool::from(a.ct_eq(&*b))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,8 +17,8 @@ expression: "#[sqlfunc(sqlname = \"constant_time_compare_bytes\", propagates_nul
 )]
 pub struct ConstantTimeEqBytes;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqBytes {
-    type Input1 = &'a [u8];
-    type Input2 = &'a [u8];
+    type Input1 = &'a ByteStr;
+    type Input2 = &'a ByteStr;
     type Output = bool;
     fn call(
         &self,
@@ -55,6 +55,6 @@ impl std::fmt::Display for ConstantTimeEqBytes {
         f.write_str("constant_time_compare_bytes")
     }
 }
-pub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
-    bool::from(a.ct_eq(b))
+pub fn constant_time_eq_bytes(a: &ByteStr, b: &ByteStr) -> bool {
+    bool::from(a.ct_eq(&*b))
 }
