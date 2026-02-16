@@ -53,8 +53,8 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{
-    CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
-    SASLVerifyProofResponse, SuperuserAttribute,
+    CatalogDump, CatalogSnapshot, Command, CopyFromStdinWriter, ExecuteResponse, Response,
+    SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
@@ -876,6 +876,51 @@ impl SessionClient {
         }
     }
 
+    /// Sets up a streaming COPY FROM STDIN operation.
+    ///
+    /// Sends a command to the coordinator to create a background batch
+    /// builder task. Returns a [`CopyFromStdinWriter`] that pgwire uses
+    /// to stream decoded rows.
+    pub async fn start_copy_from_stdin(
+        &mut self,
+        target_id: CatalogItemId,
+        target_name: String,
+        columns: Vec<ColumnIndex>,
+        row_desc: mz_repr::RelationDesc,
+        params: mz_pgcopy::CopyFormatParams<'static>,
+    ) -> Result<CopyFromStdinWriter, AdapterError> {
+        self.send(|tx, session| Command::StartCopyFromStdin {
+            target_id,
+            target_name,
+            columns,
+            row_desc,
+            params,
+            session,
+            tx,
+        })
+        .await
+    }
+
+    /// Commits staged COPY FROM STDIN batches to a table.
+    ///
+    /// Adds the pre-built persist batches to the session's transaction
+    /// operations. The actual commit happens when the transaction ends.
+    pub fn stage_copy_from_stdin_batches(
+        &mut self,
+        target_id: CatalogItemId,
+        batches: Vec<mz_persist_client::batch::ProtoBatch>,
+    ) -> Result<(), AdapterError> {
+        use crate::session::{TransactionOps, WriteOp};
+        use mz_storage_client::client::TableData;
+
+        self.session()
+            .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                id: target_id,
+                rows: TableData::Batches(batches.into()),
+            }]))?;
+        Ok(())
+    }
+
     /// Inserts a set of rows into the given table.
     ///
     /// The rows only contain the columns positions in `columns`, so they
@@ -1034,7 +1079,8 @@ impl SessionClient {
             match cmd {
                 Command::Execute { .. } => typ = Some("execute"),
                 Command::GetWebhook { .. } => typ = Some("webhook"),
-                Command::Startup { .. }
+                Command::StartCopyFromStdin { .. }
+                | Command::Startup { .. }
                 | Command::AuthenticatePassword { .. }
                 | Command::AuthenticateGetSASLChallenge { .. }
                 | Command::AuthenticateVerifySASLProof { .. }

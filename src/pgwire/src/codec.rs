@@ -145,6 +145,15 @@ where
         self.inner.get_mut().codec_mut().encode_state = encode_state;
     }
 
+    /// Enables or disables copy mode on the codec.
+    ///
+    /// When copy mode is enabled, the aggregate buffer size check in the
+    /// decoder is skipped. This is needed during COPY FROM STDIN because
+    /// many small CopyData frames can accumulate in the TCP read buffer.
+    pub fn set_copy_mode(&mut self, enabled: bool) {
+        self.inner.get_mut().codec_mut().in_copy_mode = enabled;
+    }
+
     /// Waits for the connection to be closed.
     ///
     /// Returns a "connection closed" error when the connection is closed. If
@@ -208,6 +217,12 @@ where
 struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+    /// When true, skip the aggregate buffer size check in `decode()`.
+    /// During COPY FROM STDIN, many small CopyData frames accumulate in the
+    /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
+    /// frames are small. Individual frame lengths are still validated by
+    /// `parse_frame_len()`.
+    in_copy_mode: bool,
 }
 
 impl Codec {
@@ -216,6 +231,7 @@ impl Codec {
         Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
+            in_copy_mode: false,
         }
     }
 }
@@ -432,7 +448,7 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
-        if src.len() > MAX_REQUEST_SIZE {
+        if !self.in_copy_mode && src.len() > MAX_REQUEST_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(

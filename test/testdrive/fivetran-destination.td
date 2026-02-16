@@ -111,19 +111,12 @@ $ fivetran-destination action=write_batch
 
 > CREATE TABLE foo.large (a int, b text, c text, d int)
 
-# Set the max copy from size to 100MiB.
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET max_copy_from_size = 104857600;
-
 # Repeating this line 1,300,000 times should get us close to 100MiB.
 $ file-append container=fivetran path=c.csv compression=gzip header=a,b,c,d repeat=1300000
 5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
 
 $ file-append container=fivetran path=d.csv compression=gzip header=a,b,c,d repeat=1300000
 5000,"I am a large log line, <- can this comma mess us up?",foo_bar_baz,10
-
-# Note: Both 'c.csv' and 'd.csv' are individually under the 'max_copy_from_size', but together
-# they exceed it. We want to make sure the write_batch still succeeds in this case.
 
 $ fivetran-destination action=write_batch
 {

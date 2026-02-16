@@ -592,14 +592,6 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_COPY_FROM_SIZE: VarDefinition = VarDefinition::new(
-    "max_copy_from_size",
-    // 1 GiB, this limit is noted in the docs, if you change it make sure to update our docs.
-    value!(ByteSize; ByteSize::gb(1)),
-    "The maximum size in bytes we buffer for COPY FROM statements (Materialize).",
-    true,
-);
-
 pub static MAX_IDENTIFIER_LENGTH: VarDefinition = VarDefinition::new(
     "max_identifier_length",
     value!(usize; mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH),

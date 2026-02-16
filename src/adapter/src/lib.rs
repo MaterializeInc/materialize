@@ -63,7 +63,9 @@ pub mod webhook;
 pub use crate::peek_client::PeekClient;
 
 pub use crate::client::{Client, Handle, SessionClient};
-pub use crate::command::{ExecuteResponse, ExecuteResponseKind, StartupResponse};
+pub use crate::command::{
+    CopyFromStdinWriter, ExecuteResponse, ExecuteResponseKind, StartupResponse,
+};
 pub use crate::coord::ExecuteContext;
 pub use crate::coord::ExecuteContextExtra;
 pub use crate::coord::ExecuteContextGuard;

@@ -55,7 +55,7 @@ use mz_sql::parse::StatementParseResult;
 use mz_sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::INTERNAL_USER_NAMES;
-use mz_sql::session::vars::{MAX_COPY_FROM_SIZE, Var, VarInput};
+use mz_sql::session::vars::VarInput;
 use postgres::error::SqlState;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
@@ -2625,7 +2625,7 @@ where
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        params: CopyFormatParams<'_>,
+        params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         mut ctx_extra: ExecuteContextGuard,
     ) -> Result<State, io::Error> {
@@ -2669,7 +2669,7 @@ where
         target_id: CatalogItemId,
         target_name: String,
         columns: Vec<ColumnIndex>,
-        params: CopyFormatParams<'_>,
+        params: CopyFormatParams<'static>,
         row_desc: RelationDesc,
         ctx_extra: &mut ExecuteContextGuard,
     ) -> Result<State, io::Error> {
@@ -2682,36 +2682,87 @@ where
         .await?;
         self.conn.flush().await?;
 
-        let system_vars = self.adapter_client.get_system_vars().await;
-        let max_size = system_vars
-            .get(MAX_COPY_FROM_SIZE.name())
-            .ok()
-            .and_then(|max_size| max_size.value().parse().ok())
-            .unwrap_or(usize::MAX);
-        tracing::debug!("COPY FROM max buffer size: {max_size} bytes");
+        // Set up the parallel streaming batch builders in the coordinator.
+        let writer = match self
+            .adapter_client
+            .start_copy_from_stdin(
+                target_id,
+                target_name.clone(),
+                columns.clone(),
+                row_desc.clone(),
+                params.clone(),
+            )
+            .await
+        {
+            Ok(writer) => writer,
+            Err(e) => {
+                self.adapter_client.retire_execute(
+                    std::mem::take(ctx_extra),
+                    StatementEndedExecutionReason::Errored {
+                        error: e.to_string(),
+                    },
+                );
+                return self.error(e.into_response(Severity::Error)).await;
+            }
+        };
+
+        // Enable copy mode on the codec to skip aggregate buffer size checks.
+        self.conn.set_copy_mode(true);
+
+        // Batch size for splitting raw data across parallel workers (~32MB).
+        const BATCH_SIZE: usize = 32 * 1024 * 1024;
 
         let mut data = Vec::new();
+        let num_workers = writer.batch_txs.len();
+        let mut next_worker: usize = 0;
+
+        // Receive loop: accumulate CopyData, split at row boundaries,
+        // round-robin raw chunks to parallel batch builder workers.
         loop {
             let message = self.conn.recv().await?;
             match message {
                 Some(FrontendMessage::CopyData(buf)) => {
-                    // Bail before we OOM.
-                    if (data.len() + buf.len()) > max_size {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::INSUFFICIENT_RESOURCES,
-                                "COPY FROM STDIN too large",
-                            ))
-                            .await;
+                    data.extend(buf);
+
+                    // When buffer exceeds batch size, split at last newline
+                    // and send the complete rows chunk to the next worker.
+                    let mut send_failed = false;
+                    while data.len() >= BATCH_SIZE {
+                        let split_pos = match data.iter().rposition(|&b| b == b'\n') {
+                            Some(pos) => pos + 1,
+                            None => break, // no complete row yet
+                        };
+                        let remainder = data.split_off(split_pos);
+                        let chunk = std::mem::replace(&mut data, remainder);
+                        if writer.batch_txs[next_worker].send(chunk).await.is_err() {
+                            send_failed = true;
+                            break;
+                        }
+                        next_worker = (next_worker + 1) % num_workers;
                     }
-                    data.extend(buf)
+                    // Worker dropped (likely errored) — stop sending,
+                    // fall through to completion_rx for the real error.
+                    if send_failed {
+                        break;
+                    }
                 }
-                Some(FrontendMessage::CopyDone) => break,
+                Some(FrontendMessage::CopyDone) => {
+                    // Send any remaining data to the next worker.
+                    if !data.is_empty() {
+                        let chunk = std::mem::take(&mut data);
+                        // Ignore send failure — completion_rx will have the error.
+                        let _ = writer.batch_txs[next_worker].send(chunk).await;
+                    }
+                    break;
+                }
                 Some(FrontendMessage::CopyFail(err)) => {
                     self.adapter_client.retire_execute(
                         std::mem::take(ctx_extra),
                         StatementEndedExecutionReason::Canceled,
                     );
+                    // Drop the writer to signal cancellation to the background tasks.
+                    drop(writer);
+                    self.conn.set_copy_mode(false);
                     return self
                         .error(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -2728,53 +2779,58 @@ where
                             error: msg.to_string(),
                         },
                     );
+                    drop(writer);
+                    self.conn.set_copy_mode(false);
                     return self
                         .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
                         .await;
                 }
                 None => {
+                    drop(writer);
+                    self.conn.set_copy_mode(false);
                     return Ok(State::Done);
                 }
             }
         }
 
-        let column_types = typ
-            .column_types
-            .iter()
-            .map(|x| &x.scalar_type)
-            .map(mz_pgrepr::Type::from)
-            .collect::<Vec<mz_pgrepr::Type>>();
+        self.conn.set_copy_mode(false);
 
-        let rows = match mz_pgcopy::decode_copy_format(&data, &column_types, params) {
-            Ok(rows) => rows,
-            Err(e) => {
+        // Drop all senders to signal EOF to the background batch builders.
+        // If copy_err is set, a worker already failed — dropping the senders
+        // will cause remaining workers to stop, and we'll get the real error
+        // from completion_rx below.
+        drop(writer.batch_txs);
+
+        // Wait for all parallel workers to finish building batches.
+        let (proto_batches, row_count) = match writer.completion_rx.await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => {
                 self.adapter_client.retire_execute(
                     std::mem::take(ctx_extra),
                     StatementEndedExecutionReason::Errored {
                         error: e.to_string(),
                     },
                 );
+                return self.error(e.into_response(Severity::Error)).await;
+            }
+            Err(_) => {
+                let msg = "COPY FROM STDIN: background batch builder tasks dropped";
+                self.adapter_client.retire_execute(
+                    std::mem::take(ctx_extra),
+                    StatementEndedExecutionReason::Errored {
+                        error: msg.to_string(),
+                    },
+                );
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::BAD_COPY_FILE_FORMAT,
-                        format!("{}", e),
-                    ))
+                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
                     .await;
             }
         };
 
-        let count = rows.len();
-
+        // Stage all batches in the session's transaction for atomic commit.
         if let Err(e) = self
             .adapter_client
-            .insert_rows(
-                target_id,
-                target_name,
-                columns,
-                rows,
-                std::mem::take(ctx_extra),
-            )
-            .await
+            .stage_copy_from_stdin_batches(target_id, proto_batches)
         {
             self.adapter_client.retire_execute(
                 std::mem::take(ctx_extra),
@@ -2785,7 +2841,7 @@ where
             return self.error(e.into_response(Severity::Error)).await;
         }
 
-        let tag = format!("COPY {}", count);
+        let tag = format!("COPY {}", row_count);
         self.send(BackendMessage::CommandComplete { tag }).await?;
 
         Ok(State::Ready)

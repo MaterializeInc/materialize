@@ -63,8 +63,8 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::command::{
-    CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse, SASLVerifyProofResponse,
-    StartupResponse, SuperuserAttribute,
+    CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
+    SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
 use crate::coord::appends::PendingWriteTxn;
 use crate::coord::peek::PendingPeek;
@@ -163,6 +163,31 @@ impl Coordinator {
 
                     self.handle_execute(portal_name, session, tx, outer_ctx_extra)
                         .await;
+                }
+
+                Command::StartCopyFromStdin {
+                    target_id,
+                    target_name,
+                    columns,
+                    row_desc,
+                    params,
+                    session,
+                    tx,
+                } => {
+                    let otel_ctx = OpenTelemetryContext::obtain();
+                    let result = self.setup_copy_from_stdin(
+                        &session,
+                        target_id,
+                        target_name,
+                        columns,
+                        row_desc,
+                        params,
+                    );
+                    let _ = tx.send(Response {
+                        result,
+                        session,
+                        otel_ctx,
+                    });
                 }
 
                 Command::RetireExecute { data, reason } => self.retire_execution(reason, data),

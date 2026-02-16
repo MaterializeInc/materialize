@@ -378,6 +378,7 @@ impl Message {
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
+                Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,

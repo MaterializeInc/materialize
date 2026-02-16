@@ -108,6 +108,8 @@ pub enum AdapterError {
     },
     /// Expression violated a column's constraint
     ConstraintViolation(NotNullViolation),
+    /// An error occurred while decoding COPY data.
+    CopyFormatError(String),
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
     /// A dependency was dropped while sequencing a statement.
@@ -609,6 +611,7 @@ impl AdapterError {
                 SqlState::INVALID_TRANSACTION_STATE
             }
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
+            AdapterError::CopyFormatError(_) => SqlState::BAD_COPY_FILE_FORMAT,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
@@ -918,6 +921,7 @@ impl fmt::Display for AdapterError {
             AdapterError::ConstraintViolation(not_null_violation) => {
                 write!(f, "{}", not_null_violation)
             }
+            AdapterError::CopyFormatError(e) => write!(f, "{e}"),
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
             }
