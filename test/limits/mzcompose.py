@@ -1327,6 +1327,7 @@ class ArrayAgg(Generator):
 
     @classmethod
     def body(cls) -> None:
+        print("$ set-sql-timeout duration=300s")
         print("> SET statement_timeout='300s'")
         print(
             f"""> CREATE TABLE t ({
