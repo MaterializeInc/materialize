@@ -2231,6 +2231,11 @@ impl RowPacker<'_> {
         self.row.data.extend_from_slice(row.data.as_slice());
     }
 
+    /// Appends the datums of an entire `Row`.
+    pub fn extend_by_row_ref(&mut self, row: &RowRef) {
+        self.row.data.extend_from_slice(row.data());
+    }
+
     /// Appends the slice of data representing an entire `Row`. The data is not validated.
     ///
     /// # Safety
