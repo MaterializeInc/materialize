@@ -21,9 +21,9 @@ from materialize.mzcompose.services.materialized import Materialized
 SERVICES = [
     Materialized(),
     Service(
-        name="playwright",
-        config={
-            "image": "mcr.microsoft.com/playwright:v1.58.0-jammy",
+        "playwright",
+        {
+            "mzbuild": "playwright",
             "volumes": [
                 ".:/workdir",
             ],
