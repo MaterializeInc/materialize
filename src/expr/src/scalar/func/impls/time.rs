@@ -90,11 +90,11 @@ where
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ExtractTime(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for ExtractTime {
-    type Input = NaiveTime;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for ExtractTime {
+    type Input<'a> = NaiveTime;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: NaiveTime) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_time_inner(self.0, a)
     }
 
@@ -112,11 +112,11 @@ impl fmt::Display for ExtractTime {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct DatePartTime(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for DatePartTime {
-    type Input = NaiveTime;
-    type Output = Result<f64, EvalError>;
+impl EagerUnaryFunc for DatePartTime {
+    type Input<'a> = NaiveTime;
+    type Output<'a> = Result<f64, EvalError>;
 
-    fn call(&self, a: NaiveTime) -> Result<f64, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         date_part_time_inner(self.0, a)
     }
 
@@ -147,11 +147,11 @@ pub struct TimezoneTime {
     pub wall_time: NaiveDateTime,
 }
 
-impl<'a> EagerUnaryFunc<'a> for TimezoneTime {
-    type Input = NaiveTime;
-    type Output = NaiveTime;
+impl EagerUnaryFunc for TimezoneTime {
+    type Input<'a> = NaiveTime;
+    type Output<'a> = NaiveTime;
 
-    fn call(&self, a: NaiveTime) -> NaiveTime {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         timezone_time(self.tz, a, &self.wall_time)
     }
 

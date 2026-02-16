@@ -120,11 +120,11 @@ fn cast_int64_to_uint64(a: i64) -> Result<u64, EvalError> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastInt64ToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastInt64ToNumeric {
-    type Input = i64;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastInt64ToNumeric {
+    type Input<'a> = i64;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: i64) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {

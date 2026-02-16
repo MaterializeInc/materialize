@@ -37,11 +37,11 @@ fn cast_date_to_string(a: Date) -> String {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastDateToTimestamp {
-    type Input = Date;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for CastDateToTimestamp {
+    type Input<'a> = Date;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(&self, a: Date) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::from_timestamplike(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
         let updated = out.round_to_precision(self.0)?;
@@ -74,11 +74,11 @@ impl fmt::Display for CastDateToTimestamp {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
-    type Input = Date;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for CastDateToTimestampTz {
+    type Input<'a> = Date;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(&self, a: Date) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out =
             CheckedTimestamp::from_timestamplike(DateTime::<Utc>::from_naive_utc_and_offset(
                 NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap(),
@@ -146,11 +146,11 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct ExtractDate(pub DateTimeUnits);
 
-impl<'a> EagerUnaryFunc<'a> for ExtractDate {
-    type Input = Date;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for ExtractDate {
+    type Input<'a> = Date;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: Date) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         extract_date_inner(self.0, a.into())
     }
 

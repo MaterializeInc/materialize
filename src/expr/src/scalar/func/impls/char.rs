@@ -25,11 +25,11 @@ pub struct PadChar {
     pub length: Option<CharLength>,
 }
 
-impl<'a> EagerUnaryFunc<'a> for PadChar {
-    type Input = &'a str;
-    type Output = Char<String>;
+impl EagerUnaryFunc for PadChar {
+    type Input<'a> = &'a str;
+    type Output<'a> = Char<String>;
 
-    fn call(&self, a: &'a str) -> Char<String> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         Char(format_str_pad(a, self.length))
     }
 

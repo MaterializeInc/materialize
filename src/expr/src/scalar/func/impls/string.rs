@@ -158,11 +158,11 @@ fn reverse<'a>(a: &'a str) -> String {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
-    type Input = &'a str;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastStringToNumeric {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let mut d = strconv::parse_numeric(a)?;
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
@@ -208,11 +208,11 @@ fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
-    type Input = &'a str;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+impl EagerUnaryFunc for CastStringToTimestamp {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out = strconv::parse_timestamp(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
@@ -251,11 +251,11 @@ fn try_parse_monotonic_iso8601_timestamp<'a>(
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
-    type Input = &'a str;
-    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+impl EagerUnaryFunc for CastStringToTimestampTz {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let out = strconv::parse_timestamptz(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
@@ -537,11 +537,11 @@ pub struct CastStringToChar {
     pub fail_on_len: bool,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToChar {
-    type Input = &'a str;
-    type Output = Result<Char<String>, EvalError>;
+impl EagerUnaryFunc for CastStringToChar {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<Char<String>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<Char<String>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
@@ -668,11 +668,11 @@ pub struct CastStringToVarChar {
     pub fail_on_len: bool,
 }
 
-impl<'a> EagerUnaryFunc<'a> for CastStringToVarChar {
-    type Input = &'a str;
-    type Output = Result<VarChar<&'a str>, EvalError>;
+impl EagerUnaryFunc for CastStringToVarChar {
+    type Input<'a> = &'a str;
+    type Output<'a> = Result<VarChar<&'a str>, EvalError>;
 
-    fn call(&self, a: &'a str) -> Result<VarChar<&'a str>, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let s =
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
@@ -882,11 +882,11 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 
-impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
-    type Input = &'a str;
-    type Output = bool;
+impl EagerUnaryFunc for IsLikeMatch {
+    type Input<'a> = &'a str;
+    type Output<'a> = bool;
 
-    fn call(&self, haystack: &'a str) -> bool {
+    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 
@@ -909,11 +909,11 @@ impl fmt::Display for IsLikeMatch {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct IsRegexpMatch(pub Regex);
 
-impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
-    type Input = &'a str;
-    type Output = bool;
+impl EagerUnaryFunc for IsRegexpMatch {
+    type Input<'a> = &'a str;
+    type Output<'a> = bool;
 
-    fn call(&self, haystack: &'a str) -> bool {
+    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 

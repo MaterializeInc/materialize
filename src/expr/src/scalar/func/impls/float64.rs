@@ -200,11 +200,11 @@ fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastFloat64ToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastFloat64ToNumeric {
-    type Input = f64;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastFloat64ToNumeric {
+    type Input<'a> = f64;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: f64) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
                 "casting double precision to numeric".into(),

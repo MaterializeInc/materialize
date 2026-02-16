@@ -98,11 +98,11 @@ pub trait LazyUnaryFunc {
 }
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
-pub trait EagerUnaryFunc<'a> {
-    type Input: InputDatumType<'a, EvalError>;
-    type Output: OutputDatumType<'a, EvalError>;
+pub trait EagerUnaryFunc {
+    type Input<'a>: InputDatumType<'a, EvalError>;
+    type Output<'a>: OutputDatumType<'a, EvalError>;
 
-    fn call(&self, input: Self::Input) -> Self::Output;
+    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
@@ -110,18 +110,18 @@ pub trait EagerUnaryFunc<'a> {
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
         // If the input is not nullable then nulls are propagated
-        !Self::Input::nullable()
+        !Self::Input::<'_>::nullable()
     }
 
     /// Whether this function will produce NULL on non-NULL input
     fn introduces_nulls(&self) -> bool {
         // If the output is nullable then nulls can be introduced
-        Self::Output::nullable()
+        Self::Output::<'_>::nullable()
     }
 
     /// Whether this function could produce an error
     fn could_error(&self) -> bool {
-        Self::Output::fallible()
+        Self::Output::<'_>::fallible()
     }
 
     /// Whether this function preserves uniqueness
@@ -138,14 +138,14 @@ pub trait EagerUnaryFunc<'a> {
     }
 }
 
-impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
+impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
-        match T::Input::try_from_result(a.eval(datums, temp_storage)) {
+        match T::Input::<'_>::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
             Ok(input) => self.call(input).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner

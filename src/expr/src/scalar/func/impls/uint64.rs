@@ -119,11 +119,11 @@ fn cast_uint64_to_string(a: u64) -> String {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastUint64ToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastUint64ToNumeric {
-    type Input = u64;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastUint64ToNumeric {
+    type Input<'a> = u64;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: u64) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {

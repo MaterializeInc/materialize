@@ -308,11 +308,11 @@ fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct AdjustNumericScale(pub NumericMaxScale);
 
-impl<'a> EagerUnaryFunc<'a> for AdjustNumericScale {
-    type Input = Numeric;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for AdjustNumericScale {
+    type Input<'a> = Numeric;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, mut d: Numeric) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, mut d: Self::Input<'a>) -> Self::Output<'a> {
         if numeric::rescale(&mut d, self.0.into_u8()).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         };

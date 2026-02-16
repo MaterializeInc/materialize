@@ -115,11 +115,11 @@ fn cast_uint32_to_string(a: u32) -> String {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastUint32ToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastUint32ToNumeric {
-    type Input = u32;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastUint32ToNumeric {
+    type Input<'a> = u32;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: u32) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {

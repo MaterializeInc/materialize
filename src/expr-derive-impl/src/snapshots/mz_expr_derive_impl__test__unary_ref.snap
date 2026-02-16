@@ -16,10 +16,10 @@ expression: "#[sqlfunc()]\nfn unary_fn<'a>(a: &i16) -> bool {\n    unimplemented
     mz_lowertest::MzReflect
 )]
 pub struct UnaryFn;
-impl<'a> crate::func::EagerUnaryFunc<'a> for UnaryFn {
-    type Input = &'a i16;
-    type Output = bool;
-    fn call(&self, a: Self::Input) -> Self::Output {
+impl crate::func::EagerUnaryFunc for UnaryFn {
+    type Input<'a> = &'a i16;
+    type Output<'a> = bool;
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         unary_fn(a)
     }
     fn output_type(&self, input_type: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {

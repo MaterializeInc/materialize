@@ -187,11 +187,11 @@ fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct CastFloat32ToNumeric(pub Option<NumericMaxScale>);
 
-impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {
-    type Input = f32;
-    type Output = Result<Numeric, EvalError>;
+impl EagerUnaryFunc for CastFloat32ToNumeric {
+    type Input<'a> = f32;
+    type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call(&self, a: f32) -> Result<Numeric, EvalError> {
+    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
                 "casting real to numeric".into(),
