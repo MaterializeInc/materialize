@@ -45,6 +45,7 @@ pub mod role_id;
 pub mod stats;
 pub mod strconv;
 pub mod timestamp;
+mod update;
 pub mod user;
 
 pub use crate::catalog_item_id::CatalogItemId;
@@ -73,3 +74,4 @@ pub use crate::scalar::{
     Variadic, arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
+pub use crate::update::{Rows, SharedSlice, UpdateCollection, UpdateCollectionBuilder};
