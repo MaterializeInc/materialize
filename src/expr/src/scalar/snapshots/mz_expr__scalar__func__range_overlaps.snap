@@ -47,7 +47,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RangeOverlaps {
             )
     }
     fn introduces_nulls(&self) -> bool {
-        <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
+        <bool as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true

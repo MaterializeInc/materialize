@@ -32,7 +32,7 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, DatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
+    ColumnName, Datum, OutputDatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;

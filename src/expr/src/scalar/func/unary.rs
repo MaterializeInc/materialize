@@ -15,7 +15,7 @@
 
 use std::{fmt, str};
 
-use mz_repr::{Datum, DatumType, RowArena, SqlColumnType};
+use mz_repr::{Datum, InputDatumType, OutputDatumType, RowArena, SqlColumnType};
 
 use crate::scalar::func::impls::*;
 use crate::{EvalError, MirScalarExpr};
@@ -99,8 +99,8 @@ pub trait LazyUnaryFunc {
 
 /// A description of an SQL unary function that operates on eagerly evaluated expressions
 pub trait EagerUnaryFunc<'a> {
-    type Input: DatumType<'a, EvalError>;
-    type Output: DatumType<'a, EvalError>;
+    type Input: InputDatumType<'a, EvalError>;
+    type Output: OutputDatumType<'a, EvalError>;
 
     fn call(&self, input: Self::Input) -> Self::Output;
 

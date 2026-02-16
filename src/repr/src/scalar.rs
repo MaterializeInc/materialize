@@ -1929,16 +1929,22 @@ pub trait AsColumnType {
 }
 
 /// A bridge between native Rust types and SQL runtime types represented in Datums
-pub trait DatumType<'a, E>: Sized {
+pub trait InputDatumType<'a, E>: Sized {
+    /// Whether this Rust type can represent NULL values
+    fn nullable() -> bool;
+
+    /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
+    /// it fails the error variant will contain the original result.
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
+}
+
+/// A bridge between native Rust types and SQL runtime types represented in Datums
+pub trait OutputDatumType<'a, E>: Sized {
     /// Whether this Rust type can represent NULL values
     fn nullable() -> bool;
 
     /// Whether this Rust type can represent errors
     fn fallible() -> bool;
-
-    /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
-    /// it fails the error variant will contain the original result.
-    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
 
     /// Convert this Rust type into a Result containing a Datum, or an error
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E>;
@@ -1962,19 +1968,29 @@ impl<B: ToOwned<Owned: AsColumnType> + ?Sized> AsColumnType for Cow<'_, B> {
     }
 }
 
-impl<'a, E, B: ToOwned + ?Sized> DatumType<'a, E> for Cow<'a, B>
+impl<'a, E, B: ToOwned + ?Sized> InputDatumType<'a, E> for Cow<'a, B>
 where
-    for<'b> B::Owned: DatumType<'b, E>,
-    for<'b> &'b B: DatumType<'b, E>,
+    for<'b> B::Owned: InputDatumType<'b, E>,
+    for<'b> &'b B: InputDatumType<'b, E>,
+{
+    fn nullable() -> bool {
+        B::Owned::nullable()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        <&B>::try_from_result(res).map(|b| Cow::Borrowed(b))
+    }
+}
+
+impl<'a, E, B: ToOwned + ?Sized> OutputDatumType<'a, E> for Cow<'a, B>
+where
+    for<'b> B::Owned: OutputDatumType<'b, E>,
+    for<'b> &'b B: OutputDatumType<'b, E>,
 {
     fn nullable() -> bool {
         B::Owned::nullable()
     }
     fn fallible() -> bool {
         B::Owned::fallible()
-    }
-    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-        <&B>::try_from_result(res).map(|b| Cow::Borrowed(b))
     }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         match self {
@@ -1990,12 +2006,9 @@ impl<B: AsColumnType> AsColumnType for Option<B> {
     }
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
+impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for Option<B> {
     fn nullable() -> bool {
         true
-    }
-    fn fallible() -> bool {
-        false
     }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
@@ -2003,6 +2016,15 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Option<B> {
             Ok(datum) => B::try_from_result(Ok(datum)).map(Some),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Option<B> {
+    fn nullable() -> bool {
+        true
+    }
+    fn fallible() -> bool {
+        false
     }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         match self {
@@ -2018,15 +2040,21 @@ impl<E, B: AsColumnType> AsColumnType for Result<B, E> {
     }
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
+impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for Result<B, E> {
+    fn nullable() -> bool {
+        B::nullable()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        B::try_from_result(res).map(Ok)
+    }
+}
+
+impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Result<B, E> {
     fn nullable() -> bool {
         B::nullable()
     }
     fn fallible() -> bool {
         true
-    }
-    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
-        B::try_from_result(res).map(Ok)
     }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.and_then(|inner| inner.into_result(temp_storage))
@@ -2048,18 +2076,24 @@ impl<B: AsColumnType> AsColumnType for ExcludeNull<B> {
     }
 }
 
-impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for ExcludeNull<B> {
+impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for ExcludeNull<B> {
     fn nullable() -> bool {
         false
-    }
-    fn fallible() -> bool {
-        B::fallible()
     }
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Null) => Err(Ok(Datum::Null)),
             _ => B::try_from_result(res).map(ExcludeNull),
         }
+    }
+}
+
+impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for ExcludeNull<B> {
+    fn nullable() -> bool {
+        false
+    }
+    fn fallible() -> bool {
+        B::fallible()
     }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.0.into_result(temp_storage)
@@ -2074,7 +2108,7 @@ impl<B> std::ops::Deref for ExcludeNull<B> {
     }
 }
 
-/// Macro to derive DatumType for all Datum variants that are simple Copy types
+/// Macro to derive InputDatumType and OutputDatumType for all Datum variants that are simple Copy types
 macro_rules! impl_datum_type_copy {
     ($lt:lifetime, $native:ty, $variant:ident) => {
         impl<$lt> AsColumnType for $native {
@@ -2083,12 +2117,8 @@ macro_rules! impl_datum_type_copy {
             }
         }
 
-        impl<$lt, E> DatumType<$lt, E> for $native {
+        impl<$lt, E> InputDatumType<$lt, E> for $native {
             fn nullable() -> bool {
-                false
-            }
-
-            fn fallible() -> bool {
                 false
             }
 
@@ -2097,6 +2127,16 @@ macro_rules! impl_datum_type_copy {
                     Ok(Datum::$variant(f)) => Ok(f.into()),
                     _ => Err(res),
                 }
+            }
+        }
+
+        impl<$lt, E> OutputDatumType<$lt, E> for $native {
+            fn nullable() -> bool {
+                false
+            }
+
+            fn fallible() -> bool {
+                false
             }
 
             fn into_result(self, _temp_storage: &$lt RowArena) -> Result<Datum<$lt>, E> {
@@ -2125,13 +2165,9 @@ impl_datum_type_copy!('a, &'a str, String);
 impl_datum_type_copy!('a, &'a [u8], Bytes);
 impl_datum_type_copy!(crate::Timestamp, MzTimestamp);
 
-impl<'a, E> DatumType<'a, E> for Datum<'a> {
+impl<'a, E> InputDatumType<'a, E> for Datum<'a> {
     fn nullable() -> bool {
         true
-    }
-
-    fn fallible() -> bool {
-        false
     }
 
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
@@ -2140,18 +2176,24 @@ impl<'a, E> DatumType<'a, E> for Datum<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Datum<'a> {
+    fn nullable() -> bool {
+        true
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(self)
     }
 }
 
-impl<'a, E> DatumType<'a, E> for DatumList<'a> {
+impl<'a, E> InputDatumType<'a, E> for DatumList<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2161,18 +2203,24 @@ impl<'a, E> DatumType<'a, E> for DatumList<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for DatumList<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::List(self))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Array<'a> {
+impl<'a, E> InputDatumType<'a, E> for Array<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2182,18 +2230,24 @@ impl<'a, E> DatumType<'a, E> for Array<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Array<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Array(self))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
+impl<'a, E> InputDatumType<'a, E> for DatumMap<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2203,18 +2257,24 @@ impl<'a, E> DatumType<'a, E> for DatumMap<'a> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for DatumMap<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::Map(self))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
+impl<'a, E> InputDatumType<'a, E> for Range<DatumNested<'a>> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2224,13 +2284,9 @@ impl<'a, E> DatumType<'a, E> for Range<DatumNested<'a>> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Range(self))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
+impl<'a, E> OutputDatumType<'a, E> for Range<DatumNested<'a>> {
     fn nullable() -> bool {
         false
     }
@@ -2239,11 +2295,31 @@ impl<'a, E> DatumType<'a, E> for Range<Datum<'a>> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Range(self))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Range<Datum<'a>> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(r @ Datum::Range(..)) => Ok(r.unwrap_range()),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Range<Datum<'a>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2259,12 +2335,8 @@ impl AsColumnType for bool {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for bool {
+impl<'a, E> InputDatumType<'a, E> for bool {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2274,6 +2346,16 @@ impl<'a, E> DatumType<'a, E> for bool {
             Ok(Datum::False) => Ok(false),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for bool {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2291,12 +2373,8 @@ impl AsColumnType for String {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for String {
+impl<'a, E> InputDatumType<'a, E> for String {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2305,6 +2383,16 @@ impl<'a, E> DatumType<'a, E> for String {
             Ok(Datum::String(s)) => Ok(s.to_owned()),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for String {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2318,12 +2406,8 @@ impl AsColumnType for ArrayRustType<String> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
+impl<'a, E> InputDatumType<'a, E> for ArrayRustType<String> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2337,6 +2421,16 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
             )),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2360,12 +2454,8 @@ impl AsColumnType for ArrayRustType<Cow<'_, str>> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
+impl<'a, E> InputDatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2379,6 +2469,16 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
             )),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2402,12 +2502,8 @@ impl AsColumnType for Vec<u8> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Vec<u8> {
+impl<'a, E> InputDatumType<'a, E> for Vec<u8> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2416,6 +2512,16 @@ impl<'a, E> DatumType<'a, E> for Vec<u8> {
             Ok(Datum::Bytes(b)) => Ok(b.to_owned()),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Vec<u8> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2429,12 +2535,8 @@ impl AsColumnType for Numeric {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Numeric {
+impl<'a, E> InputDatumType<'a, E> for Numeric {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2444,13 +2546,9 @@ impl<'a, E> DatumType<'a, E> for Numeric {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::from(self))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for OrderedDecimal<Numeric> {
+impl<'a, E> OutputDatumType<'a, E> for Numeric {
     fn nullable() -> bool {
         false
     }
@@ -2459,11 +2557,31 @@ impl<'a, E> DatumType<'a, E> for OrderedDecimal<Numeric> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::from(self))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for OrderedDecimal<Numeric> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::Numeric(n)) => Ok(n),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for OrderedDecimal<Numeric> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2477,12 +2595,8 @@ impl AsColumnType for PgLegacyChar {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for PgLegacyChar {
+impl<'a, E> InputDatumType<'a, E> for PgLegacyChar {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2491,6 +2605,16 @@ impl<'a, E> DatumType<'a, E> for PgLegacyChar {
             Ok(Datum::UInt8(a)) => Ok(PgLegacyChar(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for PgLegacyChar {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2507,12 +2631,8 @@ where
     }
 }
 
-impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
+impl<'a, E> InputDatumType<'a, E> for PgLegacyName<&'a str> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2522,13 +2642,9 @@ impl<'a, E> DatumType<'a, E> for PgLegacyName<&'a str> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(self.0))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for PgLegacyName<String> {
+impl<'a, E> OutputDatumType<'a, E> for PgLegacyName<&'a str> {
     fn nullable() -> bool {
         false
     }
@@ -2537,11 +2653,31 @@ impl<'a, E> DatumType<'a, E> for PgLegacyName<String> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for PgLegacyName<String> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(PgLegacyName(a.to_owned())),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for PgLegacyName<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2555,12 +2691,8 @@ impl AsColumnType for Oid {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Oid {
+impl<'a, E> InputDatumType<'a, E> for Oid {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2569,6 +2701,16 @@ impl<'a, E> DatumType<'a, E> for Oid {
             Ok(Datum::UInt32(a)) => Ok(Oid(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Oid {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2582,12 +2724,8 @@ impl AsColumnType for RegClass {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegClass {
+impl<'a, E> InputDatumType<'a, E> for RegClass {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2596,6 +2734,16 @@ impl<'a, E> DatumType<'a, E> for RegClass {
             Ok(Datum::UInt32(a)) => Ok(RegClass(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for RegClass {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2609,12 +2757,8 @@ impl AsColumnType for RegProc {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegProc {
+impl<'a, E> InputDatumType<'a, E> for RegProc {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2623,6 +2767,16 @@ impl<'a, E> DatumType<'a, E> for RegProc {
             Ok(Datum::UInt32(a)) => Ok(RegProc(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for RegProc {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2636,12 +2790,8 @@ impl AsColumnType for RegType {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for RegType {
+impl<'a, E> InputDatumType<'a, E> for RegType {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2650,6 +2800,16 @@ impl<'a, E> DatumType<'a, E> for RegType {
             Ok(Datum::UInt32(a)) => Ok(RegType(a)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for RegType {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2666,12 +2826,8 @@ where
     }
 }
 
-impl<'a, E> DatumType<'a, E> for Char<&'a str> {
+impl<'a, E> InputDatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2681,13 +2837,9 @@ impl<'a, E> DatumType<'a, E> for Char<&'a str> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(self.0))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for Char<String> {
+impl<'a, E> OutputDatumType<'a, E> for Char<&'a str> {
     fn nullable() -> bool {
         false
     }
@@ -2696,11 +2848,31 @@ impl<'a, E> DatumType<'a, E> for Char<String> {
         false
     }
 
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(self.0))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Char<String> {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         match res {
             Ok(Datum::String(a)) => Ok(Char(a.to_owned())),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Char<String> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2717,12 +2889,8 @@ where
     }
 }
 
-impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
+impl<'a, E> InputDatumType<'a, E> for VarChar<&'a str> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2732,18 +2900,24 @@ impl<'a, E> DatumType<'a, E> for VarChar<&'a str> {
             _ => Err(res),
         }
     }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for VarChar<&'a str> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         Ok(Datum::String(self.0))
     }
 }
 
-impl<'a, E> DatumType<'a, E> for VarChar<String> {
+impl<'a, E> InputDatumType<'a, E> for VarChar<String> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2753,13 +2927,9 @@ impl<'a, E> DatumType<'a, E> for VarChar<String> {
             _ => Err(res),
         }
     }
-
-    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::String(temp_storage.push_string(self.0)))
-    }
 }
 
-impl<'a, E> DatumType<'a, E> for Jsonb {
+impl<'a, E> OutputDatumType<'a, E> for VarChar<String> {
     fn nullable() -> bool {
         false
     }
@@ -2768,8 +2938,28 @@ impl<'a, E> DatumType<'a, E> for Jsonb {
         false
     }
 
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::String(temp_storage.push_string(self.0)))
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Jsonb {
+    fn nullable() -> bool {
+        false
+    }
+
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         Ok(JsonbRef::try_from_result(res)?.to_owned())
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Jsonb {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2783,12 +2973,8 @@ impl AsColumnType for Jsonb {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
+impl<'a, E> InputDatumType<'a, E> for JsonbRef<'a> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2805,6 +2991,16 @@ impl<'a, E> DatumType<'a, E> for JsonbRef<'a> {
             ) => Ok(JsonbRef::from_datum(d)),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for JsonbRef<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2824,12 +3020,8 @@ impl AsColumnType for MzAclItem {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for MzAclItem {
+impl<'a, E> InputDatumType<'a, E> for MzAclItem {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2838,6 +3030,16 @@ impl<'a, E> DatumType<'a, E> for MzAclItem {
             Ok(Datum::MzAclItem(mz_acl_item)) => Ok(mz_acl_item),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for MzAclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2851,12 +3053,8 @@ impl AsColumnType for AclItem {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for AclItem {
+impl<'a, E> InputDatumType<'a, E> for AclItem {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2865,6 +3063,16 @@ impl<'a, E> DatumType<'a, E> for AclItem {
             Ok(Datum::AclItem(acl_item)) => Ok(acl_item),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for AclItem {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2878,12 +3086,8 @@ impl AsColumnType for CheckedTimestamp<NaiveDateTime> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
+impl<'a, E> InputDatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2892,6 +3096,16 @@ impl<'a, E> DatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
             Ok(Datum::Timestamp(a)) => Ok(a),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for CheckedTimestamp<NaiveDateTime> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
@@ -2905,12 +3119,8 @@ impl AsColumnType for CheckedTimestamp<DateTime<Utc>> {
     }
 }
 
-impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
+impl<'a, E> InputDatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
     fn nullable() -> bool {
-        false
-    }
-
-    fn fallible() -> bool {
         false
     }
 
@@ -2919,6 +3129,16 @@ impl<'a, E> DatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
             Ok(Datum::TimestampTz(a)) => Ok(a),
             _ => Err(res),
         }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for CheckedTimestamp<DateTime<Utc>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
     }
 
     fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {

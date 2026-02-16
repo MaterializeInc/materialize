@@ -286,7 +286,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     let (output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::DatumType<'_, ()>>::nullable()
+                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
             }
         };
         let output_type = quote! { <#output_type> };
@@ -421,7 +421,7 @@ fn binary_func(
     let (mut output_type, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
         let introduces_nulls_fn = quote! {
             fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::DatumType<'_, ()>>::nullable()
+                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
             }
         };
         let output_type = quote! { <#output_type>::as_column_type() };

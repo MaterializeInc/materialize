@@ -9,7 +9,7 @@
 
 //! Utilities for binary functions.
 
-use mz_repr::{Datum, DatumType, RowArena, SqlColumnType};
+use mz_repr::{Datum, InputDatumType, OutputDatumType, RowArena, SqlColumnType};
 
 use crate::{EvalError, MirScalarExpr};
 
@@ -67,9 +67,9 @@ pub(crate) trait LazyBinaryFunc {
 
 #[allow(unused)]
 pub(crate) trait EagerBinaryFunc<'a> {
-    type Input1: DatumType<'a, EvalError>;
-    type Input2: DatumType<'a, EvalError>;
-    type Output: DatumType<'a, EvalError>;
+    type Input1: InputDatumType<'a, EvalError>;
+    type Input2: InputDatumType<'a, EvalError>;
+    type Output: OutputDatumType<'a, EvalError>;
 
     fn call(&self, a: Self::Input1, b: Self::Input2, temp_storage: &'a RowArena) -> Self::Output;
 

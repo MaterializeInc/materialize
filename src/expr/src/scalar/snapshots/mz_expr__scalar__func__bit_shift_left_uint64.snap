@@ -47,7 +47,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftLeftUint64 {
             )
     }
     fn introduces_nulls(&self) -> bool {
-        <u64 as ::mz_repr::DatumType<'_, ()>>::nullable()
+        <u64 as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
