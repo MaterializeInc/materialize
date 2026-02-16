@@ -30,9 +30,6 @@ tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-mz-foundationdb = { path = "../foundationdb", default-features = false }
-
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 

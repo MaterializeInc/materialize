@@ -511,6 +511,8 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        features = config.pop("features", [])
+        self.features = features if isinstance(features, list) else [features]
 
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
@@ -520,6 +522,7 @@ class CargoBuild(CargoPreImage):
         rd: RepositoryDetails,
         bins: list[str],
         examples: list[str],
+        features: list[str] | None = None,
     ) -> list[str]:
         rustflags = (
             rustc_flags.coverage
@@ -584,6 +587,8 @@ class CargoBuild(CargoPreImage):
             cargo_build.extend(
                 ["--jobs", str(round(multiprocessing.cpu_count() * 2 / 3))]
             )
+        if features:
+            cargo_build.append(f"--features={','.join(features)}")
 
         return cargo_build
 
@@ -602,16 +607,20 @@ class CargoBuild(CargoPreImage):
         builds = cast(list[CargoBuild], cargo_builds)
         bins = set()
         examples = set()
+        features = set()
         for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
             examples.update(build.examples)
+            features.update(build.features)
         assert rd
 
         ui.section(f"Common build for: {', '.join(bins | examples)}")
 
-        cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
+        cargo_build = cls.generate_cargo_build_command(
+            rd, list(bins), list(examples), list(features) if features else None
+        )
 
         run_and_detect_rust_ice(cargo_build, cwd=rd.root)
 

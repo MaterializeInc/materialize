@@ -19,16 +19,3 @@ tikv_jemalloc_sys
 5:tikv_jemalloc_sys:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
 2:tikv_jemallocator:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms
 3:tikv_jemalloc_sys:background_threads,background_threads_runtime_support,default,profiling,stats,unprefixed_malloc_on_supported_platforms (*)
-foundationdb
-0:mz_clusterd:default,jemalloc,mz-alloc-default,tokio-console,workspace-hack
-1:mz_compute:
-2:mz_compute_client:default,workspace-hack
-3:mz_dyncfgs:default,workspace-hack
-4:mz_persist_client:default,workspace-hack
-5:mz_persist:default,workspace-hack
-6:mz_foundationdb:
-7:foundationdb:embedded-fdb-include,fdb-7_3,serde,serde_bytes,serde_json
-8:foundationdb_macros:
-8:foundationdb_sys:embedded-fdb-include,fdb-7_3
-8:foundationdb_tuple:default,uuid
-8:foundationdb_gen:embedded-fdb-include,fdb-7_3

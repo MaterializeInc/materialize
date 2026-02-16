@@ -21,7 +21,7 @@ pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;
-#[cfg(any(feature = "foundationdb", target_os = "linux"))]
+#[cfg(feature = "foundationdb")]
 pub mod foundationdb;
 pub mod generated;
 pub mod indexed;

@@ -19,7 +19,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 
 pub mod batching_oracle;
 pub mod config;
-#[cfg(any(target_os = "linux", feature = "foundationdb"))]
+#[cfg(feature = "foundationdb")]
 pub mod foundationdb_oracle;
 pub mod metrics;
 pub mod postgres_oracle;

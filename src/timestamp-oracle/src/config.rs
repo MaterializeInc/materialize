@@ -21,7 +21,7 @@ use mz_ore::url::SensitiveUrl;
 use mz_repr::Timestamp;
 
 use crate::TimestampOracle;
-#[cfg(any(target_os = "linux", feature = "foundationdb"))]
+#[cfg(feature = "foundationdb")]
 use crate::foundationdb_oracle::{FdbTimestampOracle, FdbTimestampOracleConfig};
 use crate::metrics::Metrics;
 use crate::postgres_oracle::{
@@ -37,7 +37,7 @@ pub enum TimestampOracleConfig {
     /// Use a Postgres/CockroachDB-backed timestamp oracle.
     Postgres(PostgresTimestampOracleConfig),
     /// Use a FoundationDB-backed timestamp oracle.
-    #[cfg(any(target_os = "linux", feature = "foundationdb"))]
+    #[cfg(feature = "foundationdb")]
     Fdb(FdbTimestampOracleConfig),
 }
 
@@ -56,9 +56,9 @@ impl TimestampOracleConfig {
         let scheme = url.scheme();
         match scheme {
             "postgres" | "postgresql" => Ok(Self::new_postgres(url, metrics_registry)),
-            #[cfg(any(target_os = "linux", feature = "foundationdb"))]
+            #[cfg(feature = "foundationdb")]
             "foundationdb" => Ok(Self::new_fdb(url.clone(), metrics_registry)),
-            #[cfg(not(any(target_os = "linux", feature = "foundationdb")))]
+            #[cfg(not(feature = "foundationdb"))]
             "foundationdb" => {
                 anyhow::bail!("FoundationDB timestamp oracle is not supported on this platform")
             }
@@ -78,7 +78,7 @@ impl TimestampOracleConfig {
     }
 
     /// Create a new FoundationDB-backed timestamp oracle configuration.
-    #[cfg(any(target_os = "linux", feature = "foundationdb"))]
+    #[cfg(feature = "foundationdb")]
     pub fn new_fdb(url: SensitiveUrl, metrics_registry: &MetricsRegistry) -> Self {
         TimestampOracleConfig::Fdb(FdbTimestampOracleConfig::new(url, metrics_registry))
     }
@@ -87,7 +87,7 @@ impl TimestampOracleConfig {
     pub fn metrics(&self) -> Arc<Metrics> {
         match self {
             TimestampOracleConfig::Postgres(config) => Arc::clone(config.metrics()),
-            #[cfg(any(target_os = "linux", feature = "foundationdb"))]
+            #[cfg(feature = "foundationdb")]
             TimestampOracleConfig::Fdb(config) => Arc::clone(config.metrics()),
         }
     }
@@ -111,7 +111,7 @@ impl TimestampOracleConfig {
                 )
                 .await,
             ),
-            #[cfg(any(target_os = "linux", feature = "foundationdb"))]
+            #[cfg(feature = "foundationdb")]
             TimestampOracleConfig::Fdb(config) => {
                 let fdb_oracle = FdbTimestampOracle::open(
                     config.clone(),
@@ -135,7 +135,7 @@ impl TimestampOracleConfig {
             TimestampOracleConfig::Postgres(config) => {
                 PostgresTimestampOracle::<NowFn>::get_all_timelines(config.clone()).await
             }
-            #[cfg(any(target_os = "linux", feature = "foundationdb"))]
+            #[cfg(feature = "foundationdb")]
             TimestampOracleConfig::Fdb(config) => {
                 FdbTimestampOracle::<NowFn>::get_all_timelines(config.clone()).await
             }

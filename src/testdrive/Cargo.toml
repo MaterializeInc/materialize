@@ -94,9 +94,5 @@ tonic-prost-build = "0.14.2"
 default = ["mz-build-tools/default", "workspace-hack"]
 foundationdb = ["mz-persist-client/foundationdb"]
 
-# On Linux, enable FoundationDB by default
-[target.'cfg(target_os = "linux")'.dependencies]
-mz-persist-client = { path = "../persist-client", default-features = false, features = ["foundationdb"] }
-
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

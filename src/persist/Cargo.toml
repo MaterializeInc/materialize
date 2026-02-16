@@ -80,9 +80,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 version = "0.10.9"
 features = ["asm"]
 
-[target.'cfg(target_os = "linux")'.dependencies]
-mz-foundationdb = { path = "../foundationdb", default-features = false  }
-
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json = "1.0.149"

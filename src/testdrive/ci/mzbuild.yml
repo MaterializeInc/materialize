@@ -11,6 +11,7 @@ name: testdrive
 pre-image:
   - type: cargo-build
     bin: testdrive
+    features: [ mz-testdrive/foundationdb ]
     extract:
       protobuf-src:
         bin: protobuf-bin
