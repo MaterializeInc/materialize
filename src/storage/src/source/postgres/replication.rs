@@ -88,8 +88,8 @@ use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
-use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -717,12 +717,11 @@ async fn raw_stream<'a>(
     );
 
     let (probe_tx, mut probe_rx) = watch::channel(None);
-    let config_set = Arc::clone(config.config.config_set());
+    let timestamp_interval = config.timestamp_interval;
     let now_fn = config.now_fn.clone();
     let max_lsn_task_handle =
         mz_ore::task::spawn(|| format!("pg_current_wal_lsn:{}", config.id), async move {
-            let mut probe_ticker =
-                probe::Ticker::new(|| PG_OFFSET_KNOWN_INTERVAL.get(&config_set), now_fn);
+            let mut probe_ticker = probe::Ticker::new(move || timestamp_interval, now_fn);
 
             while !probe_tx.is_closed() {
                 let probe_ts = probe_ticker.tick().await;

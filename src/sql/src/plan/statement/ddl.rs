@@ -904,7 +904,7 @@ pub fn plan_create_source(
             }
             duration
         }
-        None => scx.catalog.config().timestamp_interval,
+        None => scx.catalog.system_vars().timestamp_interval(),
     };
 
     let (desc, data_source) = match progress_subsource {

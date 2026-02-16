@@ -11,7 +11,7 @@
 //!
 //! The operator does the following:
 //!
-//! * At some cadence [`OFFSET_KNOWN_INTERVAL`] will probe the source for the max
+//! * At some cadence `timestamp_interval` will probe the source for the max
 //!   [`Lsn`], emit the upstream known offset, and update `SourceStatistics`.
 //! * Listen to a provided [`futures::Stream`] of resume uppers, which represents
 //!   the durably committed upper for _all_ of the subsources/exports associated
@@ -35,7 +35,7 @@ use mz_storage_types::connections::SqlServerConnectionDetails;
 use mz_storage_types::dyncfgs::SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY;
 use mz_storage_types::sources::SqlServerSourceExtras;
 use mz_storage_types::sources::sql_server::{
-    CDC_CLEANUP_CHANGE_TABLE, CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES, OFFSET_KNOWN_INTERVAL,
+    CDC_CLEANUP_CHANGE_TABLE, CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES,
 };
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
@@ -107,8 +107,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
              }
 
 
-            let probe_interval = OFFSET_KNOWN_INTERVAL.handle(config.config.config_set());
-            let mut probe_ticker = probe::Ticker::new(|| probe_interval.get(), config.now_fn);
+            let timestamp_interval = config.timestamp_interval;
+            let mut probe_ticker = probe::Ticker::new(move || timestamp_interval, config.now_fn);
 
             // Offset that is measured from the upstream SQL Server instance. Tracked to detect an offset that moves backwards.
             let mut prev_offset_known: Option<Lsn> = None;

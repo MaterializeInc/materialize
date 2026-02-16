@@ -31,9 +31,7 @@ use mz_sql_server_util::inspect::{
 use mz_storage_types::dyncfgs::SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY;
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSourceConnection;
-use mz_storage_types::sources::sql_server::{
-    CDC_POLL_INTERVAL, MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL,
-};
+use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPORT_INTERVAL};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
@@ -416,7 +414,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
             // Off to the races! Replicate data from SQL Server.
             let cdc_stream = cdc_handle
-                .poll_interval(CDC_POLL_INTERVAL.get(config.config.config_set()))
+                .poll_interval(config.timestamp_interval)
                 .into_stream();
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 

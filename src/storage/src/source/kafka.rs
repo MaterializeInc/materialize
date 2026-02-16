@@ -31,7 +31,6 @@ use mz_ore::iter::IteratorExt;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, adt::jsonb::Jsonb};
 use mz_ssh_util::tunnel::SshTunnelStatus;
-use mz_storage_types::dyncfgs::KAFKA_METADATA_FETCH_INTERVAL;
 use mz_storage_types::errors::{
     ContextCreationError, DataflowError, SourceError, SourceErrorDetails,
 };
@@ -1701,10 +1700,8 @@ fn spawn_metadata_thread<C: ConsumerContext>(
                 "kafka metadata thread: starting..."
             );
 
-            let mut ticker = probe::Ticker::new(
-                || KAFKA_METADATA_FETCH_INTERVAL.get(config.config.config_set()),
-                config.now_fn,
-            );
+            let timestamp_interval = config.timestamp_interval;
+            let mut ticker = probe::Ticker::new(move || timestamp_interval, config.now_fn);
 
             loop {
                 let probe_ts = ticker.tick_blocking();

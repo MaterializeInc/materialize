@@ -201,11 +201,10 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "kafka_default_metadata_fetch_interval",
+            "timestamp_interval",
             "1s",
             ["100ms", "1s"],
         ),
-        VariableSystemParameter("mysql_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "force_source_table_syntax",
             "true" if force_source_table_syntax else "false",
@@ -372,7 +371,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_validate_part_bounds_on_write", "false", ["true", "false"]
         ),
-        VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "statement_logging_default_sample_rate",
             "1.0",
@@ -409,9 +407,6 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "storage_use_continual_feedback_upsert", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "sql_server_offset_known_interval", "1s", ["10ms", "100ms", "1s"]
         ),
         # End of list (ordered by name)
     ]
@@ -588,7 +583,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "storage_sink_ensure_topic_config",
     "sql_server_max_lsn_wait",
     "sql_server_snapshot_progress_report_interval",
-    "sql_server_cdc_poll_interval",
     "sql_server_cdc_cleanup_change_table",
     "sql_server_cdc_cleanup_change_table_max_deletes",
     "allow_user_sessions",

@@ -300,7 +300,6 @@ impl CatalogState {
                 environment_id: EnvironmentId::for_tests(),
                 session_id: Default::default(),
                 build_info: &DUMMY_BUILD_INFO,
-                timestamp_interval: Default::default(),
                 now: NOW_ZERO.clone(),
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),

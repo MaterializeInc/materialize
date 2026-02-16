@@ -19,7 +19,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::LazyLock;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use mz_auth::password::Password;
@@ -425,8 +425,6 @@ pub struct CatalogConfig {
     pub session_id: Uuid,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
-    /// Default timestamp interval.
-    pub timestamp_interval: Duration,
     /// Function that returns a wall clock now time; can safely be mocked to return
     /// 0.
     pub now: NowFn,

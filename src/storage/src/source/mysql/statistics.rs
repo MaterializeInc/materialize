@@ -10,7 +10,6 @@
 //! Renders the statistics collection of the [`MySqlSourceConnection`] ingestion dataflow.
 
 use futures::StreamExt;
-use mz_storage_types::dyncfgs::MYSQL_OFFSET_KNOWN_INTERVAL;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream};
@@ -78,10 +77,8 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 .await?;
 
             tokio::pin!(resume_uppers);
-            let mut probe_ticker = probe::Ticker::new(
-                || MYSQL_OFFSET_KNOWN_INTERVAL.get(config.config.config_set()),
-                config.now_fn,
-            );
+            let timestamp_interval = config.timestamp_interval;
+            let mut probe_ticker = probe::Ticker::new(move || timestamp_interval, config.now_fn);
 
             let probe_loop = async {
                 loop {

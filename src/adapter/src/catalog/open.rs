@@ -158,7 +158,6 @@ impl Catalog {
                 environment_id: config.environment_id,
                 session_id: Uuid::new_v4(),
                 build_info: config.build_info,
-                timestamp_interval: Duration::from_secs(1),
                 now: config.now.clone(),
                 connection_context: config.connection_context,
                 builtins_cfg: BuiltinsConfig {

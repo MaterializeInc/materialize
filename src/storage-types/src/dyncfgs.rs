@@ -105,13 +105,6 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
     available.",
 );
 
-/// Interval to fetch topic partition metadata.
-pub static KAFKA_METADATA_FETCH_INTERVAL: Config<Duration> = Config::new(
-    "kafka_default_metadata_fetch_interval",
-    Duration::from_secs(1),
-    "Interval to fetch topic partition metadata.",
-);
-
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
     Config::new(
         "kafka_default_aws_privatelink_endpoint_identification_algorithm",
@@ -172,13 +165,6 @@ pub const MYSQL_REPLICATION_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
     "Replication heartbeat interval requested from the MySQL server.",
 );
 
-/// Interval to fetch `offset_known`, from `@gtid_executed`
-pub const MYSQL_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
-    "mysql_offset_known_interval",
-    Duration::from_secs(1),
-    "Interval to fetch `offset_known`, from `@gtid_executed`",
-);
-
 // Postgres
 
 /// Interval to poll `confirmed_flush_lsn` to get a resumption lsn.
@@ -186,13 +172,6 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
     "postgres_fetch_slot_resume_lsn_interval",
     Duration::from_millis(500),
     "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
-);
-
-/// Interval to fetch `offset_known`, from `pg_current_wal_lsn`
-pub const PG_OFFSET_KNOWN_INTERVAL: Config<Duration> = Config::new(
-    "pg_offset_known_interval",
-    Duration::from_secs(1),
-    "Interval to fetch `offset_known`, from `pg_current_wal_lsn`",
 );
 
 /// Interval to re-validate the schemas of ingested tables.
@@ -347,17 +326,14 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
-        .add(&KAFKA_METADATA_FETCH_INTERVAL)
         .add(&KAFKA_POLL_MAX_WAIT)
         .add(&KAFKA_RETRY_BACKOFF)
         .add(&KAFKA_RETRY_BACKOFF_MAX)
         .add(&KAFKA_RECONNECT_BACKOFF)
         .add(&KAFKA_RECONNECT_BACKOFF_MAX)
-        .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
-        .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
         .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
@@ -375,11 +351,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUSPENDABLE_SOURCES)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
-        .add(&crate::sources::sql_server::CDC_POLL_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
         .add(&crate::sources::sql_server::MAX_LSN_WAIT)
         .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
-        .add(&crate::sources::sql_server::OFFSET_KNOWN_INTERVAL)
         .add(&STATISTICS_RETENTION_DURATION)
 }
