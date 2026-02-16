@@ -691,23 +691,21 @@ impl Value {
             Type::Array(elem_type) => {
                 let (elements, dims) =
                     strconv::parse_array(s, || None, |elem_text| Ok::<_, String>(Some(elem_text)))?;
-                // SAFETY: The function returns the number of times it called `push` on the packer.
-                unsafe {
-                    packer.push_array_with_unchecked(&dims, |packer| {
-                        let mut nelements = 0;
-                        for element in elements {
-                            match element {
-                                Some(elem_text) => {
-                                    Value::decode_text_into_row(elem_type, &elem_text, packer)?
-                                }
 
-                                None => packer.push(Datum::Null),
+                packer.push_array_with_unchecked(&dims, |packer| {
+                    let mut nelements = 0;
+                    for element in elements {
+                        match element {
+                            Some(elem_text) => {
+                                Value::decode_text_into_row(elem_type, &elem_text, packer)?
                             }
-                            nelements += 1;
+
+                            None => packer.push(Datum::Null),
                         }
-                        Ok::<_, Box<dyn Error + Sync + Send>>(nelements)
-                    })?
-                }
+                        nelements += 1;
+                    }
+                    Ok::<_, Box<dyn Error + Sync + Send>>(nelements)
+                })?
             }
             Type::Int2Vector { .. } => {
                 return Err("input of Int2Vector types is not implemented".into());
