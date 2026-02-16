@@ -1500,13 +1500,18 @@ def workflow_documentation_defaults(
 
     # Following https://materialize.com/docs/installation/install-on-local-kind/
     # orchestratord test can't run against future versions, so ignore those
-    versions = reversed(
-        [
-            version
-            for version in get_self_managed_versions()
-            if version < current_version
-        ]
-        + [current_version]
+    versions = buildkite.shard_list(
+        list(
+            reversed(
+                [
+                    version
+                    for version in get_self_managed_versions()
+                    if version < current_version
+                ]
+                + [current_version]
+            )
+        ),
+        lambda version: str(version),
     )
     for version in versions:
         print(f"--- Running with defaults against {version}")
