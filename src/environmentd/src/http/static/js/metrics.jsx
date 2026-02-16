@@ -72,6 +72,7 @@ function keyBy(items, keyFn) {
  * @returns {Labels}
  */
 function pickLabels(labels, keys) {
+  /** @type {Labels} */
   const result = {};
   for (const k of keys) {
     result[k] = labels[k] || '';
@@ -152,6 +153,7 @@ function formatValue(v) {
 }
 
 // --- Styles ---
+/** @type {Record<string, React.CSSProperties>} */
 const styles = {
   container: { fontFamily: 'system-ui, -apple-system, sans-serif', padding: '16px', maxWidth: '1200px', margin: '0 auto' },
   toolbar: { display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap' },
@@ -454,7 +456,7 @@ function ScalarTable({ series, labelNames, metricType }) {
 
 // --- Histogram: one chart per label combination ---
 
-function HistogramChart({ buckets, width }) {
+function HistogramChart({ buckets, width = 500 }) {
   const ref = useRef(null);
   const chartWidth = width || 500;
 
@@ -486,7 +488,7 @@ function HistogramChart({ buckets, width }) {
       .padding(0.1);
 
     const y = d3.scaleLinear()
-      .domain([0, d3.max(data, b => b.count) || 1])
+      .domain([0, d3.max(data, /** @param {DeCumulatedBucket} b */ (b) => b.count) || 1])
       .range([innerH, 0]);
 
     g.selectAll('rect')
@@ -845,7 +847,7 @@ function MetricsApp() {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
-      const text = reader.result;
+      const text = /** @type {string} */ (reader.result);
       rawTextRef.current = text;
       const parsed = parsePrometheusText(text);
       setSnapshots([{ ...parsed, timestamp: Date.now() }]);

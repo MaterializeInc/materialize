@@ -4,9 +4,14 @@
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
-    "install-browsers": "playwright install chromium"
+    "install-browsers": "playwright install chromium",
+    "typecheck": "tsc -p tsconfig.typecheck.json"
   },
   "devDependencies": {
-    "@playwright/test": "1.58.0"
+    "@playwright/test": "1.58.0",
+    "@types/d3": "5.16.7",
+    "@types/react": "16.14.69",
+    "@types/react-dom": "16.9.25",
+    "typescript": "5.7.3"
   }
 }

@@ -24,7 +24,7 @@
  *
  * @typedef {{
  *   labels: Labels,
- *   buckets: CumulativeBucket[],
+ *   buckets?: CumulativeBucket[],
  *   deCumulatedBuckets: DeCumulatedBucket[],
  *   sum: number|null,
  *   count: number|null,
@@ -36,7 +36,7 @@
  * @typedef {{
  *   name: string,
  *   help: string,
- *   type: 'counter'|'gauge'|'histogram'|'summary'|'untyped',
+ *   type: string,
  *   samples: Sample[],
  *   labelNames: string[],
  *   series?: ScalarSeries[],
@@ -135,7 +135,7 @@ function parsePrometheusText(text) {
  */
 function updateFamily(families, name, { help, type } = {}) {
   if (!families.has(name)) {
-    families.set(name, { name, help: '', type: 'untyped', samples: [] });
+    families.set(name, { name, help: '', type: 'untyped', samples: [], labelNames: [] });
   }
   const family = families.get(name);
   if (help !== undefined) family.help = help;
@@ -276,6 +276,7 @@ function parseSampleLine(line) {
  * @returns {Labels}
  */
 function parseLabels(str) {
+  /** @type {Labels} */
   const labels = {};
   if (!str) return labels;
   const re = /(\w+)="([^"]*)"/g;
