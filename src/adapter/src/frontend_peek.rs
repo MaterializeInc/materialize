@@ -1109,8 +1109,7 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            let global_mir_plan =
-                                optimizer.catch_unwind_optimize(plan.from.clone())?;
+                            let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
                             let as_of = timestamp_context.timestamp_or_default();
 
                             if let Some(up_to) = optimizer.up_to() {
