@@ -425,7 +425,8 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// `map_filter_project`.
     pub result_desc: RelationDesc,
     /// If `Some`, then look up only the given keys from the collection (instead of a full scan).
-    /// The vector is never empty.
+    /// The vector may be empty, indicating that no keys are targeted on this worker
+    /// (the worker should respond with empty results immediately).
     pub literal_constraints: Option<Vec<Row>>,
     /// The identifier of this peek request.
     ///

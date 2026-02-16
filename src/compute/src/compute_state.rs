@@ -572,6 +572,21 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
     #[mz_ore::instrument(level = "debug")]
     fn handle_peek(&mut self, peek: Peek) {
+        // Empty literal constraints means no keys hash to this worker.
+        // Respond immediately with empty results.
+        if peek
+            .literal_constraints
+            .as_ref()
+            .is_some_and(|c| c.is_empty())
+        {
+            self.send_compute_response(ComputeResponse::PeekResponse(
+                peek.uuid,
+                PeekResponse::Rows(RowCollection::default()),
+                OpenTelemetryContext::obtain(),
+            ));
+            return;
+        }
+
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
                 // Acquire a copy of the trace suitable for fulfilling the peek.

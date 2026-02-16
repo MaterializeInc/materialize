@@ -25,10 +25,12 @@
 use std::sync::mpsc::{self, TryRecvError};
 use std::sync::{Arc, Mutex};
 
+use differential_dataflow::Hashable;
 use itertools::Itertools;
-use mz_compute_client::protocol::command::ComputeCommand;
+use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
+use mz_repr::Row;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::Exchange;
@@ -197,7 +199,28 @@ fn split_command(
                 })
                 .map(Box::new)
                 .map(ComputeCommand::CreateDataflow);
-            Either::Left(commands)
+            Either::Left(Either::Left(commands))
+        }
+        ComputeCommand::Peek(mut peek)
+            if peek.literal_constraints.is_some()
+                && matches!(peek.target, PeekTarget::Index { .. }) =>
+        {
+            // Index peeks with literal constraints can be split per worker: each key
+            // hashes to exactly one worker's arrangement shard, so we route each
+            // constraint to the owning worker and give other workers an empty list
+            // (they must still respond, but can short-circuit immediately).
+            let constraints = peek.literal_constraints.take().unwrap();
+            let mut per_worker: Vec<Vec<Row>> = vec![Vec::new(); parts];
+            for row in constraints {
+                let target = usize::cast_from(row.hashed()) % parts;
+                per_worker[target].push(row);
+            }
+            let commands = per_worker.into_iter().map(move |wc| {
+                let mut wp = (*peek).clone();
+                wp.literal_constraints = Some(wc);
+                ComputeCommand::Peek(Box::new(wp))
+            });
+            Either::Left(Either::Right(commands))
         }
         command => {
             let commands = std::iter::repeat_n(command, parts);
