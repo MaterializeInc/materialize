@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"regclasstooid\",\n    preserves_uniquen
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastRegClassToOid;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastRegClassToOid {

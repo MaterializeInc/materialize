@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"mz_aclitem_privileges\")]\nfn mz_acl_item_pri
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct MzAclItemPrivileges;
 impl<'a> crate::func::EagerUnaryFunc<'a> for MzAclItemPrivileges {

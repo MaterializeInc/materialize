@@ -13,7 +13,7 @@ expression: "#[sqlfunc(propagates_nulls = true)]\nfn uuid_generate_v5(a: uuid::U
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct UuidGenerateV5;
 impl crate::func::binary::EagerBinaryFunc for UuidGenerateV5 {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for UuidGenerateV5 {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
     fn propagates_nulls(&self) -> bool {
         true

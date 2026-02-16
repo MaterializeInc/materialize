@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"real_to_integer\",\n    preserves_uniqu
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastFloat32ToInt32;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastFloat32ToInt32 {

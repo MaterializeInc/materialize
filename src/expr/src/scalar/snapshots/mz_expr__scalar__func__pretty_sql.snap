@@ -13,7 +13,7 @@ expression: "#[sqlfunc(propagates_nulls = true)]\nfn pretty_sql<'a>(\n    sql: &
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct PrettySql;
 impl crate::func::binary::EagerBinaryFunc for PrettySql {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for PrettySql {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
     fn propagates_nulls(&self) -> bool {
         true

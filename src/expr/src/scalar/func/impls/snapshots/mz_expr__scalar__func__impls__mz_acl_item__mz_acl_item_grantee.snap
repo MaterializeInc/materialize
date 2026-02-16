@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"mz_aclitem_grantee\")]\nfn mz_acl_item_grante
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct MzAclItemGrantee;
 impl<'a> crate::func::EagerUnaryFunc<'a> for MzAclItemGrantee {

@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"ascii\")]\nfn ascii<'a>(a: &'a str) -> i32 {\
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Ascii;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Ascii {

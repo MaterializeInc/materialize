@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"timestamp_to_time\", preserves_uniqueness = f
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastTimestampToTime;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastTimestampToTime {

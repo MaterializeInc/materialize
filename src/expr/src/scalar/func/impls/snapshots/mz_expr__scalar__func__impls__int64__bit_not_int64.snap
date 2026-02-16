@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"~\", preserves_uniqueness = true, inverse = t
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct BitNotInt64;
 impl<'a> crate::func::EagerUnaryFunc<'a> for BitNotInt64 {

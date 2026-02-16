@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    output_type = \"Vec<u8>\",\n    sqlname = \"digest\
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct DigestBytes;
 impl crate::func::binary::EagerBinaryFunc for DigestBytes {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for DigestBytes {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
     fn introduces_nulls(&self) -> bool {
         false

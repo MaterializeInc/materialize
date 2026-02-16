@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"jsonb_to_double\", is_monotone = true)]\nfn c
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastJsonbToFloat64;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastJsonbToFloat64 {

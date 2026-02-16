@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"cbrtf64\")]\nfn cbrt_float64(a: f64) -> f64 {
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CbrtFloat64;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CbrtFloat64 {

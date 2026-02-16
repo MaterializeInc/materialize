@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn acos(a: f64) -> Result<f64, EvalError> {\n    if a
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Acos;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Acos {

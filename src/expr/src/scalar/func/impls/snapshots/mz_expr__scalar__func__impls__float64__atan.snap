@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn atan(a: f64) -> f64 {\n    a.atan()\n}\n"
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Atan;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Atan {

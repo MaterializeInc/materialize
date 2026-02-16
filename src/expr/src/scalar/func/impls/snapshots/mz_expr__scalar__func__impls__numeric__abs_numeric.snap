@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"abs\")]\nfn abs_numeric(mut a: Numeric) -> Nu
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct AbsNumeric;
 impl<'a> crate::func::EagerUnaryFunc<'a> for AbsNumeric {

@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"step_mz_timestamp\",\n    preserves_uni
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct StepMzTimestamp;
 impl<'a> crate::func::EagerUnaryFunc<'a> for StepMzTimestamp {

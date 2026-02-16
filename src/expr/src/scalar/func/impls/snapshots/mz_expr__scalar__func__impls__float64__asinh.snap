@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn asinh(a: f64) -> f64 {\n    a.asinh()\n}\n"
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Asinh;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Asinh {

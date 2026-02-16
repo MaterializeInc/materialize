@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"range_empty\")]\nfn range_empty<'a>(a: Range<
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct RangeEmpty;
 impl<'a> crate::func::EagerUnaryFunc<'a> for RangeEmpty {

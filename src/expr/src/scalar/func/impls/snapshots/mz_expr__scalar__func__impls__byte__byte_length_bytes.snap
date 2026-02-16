@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"octet_length\")]\nfn byte_length_bytes<'a>(a:
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct ByteLengthBytes;
 impl<'a> crate::func::EagerUnaryFunc<'a> for ByteLengthBytes {

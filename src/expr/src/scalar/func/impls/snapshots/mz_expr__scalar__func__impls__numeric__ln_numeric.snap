@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"lnnumeric\")]\nfn ln_numeric(a: Numeric) -> R
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct LnNumeric;
 impl<'a> crate::func::EagerUnaryFunc<'a> for LnNumeric {

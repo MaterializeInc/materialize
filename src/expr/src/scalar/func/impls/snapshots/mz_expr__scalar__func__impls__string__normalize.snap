@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn normalize(text: &str, form_str: &str) -> Result<St
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Normalize;
 impl crate::func::binary::EagerBinaryFunc for Normalize {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for Normalize {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
 }
 impl std::fmt::Display for Normalize {

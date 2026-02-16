@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"integer_to_text\",\n    preserves_uniqu
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastInt32ToString;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastInt32ToString {

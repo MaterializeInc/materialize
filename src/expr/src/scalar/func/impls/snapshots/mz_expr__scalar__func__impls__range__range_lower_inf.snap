@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"range_lower_inf\")]\nfn range_lower_inf<'a>(a
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct RangeLowerInf;
 impl<'a> crate::func::EagerUnaryFunc<'a> for RangeLowerInf {

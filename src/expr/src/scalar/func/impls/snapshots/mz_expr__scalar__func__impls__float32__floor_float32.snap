@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"floorf32\")]\nfn floor_float32(a: f32) -> f32
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct FloorFloat32;
 impl<'a> crate::func::EagerUnaryFunc<'a> for FloorFloat32 {

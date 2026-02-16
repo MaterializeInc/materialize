@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"btrim\")]\nfn trim_whitespace<'a>(a: &'a str)
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct TrimWhitespace;
 impl<'a> crate::func::EagerUnaryFunc<'a> for TrimWhitespace {

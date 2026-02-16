@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = \"Op
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct ComplexOutputTypeFn;
 impl crate::func::binary::EagerBinaryFunc for ComplexOutputTypeFn {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for ComplexOutputTypeFn {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
     fn introduces_nulls(&self) -> bool {
         <Option<bool> as ::mz_repr::OutputDatumType<'_, ()>>::nullable()

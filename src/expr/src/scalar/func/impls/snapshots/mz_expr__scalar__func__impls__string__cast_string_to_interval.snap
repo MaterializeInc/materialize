@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"text_to_interval\",\n    preserves_uniq
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastStringToInterval;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastStringToInterval {

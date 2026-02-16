@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"double_to_uint8\",\n    preserves_uniqu
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastFloat64ToUint64;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastFloat64ToUint64 {

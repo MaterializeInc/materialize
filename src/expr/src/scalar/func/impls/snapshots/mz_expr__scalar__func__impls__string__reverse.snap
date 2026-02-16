@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"reverse\")]\nfn reverse<'a>(a: &'a str) -> St
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Reverse;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Reverse {

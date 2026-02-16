@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"INFALLIBLE\", is_infix_op = true)]\n#[allow(d
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Infallible1;
 impl crate::func::binary::EagerBinaryFunc for Infallible1 {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for Infallible1 {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
     fn is_infix_op(&self) -> bool {
         true

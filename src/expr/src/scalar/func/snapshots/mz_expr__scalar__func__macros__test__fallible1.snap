@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn fallible1(a: f32) -> Result<f32, EvalError> {\n   
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Fallible1;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Fallible1 {

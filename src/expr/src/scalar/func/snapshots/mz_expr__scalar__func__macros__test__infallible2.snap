@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn infallible2(a: Option<f32>) -> f32 {\n    a.unwrap
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Infallible2;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Infallible2 {

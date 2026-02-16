@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"abs\")]\nfn abs_float32(a: f32) -> f32 {\n   
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct AbsFloat32;
 impl<'a> crate::func::EagerUnaryFunc<'a> for AbsFloat32 {

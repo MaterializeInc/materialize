@@ -13,7 +13,7 @@ expression: "#[sqlfunc(\n    sqlname = \"bytea_to_text\",\n    preserves_uniquen
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct CastBytesToString;
 impl<'a> crate::func::EagerUnaryFunc<'a> for CastBytesToString {

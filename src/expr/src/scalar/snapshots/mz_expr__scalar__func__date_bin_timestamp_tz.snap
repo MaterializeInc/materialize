@@ -13,7 +13,7 @@ expression: "#[sqlfunc(is_monotone = \"(true, true)\", sqlname = \"bin_unix_epoc
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct DateBinTimestampTz;
 impl crate::func::binary::EagerBinaryFunc for DateBinTimestampTz {
@@ -39,12 +39,9 @@ impl crate::func::binary::EagerBinaryFunc for DateBinTimestampTz {
             self,
         );
         let nullable = output.nullable;
-        output
-            .nullable(
-                nullable
-                    || (propagates_nulls
-                        && (input_type_a.nullable || input_type_b.nullable)),
-            )
+        let is_null = nullable
+            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        output.nullable(is_null)
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)

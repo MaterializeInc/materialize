@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"mz_sleep\")]\nfn sleep(a: f64) -> Option<Chec
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Sleep;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Sleep {

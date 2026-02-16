@@ -13,7 +13,7 @@ expression: "#[sqlfunc(sqlname = \"truncf32\")]\nfn trunc_float32(a: f32) -> f32
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct TruncFloat32;
 impl<'a> crate::func::EagerUnaryFunc<'a> for TruncFloat32 {

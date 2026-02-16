@@ -13,7 +13,7 @@ expression: "#[sqlfunc()]\nfn chr(a: i32) -> Result<String, EvalError> {\n    le
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect
+    mz_lowertest::MzReflect,
 )]
 pub struct Chr;
 impl<'a> crate::func::EagerUnaryFunc<'a> for Chr {
