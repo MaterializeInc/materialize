@@ -11,9 +11,86 @@
 
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
+/**
+ * Types referenced from prometheus.js: Labels, ScalarSeries, HistogramSeries, MetricFamily, DeCumulatedBucket
+ *
+ * @typedef {{ labels: Labels, value: number, delta?: number, rate?: number }} ScalarSeriesWithDelta
+ *
+ * @typedef {{
+ *   labels: Labels,
+ *   deCumulatedBuckets: DeCumulatedBucket[],
+ *   sum: number,
+ *   count: number,
+ *   average: number|null,
+ *   deltaCount?: number,
+ *   obsRate?: number,
+ *   rateBuckets?: DeCumulatedBucket[]
+ * }} HistogramSeriesWithDelta
+ */
+
+// --- Collection utilities ---
+
+/**
+ * Group items by a key function, returning a Map from key to array of items.
+ *
+ * @template T
+ * @param {T[]} items
+ * @param {(item: T) => string} keyFn
+ * @returns {Map<string, T[]>}
+ */
+function groupBy(items, keyFn) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = keyFn(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+}
+
+/**
+ * Index items by a key function, returning a Map from key to item (last wins on collision).
+ *
+ * @template T
+ * @param {T[]} items
+ * @param {(item: T) => string} keyFn
+ * @returns {Map<string, T>}
+ */
+function keyBy(items, keyFn) {
+  const map = new Map();
+  for (const item of items) {
+    map.set(keyFn(item), item);
+  }
+  return map;
+}
+
+/**
+ * Pick a subset of label keys from a labels object.
+ *
+ * @param {Labels} labels
+ * @param {Iterable<string>} keys
+ * @returns {Labels}
+ */
+function pickLabels(labels, keys) {
+  const result = {};
+  for (const k of keys) {
+    result[k] = labels[k] || '';
+  }
+  return result;
+}
+
+/** @param {Labels} labels */
+const labelsKey = (labels) => JSON.stringify(labels);
+
 // Max samples before requiring expand to see values
 const AUTO_SHOW_THRESHOLD = 5;
 
+/**
+ * Fetch raw Prometheus metrics text from a URL.
+ *
+ * @param {string} url
+ * @returns {Promise<string>}
+ */
 async function fetchMetrics(url) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -22,6 +99,11 @@ async function fetchMetrics(url) {
   return response.text();
 }
 
+/**
+ * Discover available metrics endpoints (environmentd + cluster replicas).
+ *
+ * @returns {Promise<Array<{ label: string, url: string }>>}
+ */
 async function discoverEndpoints() {
   const endpoints = [{ label: 'environmentd', url: '/metrics' }];
   try {
@@ -57,6 +139,12 @@ async function discoverEndpoints() {
   return endpoints;
 }
 
+/**
+ * Format a numeric metric value for display.
+ *
+ * @param {number} v
+ * @returns {string}
+ */
 function formatValue(v) {
   if (Number.isInteger(v)) return String(v);
   if (Math.abs(v) >= 0.01 && Math.abs(v) < 1e6) return v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
@@ -110,6 +198,12 @@ function CopyButton({ getText }) {
   );
 }
 
+/**
+ * Format a histogram series as tab-separated text for clipboard export.
+ *
+ * @param {HistogramSeries} series
+ * @returns {string}
+ */
 function histogramSeriesToTsv(series) {
   const labelParts = Object.entries(series.labels).map(([k, v]) => `${k}="${v}"`).join(', ');
   const header = 'le\tcount';
@@ -158,97 +252,103 @@ function LabelDimensionToggles({ labelNames, selectedLabels, onToggle }) {
   );
 }
 
+/**
+ * Aggregate histogram series by a subset of label dimensions, summing buckets.
+ *
+ * @param {HistogramSeries[]} histogramSeries
+ * @param {string[]} labelNames - All label names on this family
+ * @param {Set<string>} selectedLabels - Label dimensions to keep (others are collapsed)
+ * @returns {HistogramSeries[]}
+ */
 function aggregateHistogramSeries(histogramSeries, labelNames, selectedLabels) {
   if (!histogramSeries || selectedLabels.size === labelNames.length) return histogramSeries;
 
-  const groups = new Map();
-  for (const series of histogramSeries) {
-    const groupLabels = {};
-    for (const label of selectedLabels) {
-      groupLabels[label] = series.labels[label] || '';
-    }
-    const key = JSON.stringify(groupLabels);
-    if (!groups.has(key)) {
-      groups.set(key, { labels: groupLabels, bucketSums: {}, sum: 0, count: 0 });
-    }
-    const group = groups.get(key);
-    for (const b of series.deCumulatedBuckets) {
-      const leKey = String(b.le);
-      group.bucketSums[leKey] = (group.bucketSums[leKey] || 0) + b.count;
-    }
-    if (series.sum !== null) group.sum += series.sum;
-    if (series.count !== null) group.count += series.count;
-  }
+  const grouped = groupBy(histogramSeries, s => labelsKey(pickLabels(s.labels, selectedLabels)));
 
-  return [...groups.values()].map(g => {
-    const deCumulatedBuckets = Object.entries(g.bucketSums).map(([le, count]) => ({
-      le: parseFloat(le),
-      count,
-    })).sort((a, b) => a.le - b.le);
-    return {
-      labels: g.labels,
-      deCumulatedBuckets,
-      sum: g.sum,
-      count: g.count,
-      average: g.count > 0 ? g.sum / g.count : null,
-    };
+  return [...grouped.values()].map(seriesList => {
+    const labels = pickLabels(seriesList[0].labels, selectedLabels);
+    const sum = seriesList.reduce((acc, s) => acc + (s.sum || 0), 0);
+    const count = seriesList.reduce((acc, s) => acc + (s.count || 0), 0);
+
+    // Merge de-cumulated buckets across all series in the group
+    const bucketSums = {};
+    for (const series of seriesList) {
+      for (const b of series.deCumulatedBuckets) {
+        const leKey = String(b.le);
+        bucketSums[leKey] = (bucketSums[leKey] || 0) + b.count;
+      }
+    }
+    const deCumulatedBuckets = Object.entries(bucketSums)
+      .map(([le, count]) => ({ le: parseFloat(le), count }))
+      .sort((a, b) => a.le - b.le);
+
+    return { labels, deCumulatedBuckets, sum, count, average: count > 0 ? sum / count : null };
   });
 }
 
+/**
+ * Aggregate scalar series by a subset of label dimensions, summing values.
+ *
+ * @param {ScalarSeries[]} series
+ * @param {string[]} labelNames - All label names on this family
+ * @param {Set<string>} selectedLabels - Label dimensions to keep
+ * @returns {{ series: ScalarSeries[], labelNames: string[] }}
+ */
 function aggregateScalarSeries(series, labelNames, selectedLabels) {
   if (!series || selectedLabels.size === labelNames.length) {
     return { series, labelNames: [...labelNames] };
   }
 
   const activeLabelNames = labelNames.filter(n => selectedLabels.has(n));
-  const groups = new Map();
-  for (const s of series) {
-    const groupLabels = {};
-    for (const label of activeLabelNames) {
-      groupLabels[label] = s.labels[label] || '';
-    }
-    const key = JSON.stringify(groupLabels);
-    if (!groups.has(key)) {
-      groups.set(key, { labels: groupLabels, value: 0 });
-    }
-    groups.get(key).value += s.value;
-  }
-  return { series: [...groups.values()], labelNames: activeLabelNames };
+  const grouped = groupBy(series, s => labelsKey(pickLabels(s.labels, activeLabelNames)));
+
+  const aggregated = [...grouped.values()].map(seriesList => ({
+    labels: pickLabels(seriesList[0].labels, activeLabelNames),
+    value: seriesList.reduce((acc, s) => acc + s.value, 0),
+  }));
+
+  return { series: aggregated, labelNames: activeLabelNames };
 }
 
 // --- Delta / rate computation ---
 
+/**
+ * Enrich scalar series with delta and rate by comparing against a previous snapshot.
+ *
+ * @param {ScalarSeries[]} currentSeries
+ * @param {ScalarSeries[]} prevSeries
+ * @param {number} dtSeconds - Elapsed time between snapshots
+ * @returns {ScalarSeriesWithDelta[]}
+ */
 function computeScalarDeltas(currentSeries, prevSeries, dtSeconds) {
   if (!prevSeries || !dtSeconds) return currentSeries;
-  const prevMap = new Map();
-  for (const s of prevSeries) {
-    prevMap.set(JSON.stringify(s.labels), s.value);
-  }
+  const prevMap = keyBy(prevSeries, s => labelsKey(s.labels));
   return currentSeries.map(s => {
-    const prevVal = prevMap.get(JSON.stringify(s.labels));
-    if (prevVal !== undefined) {
-      const delta = s.value - prevVal;
-      return { ...s, delta, rate: delta / dtSeconds };
-    }
-    return s;
+    const prev = prevMap.get(labelsKey(s.labels));
+    if (!prev) return s;
+    const delta = s.value - prev.value;
+    return { ...s, delta, rate: delta / dtSeconds };
   });
 }
 
+/**
+ * Enrich histogram series with delta counts, observation rates, and rate buckets.
+ *
+ * @param {HistogramSeries[]} currentList
+ * @param {HistogramSeries[]} prevList
+ * @param {number} dtSeconds - Elapsed time between snapshots
+ * @returns {HistogramSeriesWithDelta[]}
+ */
 function computeHistogramDeltas(currentList, prevList, dtSeconds) {
   if (!prevList || !dtSeconds) return currentList;
-  const prevMap = new Map();
-  for (const s of prevList) {
-    prevMap.set(JSON.stringify(s.labels), s);
-  }
+  const prevMap = keyBy(prevList, s => labelsKey(s.labels));
   return currentList.map(s => {
-    const prev = prevMap.get(JSON.stringify(s.labels));
+    const prev = prevMap.get(labelsKey(s.labels));
     if (!prev) return s;
     const deltaCount = (s.count || 0) - (prev.count || 0);
     const obsRate = deltaCount / dtSeconds;
-    // Delta buckets for rate chart
     const rateBuckets = s.deCumulatedBuckets.map((b, i) => {
-      const prevCount = (prev.deCumulatedBuckets && prev.deCumulatedBuckets[i])
-        ? prev.deCumulatedBuckets[i].count : 0;
+      const prevCount = prev.deCumulatedBuckets?.[i]?.count ?? 0;
       return { le: b.le, count: Math.max(0, (b.count - prevCount) / dtSeconds) };
     });
     return { ...s, deltaCount, obsRate, rateBuckets };

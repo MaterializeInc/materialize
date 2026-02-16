@@ -10,6 +10,41 @@
 'use strict';
 
 /**
+ * @typedef {Object<string, string>} Labels
+ *
+ * @typedef {{
+ *   metricName: string,
+ *   labels: Labels,
+ *   value: number,
+ *   raw: string
+ * }} Sample
+ *
+ * @typedef {{ le: number, value: number }} CumulativeBucket
+ * @typedef {{ le: number, count: number }} DeCumulatedBucket
+ *
+ * @typedef {{
+ *   labels: Labels,
+ *   buckets: CumulativeBucket[],
+ *   deCumulatedBuckets: DeCumulatedBucket[],
+ *   sum: number|null,
+ *   count: number|null,
+ *   average: number|null
+ * }} HistogramSeries
+ *
+ * @typedef {{ labels: Labels, value: number }} ScalarSeries
+ *
+ * @typedef {{
+ *   name: string,
+ *   help: string,
+ *   type: 'counter'|'gauge'|'histogram'|'summary'|'untyped',
+ *   samples: Sample[],
+ *   labelNames: string[],
+ *   series?: ScalarSeries[],
+ *   histogramSeries?: HistogramSeries[]
+ * }} MetricFamily
+ */
+
+/**
  * Parse Prometheus text exposition format into structured metric families and groups.
  *
  * @param {string} text - Raw Prometheus metrics text
@@ -90,6 +125,14 @@ function parsePrometheusText(text) {
   return { families, groups };
 }
 
+/**
+ * Get or create a metric family in the families map, optionally updating help/type.
+ *
+ * @param {Map<string, MetricFamily>} families
+ * @param {string} name
+ * @param {{ help?: string, type?: string }} [opts]
+ * @returns {MetricFamily}
+ */
 function updateFamily(families, name, { help, type } = {}) {
   if (!families.has(name)) {
     families.set(name, { name, help: '', type: 'untyped', samples: [] });
@@ -101,9 +144,11 @@ function updateFamily(families, name, { help, type } = {}) {
 }
 
 /**
- * Build structured series data for a family.
+ * Build structured series data for a family (mutates family in place).
  * - For histograms: groups buckets/sum/count by label combination (excluding `le`)
  * - For counters/gauges: produces a flat series array of { labels, value }
+ *
+ * @param {MetricFamily} family
  */
 function buildSeries(family) {
   const isHistogram = family.type === 'histogram';
@@ -121,19 +166,25 @@ function buildSeries(family) {
   family.labelNames = [...labelNameSet].sort();
 
   if (isHistogram) {
-    buildHistogramSeries(family);
+    family.histogramSeries = buildHistogramSeries(family.samples, family.labelNames);
   } else {
-    family.series = buildScalarSeries(family);
+    family.series = buildScalarSeries(family.samples, family.name);
   }
 }
 
-function buildHistogramSeries(family) {
+/**
+ * Group histogram samples by label combination and build de-cumulated bucket series.
+ *
+ * @param {Sample[]} samples
+ * @param {string[]} labelNames - Label names excluding 'le'
+ * @returns {HistogramSeries[]}
+ */
+function buildHistogramSeries(samples, labelNames) {
   const seriesMap = new Map();
 
-  for (const sample of family.samples) {
-    // Build grouping key from non-le labels
+  for (const sample of samples) {
     const groupLabels = {};
-    for (const key of family.labelNames) {
+    for (const key of labelNames) {
       if (sample.labels[key] !== undefined) {
         groupLabels[key] = sample.labels[key];
       }
@@ -157,7 +208,7 @@ function buildHistogramSeries(family) {
     }
   }
 
-  family.histogramSeries = [];
+  const result = [];
   for (const [, series] of seriesMap) {
     series.buckets.sort((a, b) => a.le - b.le);
     // De-cumulate
@@ -171,21 +222,32 @@ function buildHistogramSeries(family) {
     if (series.sum !== null && series.count !== null && series.count > 0) {
       series.average = series.sum / series.count;
     }
-    family.histogramSeries.push(series);
+    result.push(series);
   }
+  return result;
 }
 
-function buildScalarSeries(family) {
-  // "Main" samples: those matching family name or family_name_total
-  // (exclude _sum, _count, _bucket which belong to sub-metrics)
-  const mainSamples = family.samples.filter(s =>
-    s.metricName === family.name || s.metricName === family.name + '_total'
-  );
-  return mainSamples.map(s => ({ labels: s.labels, value: s.value }));
+/**
+ * Build scalar (counter/gauge) series from samples matching the family name.
+ *
+ * @param {Sample[]} samples
+ * @param {string} familyName
+ * @returns {ScalarSeries[]}
+ */
+function buildScalarSeries(samples, familyName) {
+  return samples
+    .filter(s => s.metricName === familyName || s.metricName === familyName + '_total')
+    .map(s => ({ labels: s.labels, value: s.value }));
 }
 
 // --- Line parsing ---
 
+/**
+ * Parse a single Prometheus sample line into metric name, labels, and value.
+ *
+ * @param {string} line - e.g. 'http_requests_total{method="GET"} 42'
+ * @returns {{ metricName: string, labels: Labels, value: number } | null}
+ */
 function parseSampleLine(line) {
   const braceIdx = line.indexOf('{');
   const spaceIdx = line.indexOf(' ');
@@ -207,6 +269,12 @@ function parseSampleLine(line) {
   return null;
 }
 
+/**
+ * Parse a Prometheus label string into key-value pairs.
+ *
+ * @param {string} str - e.g. 'method="GET",status="200"'
+ * @returns {Labels}
+ */
 function parseLabels(str) {
   const labels = {};
   if (!str) return labels;
@@ -217,6 +285,14 @@ function parseLabels(str) {
   return labels;
 }
 
+/**
+ * Extract the grouping prefix from a metric name.
+ * For mz_* metrics, uses the second segment (e.g. 'mz_compute').
+ * For others, uses the first segment (e.g. 'http').
+ *
+ * @param {string} name
+ * @returns {string}
+ */
 function getMetricPrefix(name) {
   if (name.startsWith('mz_')) {
     const rest = name.slice(3);
