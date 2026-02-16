@@ -312,11 +312,10 @@ describe("CreateRoleModal", () => {
       ).toBeVisible();
     });
 
-    // The primary resource (Role) was created, so the modal should close
-    // to prevent duplicate creation errors on retry.
-    expect(mockOnClose).toHaveBeenCalled();
+    // Modal stays open showing the partial failure details
+    expect(screen.getByText("Create Role")).toBeVisible();
 
-    // The error detail should still be visible (e.g., in the toast)
+    // The error detail should be visible in the form
     expect(
       screen.getByText(/permission denied for role analyst/),
     ).toBeInTheDocument();

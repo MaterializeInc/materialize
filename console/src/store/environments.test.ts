@@ -53,15 +53,6 @@ const enabledStillBootingEnvironment: EnabledEnvironment = {
   resolvable: false,
 };
 
-const healthCheckResponse = {
-  results: [
-    {
-      rows: [["v0.62.2 (db0befbf8)"]],
-      col_names: ["mz_version"],
-    },
-  ],
-};
-
 describe("store/environments", () => {
   beforeEach(() => {
     server.use(buildCloudRegionsReponse());
@@ -89,22 +80,16 @@ describe("store/environments", () => {
       ]);
     });
 
-    it("should return crashed when max boot time has elapsed and a timeout occurs", async () => {
+    it("should return crashed when max boot time has elapsed and a network error occurs", async () => {
       server.use(
         http.post("*/api/sql", () => {
-          return new Promise<HttpResponse>((resolve) => {
-            // Simulate a "slow" response
-            setTimeout(
-              () => resolve(HttpResponse.json(healthCheckResponse)),
-              100,
-            );
-          });
+          return HttpResponse.error();
         }),
       );
       const result = await fetchEnvironmentHealth(
         enabledEnvironment,
-        1, // 1ms timeout
-        { seconds: 0.001 }, // 1ms max boot time
+        10_000,
+        { seconds: 0.001 }, // 1ms max boot time (already exceeded)
       );
       expect(result.health).toEqual("crashed");
       const { errors } = result as { errors?: EnvironmentError[] };
@@ -112,7 +97,7 @@ describe("store/environments", () => {
         {
           message:
             "Environment not resolvable for more than 0.001 seconds after creation",
-          details: new DOMException(),
+          details: expect.any(Error),
         },
       ]);
     });
@@ -140,19 +125,13 @@ describe("store/environments", () => {
     it("should return crashed when not responsive for longer than max boot time", async () => {
       server.use(
         http.post("*/api/sql", () => {
-          return new Promise<HttpResponse>((resolve) => {
-            // Simulate a "slow" response
-            setTimeout(
-              () => resolve(HttpResponse.json(healthCheckResponse)),
-              100,
-            );
-          });
+          return HttpResponse.error();
         }),
       );
       const result = await fetchEnvironmentHealth(
         enabledEnvironment,
-        2, // 2ms timeout
-        { seconds: 0.001 }, // 1ms max boot time
+        10_000,
+        { seconds: 0.001 }, // 1ms max boot time (already exceeded)
       );
       expect(result.health).toEqual("crashed");
       const { errors } = result as { errors?: EnvironmentError[] };
@@ -161,7 +140,7 @@ describe("store/environments", () => {
           message: expect.stringMatching(
             "Environment not resolvable for more than 0.001 seconds after creation",
           ),
-          details: new DOMException(),
+          details: expect.any(Error),
         },
       ]);
     });

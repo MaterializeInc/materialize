@@ -805,10 +805,62 @@ steps:
           - ci/test/console/**
         depends_on: []
         timeout_in_minutes: 15
+        artifact_paths: console/log/**/*
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         coverage: skip
         sanitizer: skip
+
+      - id: console-sql-test
+        label: ":npm: Console SQL tests"
+        depends_on: build-x86_64
+        timeout_in_minutes: 30
+        inputs:
+          - console/**
+          - test/console/**
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: console
+              run: sql-tests
+        agents:
+          # SQL Server doesn't support ARM
+          queue: hetzner-x86-64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
+      - id: console-e2e-test
+        label: ":playwright: Console e2e tests"
+        command: ci/test/console/console-e2e.sh
+        inputs:
+          - console/**
+          - ci/test/console/**
+        depends_on: []
+        timeout_in_minutes: 60
+        artifact_paths: console/test-results/**/*
+        agents:
+          queue: linux-x86_64-large
+        env:
+          CI: "true"
+        coverage: skip
+        sanitizer: skip
+        skip: "Get secrets from console repo"
+
+      - id: console-e2e-prod-test
+        label: ":playwright: Console e2e tests (production)"
+        command: ci/test/console/console-e2e-prod.sh
+        inputs:
+          - console/**
+          - ci/test/console/**
+        depends_on: []
+        timeout_in_minutes: 60
+        artifact_paths: console/test-results/**/*
+        agents:
+          queue: linux-x86_64-large
+        env:
+          CI: "true"
+        coverage: skip
+        sanitizer: skip
+        skip: "Requires Vercel secrets (VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID) to be configured in Buildkite"
 
   - id: deploy-website
     label: Deploy website

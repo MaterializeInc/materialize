@@ -16,7 +16,7 @@ export default defineConfig({
   test: {
     ...baseConfig.test,
     globalSetup: ["src/test/sql/sql.setup.ts"],
-    setupFiles: ["src/__mocks__/globalMocks.js"],
+    setupFiles: ["src/__mocks__/globalMocks.js", "src/__mocks__/jsDom.ts"],
     // These tests do not use the dom or any browser state
     // Disabling isolation improves performance
     isolate: false,

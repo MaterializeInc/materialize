@@ -200,3 +200,39 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+- package-ecosystem: npm
+  directory: /console
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 20
+  labels: [A-dependencies]
+  groups:
+    babel:
+      patterns:
+        - "@babel/*"
+    emotion:
+      patterns:
+        - "@emotion/*"
+    launchdarkly:
+      patterns:
+        - "launchdarkly-*"
+    materialize:
+      patterns:
+        - "@materializeinc/*"
+    tanstack:
+      patterns:
+        - "@tanstack/*"
+    visx:
+      patterns:
+        - "@visx/*"
+    typescript_eslint:
+      patterns:
+        - "@typescript-eslint/*"
+    openapi:
+      patterns:
+        - "openapi-typescript"
+        - "openapi-fetch"

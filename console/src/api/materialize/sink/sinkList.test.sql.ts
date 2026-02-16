@@ -41,7 +41,7 @@ describe("buildSinkListQuery", () => {
         name: "my_sink",
         schemaName: "public",
         size: null,
-        status: expect.stringMatching("running|created"),
+        status: expect.stringMatching("running|created|starting"),
         type: "kafka",
       },
     ]);

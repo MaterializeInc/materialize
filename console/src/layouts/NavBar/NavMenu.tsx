@@ -233,7 +233,7 @@ const useSelfManagedNavMenuItems = () => {
     canViewUsage: false,
     location,
     // TODO (SangJunBak): Remove guard once we want to re-enable Query History
-    //  for self managed https://github.com/MaterializeInc/cloud/issues/10755
+    //  for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
     canViewQueryHistory: false,
     canViewAppPasswords: false,
     canViewLicenseKeys,

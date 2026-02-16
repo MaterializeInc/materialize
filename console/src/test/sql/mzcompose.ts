@@ -14,10 +14,7 @@ import { fileURLToPath } from "node:url";
 import dedent from "dedent";
 
 const DIRNAME = path.dirname(fileURLToPath(import.meta.url));
-const TESTDRIVE_PATH = path.resolve(
-  DIRNAME,
-  "../../../../materialize/test/console",
-);
+const TESTDRIVE_PATH = path.resolve(DIRNAME, "../../../../test/console");
 const COMPOSE_PATH = path.resolve(TESTDRIVE_PATH, "mzcompose");
 
 export async function getMaterializeEndpoint(port: number) {
@@ -28,6 +25,22 @@ export async function getMaterializeEndpoint(port: number) {
 }
 
 export async function getMaterializeEndpoints() {
+  // When running inside the Docker composition (via mzcompose), endpoints are
+  // passed as environment variables so we can reach services by hostname.
+  if (process.env.MZ_INTERNAL_SQL_HOST && process.env.MZ_INTERNAL_HTTP_HOST) {
+    return {
+      internalSql: {
+        host: process.env.MZ_INTERNAL_SQL_HOST,
+        port: parseInt(process.env.MZ_INTERNAL_SQL_PORT ?? "6877"),
+      },
+      internalHttp: {
+        host: process.env.MZ_INTERNAL_HTTP_HOST,
+        port: parseInt(process.env.MZ_INTERNAL_HTTP_PORT ?? "6878"),
+      },
+    };
+  }
+
+  // Fallback: resolve host-mapped ports via mzcompose (for local development).
   const internalSql = await getMaterializeEndpoint(6877);
   const internalHttp = await getMaterializeEndpoint(6878);
 
