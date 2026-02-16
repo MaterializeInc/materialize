@@ -1054,6 +1054,15 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::AlterSourceTimestampInterval(plan::AlterSourceTimestampIntervalPlan {
+            id,
+            value: _,
+            interval: _,
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
             ..Default::default()

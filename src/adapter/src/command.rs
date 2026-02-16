@@ -811,6 +811,7 @@ impl ExecuteResponse {
             | AlterOwner
             | AlterItemRename
             | AlterRetainHistory
+            | AlterSourceTimestampInterval
             | AlterNoop
             | AlterSchemaRename
             | AlterSchemaSwap

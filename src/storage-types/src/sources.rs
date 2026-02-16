@@ -658,19 +658,14 @@ impl<C: ConnectionAccess> AlterCompatible for SourceDesc<C> {
         }
         let Self {
             connection,
-            timestamp_interval,
+            // timestamp_interval is allowed to change via ALTER SOURCE
+            timestamp_interval: _,
         } = &self;
 
-        let compatibility_checks = [
-            (
-                connection.alter_compatible(id, &other.connection).is_ok(),
-                "connection",
-            ),
-            (
-                timestamp_interval == &other.timestamp_interval,
-                "timestamp_interval",
-            ),
-        ];
+        let compatibility_checks = [(
+            connection.alter_compatible(id, &other.connection).is_ok(),
+            "connection",
+        )];
 
         for (compatible, field) in compatibility_checks {
             if !compatible {

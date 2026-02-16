@@ -1248,6 +1248,43 @@ where
         Ok(())
     }
 
+    async fn alter_ingestion_source_desc(
+        &mut self,
+        ingestion_ids: BTreeMap<GlobalId, SourceDesc>,
+    ) -> Result<(), StorageError<Self::Timestamp>> {
+        let mut ingestions_to_run = BTreeSet::new();
+
+        for (id, new_desc) in ingestion_ids {
+            let collection = self
+                .collections
+                .get_mut(&id)
+                .ok_or_else(|| StorageError::IdentifierMissing(id))?;
+
+            match &mut collection.data_source {
+                DataSource::Ingestion(ingestion) => {
+                    if ingestion.desc != new_desc {
+                        tracing::info!(
+                            from = ?ingestion.desc,
+                            to = ?new_desc,
+                            "alter_ingestion_source_desc, updating"
+                        );
+                        ingestion.desc = new_desc;
+                        ingestions_to_run.insert(id);
+                    }
+                }
+                o => {
+                    tracing::warn!("alter_ingestion_source_desc called on {:?}", o);
+                    Err(StorageError::IdentifierInvalid(id))?;
+                }
+            }
+        }
+
+        for id in ingestions_to_run {
+            self.run_ingestion(id)?;
+        }
+        Ok(())
+    }
+
     async fn alter_ingestion_connections(
         &mut self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,

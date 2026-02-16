@@ -1252,6 +1252,7 @@ impl Coordinator {
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
+                | Op::AlterSourceTimestampInterval { .. }
                 | Op::AlterNetworkPolicy { .. }
                 | Op::AlterAddColumn { .. }
                 | Op::AlterMaterializedViewApplyReplacement { .. }

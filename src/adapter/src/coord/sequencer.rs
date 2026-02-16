@@ -496,6 +496,12 @@ impl Coordinator {
                     let result = self.sequence_alter_retain_history(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
+                Plan::AlterSourceTimestampInterval(plan) => {
+                    let result = self
+                        .sequence_alter_source_timestamp_interval(&mut ctx, plan)
+                        .await;
+                    ctx.retire(result);
+                }
                 Plan::AlterItemRename(plan) => {
                     let result = self.sequence_alter_item_rename(&mut ctx, plan).await;
                     ctx.retire(result);

@@ -498,6 +498,12 @@ pub trait StorageController: Debug {
         source_desc: &SourceDesc,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    /// Alters each identified ingestion to use the correlated [`SourceDesc`].
+    async fn alter_ingestion_source_desc(
+        &mut self,
+        ingestion_ids: BTreeMap<GlobalId, SourceDesc>,
+    ) -> Result<(), StorageError<Self::Timestamp>>;
+
     /// Alters each identified collection to use the correlated [`GenericSourceConnection`].
     async fn alter_ingestion_connections(
         &mut self,

@@ -2223,6 +2223,57 @@ impl CatalogItem {
         Ok(res)
     }
 
+    /// Updates the timestamp interval for a source. Returns an error if this item is not a source.
+    pub fn update_timestamp_interval(
+        &mut self,
+        value: Option<Value>,
+        interval: Duration,
+    ) -> Result<(), ()> {
+        let update = |ast: &mut Statement<Raw>| {
+            match ast {
+                Statement::CreateSource(stmt) => {
+                    let pos = stmt.with_options.iter().rposition(|o| {
+                        o.name == mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval
+                    });
+                    if let Some(value) = value {
+                        let next = mz_sql_parser::ast::CreateSourceOption {
+                            name: mz_sql_parser::ast::CreateSourceOptionName::TimestampInterval,
+                            value: Some(WithOptionValue::Value(value)),
+                        };
+                        if let Some(idx) = pos {
+                            stmt.with_options[idx] = next;
+                        } else {
+                            stmt.with_options.push(next);
+                        }
+                    } else {
+                        if let Some(idx) = pos {
+                            stmt.with_options.swap_remove(idx);
+                        }
+                    }
+                }
+                _ => return Err(()),
+            };
+            Ok(())
+        };
+
+        self.update_sql(update)?;
+
+        // Update the in-memory SourceDesc timestamp_interval.
+        match self {
+            CatalogItem::Source(source) => {
+                match &mut source.data_source {
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        desc.timestamp_interval = interval;
+                    }
+                    _ => return Err(()),
+                }
+                Ok(())
+            }
+            _ => Err(()),
+        }
+    }
+
     pub fn add_column(
         &mut self,
         name: ColumnName,

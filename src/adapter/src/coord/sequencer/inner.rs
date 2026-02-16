@@ -3122,6 +3122,44 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_alter_source_timestamp_interval(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: plan::AlterSourceTimestampIntervalPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let ops = vec![catalog::Op::AlterSourceTimestampInterval {
+            id: plan.id,
+            value: plan.value,
+            interval: plan.interval,
+        }];
+        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+            Box::pin(async move {
+                let source = coord
+                    .catalog()
+                    .get_entry(&plan.id)
+                    .source()
+                    .expect("known to be source");
+                let (global_id, desc) = match &source.data_source {
+                    DataSourceDesc::Ingestion { desc, .. }
+                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                        (source.global_id, desc.clone())
+                    }
+                    _ => return,
+                };
+                let desc = desc.into_inline_connection(coord.catalog().state());
+                coord
+                    .controller
+                    .storage
+                    .alter_ingestion_source_desc(BTreeMap::from([(global_id, desc)]))
+                    .await
+                    .unwrap_or_terminate("cannot fail to alter ingestion source desc");
+            })
+        })
+        .await?;
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
+    }
+
+    #[instrument]
     pub(super) async fn sequence_alter_schema_rename(
         &mut self,
         ctx: &mut ExecuteContext,

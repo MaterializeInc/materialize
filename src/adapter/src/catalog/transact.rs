@@ -84,6 +84,11 @@ pub enum Op {
         value: Option<Value>,
         window: CompactionWindow,
     },
+    AlterSourceTimestampInterval {
+        id: CatalogItemId,
+        value: Option<Value>,
+        interval: Duration,
+    },
     AlterRole {
         id: RoleId,
         name: String,
@@ -773,6 +778,36 @@ impl Catalog {
                         details,
                     )?;
                 }
+
+                tx.update_item(id, new_entry.into())?;
+
+                Self::log_update(state, &id);
+            }
+            Op::AlterSourceTimestampInterval {
+                id,
+                value,
+                interval,
+            } => {
+                let entry = state.get_entry(&id);
+                if id.is_system() {
+                    let name = entry.name();
+                    let full_name =
+                        state.resolve_full_name(name, session.map(|session| session.conn_id()));
+                    return Err(AdapterError::Catalog(Error::new(ErrorKind::ReadOnlyItem(
+                        full_name.to_string(),
+                    ))));
+                }
+
+                let mut new_entry = entry.clone();
+                new_entry
+                    .item
+                    .update_timestamp_interval(value, interval)
+                    .map_err(|_| {
+                        AdapterError::Catalog(Error::new(ErrorKind::Internal(
+                            "planner should have rejected invalid alter timestamp interval item type"
+                                .to_string(),
+                        )))
+                    })?;
 
                 tx.update_item(id, new_entry.into())?;
 

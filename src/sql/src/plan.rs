@@ -212,6 +212,7 @@ pub enum Plan {
     SideEffectingFunc(SideEffectingFunc),
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
+    AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
 }
 
 impl Plan {
@@ -244,6 +245,7 @@ impl Plan {
                 PlanKind::AlterNoop,
                 PlanKind::AlterSource,
                 PlanKind::AlterRetainHistory,
+                PlanKind::AlterSourceTimestampInterval,
             ],
             StatementKind::AlterSystemReset => &[PlanKind::AlterNoop, PlanKind::AlterSystemReset],
             StatementKind::AlterSystemResetAll => {
@@ -474,6 +476,7 @@ impl Plan {
             Plan::SideEffectingFunc(_) => "side effecting func",
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
+            Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
         }
     }
 
@@ -1208,6 +1211,13 @@ pub struct AlterRetainHistoryPlan {
     pub value: Option<Value>,
     pub window: CompactionWindow,
     pub object_type: ObjectType,
+}
+
+#[derive(Debug)]
+pub struct AlterSourceTimestampIntervalPlan {
+    pub id: CatalogItemId,
+    pub value: Option<Value>,
+    pub interval: Duration,
 }
 
 #[derive(Debug, Clone)]

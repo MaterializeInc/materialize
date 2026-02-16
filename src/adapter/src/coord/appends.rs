@@ -1007,6 +1007,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)
         | Plan::AlterRetainHistory(_)
+        | Plan::AlterSourceTimestampInterval(_)
         | Plan::AlterSchemaRename(_)
         | Plan::AlterSchemaSwap(_)
         | Plan::AlterSecret(_)
