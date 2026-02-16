@@ -16,16 +16,16 @@ expression: "#[sqlfunc(sqlname = \"ltrim\", propagates_nulls = true)]\nfn trim_l
     mz_lowertest::MzReflect
 )]
 pub struct TrimLeading;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TrimLeading {
-    type Input1 = &'a str;
-    type Input2 = &'a str;
-    type Output = &'a str;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for TrimLeading {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = &'a str;
+    type Output<'a> = &'a str;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         trim_leading(a, b)
     }
     fn output_type(

@@ -16,16 +16,16 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"ilike\")]\nfn is_like_mat
     mz_lowertest::MzReflect
 )]
 pub struct IsLikeMatchCaseInsensitive;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for IsLikeMatchCaseInsensitive {
-    type Input1 = &'a str;
-    type Input2 = &'a str;
-    type Output = Result<bool, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for IsLikeMatchCaseInsensitive {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = &'a str;
+    type Output<'a> = Result<bool, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         is_like_match_case_insensitive(a, b)
     }
     fn output_type(

@@ -16,16 +16,16 @@ expression: "#[sqlfunc(sqlname = \"length\", propagates_nulls = true)]\nfn encod
     mz_lowertest::MzReflect
 )]
 pub struct EncodedBytesCharLength;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
-    type Input1 = &'a [u8];
-    type Input2 = &'a str;
-    type Output = Result<i32, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for EncodedBytesCharLength {
+    type Input1<'a> = &'a [u8];
+    type Input2<'a> = &'a str;
+    type Output<'a> = Result<i32, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         encoded_bytes_char_length(a, b)
     }
     fn output_type(

@@ -16,16 +16,16 @@ expression: "#[sqlfunc(sqlname = \"timezoneit\")]\n/// Converts the time datum `
     mz_lowertest::MzReflect
 )]
 pub struct TimezoneIntervalTimeBinary;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TimezoneIntervalTimeBinary {
-    type Input1 = Interval;
-    type Input2 = chrono::NaiveTime;
-    type Output = Result<chrono::NaiveTime, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for TimezoneIntervalTimeBinary {
+    type Input1<'a> = Interval;
+    type Input2<'a> = chrono::NaiveTime;
+    type Output<'a> = Result<chrono::NaiveTime, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         timezone_interval_time_binary(a, b)
     }
     fn output_type(

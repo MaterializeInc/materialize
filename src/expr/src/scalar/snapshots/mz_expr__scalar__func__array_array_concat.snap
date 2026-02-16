@@ -16,16 +16,16 @@ expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.witho
     mz_lowertest::MzReflect
 )]
 pub struct ArrayArrayConcat;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayArrayConcat {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Result<Datum<'a>, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for ArrayArrayConcat {
+    type Input1<'a> = Datum<'a>;
+    type Input2<'a> = Datum<'a>;
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         array_array_concat(a, b, temp_storage)
     }
     fn output_type(

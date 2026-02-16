@@ -16,16 +16,16 @@ expression: "#[sqlfunc(sqlname = \"extractiv\", propagates_nulls = true, introdu
     mz_lowertest::MzReflect
 )]
 pub struct DatePartIntervalNumeric;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartIntervalNumeric {
-    type Input1 = &'a str;
-    type Input2 = Interval;
-    type Output = Result<Numeric, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for DatePartIntervalNumeric {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = Interval;
+    type Output<'a> = Result<Numeric, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         date_part_interval_numeric(a, b)
     }
     fn output_type(

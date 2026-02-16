@@ -16,16 +16,16 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"||\")]\nfn jsonb_concat<'
     mz_lowertest::MzReflect
 )]
 pub struct JsonbConcat;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbConcat {
-    type Input1 = JsonbRef<'a>;
-    type Input2 = JsonbRef<'a>;
-    type Output = Option<JsonbRef<'a>>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for JsonbConcat {
+    type Input1<'a> = JsonbRef<'a>;
+    type Input2<'a> = JsonbRef<'a>;
+    type Output<'a> = Option<JsonbRef<'a>>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         jsonb_concat(a, b, temp_storage)
     }
     fn output_type(

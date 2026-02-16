@@ -16,16 +16,16 @@ expression: "#[sqlfunc(propagates_nulls = true, introduces_nulls = false)]\nfn l
     mz_lowertest::MzReflect
 )]
 pub struct LikeEscape;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LikeEscape {
-    type Input1 = &'a str;
-    type Input2 = &'a str;
-    type Output = Result<&'a str, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for LikeEscape {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = &'a str;
+    type Output<'a> = Result<&'a str, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         like_escape(a, b, temp_storage)
     }
     fn output_type(

@@ -16,16 +16,16 @@ expression: "#[sqlfunc(propagates_nulls = true)]\nfn get_byte(bytes: &[u8], inde
     mz_lowertest::MzReflect
 )]
 pub struct GetByte;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetByte {
-    type Input1 = &'a [u8];
-    type Input2 = i32;
-    type Output = Result<i32, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for GetByte {
+    type Input1<'a> = &'a [u8];
+    type Input2<'a> = i32;
+    type Output<'a> = Result<i32, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         get_byte(a, b)
     }
     fn output_type(

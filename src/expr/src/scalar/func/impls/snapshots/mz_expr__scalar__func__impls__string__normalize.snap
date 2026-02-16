@@ -16,16 +16,16 @@ expression: "#[sqlfunc()]\nfn normalize(text: &str, form_str: &str) -> Result<St
     mz_lowertest::MzReflect
 )]
 pub struct Normalize;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Normalize {
-    type Input1 = &'a str;
-    type Input2 = &'a str;
-    type Output = Result<String, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for Normalize {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = &'a str;
+    type Output<'a> = Result<String, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         normalize(a, b)
     }
     fn output_type(

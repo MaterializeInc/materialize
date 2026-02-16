@@ -16,16 +16,16 @@ expression: "#[sqlfunc()]\n#[allow(dead_code)]\nfn infallible3(a: f32, b: f32) -
     mz_lowertest::MzReflect
 )]
 pub struct Infallible3;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Infallible3 {
-    type Input1 = f32;
-    type Input2 = f32;
-    type Output = Option<f32>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for Infallible3 {
+    type Input1<'a> = f32;
+    type Input2<'a> = f32;
+    type Output<'a> = Option<f32>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         infallible3(a, b)
     }
     fn output_type(

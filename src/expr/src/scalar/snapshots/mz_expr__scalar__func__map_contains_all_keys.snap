@@ -16,16 +16,16 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?&\")]\nfn map_contains_a
     mz_lowertest::MzReflect
 )]
 pub struct MapContainsAllKeys;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for MapContainsAllKeys {
-    type Input1 = DatumMap<'a>;
-    type Input2 = Array<'a>;
-    type Output = bool;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for MapContainsAllKeys {
+    type Input1<'a> = DatumMap<'a>;
+    type Input2<'a> = Array<'a>;
+    type Output<'a> = bool;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         map_contains_all_keys(a, b)
     }
     fn output_type(

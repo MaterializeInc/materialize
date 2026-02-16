@@ -16,16 +16,16 @@ expression: "#[sqlfunc(sqlname = \"array_length\", propagates_nulls = true, intr
     mz_lowertest::MzReflect
 )]
 pub struct ArrayLength;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLength {
-    type Input1 = Array<'a>;
-    type Input2 = i64;
-    type Output = Result<Option<i32>, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for ArrayLength {
+    type Input1<'a> = Array<'a>;
+    type Input2<'a> = i64;
+    type Output<'a> = Result<Option<i32>, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         array_length(a, b)
     }
     fn output_type(

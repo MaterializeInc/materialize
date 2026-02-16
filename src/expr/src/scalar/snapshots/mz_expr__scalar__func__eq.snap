@@ -16,16 +16,16 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"=\", negate = \"Some(NotE
     mz_lowertest::MzReflect
 )]
 pub struct Eq;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Eq {
-    type Input1 = ExcludeNull<Datum<'a>>;
-    type Input2 = ExcludeNull<Datum<'a>>;
-    type Output = bool;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for Eq {
+    type Input1<'a> = ExcludeNull<Datum<'a>>;
+    type Input2<'a> = ExcludeNull<Datum<'a>>;
+    type Output<'a> = bool;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         eq(a, b)
     }
     fn output_type(

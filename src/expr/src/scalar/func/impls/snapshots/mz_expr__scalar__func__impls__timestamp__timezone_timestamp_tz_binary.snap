@@ -16,16 +16,16 @@ expression: "#[sqlfunc(sqlname = \"timezonetstz\")]\nfn timezone_timestamp_tz_bi
     mz_lowertest::MzReflect
 )]
 pub struct TimezoneTimestampTzBinary;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TimezoneTimestampTzBinary {
-    type Input1 = &'a str;
-    type Input2 = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for TimezoneTimestampTzBinary {
+    type Input1<'a> = &'a str;
+    type Input2<'a> = CheckedTimestamp<DateTime<Utc>>;
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         timezone_timestamp_tz_binary(a, b)
     }
     fn output_type(

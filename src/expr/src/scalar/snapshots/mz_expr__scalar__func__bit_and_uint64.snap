@@ -16,16 +16,16 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"&\", propagates_nulls = t
     mz_lowertest::MzReflect
 )]
 pub struct BitAndUint64;
-impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitAndUint64 {
-    type Input1 = u64;
-    type Input2 = u64;
-    type Output = u64;
-    fn call(
+impl crate::func::binary::EagerBinaryFunc for BitAndUint64 {
+    type Input1<'a> = u64;
+    type Input2<'a> = u64;
+    type Output<'a> = u64;
+    fn call<'a>(
         &self,
-        a: Self::Input1,
-        b: Self::Input2,
+        a: Self::Input1<'a>,
+        b: Self::Input2<'a>,
         temp_storage: &'a mz_repr::RowArena,
-    ) -> Self::Output {
+    ) -> Self::Output<'a> {
         bit_and_uint64(a, b)
     }
     fn output_type(
