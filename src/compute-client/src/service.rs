@@ -14,13 +14,12 @@ use std::mem;
 
 use async_trait::async_trait;
 use bytesize::ByteSize;
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::lattice::Lattice;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastInto;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{GlobalId, UpdateCollection};
 use mz_service::client::{GenericClient, Partitionable, PartitionedState};
 use timely::PartialOrder;
 use timely::progress::frontier::{Antichain, MutableAntichain};
@@ -313,17 +312,19 @@ where
                 if old_frontier != new_frontier && !tracked.dropped {
                     let updates = match &mut tracked.stashed_updates {
                         Ok(stashed_updates) => {
-                            // The compute protocol requires us to only send out consolidated
-                            // batches.
-                            consolidate_updates(stashed_updates);
-
-                            let mut ship = Vec::new();
-                            let mut keep = Vec::new();
-                            for (time, data, diff) in stashed_updates.drain(..) {
-                                if new_frontier.less_equal(&time) {
-                                    keep.push((time, data, diff));
-                                } else {
-                                    ship.push((time, data, diff));
+                            // Split each collection along the frontier, passing the prefix along.
+                            let mut ship = vec![];
+                            let mut keep = vec![];
+                            for collection in stashed_updates.drain(..) {
+                                let partition_point = collection
+                                    .times()
+                                    .partition_point(|t| !new_frontier.less_equal(t));
+                                let (ship_coll, keep_coll) = collection.split_at(partition_point);
+                                if ship_coll.len() > 0 {
+                                    ship.push(ship_coll);
+                                }
+                                if keep_coll.len() > 0 {
+                                    keep.push(keep_coll);
                                 }
                             }
                             tracked.stashed_updates = Ok(keep);
@@ -526,7 +527,7 @@ struct PendingSubscribe<T> {
     /// The subscribe frontiers of the partitioned shards.
     frontiers: MutableAntichain<T>,
     /// The updates we are holding back until their timestamps are complete.
-    stashed_updates: Result<Vec<(T, Row, Diff)>, String>,
+    stashed_updates: Result<Vec<UpdateCollection<T>>, String>,
     /// The row size of stashed updates, for `max_result_size` checking.
     stashed_result_size: usize,
     /// Whether we have already emitted a `DroppedAt` response for this subscribe.
@@ -554,7 +555,11 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
     ///
     /// This also implements the short-circuit behavior of error responses, and performs
     /// `max_result_size` checking.
-    fn stash(&mut self, new_updates: Result<Vec<(T, Row, Diff)>, String>, max_result_size: u64) {
+    fn stash(
+        &mut self,
+        new_updates: Result<Vec<UpdateCollection<T>>, String>,
+        max_result_size: u64,
+    ) {
         match (&mut self.stashed_updates, new_updates) {
             (Err(_), _) => {
                 // Subscribe is borked; nothing to do.
@@ -564,7 +569,7 @@ impl<T: ComputeControllerTimestamp> PendingSubscribe<T> {
                 self.stashed_updates = Err(text);
             }
             (Ok(stashed), Ok(new)) => {
-                let new_size: usize = new.iter().map(|(_, row, _)| row.byte_len()).sum();
+                let new_size: usize = new.iter().map(|coll| coll.byte_len()).sum();
                 self.stashed_result_size += new_size;
 
                 if self.stashed_result_size > max_result_size.cast_into() {

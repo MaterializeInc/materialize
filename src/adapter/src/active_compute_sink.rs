@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::iter;
 
 use anyhow::anyhow;
+use differential_dataflow::consolidation::consolidate_updates;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
@@ -162,12 +163,17 @@ impl ActiveSubscribe {
     /// Returns `true` if the subscribe is finished.
     pub fn process_response(&self, batch: SubscribeBatch) -> bool {
         let mut rows = match batch.updates {
-            Ok(rows) => rows,
+            Ok(rows) => rows
+                .iter()
+                .flat_map(|c| c.iter())
+                .map(|(r, t, d)| (t.clone(), r.to_owned(), d))
+                .collect(),
             Err(s) => {
                 self.send(PeekResponseUnary::Error(s));
                 return true;
             }
         };
+        consolidate_updates(&mut rows);
 
         // Sort results by time. We use stable sort here because it will produce
         // deterministic results since the cursor will always produce rows in
