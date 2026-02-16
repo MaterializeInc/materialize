@@ -144,7 +144,7 @@ impl SqlColumnType {
 
     pub fn try_union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         self.sql_union(other).or_else(|e| {
-            ::tracing::error!("repr type error: sql_union({self:?}, {other:?}): {e}");
+            ::tracing::trace!("repr type error: sql_union({self:?}, {other:?}): {e}");
 
             let repr_self = ReprColumnType::from(self);
             let repr_other = ReprColumnType::from(other);
