@@ -848,7 +848,12 @@ mod tests {
             buf_s.clear();
         }
 
-        proptest!(|(segments in any::<Vec<Vec<u8>>>(), s in any::<u64>(), c in any::<i64>(), e in any::<i64>())| {
+        proptest!(|(
+            segments in any::<Vec<Vec<u8>>>(),
+            s in any::<u64>(),
+            c in any::<i64>(),
+            e in any::<i64>(),
+        )| {
             test(segments, s, c, e);
         })
     }

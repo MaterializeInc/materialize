@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, View};
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
@@ -424,8 +425,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,

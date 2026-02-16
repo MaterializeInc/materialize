@@ -932,7 +932,6 @@ impl<'a> CollectIndexRequests<'a> {
         contexts: &Vec<IndexUsageContext>,
     ) -> Result<(), RecursionLimitError> {
         self.checked_recur_mut(|this| {
-
             // If an index exists on `on_id`, this function picks an index to be fully scanned.
             let pick_index_for_full_scan = |on_id: &GlobalId| {
                 // Note that the choice we make here might be modified later at the
@@ -940,9 +939,11 @@ impl<'a> CollectIndexRequests<'a> {
                 choose_index(
                     this.source_keys,
                     on_id,
-                    &this.indexes_available.indexes_on(*on_id).map(
-                        |(idx_id, key)| (idx_id, key.iter().cloned().collect_vec())
-                    ).collect_vec()
+                    &this
+                        .indexes_available
+                        .indexes_on(*on_id)
+                        .map(|(idx_id, key)| (idx_id, key.iter().cloned().collect_vec()))
+                        .collect_vec(),
                 )
             };
 
@@ -969,7 +970,9 @@ impl<'a> CollectIndexRequests<'a> {
                             // https://github.com/MaterializeInc/database-issues/issues/2115
                             this.collect_index_reqs_inner(
                                 &mut inputs[0],
-                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(DeltaJoinIndexUsageType::Unknown)),
+                                &IndexUsageContext::from_usage_type(IndexUsageType::DeltaJoin(
+                                    DeltaJoinIndexUsageType::Unknown,
+                                )),
                             )?;
                             for input in &mut inputs[1..] {
                                 this.collect_index_reqs_inner(
@@ -984,7 +987,9 @@ impl<'a> CollectIndexRequests<'a> {
                             for input in inputs {
                                 this.collect_index_reqs_inner(
                                     input,
-                                    &IndexUsageContext::from_usage_type(IndexUsageType::Lookup(*idx_id)),
+                                    &IndexUsageContext::from_usage_type(IndexUsageType::Lookup(
+                                        *idx_id,
+                                    )),
                                 )?;
                             }
                         }
@@ -996,7 +1001,8 @@ impl<'a> CollectIndexRequests<'a> {
                     }
                 }
                 MirRelationExpr::ArrangeBy { input, keys } => {
-                    this.collect_index_reqs_inner(input, &IndexUsageContext::add_keys(contexts, keys))?;
+                    let ctx = &IndexUsageContext::add_keys(contexts, keys);
+                    this.collect_index_reqs_inner(input, ctx)?;
                 }
                 MirRelationExpr::Get {
                     id: Id::Global(global_id),
@@ -1017,22 +1023,33 @@ impl<'a> CollectIndexRequests<'a> {
                                 // We have some index usage context, but didn't see an `ArrangeBy`.
                                 try_full_scan = true;
                                 match context.usage_type {
-                                    IndexUsageType::FullScan | IndexUsageType::SinkExport | IndexUsageType::IndexExport => {
+                                    IndexUsageType::FullScan
+                                    | IndexUsageType::SinkExport
+                                    | IndexUsageType::IndexExport => {
                                         // Not possible, because these don't go through
                                         // IndexUsageContext at all.
                                         unreachable!()
-                                    },
+                                    }
                                     // You can find more info on why the following join cases
                                     // shouldn't happen in comments of the Join lowering to LIR.
-                                    IndexUsageType::Lookup(_) => soft_panic_or_log!("CollectIndexRequests encountered an IndexedFilter join without an ArrangeBy"),
-                                    IndexUsageType::DifferentialJoin => soft_panic_or_log!("CollectIndexRequests encountered a Differential join without an ArrangeBy"),
-                                    IndexUsageType::DeltaJoin(_) => soft_panic_or_log!("CollectIndexRequests encountered a Delta join without an ArrangeBy"),
+                                    IndexUsageType::Lookup(_) => soft_panic_or_log!(
+                                        "CollectIndexRequests encountered \
+                                         an IndexedFilter join without an ArrangeBy"
+                                    ),
+                                    IndexUsageType::DifferentialJoin => soft_panic_or_log!(
+                                        "CollectIndexRequests encountered \
+                                         a Differential join without an ArrangeBy"
+                                    ),
+                                    IndexUsageType::DeltaJoin(_) => soft_panic_or_log!(
+                                        "CollectIndexRequests encountered \
+                                         a Delta join without an ArrangeBy"
+                                    ),
                                     IndexUsageType::PlanRootNoArrangement => {
                                         // This is ok: the entire plan is a `Get`, with not even an
                                         // `ArrangeBy`. Note that if an index exists, the usage will
                                         // be saved as `FullScan` (NOT as `PlanRootNoArrangement`),
                                         // because we are going into the `try_full_scan` if.
-                                    },
+                                    }
                                     IndexUsageType::FastPathLimit => {
                                         // These are created much later, not even inside
                                         // `prune_and_annotate_dataflow_index_imports`.
@@ -1042,7 +1059,7 @@ impl<'a> CollectIndexRequests<'a> {
                                         // Not possible, because we create `DanglingArrangeBy`
                                         // only when we see an `ArrangeBy`.
                                         unreachable!()
-                                    },
+                                    }
                                     IndexUsageType::Unknown => {
                                         // These are added only after `CollectIndexRequests` has run.
                                         unreachable!()
@@ -1051,28 +1068,30 @@ impl<'a> CollectIndexRequests<'a> {
                             }
                             Some(requested_keys) => {
                                 for requested_key in requested_keys {
-                                    match this
-                                        .indexes_available
-                                        .indexes_on(*global_id)
-                                        .find(|(available_idx_id, available_key)| {
+                                    match this.indexes_available.indexes_on(*global_id).find(
+                                        |(available_idx_id, available_key)| {
                                             match context.usage_type {
                                                 IndexUsageType::Lookup(req_idx_id) => {
                                                     // `LiteralConstraints` already picked an index
                                                     // by id. Let's use that one.
-                                                    assert!(!(available_idx_id == &req_idx_id && available_key != &requested_key));
+                                                    assert!(
+                                                        !(available_idx_id == &req_idx_id
+                                                            && available_key != &requested_key)
+                                                    );
                                                     available_idx_id == &req_idx_id
-                                                },
+                                                }
                                                 _ => available_key == &requested_key,
                                             }
-                                        })
-                                    {
+                                        },
+                                    ) {
                                         Some((idx_id, key)) => {
+                                            let usage = context.usage_type.clone();
                                             this.index_reqs_by_id
                                                 .get_mut(global_id)
                                                 .unwrap()
-                                                .push((idx_id, key.to_owned(), context.usage_type.clone()));
-                                            index_accesses.push((idx_id, context.usage_type.clone()));
-                                        },
+                                                .push((idx_id, key.to_owned(), usage.clone()));
+                                            index_accesses.push((idx_id, usage));
+                                        }
                                         None => {
                                             // If there is a key requested for which we don't have an
                                             // index, then we might still be able to do a full scan of a
@@ -1099,10 +1118,11 @@ impl<'a> CollectIndexRequests<'a> {
                         // Also note that currently we are deduplicating index usage types when
                         // printing index usages in EXPLAIN.
                         if let Some((idx_id, key)) = pick_index_for_full_scan(global_id) {
-                            this.index_reqs_by_id
-                                .get_mut(global_id)
-                                .unwrap()
-                                .push((idx_id, key.to_owned(), IndexUsageType::FullScan));
+                            this.index_reqs_by_id.get_mut(global_id).unwrap().push((
+                                idx_id,
+                                key.to_owned(),
+                                IndexUsageType::FullScan,
+                            ));
                             index_accesses.push((idx_id, IndexUsageType::FullScan));
                         }
                     }
@@ -1134,10 +1154,7 @@ impl<'a> CollectIndexRequests<'a> {
                     // The above call filled in the entry for `id` in `context_across_lets` (if it
                     // was referenced). Anyhow, at least an empty entry should exist, because we started
                     // above with inserting it.
-                    this.collect_index_reqs_inner(
-                        value,
-                        &this.context_across_lets[id].clone(),
-                    )?;
+                    this.collect_index_reqs_inner(value, &this.context_across_lets[id].clone())?;
                     // Clean up the id from the saved contexts.
                     this.context_across_lets.remove(id);
                 }
@@ -1148,8 +1165,10 @@ impl<'a> CollectIndexRequests<'a> {
                     body,
                 } => {
                     for id in ids.iter() {
-                        let shadowed_context = this.context_across_lets.insert(id.clone(), Vec::new());
-                        assert_none!(shadowed_context); // No shadowing in MIR
+                        let shadowed_context =
+                            this.context_across_lets.insert(id.clone(), Vec::new());
+                        // No shadowing in MIR
+                        assert_none!(shadowed_context);
                     }
                     // We go backwards: Recurse on the body first.
                     this.collect_index_reqs_inner(body, contexts)?;

@@ -182,10 +182,13 @@ where
         // source.
         let mut hydrating = true;
 
-        // A re-usable buffer of changes, per key. This is an `IndexMap` because it has to be `drain`-able
-        // and have a consistent iteration order.
-        let mut commands_state: indexmap::IndexMap<_, upsert_types::UpsertValueAndSize<G::Timestamp, FromTime>> =
-            indexmap::IndexMap::new();
+        // A re-usable buffer of changes, per key. This is an `IndexMap`
+        // because it has to be `drain`-able and have a consistent iteration
+        // order.
+        let mut commands_state: indexmap::IndexMap<
+            _,
+            upsert_types::UpsertValueAndSize<G::Timestamp, FromTime>,
+        > = indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
         // For stashing source input while it's not eligible for processing.
@@ -221,7 +224,6 @@ where
 
         let mut error_emitter = (&mut health_output, &health_cap);
 
-
         loop {
             tokio::select! {
                 _ = persist_input.ready() => {
@@ -236,10 +238,17 @@ where
                                     updates=%data.len(),
                                     "received persist data");
 
-                                persist_stash.extend(data.into_iter().map(|((key, value), ts, diff)| {
-                                    largest_seen_persist_ts = std::cmp::max(largest_seen_persist_ts.clone(), Some(ts.clone()));
-                                    (key, value, ts, diff)
-                                }));
+                                persist_stash.extend(data.into_iter().map(
+                                    |((key, value), ts, diff)| {
+                                        largest_seen_persist_ts =
+                                            std::cmp::max(
+                                                largest_seen_persist_ts
+                                                    .clone(),
+                                                Some(ts.clone()),
+                                            );
+                                        (key, value, ts, diff)
+                                    },
+                                ));
                             }
                             AsyncEvent::Progress(upper) => {
                                 tracing::trace!(
@@ -358,7 +367,10 @@ where
                                     };
                                 }
 
-                                if prevent_snapshot_buffering && input_upper.as_option() == Some(&event_time) {
+                                if prevent_snapshot_buffering
+                                    && input_upper.as_option()
+                                        == Some(&event_time)
+                                {
                                     tracing::debug!(
                                         worker_id = %source_config.worker_id,
                                         source_id = %source_config.id,
@@ -433,7 +445,9 @@ where
             // when the source-input frontier advances or when the persist
             // frontier advances.
             if !stash.is_empty() {
-                let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
+                let cap = stash_cap
+                    .as_mut()
+                    .expect("missing capability for non-empty stash");
 
                 tracing::trace!(
                     worker_id = %source_config.worker_id,
@@ -447,7 +461,10 @@ where
                     &mut commands_state,
                     &mut output_updates,
                     &mut multi_get_scratch,
-                    DrainStyle::ToUpper{input_upper: &input_upper, persist_upper: &persist_upper},
+                    DrainStyle::ToUpper {
+                        input_upper: &input_upper,
+                        persist_upper: &persist_upper,
+                    },
                     &mut error_emitter,
                     &mut state,
                     &source_config,
@@ -465,13 +482,14 @@ where
                 }
 
                 if !stash.is_empty() {
-                    let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
+                    let min_remaining_time = min_remaining_time
+                        .take()
+                        .expect("we still have updates left");
                     cap.downgrade(&min_remaining_time);
                 } else {
                     stash_cap = None;
                 }
             }
-
 
             if input_upper.is_empty() {
                 tracing::debug!(
@@ -491,7 +509,9 @@ where
             // the collection always accumulates correctly for all keys.
             if let Some(partial_drain_time) = &partial_drain_time {
                 if !stash.is_empty() {
-                    let cap = stash_cap.as_mut().expect("missing capability for non-empty stash");
+                    let cap = stash_cap
+                        .as_mut()
+                        .expect("missing capability for non-empty stash");
 
                     tracing::trace!(
                         worker_id = %source_config.worker_id,
@@ -505,9 +525,9 @@ where
                         &mut commands_state,
                         &mut output_updates,
                         &mut multi_get_scratch,
-                        DrainStyle::AtTime{
+                        DrainStyle::AtTime {
                             time: partial_drain_time.clone(),
-                            persist_upper: &persist_upper
+                            persist_upper: &persist_upper,
                         },
                         &mut error_emitter,
                         &mut state,
@@ -526,7 +546,9 @@ where
                     }
 
                     if !stash.is_empty() {
-                        let min_remaining_time = min_remaining_time.take().expect("we still have updates left");
+                        let min_remaining_time = min_remaining_time
+                            .take()
+                            .expect("we still have updates left");
                         cap.downgrade(&min_remaining_time);
                     } else {
                         stash_cap = None;

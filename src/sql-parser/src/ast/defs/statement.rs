@@ -4524,7 +4524,17 @@ impl<T: AstInfo> AstDisplay for RefreshOptionValue<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize
+)]
 pub enum ClusterScheduleOptionValue {
     Manual,
     Refresh {

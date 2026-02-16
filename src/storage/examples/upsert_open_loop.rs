@@ -445,8 +445,10 @@ async fn run_benchmark(
                             let batch = mz_ore::task::spawn_blocking(
                                 || "data_generator-batch",
                                 move || {
-                                    batch_span
-                                        .in_scope(|| data_generator_cloned.gen_batch(usize::cast_from(batch_idx)))
+                                    batch_span.in_scope(|| {
+                                        data_generator_cloned
+                                            .gen_batch(usize::cast_from(batch_idx))
+                                    })
                                 },
                             )
                             .await;
@@ -454,7 +456,8 @@ async fn run_benchmark(
                             let batch = match batch {
                                 Some(x) => x,
                                 None => {
-                                    let records_sent = usize::cast_from(batch_idx) * args.batch_size;
+                                    let records_sent =
+                                        usize::cast_from(batch_idx) * args.batch_size;
                                     let finished = format!(
                                         "Data generator {} finished after {} ms and sent {} records",
                                         source_id,
@@ -467,7 +470,9 @@ async fn run_benchmark(
                             batch_idx += 1;
 
                             // send will only error if the matching receiver has been dropped.
-                            if let Err(SendError(_)) = generator_tx.send(GeneratorEvent::Data(batch)) {
+                            if let Err(SendError(_)) =
+                                generator_tx.send(GeneratorEvent::Data(batch))
+                            {
                                 bail!("receiver unexpectedly dropped");
                             }
                             debug!("data generator {} wrote a batch", source_id);

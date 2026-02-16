@@ -34,7 +34,18 @@ fn cast_date_to_string(a: Date) -> String {
     buf
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastDateToTimestamp(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastDateToTimestamp {
@@ -71,7 +82,18 @@ impl fmt::Display for CastDateToTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastDateToTimestampTz(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastDateToTimestampTz {
@@ -143,7 +165,18 @@ pub fn extract_date_inner(units: DateTimeUnits, date: NaiveDate) -> Result<Numer
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractDate(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractDate {

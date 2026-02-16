@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use maplit::btreemap;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Index};
 use mz_ore::instrument;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
@@ -341,8 +342,11 @@ impl Coordinator {
                 ), AdapterError> {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                    let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
+                    let index_plan = optimize::index::Index::new(
+                        plan.name.clone(),
+                        plan.index.on,
+                        plan.index.keys.clone(),
+                    );
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -512,8 +516,7 @@ impl Coordinator {
         match transact_result {
             Ok(_) => Ok(StageResult::Response(ExecuteResponse::CreatedIndex)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {

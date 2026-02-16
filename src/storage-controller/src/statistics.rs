@@ -162,8 +162,14 @@ where
                     // out to the collection.
                     if !correction.is_empty() {
                         current_metrics.extend(correction.iter().cloned());
-                        collection_mgmt
-                            .differential_append(statistics_collection_id, correction.into_iter().map(|(r, d)| (r, d.into())).collect());
+                        let updates = correction
+                            .into_iter()
+                            .map(|(r, d)| (r, d.into()))
+                            .collect();
+                        collection_mgmt.differential_append(
+                            statistics_collection_id,
+                            updates,
+                        );
                     }
                 }
             }

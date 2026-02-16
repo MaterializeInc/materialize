@@ -839,34 +839,43 @@ impl mz_server_core::Server for PgwireBalancer {
                             mut params,
                         }) => {
                             let mut conn = FramedConn::new(conn);
+                            let rejected =
+                                SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION;
                             let peer_addr = match peer_addr {
                                 Ok(addr) => addr.ip(),
                                 Err(e) => {
                                     error!("Invalid peer_addr {:?}", e);
                                     return Ok(conn
                                         .send(ErrorResponse::fatal(
-                                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                            rejected,
                                             "invalid peer address",
                                         ))
                                         .await?);
                                 }
                             };
-                            debug!(%conn_uuid, %peer_addr,  "starting new pgwire connection in balancer");
+                            debug!(
+                                %conn_uuid, %peer_addr,
+                                "starting new pgwire connection in balancer",
+                            );
                             let prev =
                                 params.insert(CONN_UUID_KEY.to_string(), conn_uuid.to_string());
                             if prev.is_some() {
                                 return Ok(conn
                                     .send(ErrorResponse::fatal(
-                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        rejected,
                                         format!("invalid parameter '{CONN_UUID_KEY}'"),
                                     ))
                                     .await?);
                             }
 
-                            if let Some(_) = params.insert(MZ_FORWARDED_FOR_KEY.to_string(), peer_addr.to_string().clone()) {
+                            let forwarded_for = params.insert(
+                                MZ_FORWARDED_FOR_KEY.to_string(),
+                                peer_addr.to_string().clone(),
+                            );
+                            if let Some(_) = forwarded_for {
                                 return Ok(conn
                                     .send(ErrorResponse::fatal(
-                                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                                        rejected,
                                         format!("invalid parameter '{MZ_FORWARDED_FOR_KEY}'"),
                                     ))
                                     .await?);

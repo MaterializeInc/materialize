@@ -895,9 +895,18 @@ impl Typecheck {
                     for (row, _id) in rows {
                         let datums = row.unpack();
 
-                        row_difference_with_column_types(expr, &datums, &typ.column_types.iter().map(ReprColumnType::from).collect_vec())?;
+                        let col_types = typ
+                            .column_types
+                            .iter()
+                            .map(ReprColumnType::from)
+                            .collect_vec();
+                        row_difference_with_column_types(
+                            expr, &datums, &col_types,
+                        )?;
 
-                        if self.disallow_dummy && datums.iter().any(|d| d == &mz_repr::Datum::Dummy) {
+                        if self.disallow_dummy
+                            && datums.iter().any(|d| d == &mz_repr::Datum::Dummy)
+                        {
                             return Err(TypeError::DisallowedDummy {
                                 source: expr,
                             });
@@ -924,7 +933,10 @@ impl Typecheck {
                 let column_types = typ.column_types.iter().map(ReprColumnType::from).collect_vec();
 
                 // covariant: the ascribed type must be a subtype of the actual type in the context
-                let diffs = relation_subtype_difference(&column_types, ctx_typ).into_iter().flat_map(|diff| diff.ignore_nullability()).collect::<Vec<_>>();
+                let diffs = relation_subtype_difference(&column_types, ctx_typ)
+                    .into_iter()
+                    .flat_map(|diff| diff.ignore_nullability())
+                    .collect::<Vec<_>>();
 
                 if !diffs.is_empty() {
                     return Err(TypeError::MismatchColumns {
@@ -983,7 +995,12 @@ impl Typecheck {
                 }
                 // TODO(mgree) check t_exprs agrees with `func`'s input type
 
-                let t_out = func.output_type().column_types.iter().map(ReprColumnType::from).collect_vec();
+                let t_out = func
+                    .output_type()
+                    .column_types
+                    .iter()
+                    .map(ReprColumnType::from)
+                    .collect_vec();
 
                 // FlatMap extends the existing columns
                 t_in.extend(t_out);
@@ -1014,7 +1031,10 @@ impl Typecheck {
                                 scalar_type: ReprScalarType::Bool,
                                 nullable: true,
                             },
-                            diffs: vec![ReprColumnTypeDifference::NotSubtype { sub, sup: ReprScalarType::Bool }],
+                            diffs: vec![ReprColumnTypeDifference::NotSubtype {
+                                sub,
+                                sup: ReprScalarType::Bool,
+                            }],
                             message: "expected boolean condition".to_string(),
                         });
                     }
@@ -1056,14 +1076,19 @@ impl Typecheck {
                         }
 
                         if let Some(t_first) = t_exprs.get(0) {
-                            let diffs = scalar_subtype_difference(&t_expr.scalar_type, &t_first.scalar_type);
+                            let diffs = scalar_subtype_difference(
+                                &t_expr.scalar_type,
+                                &t_first.scalar_type,
+                            );
                             if !diffs.is_empty() {
                                 return Err(TypeError::MismatchColumn {
                                     source: expr,
                                     got: t_expr,
                                     expected: t_first.clone(),
                                     diffs,
-                                    message: "equivalence class members have different scalar types".to_string(),
+                                    message: "equivalence class members \
+                                        have different scalar types"
+                                        .to_string(),
                                 });
                             }
 
@@ -1079,8 +1104,13 @@ impl Typecheck {
                                         source: expr,
                                         got: t_expr.clone(),
                                         expected: t_first.clone(),
-                                        diffs: vec![ReprColumnTypeDifference::Nullability { sub, sup }],
-                                        message: "equivalence class members have different nullability (and join equivalence checking is strict)".to_string(),
+                                        diffs: vec![
+                                            ReprColumnTypeDifference::Nullability { sub, sup },
+                                        ],
+                                        message: "equivalence class members have \
+                                            different nullability (and join \
+                                            equivalence checking is strict)"
+                                            .to_string(),
                                     };
 
                                     // TODO(mgree) this imprecision should be resolved, but we need to fix the optimizer
@@ -1165,7 +1195,11 @@ impl Typecheck {
                     .map(|scalar_expr| tc.typecheck_scalar(scalar_expr, expr, &t_in))
                     .collect::<Result<Vec<_>, _>>()?;
 
-                    if self.disallow_dummy && group_key.iter().any(|scalar_expr| scalar_expr.contains_dummy()) {
+                    if self.disallow_dummy
+                        && group_key
+                            .iter()
+                            .any(|scalar_expr| scalar_expr.contains_dummy())
+                    {
                         return Err(TypeError::DisallowedDummy {
                             source: expr,
                         });
@@ -2072,13 +2106,20 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig { cases: 5000, max_global_rejects: 2500, ..Default::default() })]
+        #![proptest_config(ProptestConfig {
+            cases: 5000,
+            max_global_rejects: 2500,
+            ..Default::default()
+        })]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn datum_type_difference_with_instance_of_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
-            let datum = arb_datum_for_column(src.clone());
-            (Just(src), datum) }
-        )) {
+        fn datum_type_difference_with_instance_of_on_valid_data(
+            (src, datum) in any::<SqlColumnType>()
+                .prop_flat_map(|src| {
+                    let datum = arb_datum_for_column(src.clone());
+                    (Just(src), datum)
+                })
+        ) {
             let typ = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 
@@ -2101,7 +2142,10 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn datum_type_difference_agrees_with_is_instance_of_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum(false)) {
+        fn datum_type_difference_agrees_with_is_instance_of_on_random_data(
+            src in any::<SqlColumnType>(),
+            datum in arb_datum(false),
+        ) {
             let typ = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 

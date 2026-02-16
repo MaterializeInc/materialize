@@ -109,15 +109,20 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Export statistics for a given capture instance
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
-            // Maps the included columns for each output index so we can check whether schema updates are valid on a per-output basis
+            // Maps the included columns for each output index so we can check
+            // whether schema updates are valid on a per-output basis
             let mut included_columns: HashMap<u64, Vec<Arc<str>>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
-                if decoder_map.insert(output.partition_index, Arc::clone(&output.decoder)).is_some() {
+                let key = output.partition_index;
+                if decoder_map.insert(key, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
-                // Collect the included columns from decoder for schema change validation
-                // The decoder serves as an effective source of truth for which columns are "included", as we only care about the columns that are being decoded and replicated
+                // Collect the included columns from decoder for schema
+                // change validation. The decoder serves as an effective
+                // source of truth for which columns are "included", as we
+                // only care about the columns that are being decoded and
+                // replicated
                 let included_cols = output.decoder.included_column_names();
                 included_columns.insert(output.partition_index, included_cols);
 
@@ -165,7 +170,12 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .map(|i| i.as_ref());
 
             // TODO (maz): we can avoid this query by using SourceOutputInfo
-            let snapshot_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(&mut client, snapshot_instances).await?;
+            let snapshot_tables =
+                mz_sql_server_util::inspect::get_tables_for_capture_instance(
+                    &mut client,
+                    snapshot_instances,
+                )
+                .await?;
 
             // validate that the restore_history_id hasn't changed
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
@@ -208,7 +218,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     schema_name = &table.schema_name,
                     table_name = &table.name);
                 let size_calc_start = Instant::now();
-                let table_total = mz_sql_server_util::inspect::snapshot_size(&mut client, &table.schema_name, &table.name).await?;
+                let table_total =
+                    mz_sql_server_util::inspect::snapshot_size(
+                        &mut client,
+                        &table.schema_name,
+                        &table.name,
+                    )
+                    .await?;
                 metrics.set_snapshot_table_size_latency(
                     &qualified_table_name,
                     size_calc_start.elapsed().as_secs_f64()
@@ -247,25 +263,49 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         .snapshot(&table, config.worker_id, config.id)
                         .await?;
 
-                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, "timely-{worker_id} snapshot start");
+                    tracing::info!(
+                        %config.id,
+                        %table.name,
+                        %table.schema_name,
+                        %snapshot_lsn,
+                        "timely-{worker_id} snapshot start",
+                    );
 
                     let mut snapshot = std::pin::pin!(snapshot);
 
-                    snapshot_lsns.insert(Arc::clone(&table.capture_instance.name), snapshot_lsn);
+                    snapshot_lsns.insert(
+                        Arc::clone(&table.capture_instance.name),
+                        snapshot_lsn,
+                    );
 
-                    let partition_indexes = capture_instance_to_snapshot.get(&table.capture_instance.name)
+                    let ci_name = &table.capture_instance.name;
+                    let partition_indexes = capture_instance_to_snapshot
+                        .get(ci_name)
                         .unwrap_or_else(|| {
-                            panic!("no snapshot outputs in known capture instances [{}] for capture instance: '{}'", capture_instance_to_snapshot.keys().join(","), table.capture_instance.name);
+                            panic!(
+                                "no snapshot outputs in known capture \
+                                 instances [{}] for capture instance: \
+                                 '{}'",
+                                capture_instance_to_snapshot
+                                    .keys()
+                                    .join(","),
+                                ci_name,
+                            );
                         });
 
                     let mut snapshot_staged = 0;
                     while let Some(result) = snapshot.next().await {
-                        let sql_server_row = result.map_err(TransientError::from)?;
+                        let sql_server_row =
+                            result.map_err(TransientError::from)?;
 
                         if last_report.elapsed() > report_interval.get() {
                             last_report = Instant::now();
-                            for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
-                                export_stat.set_snapshot_records_staged(snapshot_staged);
+                            let stats =
+                                export_statistics.get(ci_name).unwrap();
+                            for export_stat in stats {
+                                export_stat.set_snapshot_records_staged(
+                                    snapshot_staged,
+                                );
                             }
                         }
 
@@ -273,9 +313,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             // Decode the SQL Server row into an MZ one.
                             let mut mz_row = Row::default();
 
-                            let decoder = decoder_map.get(partition_idx).expect("decoder for output");
-                            // Try to decode a row, returning a SourceError if it fails.
-                            let message = decode(decoder, &sql_server_row, &mut mz_row, &arena, None);
+                            let decoder = decoder_map
+                                .get(partition_idx)
+                                .expect("decoder for output");
+                            // Try to decode a row, returning a SourceError
+                            // if it fails.
+                            let message = decode(
+                                decoder,
+                                &sql_server_row,
+                                &mut mz_row,
+                                &arena,
+                                None,
+                            );
                             data_output
                                 .give_fueled(
                                     &data_cap_set[0],
@@ -286,10 +335,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         snapshot_staged += 1;
                     }
 
-                    tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, "timely-{worker_id} snapshot complete");
+                    tracing::info!(
+                        %config.id,
+                        %table.name,
+                        %table.schema_name,
+                        %snapshot_lsn,
+                        "timely-{worker_id} snapshot complete",
+                    );
                     metrics.snapshot_table_count.dec();
-                    // final update for snapshot_staged, using the staged values as the total is an estimate
-                    for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
+                    // final update for snapshot_staged, using the staged
+                    // values as the total is an estimate
+                    let stats = export_statistics.get(ci_name).unwrap();
+                    for export_stat in stats {
                         export_stat.set_snapshot_records_staged(snapshot_staged);
                         export_stat.set_snapshot_records_known(snapshot_staged);
                     }
@@ -415,11 +472,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                         // Events are emitted in LSN order for a given capture instance, if any
                         // deferred updates remain when the LSN progresses, it is a bug.
-                        if let Some(((deferred_lsn, _seqval), _row)) = deferred_updates.first_key_value()
+                        if let Some(((deferred_lsn, _seqval), _row)) =
+                            deferred_updates.first_key_value()
                             && *deferred_lsn < next_lsn
                         {
                             panic!(
-                                "deferred update lsn {deferred_lsn} < progress lsn {next_lsn}: {:?}",
+                                "deferred update lsn {deferred_lsn} \
+                                 < progress lsn {next_lsn}: {:?}",
                                 deferred_updates.keys()
                             );
                         }
@@ -432,13 +491,21 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         lsn,
                         changes,
                     } => {
-                        let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
-                            let definite_error = DefiniteError::ProgrammingError(format!(
-                                "capture instance didn't exist: '{capture_instance}'"
-                            ));
+                        let Some(partition_indexes) =
+                            capture_instances.get(&capture_instance)
+                        else {
+                            let definite_error =
+                                DefiniteError::ProgrammingError(format!(
+                                    "capture instance didn't exist: \
+                                     '{capture_instance}'"
+                                ));
                             return_definite_error(
                                 definite_error,
-                                capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
+                                capture_instances
+                                    .values()
+                                    .flat_map(|indexes| {
+                                        indexes.iter().copied()
+                                    }),
                                 data_output,
                                 data_cap_set,
                                 definite_error_handle,
@@ -448,9 +515,15 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             return Ok(());
                         };
 
-                        let (valid_partitions, err_partitions) = partition_indexes.iter().partition::<Vec<u64>, _>(|&partition_idx| {
-                            !errored_partitions.contains(partition_idx)
-                        });
+                        let (valid_partitions, err_partitions) =
+                            partition_indexes
+                                .iter()
+                                .partition::<Vec<u64>, _>(
+                                    |&partition_idx| {
+                                        !errored_partitions
+                                            .contains(partition_idx)
+                                    },
+                                );
 
                         if err_partitions.len() > 0 {
                             metrics.ignored.inc_by(u64::cast_from(changes.len()));
@@ -468,14 +541,26 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             &mut deferred_updates,
                         ).await?
                     },
-                    CdcEvent::SchemaUpdate { capture_instance, table, ddl_event } => {
-                        let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
-                            let definite_error = DefiniteError::ProgrammingError(format!(
-                                "capture instance didn't exist: '{capture_instance}'"
-                            ));
+                    CdcEvent::SchemaUpdate {
+                        capture_instance,
+                        table,
+                        ddl_event,
+                    } => {
+                        let Some(partition_indexes) =
+                            capture_instances.get(&capture_instance)
+                        else {
+                            let definite_error =
+                                DefiniteError::ProgrammingError(format!(
+                                    "capture instance didn't exist: \
+                                     '{capture_instance}'"
+                                ));
                             return_definite_error(
                                 definite_error,
-                                capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
+                                capture_instances
+                                    .values()
+                                    .flat_map(|indexes| {
+                                        indexes.iter().copied()
+                                    }),
                                 data_output,
                                 data_cap_set,
                                 definite_error_handle,
@@ -484,16 +569,31 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             .await;
                             return Ok(());
                         };
-                        let error = DefiniteError::IncompatibleSchemaChange(
-                            capture_instance.to_string(),
-                            table.to_string()
-                        );
+                        let error =
+                            DefiniteError::IncompatibleSchemaChange(
+                                capture_instance.to_string(),
+                                table.to_string(),
+                            );
                         for partition_idx in partition_indexes {
-                            if !errored_partitions.contains(partition_idx) && !ddl_event.is_compatible(included_columns.get(partition_idx).unwrap_or_else(|| panic!("Partition index didn't exist: '{partition_idx}'"))) {
+                            let cols = included_columns
+                                .get(partition_idx)
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "Partition index didn't \
+                                         exist: '{partition_idx}'"
+                                    )
+                                });
+                            if !errored_partitions
+                                .contains(partition_idx)
+                                && !ddl_event.is_compatible(cols)
+                            {
+                                let msg = Err(
+                                    error.clone().into(),
+                                );
                                 data_output
                                     .give_fueled(
                                         &data_cap_set[0],
-                                        ((*partition_idx, Err(error.clone().into())), ddl_event.lsn, Diff::ONE),
+                                        ((*partition_idx, msg), ddl_event.lsn, Diff::ONE),
                                     )
                                     .await;
                                 errored_partitions.insert(*partition_idx);

@@ -210,10 +210,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
+                let subscribe_conn = SubscribeSinkConnection::default();
                 let sink_description = ComputeSinkDesc {
                     from: from_id,
                     from_desc,
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
+                    connection: ComputeSinkConnection::Subscribe(subscribe_conn),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes
@@ -250,10 +251,11 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
                 // Make SinkDesc
+                let subscribe_conn = SubscribeSinkConnection::default();
                 let sink_description = ComputeSinkDesc {
                     from: self.view_id,
                     from_desc: desc.clone(),
-                    connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
+                    connection: ComputeSinkConnection::Subscribe(subscribe_conn),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
                     // No `FORCE NOT NULL` for subscribes

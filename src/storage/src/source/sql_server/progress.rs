@@ -30,7 +30,7 @@ use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_repr::GlobalId;
 use mz_sql_server_util::cdc::Lsn;
-use mz_sql_server_util::inspect::get_latest_restore_history_id;
+use mz_sql_server_util::inspect::{get_latest_restore_history_id, get_max_lsn};
 use mz_storage_types::connections::SqlServerConnectionDetails;
 use mz_storage_types::dyncfgs::SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY;
 use mz_storage_types::sources::SqlServerSourceExtras;
@@ -117,14 +117,20 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // committed for all subsources/exports and thus we can notify the upstream that the
             // change tables can be cleaned up.
             let mut committed_uppers = std::pin::pin!(committed_uppers);
-            let cleanup_change_table = CDC_CLEANUP_CHANGE_TABLE.handle(config.config.config_set());
-            let cleanup_max_deletes = CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES.handle(config.config.config_set());
-            let capture_instances: BTreeSet<_> = outputs.into_values().map(|info| info.capture_instance).collect();
+            let cleanup_change_table =
+                CDC_CLEANUP_CHANGE_TABLE.handle(config.config.config_set());
+            let cleanup_max_deletes =
+                CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES
+                    .handle(config.config.config_set());
+            let capture_instances: BTreeSet<_> = outputs
+                .into_values()
+                .map(|info| info.capture_instance)
+                .collect();
 
             loop {
                 tokio::select! {
                     probe_ts = probe_ticker.tick() => {
-                        let max_lsn: Lsn = mz_sql_server_util::inspect::get_max_lsn(&mut client).await?;
+                        let max_lsn: Lsn = get_max_lsn(&mut client).await?;
                         // We have to return max_lsn + 1 in the probe so that the downstream consumers of
                         // the probe view the actual max lsn as fully committed and all data at that LSN
                         // as no longer subject to change. If we don't increment the LSN before emitting
@@ -145,11 +151,16 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         };
                         if known_lsn < prev_known_lsn {
                             mz_ore::soft_panic_or_log!(
-                                "upstream SQL Server went backwards in time, current LSN: {known_lsn}, last known {prev_known_lsn}",
+                                "upstream SQL Server went backwards \
+                                 in time, current LSN: {known_lsn}, \
+                                 last known {prev_known_lsn}",
                             );
                             continue;
                         }
-                        let probe = Probe { probe_ts, upstream_frontier: Antichain::from_elem(known_lsn) };
+                        let probe = Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(known_lsn),
+                        };
                         emit_probe(&probe_cap[0], probe);
                         prev_offset_known = Some(known_lsn);
                     },
@@ -169,12 +180,13 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 // up should be present in informational notices sent back
                                 // from the upstream, but the tiberius crate does not
                                 // expose these.
-                                let cleanup_result = mz_sql_server_util::inspect::cleanup_change_table(
-                                    &mut client,
-                                    instance,
-                                    committed_upper,
-                                    cleanup_max_deletes.get(),
-                                ).await;
+                                let cleanup_result =
+                                    mz_sql_server_util::inspect::cleanup_change_table(
+                                        &mut client,
+                                        instance,
+                                        committed_upper,
+                                        cleanup_max_deletes.get(),
+                                    ).await;
                                 // TODO(sql_server2): Track this in a more user observable way.
                                 if let Err(err) = cleanup_result {
                                     tracing::warn!(?err, %instance, "cleanup of change table failed!");

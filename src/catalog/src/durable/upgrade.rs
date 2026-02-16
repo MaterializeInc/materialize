@@ -159,7 +159,10 @@ macro_rules! objects {
                 fn arbitrary_vec(version: &str) -> Result<Vec<Self>, String> {
                     let mut runner = proptest::test_runner::TestRunner::deterministic();
                     std::iter::repeat(())
-                        .filter_map(|_| AllVersionsStateUpdateKind::arbitrary(version, &mut runner).transpose())
+                        .filter_map(|_| {
+                            AllVersionsStateUpdateKind::arbitrary(version, &mut runner)
+                                .transpose()
+                        })
                         .take(ENCODED_TEST_CASES)
                         .collect::<Result<_, _>>()
                 }
@@ -173,14 +176,18 @@ macro_rules! objects {
                         $(
                             concat!("objects_", stringify!($x_old)) => {
                                 let arbitrary_data =
-                                    crate::durable::upgrade::[<objects_ $x_old>]::StateUpdateKind::arbitrary()
+                                    crate::durable::upgrade
+                                        ::[<objects_ $x_old>]::StateUpdateKind::arbitrary()
                                         .new_tree(runner)
                                         .expect("unable to create arbitrary data")
                                         .current();
-                                // Skip over generated data where kind is None because they are not interesting or
-                                // possible in production. Unfortunately any of the inner fields can still be None,
-                                // which is also not possible in production.
-                                // TODO(jkosh44) See if there's an arbitrary config that forces Some.
+                                // Skip over generated data where kind is None
+                                // because they are not interesting or possible in
+                                // production. Unfortunately any of the inner fields
+                                // can still be None, which is also not possible in
+                                // production.
+                                // TODO(jkosh44) See if there's an arbitrary config
+                                // that forces Some.
                                 let arbitrary_data = if arbitrary_data.kind.is_some() {
                                     Some(Self::[<$x_old:upper>](arbitrary_data))
                                 } else {
@@ -192,7 +199,8 @@ macro_rules! objects {
                         $(
                             concat!("objects_", stringify!($x)) => {
                                 let arbitrary_data =
-                                    crate::durable::upgrade::[<objects_ $x>]::StateUpdateKind::arbitrary()
+                                    crate::durable::upgrade
+                                        ::[<objects_ $x>]::StateUpdateKind::arbitrary()
                                         .new_tree(runner)
                                         .expect("unable to create arbitrary data")
                                         .current();

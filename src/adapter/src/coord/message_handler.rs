@@ -181,15 +181,13 @@ impl Coordinator {
             }
             Message::PrivateLinkVpcEndpointEvents(events) => {
                 if !self.controller.read_only() {
-                    self.controller
-                            .storage
-                            .append_introspection_updates(
-                                mz_storage_client::controller::IntrospectionType::PrivatelinkConnectionStatusHistory,
-                                events
-                                    .into_iter()
-                                    .map(|e| (mz_repr::Row::from(e), Diff::ONE))
-                                    .collect(),
-                            );
+                    self.controller.storage.append_introspection_updates(
+                        IntrospectionType::PrivatelinkConnectionStatusHistory,
+                        events
+                            .into_iter()
+                            .map(|e| (mz_repr::Row::from(e), Diff::ONE))
+                            .collect(),
+                    );
                 }
             }
             Message::CheckSchedulingPolicies => {

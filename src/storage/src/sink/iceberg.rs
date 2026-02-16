@@ -752,7 +752,9 @@ where
 
                     // We only start minting after we've reached as_of and resume_upper to avoid
                     // minting batches that would be immediately skipped.
-                    if PartialOrder::less_than(&observed_frontier, &resume_upper) || PartialOrder::less_than(&observed_frontier, &as_of) {
+                    if PartialOrder::less_than(&observed_frontier, &resume_upper)
+                        || PartialOrder::less_than(&observed_frontier, &as_of)
+                    {
                         continue;
                     }
 
@@ -796,11 +798,16 @@ where
                         let duration_millis = commit_interval.as_millis()
                             .checked_mul(u128::from(i))
                             .expect("commit interval multiplication overflow");
-                        let duration_ts = Timestamp::new(u64::try_from(duration_millis)
-                            .expect("commit interval too large for u64"));
-                        let desired_batch_upper = Antichain::from_elem(current_upper_ts.step_forward_by(&duration_ts));
+                        let duration_ts = Timestamp::new(
+                            u64::try_from(duration_millis)
+                                .expect("commit interval too large for u64"),
+                        );
+                        let desired_batch_upper = Antichain::from_elem(
+                            current_upper_ts.step_forward_by(&duration_ts),
+                        );
 
-                        let batch_description = (current_upper.clone(), desired_batch_upper.clone());
+                        let batch_description =
+                            (current_upper.clone(), desired_batch_upper.clone());
                         debug!(
                             "{}: minting future batch {}/{} [{}, {})",
                             name_for_logging,
@@ -1349,7 +1356,10 @@ where
                                     // Drop data that's before the first batch we received (already committed)
                                     if let Some(ref min_lower) = min_batch_lower {
                                         if PartialOrder::less_than(&ts_antichain, min_lower) {
-                                            dropped_per_time.entry(ts_antichain.into_option().unwrap()).and_modify(|c| *c += 1).or_insert(1);
+                                            dropped_per_time
+                                                .entry(ts_antichain.into_option().unwrap())
+                                                .and_modify(|c| *c += 1)
+                                                .or_insert(1);
                                             continue;
                                         }
                                     }
@@ -1545,10 +1555,14 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             for batch_desc in data {
-                                let prev = batch_descriptions.insert(batch_desc, BoundedDataFileSet { data_files: vec![] });
+                                let prev = batch_descriptions.insert(
+                                    batch_desc,
+                                    BoundedDataFileSet { data_files: vec![] },
+                                );
                                 if let Some(prev) = prev {
                                     anyhow::bail!(
-                                        "Duplicate batch description received in commit operator: {:?}",
+                                        "Duplicate batch description received \
+                                         in commit operator: {:?}",
                                         prev
                                     );
                                 }
@@ -1565,7 +1579,9 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             for bounded_data_file in data {
-                                let entry = batch_descriptions.entry(bounded_data_file.batch_desc().clone()).or_default();
+                                let entry = batch_descriptions
+                                    .entry(bounded_data_file.batch_desc().clone())
+                                    .or_default();
                                 entry.data_files.push(bounded_data_file);
                             }
                         }
@@ -1674,7 +1690,8 @@ where
                                     Err(e) => return RetryResult::RetryableErr(anyhow!(e)),
                                 };
 
-                                let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+                                let mut snapshots: Vec<_> =
+                                    table.metadata().snapshots().cloned().collect();
                                 let last = retrieve_upper_from_snapshots(&mut snapshots);
                                 let last = match last {
                                     Ok(val) => val,

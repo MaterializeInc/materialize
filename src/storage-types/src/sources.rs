@@ -272,7 +272,17 @@ impl SourceTimestamp for MzOffset {
 /// way. Individual sources like Kafka or File sources should explicitly implement their own offset
 /// type that converts to/From MzOffsets. A 0-MzOffset denotes an empty stream.
 #[derive(
-    Copy, Clone, Default, Debug, PartialEq, PartialOrd, Eq, Ord, Hash, Serialize, Deserialize,
+    Copy,
+    Clone,
+    Default,
+    Debug,
+    PartialEq,
+    PartialOrd,
+    Eq,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
 )]
 pub struct MzOffset {
     pub offset: u64,
@@ -418,7 +428,17 @@ impl TotalOrder for MzOffset {}
 /// Some variants here have attached data used to differentiate incomparable
 /// instantiations. These attached data types should be expanded in the future
 /// if we need to tell apart more kinds of sources.
-#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Ord,
+    PartialOrd,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum Timeline {
     /// EpochMilliseconds means the timestamp is the number of milliseconds since
     /// the Unix epoch.
@@ -1876,7 +1896,8 @@ mod tests {
                     .prop_map(move |datas| (desc.clone(), datas, read_desc.clone()))
             });
 
-        proptest!(|((config, (desc, source_datas, read_desc)) in (any::<EncodingConfig>(), strat))| {
+        let combined_strat = (any::<EncodingConfig>(), strat);
+        proptest!(|((config, (desc, source_datas, read_desc)) in combined_strat)| {
             roundtrip_source_data(&desc, source_datas, &read_desc, &config);
         });
     }

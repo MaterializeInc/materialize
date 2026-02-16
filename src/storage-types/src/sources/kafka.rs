@@ -353,7 +353,18 @@ impl crate::AlterCompatible for KafkaSourceExportDetails {
 /// value, exactly *at* that value, and right *after* that value. Additionally, it provides two
 /// special values for positive and negative infinity that are greater than and less than all the
 /// other elements respectively.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum RangeBound<P> {
     /// Negative infinity.
     NegInfinity,
@@ -363,7 +374,18 @@ pub enum RangeBound<P> {
     PosInfinity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum BoundKind {
     /// A bound right before a value. When used as an upper it represents an exclusive range.
     Before,

@@ -539,34 +539,67 @@ pub fn create_statement(
 ///   also converts the struct's type from `$t` to `Vec<$t>`.
 macro_rules! generate_extracted_config {
     // No default specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, Option::<$t>, None, false)],
+            $($tail),*
+        );
     };
     // No default specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, Option::<$t>, None, false)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty)
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, Option::<$t>, None, false)]
+        );
     };
     // Default specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, Default($v:expr)), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, $v, false)],
+            $($tail),*
+        );
     };
     // Default specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, Default($v:expr))) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, $v, false)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, Default($v:expr))
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, $v, false)]
+        );
     };
     // AllowMultiple specified, have remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)], $(
-            $tail
-        ),*);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, AllowMultiple), $($tail:tt),*
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, vec![], true)],
+            $($tail),*
+        );
     };
     // AllowMultiple specified, no remaining options.
-    ($option_ty:ty, [$($processed:tt)*], ($option_name:path, $t:ty, AllowMultiple)) => {
-        generate_extracted_config!($option_ty, [$($processed)* ($option_name, $t, vec![], true)]);
+    (
+        $option_ty:ty, [$($processed:tt)*],
+        ($option_name:path, $t:ty, AllowMultiple)
+    ) => {
+        generate_extracted_config!(
+            $option_ty,
+            [$($processed)* ($option_name, $t, vec![], true)]
+        );
     };
     ($option_ty:ty, [$(($option_name:path, $t:ty, $v:expr, $allow_multiple:literal))+]) => {
         paste::paste! {
@@ -597,20 +630,34 @@ macro_rules! generate_extracted_config {
                 }
             }
 
-            impl std::convert::TryFrom<Vec<$option_ty<Aug>>> for [<$option_ty Extracted>] {
+            impl std::convert::TryFrom<Vec<$option_ty<Aug>>>
+                for [<$option_ty Extracted>]
+            {
                 type Error = $crate::plan::PlanError;
-                fn try_from(v: Vec<$option_ty<Aug>>) -> Result<[<$option_ty Extracted>], Self::Error> {
+                fn try_from(
+                    v: Vec<$option_ty<Aug>>,
+                ) -> Result<[<$option_ty Extracted>], Self::Error> {
                     use [<$option_ty Name>]::*;
                     let mut extracted = [<$option_ty Extracted>]::default();
                     for option in v {
                         match option.name {
                             $(
                                 $option_name => {
-                                    if !$allow_multiple && !extracted.seen.insert(option.name.clone()) {
-                                        sql_bail!("{} specified more than once", option.name.to_ast_string_simple());
+                                    if !$allow_multiple
+                                        && !extracted.seen.insert(option.name.clone())
+                                    {
+                                        sql_bail!(
+                                            "{} specified more than once",
+                                            option.name.to_ast_string_simple(),
+                                        );
                                     }
-                                    let val: $t = $crate::plan::with_options::TryFromValue::try_from_value(option.value)
-                                        .map_err(|e| sql_err!("invalid {}: {}", option.name.to_ast_string_simple(), e))?;
+                                    let val: $t = $crate::plan::with_options
+                                        ::TryFromValue::try_from_value(option.value)
+                                        .map_err(|e| sql_err!(
+                                            "invalid {}: {}",
+                                            option.name.to_ast_string_simple(),
+                                            e,
+                                        ))?;
                                     generate_extracted_config!(
                                         @ifexpr $allow_multiple,
                                         extracted.[<$option_name:snake>].push(val),
@@ -626,7 +673,10 @@ macro_rules! generate_extracted_config {
 
             impl [<$option_ty Extracted>] {
                 #[allow(unused)]
-                fn into_values(self, catalog: &dyn crate::catalog::SessionCatalog) -> Vec<$option_ty<Aug>> {
+                fn into_values(
+                    self,
+                    catalog: &dyn crate::catalog::SessionCatalog,
+                ) -> Vec<$option_ty<Aug>> {
                     use [<$option_ty Name>]::*;
                     let mut options = Vec::new();
                     $(

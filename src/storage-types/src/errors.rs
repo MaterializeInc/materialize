@@ -28,7 +28,18 @@ include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
 
 /// The underlying data was not decodable in the format we expected: eg.
 /// invalid JSON or Avro data that doesn't match a schema.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct DecodeError {
     pub kind: DecodeErrorKind,
     pub raw: Vec<u8>,
@@ -87,7 +98,18 @@ impl Display for DecodeError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum DecodeErrorKind {
     Text(Box<str>),
     Bytes(Box<str>),
@@ -124,7 +146,18 @@ impl Display for DecodeErrorKind {
 }
 
 /// Errors arising during envelope processing.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Hash
+)]
 pub enum EnvelopeError {
     /// An error that can be retracted by a future message using upsert logic.
     Upsert(UpsertError),
@@ -170,7 +203,18 @@ impl Display for EnvelopeError {
 
 /// An error from a value in an upsert source. The corresponding key is included, allowing
 /// us to reconstruct their entry in the upsert map upon restart.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct UpsertValueError {
     /// The underlying error.
     pub inner: DecodeError,
@@ -208,7 +252,17 @@ impl Display for UpsertValueError {
 
 /// A source contained a record with a NULL key, which we don't support.
 #[derive(
-    Arbitrary, Ord, PartialOrd, Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
 )]
 pub struct UpsertNullKeyError;
 
@@ -236,7 +290,18 @@ impl Display for UpsertNullKeyError {
 }
 
 /// An error that can be retracted by a future message using upsert logic.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum UpsertError {
     /// Wrapper around a key decoding error.
     /// We use this instead of emitting the underlying `DataflowError::DecodeError` because with only
@@ -296,7 +361,18 @@ impl Display for UpsertError {
 
 /// Source-wide durable errors; for example, a replication log being meaningless or corrupted.
 /// This should _not_ include transient source errors, like connection issues or misconfigurations.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct SourceError {
     pub error: SourceErrorDetails,
 }
@@ -321,7 +397,18 @@ impl Display for SourceError {
     }
 }
 
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum SourceErrorDetails {
     Initialization(Box<str>),
     Other(Box<str>),
@@ -383,7 +470,18 @@ impl Display for SourceErrorDetails {
 /// All of the variants are boxed to minimize the memory size of `DataflowError`. This type is
 /// likely to appear in `Result<Row, DataflowError>`s on high-throughput code paths, so keeping its
 /// size less than or equal to that of `Row` is important to ensure we are not wasting memory.
-#[derive(Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, Deserialize, Serialize, PartialEq, Hash)]
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Hash
+)]
 pub enum DataflowError {
     DecodeError(Box<DecodeError>),
     EvalError(Box<EvalError>),

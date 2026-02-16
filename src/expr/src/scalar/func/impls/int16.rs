@@ -125,7 +125,18 @@ fn cast_int16_to_uint64(a: i16) -> Result<u64, EvalError> {
     u64::try_from(a).or_else(|_| Err(EvalError::UInt64OutOfRange(a.to_string().into())))
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastInt16ToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastInt16ToNumeric {

@@ -69,7 +69,18 @@ use serde::{Deserialize, Serialize};
 use crate::plan::{AvailableCollections, bucketing_of_expected_group_size};
 
 /// This enum represents the three potential types of aggregations.
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum ReductionType {
     /// Accumulable functions can be subtracted from (are invertible), and associative.
     /// We can compute these results by moving some data to the diff field under arbitrary
@@ -277,7 +288,17 @@ pub struct SingleBasicPlan {
 /// types.
 ///
 /// TODO: could we express this as a delta join
-#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd
+)]
 pub struct CollationPlan {
     /// Accumulable aggregation results to collate, if any.
     pub accumulable: Option<AccumulablePlan>,

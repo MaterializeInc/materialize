@@ -27,7 +27,7 @@ use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
-use mz_sql::plan::{self, Plan, QueryWhen};
+use mz_sql::plan::{self, Explainee, ExplaineeStatement, Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
@@ -332,8 +332,7 @@ impl PeekClient {
                 stage,
                 format,
                 config,
-                explainee:
-                    plan::Explainee::Statement(plan::ExplaineeStatement::Select { broken, plan, desc }),
+                explainee: Explainee::Statement(ExplaineeStatement::Select { broken, plan, desc }),
             }) => {
                 // Create OptimizerTrace to collect optimizer plans
                 let optimizer_trace = OptimizerTrace::new(stage.paths());
@@ -858,28 +857,44 @@ impl PeekClient {
                     // The purpose of wrapping the following in a closure is to control where the
                     // `?`s return from, so that even when a `catch_unwind_optimize` call fails,
                     // we can still handle `EXPLAIN BROKEN`.
-                    let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, OptimizerError> {
+                    let pipeline = || -> Result<
+                        Either<
+                            optimize::peek::GlobalLirPlan,
+                            optimize::copy_to::GlobalLirPlan,
+                        >,
+                        OptimizerError,
+                    > {
                         match optimizer.as_mut() {
                             Either::Left(optimizer) => {
                                 // SELECT/EXPLAIN path
                                 // HIR ⇒ MIR lowering and MIR optimization (local)
-                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                                // Attach resolved context required to continue the pipeline.
                                 let local_mir_plan =
-                                    local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
+                                    optimizer.catch_unwind_optimize(raw_expr.clone())?;
+                                // Attach resolved context required to continue the pipeline.
+                                let local_mir_plan = local_mir_plan.resolve(
+                                    timestamp_context.clone(),
+                                    &session_meta,
+                                    stats,
+                                );
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                                let global_lir_plan =
+                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
                                 Ok(Either::Left(global_lir_plan))
                             }
                             Either::Right(optimizer) => {
                                 // COPY TO path
                                 // HIR ⇒ MIR lowering and MIR optimization (local)
-                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                                // Attach resolved context required to continue the pipeline.
                                 let local_mir_plan =
-                                    local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
+                                    optimizer.catch_unwind_optimize(raw_expr.clone())?;
+                                // Attach resolved context required to continue the pipeline.
+                                let local_mir_plan = local_mir_plan.resolve(
+                                    timestamp_context.clone(),
+                                    &session_meta,
+                                    stats,
+                                );
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                                let global_lir_plan =
+                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
                                 Ok(Either::Right(global_lir_plan))
                             }
                         }
@@ -888,44 +903,53 @@ impl PeekClient {
                     let global_lir_plan_result = pipeline();
                     let optimization_finished_at = now();
 
-                    let create_insights_ctx = |optimizer: &optimize::peek::Optimizer, is_notice: bool| -> Option<Box<PlanInsightsContext>> {
-                        if !needs_plan_insights {
-                            return None;
-                        }
+                    let create_insights_ctx =
+                        |optimizer: &optimize::peek::Optimizer,
+                         is_notice: bool|
+                         -> Option<Box<PlanInsightsContext>> {
+                            if !needs_plan_insights {
+                                return None;
+                            }
 
-                        let catalog = catalog_for_insights.as_ref()?;
+                            let catalog = catalog_for_insights.as_ref()?;
 
-                        let enable_re_optimize = if needs_plan_insights {
-                            // Disable any plan insights that use the optimizer if we only want the
-                            // notice and plan optimization took longer than the threshold. This is
-                            // to prevent a situation where optimizing takes a while and there are
-                            // lots of clusters, which would delay peek execution by the product of
-                            // those.
-                            //
-                            // (This heuristic doesn't work well, see #9492.)
-                            let opt_limit = mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION
-                                .get(catalog.system_config().dyncfgs());
-                            !(is_notice && optimizer.duration() > opt_limit)
-                        } else {
-                            false
+                            let enable_re_optimize = if needs_plan_insights {
+                                // Disable any plan insights that use the optimizer if we only want the
+                                // notice and plan optimization took longer than the threshold. This is
+                                // to prevent a situation where optimizing takes a while and there are
+                                // lots of clusters, which would delay peek execution by the product of
+                                // those.
+                                //
+                                // (This heuristic doesn't work well, see #9492.)
+                                let dyncfgs = catalog.system_config().dyncfgs();
+                                let opt_limit = mz_adapter_types::dyncfgs
+                                ::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION
+                                .get(dyncfgs);
+                                !(is_notice && optimizer.duration() > opt_limit)
+                            } else {
+                                false
+                            };
+
+                            Some(Box::new(PlanInsightsContext {
+                                stmt: select_plan
+                                    .select
+                                    .as_deref()
+                                    .map(Clone::clone)
+                                    .map(Statement::Select),
+                                raw_expr: raw_expr.clone(),
+                                catalog: Arc::clone(catalog),
+                                compute_instances,
+                                target_instance: target_cluster_name,
+                                metrics: optimizer.metrics().clone(),
+                                finishing: optimizer.finishing().clone(),
+                                optimizer_config: optimizer.config().clone(),
+                                session: session_meta,
+                                timestamp_context,
+                                view_id: optimizer.select_id(),
+                                index_id: optimizer.index_id(),
+                                enable_re_optimize,
+                            }))
                         };
-
-                        Some(Box::new(PlanInsightsContext {
-                            stmt: select_plan.select.as_deref().map(Clone::clone).map(Statement::Select),
-                            raw_expr: raw_expr.clone(),
-                            catalog: Arc::clone(catalog),
-                            compute_instances,
-                            target_instance: target_cluster_name,
-                            metrics: optimizer.metrics().clone(),
-                            finishing: optimizer.finishing().clone(),
-                            optimizer_config: optimizer.config().clone(),
-                            session: session_meta,
-                            timestamp_context,
-                            view_id: optimizer.select_id(),
-                            index_id: optimizer.index_id(),
-                            enable_re_optimize,
-                        }))
-                    };
 
                     match global_lir_plan_result {
                         Ok(Either::Left(global_lir_plan)) => {
@@ -942,14 +966,12 @@ impl PeekClient {
                                         insights_ctx,
                                     })
                                 }
-                                ExplainContext::None => {
-                                    Ok(Execution::Peek {
-                                        global_lir_plan,
-                                        optimization_finished_at,
-                                        plan_insights_optimizer_trace: None,
-                                        insights_ctx: None,
-                                    })
-                                }
+                                ExplainContext::None => Ok(Execution::Peek {
+                                    global_lir_plan,
+                                    optimization_finished_at,
+                                    plan_insights_optimizer_trace: None,
+                                    insights_ctx: None,
+                                }),
                                 ExplainContext::PlanInsightsNotice(optimizer_trace) => {
                                     let insights_ctx = create_insights_ctx(&optimizer, true);
                                     Ok(Execution::Peek {
@@ -966,13 +988,18 @@ impl PeekClient {
                                             .desc
                                             .source_imports
                                             .into_iter()
-                                            .filter_map(|(id, import)| import.desc.arguments.operators.map(|mfp| (id, mfp)))
+                                            .filter_map(|(id, import)| {
+                                                import.desc.arguments.operators.map(|mfp| (id, mfp))
+                                            })
                                             .collect(),
-                                        PeekPlan::FastPath(_) => std::collections::BTreeMap::default(),
+                                        PeekPlan::FastPath(_) => {
+                                            std::collections::BTreeMap::default()
+                                        }
                                     };
                                     Ok(Execution::ExplainPushdown {
                                         imports,
-                                        determination: determination_for_pushdown.expect("it's present for the ExplainPushdown case"),
+                                        determination: determination_for_pushdown
+                                            .expect("it's present for the ExplainPushdown case"),
                                     })
                                 }
                             }
@@ -994,7 +1021,10 @@ impl PeekClient {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 if explain_ctx.broken {
                                     // EXPLAIN BROKEN: log error and continue with defaults
-                                    tracing::error!("error while handling EXPLAIN statement: {}", err);
+                                    tracing::error!(
+                                        "error while handling EXPLAIN statement: {}",
+                                        err
+                                    );
                                     Ok(Execution::ExplainPlan {
                                         df_meta: Default::default(),
                                         explain_ctx,

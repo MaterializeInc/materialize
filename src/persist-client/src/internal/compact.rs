@@ -621,7 +621,8 @@ where
             }
             if let Some(single_nonempty_batch) = single_nonempty_batch {
                 if single_nonempty_batch.batch.run_splits.len() == 0
-                    && single_nonempty_batch.batch.desc.since() != &Antichain::from_elem(T::minimum())
+                    && single_nonempty_batch.batch.desc.since()
+                        != &Antichain::from_elem(T::minimum())
                 {
                     metrics.compaction.fast_path_eligible.inc();
                 }
@@ -646,9 +647,17 @@ where
             );
             let total_chunked_runs = chunked_runs.len();
 
-            let parts_before = req.inputs.iter().map(|x| x.batch.parts.len()).sum::<usize>();
-            let parts_after = chunked_runs.iter().flat_map(|(_, _, runs, _)| runs.iter().map(|(_, _, parts)| parts.len())).sum::<usize>();
-            assert_eq!(parts_before, parts_after, "chunking should not change the number of parts");
+            let parts_before = req.inputs.iter()
+                .map(|x| x.batch.parts.len()).sum::<usize>();
+            let parts_after = chunked_runs.iter()
+                .flat_map(|(_, _, runs, _)| {
+                    runs.iter().map(|(_, _, parts)| parts.len())
+                })
+                .sum::<usize>();
+            assert_eq!(
+                parts_before, parts_after,
+                "chunking should not change the number of parts",
+            );
 
             for (applied, (input, desc, runs, run_chunk_max_memory_usage)) in
                 chunked_runs.into_iter().enumerate()
@@ -692,7 +701,8 @@ where
                 .await?;
 
                 assert!(
-                    (batch.len == 0 && batch.parts.len() == 0) || (batch.len > 0 && batch.parts.len() > 0),
+                    (batch.len == 0 && batch.parts.len() == 0)
+                        || (batch.len > 0 && batch.parts.len() > 0),
                     "updates={}, parts={}",
                     batch.len,
                     batch.parts.len(),

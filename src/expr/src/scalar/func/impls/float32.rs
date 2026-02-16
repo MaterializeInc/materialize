@@ -184,7 +184,18 @@ fn cast_float32_to_uint64(a: f32) -> Result<u64, EvalError> {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastFloat32ToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastFloat32ToNumeric {

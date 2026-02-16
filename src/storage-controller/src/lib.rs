@@ -2572,8 +2572,15 @@ where
 
                     tracing::debug!(?id, type_ = source_conn.name(), upstream = ?source_conn.external_reference(), "fetching real time recency");
 
-                    let result = rtr::real_time_recency_ts(source_conn, id, config, as_of, remap_subscribe)
-                        .await.map_err(|e| {
+                    let result = rtr::real_time_recency_ts(
+                        source_conn,
+                        id,
+                        config,
+                        as_of,
+                        remap_subscribe,
+                    )
+                    .await
+                    .map_err(|e| {
                             tracing::debug!(?id, "real time recency error: {:?}", e);
                             e
                         });

@@ -1598,7 +1598,17 @@ impl fmt::Display for Datum<'_> {
 /// There is an indirect correspondence between `Datum` variants and `SqlScalarType`
 /// variants: every `Datum` variant belongs to one or more `SqlScalarType` variants.
 #[derive(
-    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    EnumKind,
+    MzReflect
 )]
 #[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
@@ -4490,7 +4500,17 @@ impl Arbitrary for ReprScalarType {
 /// It is important that any new variants for this enum be added to the `Arbitrary` instance
 /// and the `union` method.
 #[derive(
-    Clone, Debug, EnumKind, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect,
+    Clone,
+    Debug,
+    EnumKind,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Hash,
+    MzReflect
 )]
 #[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
@@ -5483,13 +5503,20 @@ mod tests {
     proptest! {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_repr_types_agree_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
-            let datum = arb_datum_for_column(src.clone());
-            (Just(src), datum) }
-        )) {
+        fn sql_repr_types_agree_on_valid_data(
+            (src, datum) in any::<SqlColumnType>()
+                .prop_flat_map(|src| {
+                    let datum = arb_datum_for_column(src.clone());
+                    (Just(src), datum)
+                }),
+        ) {
             let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
-            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+            assert_eq!(
+                datum.is_instance_of_sql(&src),
+                datum.is_instance_of(&tgt),
+                "translated to repr type {tgt:#?}",
+            );
         }
     }
 
@@ -5499,11 +5526,18 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum(true)) {
+        fn sql_repr_types_agree_on_random_data(
+            src in any::<SqlColumnType>(),
+            datum in arb_datum(true),
+        ) {
             let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 
-            assert_eq!(datum.is_instance_of_sql(&src), datum.is_instance_of(&tgt), "translated to repr type {tgt:#?}");
+            assert_eq!(
+                datum.is_instance_of_sql(&src),
+                datum.is_instance_of(&tgt),
+                "translated to repr type {tgt:#?}",
+            );
         }
     }
 
@@ -5525,7 +5559,10 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_type_base_eq_implies_repr_type_eq(sql_type1 in any::<SqlScalarType>(), sql_type2 in any::<SqlScalarType>()) {
+        fn sql_type_base_eq_implies_repr_type_eq(
+            sql_type1 in any::<SqlScalarType>(),
+            sql_type2 in any::<SqlScalarType>(),
+        ) {
             let repr_type1 = ReprScalarType::from(&sql_type1);
             let repr_type2 = ReprScalarType::from(&sql_type2);
             if sql_type1.base_eq(&sql_type2) {
@@ -5540,27 +5577,36 @@ mod tests {
         #[cfg_attr(miri, ignore)]
         fn repr_type_self_union(repr_type in any::<ReprScalarType>()) {
             let union = repr_type.union(&repr_type);
-            assert_ok!(union, "every type should self-union (update ReprScalarType::union to handle this)");
-            assert_eq!(union.unwrap(), repr_type, "every type should self-union to itself");
+            assert_ok!(
+                union,
+                "every type should self-union \
+                 (update ReprScalarType::union to handle this)",
+            );
+            assert_eq!(
+                union.unwrap(), repr_type,
+                "every type should self-union to itself",
+            );
         }
     }
 
     proptest! {
         #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+        #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum(true))) {
             let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
-            let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
+            let unpacked_datums: Vec<Datum<'_>> = row
+                .unpack_first().unwrap_array().elements().iter().collect();
             assert_eq!(unpacked_datums, datums);
         }
 
         #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+        #[cfg_attr(miri, ignore)] // can't call foreign function `decContextDefault`
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum(true))) {
             let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
-            let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_list().iter().collect();
+            let unpacked_datums: Vec<Datum<'_>> = row
+                .unpack_first().unwrap_list().iter().collect();
             assert_eq!(unpacked_datums, datums);
         }
 
@@ -5568,14 +5614,18 @@ mod tests {
         #[cfg_attr(miri, ignore)] // too slow
         fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum(true))) {
             let PropDict(row, elts) = array;
-            let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
-            let unpacked_datums: Vec<(&str, Datum<'_>)> = row.unpack_first().unwrap_map().iter().collect();
+            let datums: Vec<(&str, Datum<'_>)> = elts.iter()
+                .map(|(k, e)| (k.as_str(), e.into())).collect();
+            let unpacked_datums: Vec<(&str, Datum<'_>)> = row
+                .unpack_first().unwrap_map().iter().collect();
             assert_eq!(unpacked_datums, datums);
         }
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(true), 1..100)) {
+        fn row_packing_roundtrips_single_valued(
+            prop_datums in prop::collection::vec(arb_datum(true), 1..100),
+        ) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
             let row = Row::pack(&datums);
             let unpacked = row.unpack();
@@ -5589,7 +5639,10 @@ mod tests {
             let row = row.unpack_first();
             let d = row.unwrap_range();
 
-            let (((prop_lower, prop_lower_inc), (prop_upper, prop_upper_inc)), crate::adt::range::RangeInner {lower, upper}) = match (prop_range, d.inner) {
+            let (
+                ((prop_lower, prop_lower_inc), (prop_upper, prop_upper_inc)),
+                crate::adt::range::RangeInner { lower, upper },
+            ) = match (prop_range, d.inner) {
                 (Some(prop_values), Some(inner_range)) => (prop_values, inner_range),
                 (None, None) => return Ok(()),
                 _ => panic!("inequivalent row packing"),

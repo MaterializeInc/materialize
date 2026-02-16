@@ -39,7 +39,17 @@ use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
 /// To construct a column type, either initialize the struct directly, or
 /// use the [`SqlScalarType::nullable`] method.
 #[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct SqlColumnType {
     /// The underlying scalar type (e.g., Int32 or String) of this column.
@@ -195,7 +205,17 @@ impl fmt::Display for SqlColumnType {
 
 /// The type of a relation.
 #[derive(
-    Arbitrary, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct SqlRelationType {
     /// The type for each column, in order.
@@ -319,7 +339,17 @@ impl RustType<ProtoKey> for Vec<usize> {
 }
 
 /// The type of a relation.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub struct ReprRelationType {
     /// The type for each column, in order.
     pub column_types: Vec<ReprColumnType>,
@@ -406,7 +436,18 @@ impl From<&SqlRelationType> for ReprRelationType {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ReprColumnType {
     /// The underlying representation scalar type (e.g., Int32 or String) of this column.
     pub scalar_type: ReprScalarType,
@@ -457,7 +498,18 @@ impl SqlColumnType {
 }
 
 /// The name of a column in a [`RelationDesc`].
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ColumnName(Box<str>);
 
 impl ColumnName {
@@ -577,7 +629,17 @@ pub const UNKNOWN_COLUMN_NAME: &str = "?column?";
 
 /// Stable index of a column in a [`RelationDesc`].
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Serialize, Deserialize, Hash, MzReflect,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct ColumnIndex(usize);
 
@@ -611,7 +673,7 @@ impl ColumnIndex {
     Deserialize,
     Hash,
     MzReflect,
-    Arbitrary,
+    Arbitrary
 )]
 pub struct RelationVersion(u64);
 

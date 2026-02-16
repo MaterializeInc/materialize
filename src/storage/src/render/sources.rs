@@ -450,7 +450,17 @@ fn split_ok_err<O, E, T, D>(x: (Result<O, E>, T, D)) -> Result<(O, T, D), (E, T,
 }
 
 /// After handling metadata insertion, we split streams into key/value parts for convenience
-#[derive(Debug, Clone, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 struct KV {
     key: Option<Result<Row, DecodeError>>,
     val: Option<Result<Row, DecodeError>>,

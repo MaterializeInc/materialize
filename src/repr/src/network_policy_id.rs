@@ -31,7 +31,7 @@ const USER_CHAR: char = 'u';
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub enum NetworkPolicyId {
     System(u64),

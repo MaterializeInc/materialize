@@ -158,7 +158,17 @@ pub struct RunSinkCommand<T> {
 }
 
 /// A "kind" enum for statuses tracked by the health operator
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
 pub enum Status {
     Starting,
     Running,

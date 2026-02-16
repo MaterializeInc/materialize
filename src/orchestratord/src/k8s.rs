@@ -9,8 +9,9 @@
 
 use std::{future::ready, time::Duration};
 
+use apiextensions::v1::CustomResourceColumnDefinition;
 use futures::StreamExt;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition;
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions;
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
     api::{DeleteParams, Patch, PatchParams, PostParams},

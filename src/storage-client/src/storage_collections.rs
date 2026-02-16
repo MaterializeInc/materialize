@@ -431,6 +431,9 @@ pub struct StorageCollectionsImpl<
 //
 // We follow a pattern where `_inner` methods get a mutable reference to the
 // shared collections state, and it's the public-facing method that locks the
+/// A boxed stream of source data with timestamps and diffs.
+type SourceDataStream<T> = BoxStream<'static, (SourceData, T, StorageDiff)>;
+
 // state for the duration of its invocation. This allows calling other `_inner`
 // methods from within `_inner` methods.
 impl<T> StorageCollectionsImpl<T>
@@ -1110,8 +1113,7 @@ where
         id: GlobalId,
         as_of: T,
         txns_read: &TxnsRead<T>,
-    ) -> BoxFuture<'static, Result<BoxStream<'static, (SourceData, T, StorageDiff)>, StorageError<T>>>
-    {
+    ) -> BoxFuture<'static, Result<SourceDataStream<T>, StorageError<T>>> {
         use futures::stream::StreamExt;
 
         let metadata = match self.collection_metadata(id) {

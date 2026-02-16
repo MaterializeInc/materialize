@@ -309,60 +309,72 @@ where
 
         // Intentionally create the span outside the task to set the parent.
         let writer_span = info_span!("writer", idx);
-        let writer_handle = mz_ore::task::spawn(|| format!("writer-{}", idx), async move {
-            trace!("writer {} waiting for barrier", idx);
-            b.wait().await;
-            info!("starting writer {}", idx);
+        let writer_handle = mz_ore::task::spawn(
+            || format!("writer-{}", idx),
+            async move {
+                trace!("writer {} waiting for barrier", idx);
+                b.wait().await;
+                info!("starting writer {}", idx);
 
-            // Max observed latency for BenchmarkWriter::write.
-            let mut max_write_latency = Duration::from_millis(0);
+                // Max observed latency for BenchmarkWriter::write.
+                let mut max_write_latency = Duration::from_millis(0);
 
-            // The last time we emitted progress information to stdout, expressed
-            // as a relative duration from start.
-            let mut prev_log = Duration::from_millis(0);
-            let mut records_written = 0;
+                // The last time we emitted progress information to stdout, expressed
+                // as a relative duration from start.
+                let mut prev_log = Duration::from_millis(0);
+                let mut records_written = 0;
 
-            loop {
-                let batch = match rx.recv().await {
-                    Some(batch) => batch,
-                    None => break,
-                };
+                loop {
+                    let batch = match rx.recv().await {
+                        Some(batch) => batch,
+                        None => break,
+                    };
 
-                trace!("writer {} received a batch. writing", idx);
-                let write_start = Instant::now();
-                writer.write(batch).await?;
+                    trace!("writer {} received a batch. writing", idx);
+                    let write_start = Instant::now();
+                    writer.write(batch).await?;
 
-                records_written += args.batch_size;
-                let write_latency = write_start.elapsed();
-                if write_latency > max_write_latency {
-                    max_write_latency = write_latency;
+                    records_written += args.batch_size;
+                    let write_latency = write_start.elapsed();
+                    if write_latency > max_write_latency {
+                        max_write_latency = write_latency;
+                    }
+
+                    let elapsed = start.elapsed();
+
+                    if elapsed - prev_log > args.logging_granularity {
+                        info!(
+                            "After {} ms writer {} has written {} records. \
+                         Max write latency {} ms most recent write \
+                         latency {} ms.",
+                            elapsed.as_millis(),
+                            idx,
+                            records_written,
+                            max_write_latency.as_millis(),
+                            write_latency.as_millis(),
+                        );
+                        prev_log = elapsed;
+                    }
+
+                    if records_written >= num_records_total {
+                        break;
+                    }
                 }
-
                 let elapsed = start.elapsed();
+                let finished = format!(
+                    "Writer {} finished after {} ms and wrote {} records. Max write latency {} ms.",
+                    idx,
+                    elapsed.as_millis(),
+                    records_written,
+                    max_write_latency.as_millis()
+                );
 
-                if elapsed - prev_log > args.logging_granularity {
-                    info!("After {} ms writer {} has written {} records. Max write latency {} ms most recent write latency {} ms.",
-                          elapsed.as_millis(), idx, records_written, max_write_latency.as_millis(), write_latency.as_millis());
-                    prev_log = elapsed;
-                }
+                writer.finish().await.unwrap();
 
-                if records_written >= num_records_total {
-                    break;
-                }
+                Ok(finished)
             }
-            let elapsed = start.elapsed();
-            let finished = format!(
-                "Writer {} finished after {} ms and wrote {} records. Max write latency {} ms.",
-                idx,
-                elapsed.as_millis(),
-                records_written,
-                max_write_latency.as_millis()
-            );
-
-            writer.finish().await.unwrap();
-
-            Ok(finished)
-        }.instrument(writer_span));
+            .instrument(writer_span),
+        );
 
         write_handles.push(writer_handle);
     }
@@ -373,60 +385,89 @@ where
         let b = Arc::clone(&barrier);
         // Intentionally create the span outside the task to set the parent.
         let reader_span = info_span!("reader", idx);
-        let reader_handle = mz_ore::task::spawn(|| format!("reader-{}", idx), async move {
-            trace!("reader {} waiting for barrier", idx);
-            b.wait().await;
-            info!("starting reader {}", idx);
+        let reader_handle = mz_ore::task::spawn(
+            || format!("reader-{}", idx),
+            async move {
+                trace!("reader {} waiting for barrier", idx);
+                b.wait().await;
+                info!("starting reader {}", idx);
 
-            // Max observed latency for BenchmarkReader::num_records.
-            let mut max_read_latency = Duration::from_millis(0);
+                // Max observed latency for BenchmarkReader::num_records.
+                let mut max_read_latency = Duration::from_millis(0);
 
-            // Max observed delay between the number of records expected to be read at any
-            // point in time vs the number of records actually ingested by that point.
-            let mut max_lag = 0;
+                // Max observed delay between the number of records expected to be read at any
+                // point in time vs the number of records actually ingested by that point.
+                let mut max_lag = 0;
 
-            // The last time we emitted progress information to stdout, expressed
-            // as a relative duration from start.
-            let mut prev_log = Duration::from_millis(0);
-            loop {
-                let elapsed = start.elapsed();
-                let expected_sent = elapsed.as_millis() as usize
-                    / (time_per_batch.as_millis() as usize)
-                    * args.batch_size;
-                let read_start = Instant::now();
-                let num_records_read = reader.num_records().await?;
-                let read_latency = read_start.elapsed();
-                let lag = if expected_sent > num_records_read {
-                    expected_sent - num_records_read
-                } else {
-                    0
-                };
-                if lag > max_lag {
-                    max_lag = lag;
-                }
+                // The last time we emitted progress information to stdout, expressed
+                // as a relative duration from start.
+                let mut prev_log = Duration::from_millis(0);
+                loop {
+                    let elapsed = start.elapsed();
+                    let expected_sent = elapsed.as_millis() as usize
+                        / (time_per_batch.as_millis() as usize)
+                        * args.batch_size;
+                    let read_start = Instant::now();
+                    let num_records_read = reader.num_records().await?;
+                    let read_latency = read_start.elapsed();
+                    let lag = if expected_sent > num_records_read {
+                        expected_sent - num_records_read
+                    } else {
+                        0
+                    };
+                    if lag > max_lag {
+                        max_lag = lag;
+                    }
 
-                if read_latency > max_read_latency {
-                    max_read_latency = read_latency;
-                }
+                    if read_latency > max_read_latency {
+                        max_read_latency = read_latency;
+                    }
 
-                if elapsed - prev_log > args.logging_granularity {
-                    let elapsed_seconds = elapsed.as_secs();
-                    let mb_read = (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
-                    let throughput = mb_read / elapsed_seconds as f64;
-                    info!("After {} ms reader {} has read {} records (throughput {:.3} MiB/s). Max read lag {} records, most recent read lag {} records. Max read latency {} ms, most recent read latency {} ms",
-                          elapsed.as_millis(), idx, num_records_read, throughput, max_lag, lag, max_read_latency.as_millis(), read_latency.as_millis());
-                    prev_log = elapsed;
-                }
-                if num_records_read == num_records_total {
-                    let elapsed_seconds = elapsed.as_secs();
-                    let mb_read = (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
-                    let throughput = mb_read / elapsed_seconds as f64;
-                    let finished = format!("Reader {} finished after {} ms and read {} records (throughput {:.3} MiB/s). Max read lag {} records. Max read latency {} ms.",
-                          idx, elapsed.as_millis(), num_records_read, throughput, max_lag, max_read_latency.as_millis());
-                    return Ok((finished, reader));
+                    if elapsed - prev_log > args.logging_granularity {
+                        let elapsed_seconds = elapsed.as_secs();
+                        let mb_read =
+                            (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
+                        let throughput = mb_read / elapsed_seconds as f64;
+                        info!(
+                            "After {} ms reader {} has read {} records \
+                         (throughput {:.3} MiB/s). Max read lag {} \
+                         records, most recent read lag {} records. \
+                         Max read latency {} ms, most recent read \
+                         latency {} ms",
+                            elapsed.as_millis(),
+                            idx,
+                            num_records_read,
+                            throughput,
+                            max_lag,
+                            lag,
+                            max_read_latency.as_millis(),
+                            read_latency.as_millis(),
+                        );
+                        prev_log = elapsed;
+                    }
+                    if num_records_read == num_records_total {
+                        let elapsed_seconds = elapsed.as_secs();
+                        let mb_read =
+                            (num_records_read * args.record_size_bytes) as f64 / MIB as f64;
+                        let throughput = mb_read / elapsed_seconds as f64;
+                        let finished = format!(
+                            "Reader {} finished after {} ms and read \
+                         {} records (throughput {:.3} MiB/s). \
+                         Max read lag {} records. \
+                         Max read latency {} ms.",
+                            idx,
+                            elapsed.as_millis(),
+                            num_records_read,
+                            throughput,
+                            max_lag,
+                            max_read_latency.as_millis(),
+                        );
+                        return Ok((finished, reader));
+                    }
                 }
             }
-        }.instrument(reader_span));
+            .instrument(reader_span),
+        );
         read_handles.push(reader_handle);
     }
 

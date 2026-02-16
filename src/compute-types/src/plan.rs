@@ -54,7 +54,17 @@ pub mod transform;
 /// columns not explicitly captured by the key, and how to return to the original
 /// row from the concatenation of key and value. Further explanation is available
 /// in the documentation for `KeyValRowMapping`.
-#[derive(Clone, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub struct AvailableCollections {
     /// Whether the collection exists in unarranged form.
     pub raw: bool,
@@ -96,7 +106,18 @@ impl AvailableCollections {
 }
 
 /// An identifier for an LIR node.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize, Columnar)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    Columnar
+)]
 pub struct LirId(u64);
 
 impl LirId {

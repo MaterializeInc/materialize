@@ -41,7 +41,17 @@ use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 /// and `Running` statuses from them do not mark the entire object as running.
 ///
 /// Ensure you update `is_sidechannel` when adding variants.
-#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
 pub enum StatusNamespace {
     /// A normal status namespaces. Any `Running` status from any worker will mark the object
     /// `Running`.

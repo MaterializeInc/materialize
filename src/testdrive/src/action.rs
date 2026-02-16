@@ -646,6 +646,7 @@ impl State {
 
     /// Delete Kafka topics + CCSR subjects that were created in this run
     pub async fn reset_kafka(&self) -> Result<(), anyhow::Error> {
+        use rdkafka::types::RDKafkaErrorCode;
         let mut errors: Vec<anyhow::Error> = Vec::new();
 
         let metadata = self.kafka_producer.client().fetch_metadata(
@@ -681,10 +682,7 @@ impl State {
                     }
                     for (res, topic) in res.iter().zip_eq(testdrive_topics.iter()) {
                         match res {
-                            Ok(_)
-                            | Err((_, rdkafka::types::RDKafkaErrorCode::UnknownTopicOrPartition)) => {
-                                ()
-                            }
+                            Ok(_) | Err((_, RDKafkaErrorCode::UnknownTopicOrPartition)) => (),
                             Err((_, err)) => {
                                 errors.push(anyhow!("unable to delete {}: {}", topic, err));
                             }

@@ -71,7 +71,17 @@ use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollectio
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 use crate::statistics::SourceStatistics;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 struct HealthStatus {
     kafka: Option<HealthStatusUpdate>,
     ssh: Option<HealthStatusUpdate>,

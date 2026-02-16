@@ -473,7 +473,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 as_of = ?as_of.elements(),
                 time_dependence = ?dataflow.time_dependence,
                 expiration = ?dataflow_expiration.elements(),
-                expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
+                expiration_datetime = ?dataflow_expiration
+                    .as_option()
+                    .map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
                 "creating dataflow",
@@ -486,7 +488,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 as_of = ?as_of.elements(),
                 time_dependence = ?dataflow.time_dependence,
                 expiration = ?dataflow_expiration.elements(),
-                expiration_datetime = ?dataflow_expiration.as_option().map(|t| mz_ore::now::to_datetime(t.into())),
+                expiration_datetime = ?dataflow_expiration
+                    .as_option()
+                    .map(|t| mz_ore::now::to_datetime(t.into())),
                 plan_until = ?dataflow.until.elements(),
                 until = ?until.elements(),
                 "creating dataflow",

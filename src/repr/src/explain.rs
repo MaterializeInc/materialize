@@ -805,7 +805,18 @@ impl UsedIndexes {
     }
 }
 
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Arbitrary,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum IndexUsageType {
     /// Read the entire index.
     FullScan,
@@ -849,7 +860,18 @@ pub enum IndexUsageType {
 /// In a snapshot, one arrangement of the first input is scanned, all the other arrangements (of the
 /// first input, and of all other inputs) only get lookups.
 /// When later input batches are arriving, all inputs are fully read.
-#[derive(Debug, Clone, Arbitrary, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Arbitrary,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum DeltaJoinIndexUsageType {
     Unknown,
     Lookup,

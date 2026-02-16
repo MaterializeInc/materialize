@@ -60,7 +60,10 @@ fn cast_pg_legacy_char_to_char(a: PgLegacyChar) -> Result<Char<String>, EvalErro
 #[sqlfunc(
     sqlname = "\"char\"_to_varchar",
     preserves_uniqueness = true,
-    inverse = to_unary!(super::CastStringToVarChar{fail_on_len: false, length: Some(VarCharMaxLength::try_from(1).unwrap())})
+    inverse = to_unary!(super::CastStringToVarChar{
+        fail_on_len: false,
+        length: Some(VarCharMaxLength::try_from(1).unwrap()),
+    })
 )]
 fn cast_pg_legacy_char_to_var_char(a: PgLegacyChar) -> Result<VarChar<String>, EvalError> {
     let mut buf = String::new();

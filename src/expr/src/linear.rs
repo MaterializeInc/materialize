@@ -29,7 +29,17 @@ use crate::{MirRelationExpr, MirScalarExpr};
 /// expressions in `self.expressions`, even though this is not something
 /// we can directly evaluate. The plan creation methods will defensively
 /// ensure that the right thing happens.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Ord, PartialOrd)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    Ord,
+    PartialOrd
+)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
     ///
@@ -312,9 +322,15 @@ impl MapFilterProject {
         // This is essentially the same code as `extract_non_errors_from_expr`, except the seemingly
         // superfluous outer if, which works around a borrow-checker issue:
         // https://github.com/rust-lang/rust/issues/54663
-        if matches!(expr, MirRelationExpr::Map { input: _, scalars } if scalars.iter().all(|s| !s.is_literal_err()))
-            || matches!(expr, MirRelationExpr::Filter { input: _, predicates } if predicates.iter().all(|p| !p.is_literal_err()))
-            || matches!(expr, MirRelationExpr::Project { .. })
+        if matches!(
+            expr,
+            MirRelationExpr::Map { input: _, scalars }
+                if scalars.iter().all(|s| !s.is_literal_err())
+        ) || matches!(
+            expr,
+            MirRelationExpr::Filter { input: _, predicates }
+                if predicates.iter().all(|p| !p.is_literal_err())
+        ) || matches!(expr, MirRelationExpr::Project { .. })
         {
             match expr {
                 MirRelationExpr::Map { input, scalars }

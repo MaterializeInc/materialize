@@ -112,7 +112,18 @@ fn cast_uint32_to_string(a: u32) -> String {
     buf
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastUint32ToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastUint32ToNumeric {

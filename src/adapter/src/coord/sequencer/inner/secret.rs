@@ -10,6 +10,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
@@ -218,8 +219,7 @@ impl Coordinator {
         let res = match self.catalog_transact(Some(session), ops).await {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,

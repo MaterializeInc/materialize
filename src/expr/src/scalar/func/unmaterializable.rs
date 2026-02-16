@@ -22,7 +22,18 @@ use mz_lowertest::MzReflect;
 use mz_repr::{SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum UnmaterializableFunc {
     CurrentDatabase,
     CurrentSchema,

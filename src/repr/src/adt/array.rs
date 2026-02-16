@@ -170,7 +170,7 @@ impl ArrayDimension {
     PartialOrd,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub enum InvalidArrayError {
     /// The number of dimensions in the array exceeds [`MAX_ARRAY_DIMENSIONS]`.

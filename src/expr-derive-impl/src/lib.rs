@@ -126,7 +126,10 @@ mod test {
                 propagates_nulls = true
         };
         let item = quote! {
-            fn complex_output_type_fn<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+            fn complex_output_type_fn<'a>(
+                a: Datum<'a>,
+                b: Datum<'a>,
+            ) -> Result<Datum<'a>, EvalError> {
                 unimplemented!()
             }
         };

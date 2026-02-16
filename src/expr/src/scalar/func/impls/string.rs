@@ -155,7 +155,18 @@ fn reverse<'a>(a: &'a str) -> String {
     a.chars().rev().collect()
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToNumeric(pub Option<NumericMaxScale>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToNumeric {
@@ -205,7 +216,18 @@ fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
     strconv::parse_time(a).err_into()
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToTimestamp(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToTimestamp {
@@ -248,7 +270,18 @@ fn try_parse_monotonic_iso8601_timestamp<'a>(
     Some(ts)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToTimestampTz(pub Option<TimestampPrecision>);
 
 impl<'a> EagerUnaryFunc<'a> for CastStringToTimestampTz {
@@ -294,7 +327,18 @@ fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
     strconv::parse_uuid(a).err_into()
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToArray {
     // Target array's type.
     pub return_ty: SqlScalarType,
@@ -367,7 +411,18 @@ impl fmt::Display for CastStringToArray {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToList {
     // Target list's type
     pub return_ty: SqlScalarType,
@@ -446,7 +501,18 @@ impl fmt::Display for CastStringToList {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToMap {
     // Target map's value type
     pub return_ty: SqlScalarType,
@@ -531,7 +597,18 @@ impl fmt::Display for CastStringToMap {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToChar {
     pub length: Option<mz_repr::adt::char::CharLength>,
     pub fail_on_len: bool,
@@ -585,7 +662,18 @@ impl fmt::Display for CastStringToChar {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToRange {
     // Target range's type
     pub return_ty: SqlScalarType,
@@ -662,7 +750,18 @@ impl fmt::Display for CastStringToRange {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToVarChar {
     pub length: Option<VarCharMaxLength>,
     pub fail_on_len: bool,
@@ -728,7 +827,18 @@ static INT2VECTOR_CAST_EXPR: LazyLock<MirScalarExpr> = LazyLock::new(|| MirScala
     expr: Box::new(MirScalarExpr::column(0)),
 });
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastStringToInt2Vector;
 
 impl LazyUnaryFunc for CastStringToInt2Vector {
@@ -879,7 +989,18 @@ fn normalize(text: &str, form_str: &str) -> Result<String, EvalError> {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct IsLikeMatch(pub like_pattern::Matcher);
 
 impl<'a> EagerUnaryFunc<'a> for IsLikeMatch {
@@ -906,7 +1027,18 @@ impl fmt::Display for IsLikeMatch {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct IsRegexpMatch(pub Regex);
 
 impl<'a> EagerUnaryFunc<'a> for IsRegexpMatch {
@@ -933,7 +1065,18 @@ impl fmt::Display for IsRegexpMatch {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct RegexpMatch(pub Regex);
 
 impl LazyUnaryFunc for RegexpMatch {
@@ -991,7 +1134,18 @@ impl fmt::Display for RegexpMatch {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct RegexpSplitToArray(pub Regex);
 
 impl LazyUnaryFunc for RegexpSplitToArray {
@@ -1054,7 +1208,18 @@ fn panic<'a>(a: &'a str) -> String {
     panic!("{}", a)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct QuoteIdent;
 
 impl LazyUnaryFunc for QuoteIdent {
@@ -1113,7 +1278,18 @@ impl fmt::Display for QuoteIdent {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct RegexpReplace {
     pub regex: Regex,
     pub limit: usize,

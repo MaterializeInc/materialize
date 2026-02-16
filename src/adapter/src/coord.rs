@@ -3474,7 +3474,9 @@ impl Coordinator {
                     // `next()` on any stream is cancel-safe:
                     // https://docs.rs/tokio-stream/0.1.9/tokio_stream/trait.StreamExt.html#cancel-safety
                     // Receive a single command.
-                    Some(event) = cluster_events.next() => messages.push(Message::ClusterEvent(event)),
+                    Some(event) = cluster_events.next() => {
+                        messages.push(Message::ClusterEvent(event))
+                    },
                     // See [`mz_controller::Controller::Controller::ready`] for notes
                     // on why this is cancel-safe.
                     // Receive a single command.
@@ -3522,7 +3524,9 @@ impl Coordinator {
                         if count == 0 {
                             break;
                         } else {
-                            messages.extend(cmd_messages.drain(..).map(|(otel_ctx, cmd)| Message::Command(otel_ctx, cmd)));
+                            messages.extend(cmd_messages.drain(..).map(
+                                |(otel_ctx, cmd)| Message::Command(otel_ctx, cmd),
+                            ));
                         }
                     },
                     // `recv()` on `UnboundedReceiver` is cancellation safe:
@@ -3534,7 +3538,9 @@ impl Coordinator {
                             pending_read_txns.push(pending_read_txn);
                         }
                         for (conn_id, pending_read_txn) in pending_read_txns {
-                            let prev = self.pending_linearize_read_txns.insert(conn_id, pending_read_txn);
+                            let prev = self
+                                .pending_linearize_read_txns
+                                .insert(conn_id, pending_read_txn);
                             soft_assert_or_log!(
                                 prev.is_none(),
                                 "connections can not have multiple concurrent reads, prev: {prev:?}"

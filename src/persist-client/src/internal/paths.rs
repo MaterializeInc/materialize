@@ -116,7 +116,18 @@ impl Display for WriterKey {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct PartialBatchKey(pub(crate) String);
 
 fn split_batch_key(key: &str) -> Result<(WriterKey, PartId), String> {
@@ -186,7 +197,18 @@ impl RollupId {
 /// Used to reduce the bytes needed to refer to a blob key in memory and in
 /// persistent state, all access to blobs are always within the context of an
 /// individual shard.
-#[derive(Arbitrary, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct PartialRollupKey(pub(crate) String);
 
 impl PartialRollupKey {

@@ -17,7 +17,18 @@ use crate::func::binary::EagerBinaryFunc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastListToString {
     pub ty: SqlScalarType,
 }
@@ -70,7 +81,18 @@ impl fmt::Display for CastListToString {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastListToJsonb {
     pub cast_element: Box<MirScalarExpr>,
 }
@@ -135,7 +157,18 @@ impl fmt::Display for CastListToJsonb {
 
 /// Casts between two list types by casting each element of `a` ("list1") using
 /// `cast_expr` and collecting the results into a new list ("list2").
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastList1ToList2 {
     /// List2's type
     pub return_ty: SqlScalarType,
@@ -199,7 +232,18 @@ impl fmt::Display for CastList1ToList2 {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ListLength;
 
 impl LazyUnaryFunc for ListLength {
@@ -254,7 +298,18 @@ impl fmt::Display for ListLength {
 /// The `list_length_max` implementation.
 ///
 /// We're not deriving `sqlfunc` here because we need to pass in the `max_layer` parameter.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ListLengthMax {
     /// Maximal allowed layer to query.
     pub max_layer: usize,

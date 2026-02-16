@@ -533,7 +533,13 @@ impl Coordinator {
             || "optimize peek",
             move || {
                 span.in_scope(|| {
-                    let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
+                    let pipeline = || -> Result<
+                        Either<
+                            optimize::peek::GlobalLirPlan,
+                            optimize::copy_to::GlobalLirPlan,
+                        >,
+                        AdapterError,
+                    > {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
                         let raw_expr = plan.source.clone();
@@ -542,22 +548,34 @@ impl Coordinator {
                             // Optimize SELECT statement.
                             Either::Left(optimizer) => {
                                 // HIR ⇒ MIR lowering and MIR optimization (local)
-                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                                let local_mir_plan =
+                                    optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
+                                let local_mir_plan = local_mir_plan.resolve(
+                                    timestamp_context.clone(),
+                                    &session,
+                                    stats,
+                                );
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                                let global_lir_plan =
+                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
 
                                 Ok(Either::Left(global_lir_plan))
                             }
                             // Optimize COPY TO statement.
                             Either::Right(optimizer) => {
                                 // HIR ⇒ MIR lowering and MIR optimization (local)
-                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                                let local_mir_plan =
+                                    optimizer.catch_unwind_optimize(raw_expr)?;
                                 // Attach resolved context required to continue the pipeline.
-                                let local_mir_plan = local_mir_plan.resolve(timestamp_context.clone(), &session, stats);
+                                let local_mir_plan = local_mir_plan.resolve(
+                                    timestamp_context.clone(),
+                                    &session,
+                                    stats,
+                                );
                                 // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                                let global_lir_plan =
+                                    optimizer.catch_unwind_optimize(local_mir_plan)?;
 
                                 Ok(Either::Right(global_lir_plan))
                             }
@@ -576,30 +594,35 @@ impl Coordinator {
                             // plan optimization took longer than the threshold. This is to prevent a
                             // situation where optimizing takes a while and there a lots of clusters,
                             // which would delay peek execution by the product of those.
-                            let opt_limit = PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION
-                                .get(catalog.system_config().dyncfgs());
-                            let target_instance = catalog
-                                .get_cluster(optimizer.cluster_id())
-                                .name
-                                .clone();
+                            let opt_limit =
+                                PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION
+                                    .get(catalog.system_config().dyncfgs());
+                            let target_instance =
+                                catalog.get_cluster(optimizer.cluster_id()).name.clone();
                             let enable_re_optimize =
                                 !(matches!(explain_ctx, ExplainContext::PlanInsightsNotice(_))
                                     && optimizer.duration() > opt_limit);
-                            let insights_ctx = needs_plan_insights.then(|| PlanInsightsContext {
-                                stmt: plan.select.as_deref().map(Clone::clone).map(Statement::Select),
-                                raw_expr: plan.source.clone(),
-                                catalog,
-                                compute_instances,
-                                target_instance,
-                                metrics: optimizer.metrics().clone(),
-                                finishing: optimizer.finishing().clone(),
-                                optimizer_config: optimizer.config().clone(),
-                                session,
-                                timestamp_context,
-                                view_id: optimizer.select_id(),
-                                index_id: optimizer.index_id(),
-                                enable_re_optimize,
-                            }).map(Box::new);
+                            let insights_ctx = needs_plan_insights
+                                .then(|| PlanInsightsContext {
+                                    stmt: plan
+                                        .select
+                                        .as_deref()
+                                        .map(Clone::clone)
+                                        .map(Statement::Select),
+                                    raw_expr: plan.source.clone(),
+                                    catalog,
+                                    compute_instances,
+                                    target_instance,
+                                    metrics: optimizer.metrics().clone(),
+                                    finishing: optimizer.finishing().clone(),
+                                    optimizer_config: optimizer.config().clone(),
+                                    session,
+                                    timestamp_context,
+                                    view_id: optimizer.select_id(),
+                                    index_id: optimizer.index_id(),
+                                    enable_re_optimize,
+                                })
+                                .map(Box::new);
                             match explain_ctx {
                                 ExplainContext::Plan(explain_ctx) => {
                                     let (_, df_meta, _) = global_lir_plan.unapply();
@@ -651,10 +674,7 @@ impl Coordinator {
                                             .source_imports
                                             .into_iter()
                                             .filter_map(|(id, import)| {
-                                                import.desc
-                                                    .arguments
-                                                    .operators
-                                                    .map(|mfp| (id, mfp))
+                                                import.desc.arguments.operators.map(|mfp| (id, mfp))
                                             })
                                             .collect(),
                                         PeekPlan::FastPath(_) => BTreeMap::default(),

@@ -382,7 +382,18 @@ impl ImpliedValue for OptionalString {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct OptionalDuration(pub Option<Duration>);
 
 impl From<Duration> for OptionalDuration {

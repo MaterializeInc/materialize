@@ -85,7 +85,17 @@ static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
 ///
 /// This is a simplified representation of `DeploymentState`, suitable for
 /// announcement to the external orchestrator.
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
 pub enum DeploymentStatus {
     /// This deployment is not the leader. It is initializing and is not yet
     /// ready to become the leader.
@@ -98,7 +108,17 @@ pub enum DeploymentStatus {
     IsLeader,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord
+)]
 pub struct GetLeaderStatusResponse {
     status: DeploymentStatus,
 }
@@ -1273,13 +1293,19 @@ fn create_connection_info(
     let mut listeners_config = ListenersConfig {
         sql: btreemap! {
             "external".to_owned() => SqlListenerConfig{
-                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_sql_port),
+                addr: SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
+                    config.environmentd_sql_port,
+                ),
                 authenticator_kind,
                 allowed_roles: AllowedRoles::Normal,
                 enable_tls: external_enable_tls,
             },
             "internal".to_owned() => SqlListenerConfig{
-                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_sql_port),
+                addr: SocketAddr::new(
+                    IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
+                    config.environmentd_internal_sql_port,
+                ),
                 authenticator_kind: AuthenticatorKind::None,
                 // Should this just be Internal?
                 allowed_roles: AllowedRoles::NormalAndInternal,
@@ -1289,7 +1315,10 @@ fn create_connection_info(
         http: btreemap! {
             "external".to_owned() => HttpListenerConfig{
                 base: BaseListenerConfig {
-                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
+                    addr: SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
+                        config.environmentd_http_port,
+                    ),
                     // SASL authentication is only supported for SQL (PostgreSQL wire protocol).
                     // HTTP listeners must use Password authentication when SASL is enabled.
                     // This is validated at environmentd startup via ListenerConfig::validate().
@@ -1311,7 +1340,10 @@ fn create_connection_info(
             },
             "internal".to_owned() => HttpListenerConfig{
                 base: BaseListenerConfig {
-                    addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_internal_http_port),
+                    addr: SocketAddr::new(
+                        IpAddr::V4(Ipv4Addr::new(0,0,0,0)),
+                        config.environmentd_internal_http_port,
+                    ),
                     authenticator_kind: AuthenticatorKind::None,
                     // Should this just be Internal?
                     allowed_roles: AllowedRoles::NormalAndInternal,

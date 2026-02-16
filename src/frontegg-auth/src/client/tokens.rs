@@ -77,7 +77,15 @@ impl Client {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Hash,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize
+)]
 #[serde(rename_all = "camelCase")]
 pub struct ApiTokenArgs {
     pub client_id: Uuid,

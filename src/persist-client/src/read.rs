@@ -56,7 +56,17 @@ pub use crate::internal::encoding::LazyPartStats;
 pub use crate::internal::state::Since;
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct LeasedReaderId(pub(crate) [u8; 16]);
 

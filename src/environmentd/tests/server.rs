@@ -1698,16 +1698,24 @@ fn test_old_storage_usage_records_are_reaped_on_restart() {
         *now.lock().expect("lock poisoned") +=
             u64::try_from(collection_interval.as_millis()).expect("known to fit") + 1000;
 
-        let subsequent_initial_timestamp = Retry::default().max_duration(Duration::from_secs(30)).retry(|_| {
+        let subsequent_initial_timestamp = Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let query = format!(
+                    "SELECT ts FROM (\
+                     SELECT (EXTRACT(EPOCH FROM \
+                     MIN(collection_timestamp)) * 1000)\
+                     ::integer as ts FROM \
+                     mz_internal.mz_storage_usage_by_shard\
+                     ) WHERE ts > {initial_timestamp};"
+                );
                 client
-                    .query_one(
-                        &format!("SELECT ts FROM (SELECT (EXTRACT(EPOCH FROM MIN(collection_timestamp)) * 1000)::integer as ts FROM mz_internal.mz_storage_usage_by_shard) WHERE ts > {initial_timestamp};"),
-                        &[],
-                    )
+                    .query_one(&query, &[])
                     .map_err(|e| e.to_string())?
                     .try_get::<_, i32>(0)
                     .map_err(|e| e.to_string())
-            }).expect("Could not fetch initial timestamp");
+            })
+            .expect("Could not fetch initial timestamp");
 
         info!(%subsequent_initial_timestamp);
         assert!(

@@ -145,14 +145,30 @@ impl Server {
                                 let conn_uuid_handle = conn.inner_mut().uuid_handle();
                                 let conn_uuid = params
                                     .remove(CONN_UUID_KEY)
-                                    .and_then(|uuid| uuid.parse().inspect_err(|e| error!("pgwire connection with invalid conn UUID: {e}")).ok());
+                                    .and_then(|uuid| {
+                                        uuid.parse()
+                                            .inspect_err(|e| {
+                                                error!(
+                                                    "pgwire connection with invalid conn UUID: {e}",
+                                                )
+                                            })
+                                            .ok()
+                                    });
                                 let conn_uuid_forwarded = conn_uuid.is_some();
-                                // FIXME(ptravers): we should be able to inject the clock when instantiating the `Server`
-                                // but as of writing there's no great way, I can see, to harmonize the lifetimes of the return type
-                                // and &self which must house `NowFn`.
-                                let conn_uuid = conn_uuid.unwrap_or_else(|| epoch_to_uuid_v7(&(SYSTEM_TIME.clone())()));
+                                // FIXME(ptravers): we should be able to inject
+                                // the clock when instantiating the `Server`
+                                // but as of writing there's no great way, I can
+                                // see, to harmonize the lifetimes of the return
+                                // type and &self which must house `NowFn`.
+                                let conn_uuid = conn_uuid.unwrap_or_else(
+                                    || epoch_to_uuid_v7(&(SYSTEM_TIME.clone())()),
+                                );
                                 conn_uuid_handle.set(conn_uuid);
-                                debug!(conn_uuid = %conn_uuid_handle.display(), conn_uuid_forwarded, "starting new pgwire connection in adapter");
+                                debug!(
+                                    conn_uuid = %conn_uuid_handle.display(),
+                                    conn_uuid_forwarded,
+                                    "starting new pgwire connection in adapter",
+                                );
 
                                 let direct_peer_addr = conn
                                     .inner_mut()

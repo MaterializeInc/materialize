@@ -460,7 +460,8 @@ impl k8s_controller::Context for Context {
                         MaterializeStatus {
                             active_generation,
                             last_completed_rollout_request: status.last_completed_rollout_request,
-                            last_completed_rollout_environmentd_image_ref: last_completed_rollout_environmentd_image_ref.clone(),
+                            last_completed_rollout_environmentd_image_ref:
+                                last_completed_rollout_environmentd_image_ref.clone(),
                             resource_id: status.resource_id,
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
@@ -468,10 +469,16 @@ impl k8s_controller::Context for Context {
                                 status: "False".into(),
                                 last_transition_time: Time(Timestamp::now()),
                                 message: format!(
-                        "Refusing to upgrade from {} to {}. More than one major version from last successful rollout. If coming from Self Managed 25.2, upgrade to materialize/environmentd:v0.147.20 first.",
-                        last_completed_rollout_environmentd_image_ref.expect("should be set if upgrade window check fails"),
-                        &mz.spec.environmentd_image_ref,
-                    ),
+                                    "Refusing to upgrade from {} to {}. \
+                                     More than one major version from \
+                                     last successful rollout. If coming \
+                                     from Self Managed 25.2, upgrade to \
+                                     materialize/environmentd:v0.147.20 \
+                                     first.",
+                                    last_completed_rollout_environmentd_image_ref
+                                        .expect("should be set if upgrade window check fails"),
+                                    &mz.spec.environmentd_image_ref,
+                                ),
                                 observed_generation: mz.meta().generation,
                                 reason: "FailedDeploy".into(),
                             }],
@@ -592,7 +599,8 @@ impl k8s_controller::Context for Context {
                                 // here, because there was an error during
                                 // the rollout and we want to ensure it gets
                                 // retried.
-                                last_completed_rollout_request: status.last_completed_rollout_request,
+                                last_completed_rollout_request: status
+                                    .last_completed_rollout_request,
                                 last_completed_rollout_environmentd_image_ref: status
                                     .last_completed_rollout_environmentd_image_ref,
                                 resource_id: status.resource_id,
@@ -602,7 +610,8 @@ impl k8s_controller::Context for Context {
                                     status: "False".into(),
                                     last_transition_time: Time(Timestamp::now()),
                                     message: format!(
-                                        "Failed to apply changes for generation {desired_generation}: {e}"
+                                        "Failed to apply changes for \
+                                         generation {desired_generation}: {e}"
                                     ),
                                     observed_generation: mz.meta().generation,
                                     reason: "FailedDeploy".into(),

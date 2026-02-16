@@ -49,7 +49,17 @@ pub mod like_pattern;
 
 include!(concat!(env!("OUT_DIR"), "/mz_expr.scalar.rs"));
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
@@ -2344,7 +2354,18 @@ impl MirScalarExpr {
 /// The fields are ordered based on heuristic assumptions about their typical selectivity, so that
 /// Ord gives the right ordering for join inputs. Bigger is better, i.e., will tend to come earlier
 /// than other inputs.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct FilterCharacteristics {
     // `<expr> = <literal>` appears in the filter.
     // Excludes cases where NOT appears anywhere above the literal equality.
@@ -2525,7 +2546,7 @@ impl FilterCharacteristics {
     Serialize,
     Deserialize,
     Hash,
-    MzReflect,
+    MzReflect
 )]
 pub enum DomainLimit {
     None,
@@ -2559,7 +2580,17 @@ impl RustType<ProtoDomainLimit> for DomainLimit {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub enum EvalError {
     CharacterNotValidForEncoding(i32),

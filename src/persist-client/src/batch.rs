@@ -472,7 +472,15 @@ impl BatchBuilderConfig {
 
 /// A list of (lowercase) column names that persist will always retain
 /// stats for, even if it means going over the stats budget.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    Arbitrary
+)]
 pub(crate) struct UntrimmableColumns {
     /// Always retain columns whose lowercased names exactly equal any of these strings.
     pub equals: Vec<Cow<'static, str>>,

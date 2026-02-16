@@ -66,54 +66,69 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
         };
-        let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_,_| move |input, output| {
-            input.for_each_time(|time, data| {
-                output.session_with_builder(&time)
-                    .give_iterator(data.flat_map(|d|
-                        d.borrow().into_index_iter().flat_map(move |(time, (operator_id, massaged))| {
-                            let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
-                            let time_ms: Timestamp = time_ms.try_into().expect("must fit");
-                            massaged.into_iter().map(move |(source, port, update_type, ts, diff)| {
-                                let datum = (update_type, operator_id, source, port, ts);
-                                ((datum, ()), time_ms, diff)
-                            })
-                        }
-                    )));
-            });
+        let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, data| {
+                    output
+                        .session_with_builder(&time)
+                        .give_iterator(data.flat_map(|d| {
+                            d.borrow().into_index_iter().flat_map(
+                                move |(time, (operator_id, massaged))| {
+                                    let time_ms =
+                                        ((time.as_millis() / interval_ms) + 1) * interval_ms;
+                                    let time_ms: Timestamp = time_ms.try_into().expect("must fit");
+                                    massaged.into_iter().map(
+                                        move |(source, port, update_type, ts, diff)| {
+                                            let datum =
+                                                (update_type, operator_id, source, port, ts);
+                                            ((datum, ()), time_ms, diff)
+                                        },
+                                    )
+                                },
+                            )
+                        }));
+                });
+            }
         });
 
         // Restrict results by those logs that are meant to be active.
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
         let worker_id = scope.index();
 
-        let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
-            &logs,
-            TimelyLog::Reachability,
-            move |data, packer, session| {
-                for ((datum, ()), time, diff) in data.iter() {
-                    let (update_type, operator_id, source, port, ts) = datum;
-                    let update_type = if *update_type { "source" } else { "target" };
-                    let data = packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*operator_id)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                        Datum::UInt64(u64::cast_from(*source)),
-                        Datum::UInt64(u64::cast_from(*port)),
-                        Datum::String(update_type),
-                        Datum::from(*ts),
-                    ]);
-                    session.give((data, time, diff));
-                }
-            }
-        );
+        let updates =
+            consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
+                &logs,
+                TimelyLog::Reachability,
+                move |data, packer, session| {
+                    for ((datum, ()), time, diff) in data.iter() {
+                        let (update_type, operator_id, source, port, ts) = datum;
+                        let update_type = if *update_type { "source" } else { "target" };
+                        let data = packer.pack_slice(&[
+                            Datum::UInt64(u64::cast_from(*operator_id)),
+                            Datum::UInt64(u64::cast_from(worker_id)),
+                            Datum::UInt64(u64::cast_from(*source)),
+                            Datum::UInt64(u64::cast_from(*port)),
+                            Datum::String(update_type),
+                            Datum::from(*ts),
+                        ]);
+                        session.give((data, time, diff));
+                    }
+                },
+            );
 
         let mut result = BTreeMap::new();
         for variant in logs_active {
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, Timestamp, Diff>,
+                );
                 let trace = updates
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .mz_arrange_core::<
+                        _,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,

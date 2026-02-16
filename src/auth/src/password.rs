@@ -14,7 +14,16 @@ use std::fmt::{Debug, Display};
 use static_assertions::assert_not_impl_all;
 
 ///Password is a String wrapper type that does not implement Display or Debug
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord, Arbitrary)]
+#[derive(
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    Arbitrary
+)]
 pub struct Password(pub String);
 
 assert_not_impl_all!(Password: Display);

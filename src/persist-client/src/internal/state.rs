@@ -694,9 +694,12 @@ impl<T: Timestamp + Codec64 + Sync> RunPart<T> {
                     yield Cow::Borrowed(p);
                 }
                 RunPart::Many(r) => {
-                    let fetched = r.get(shard_id, blob, metrics).await.ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
+                    let fetched = r.get(shard_id, blob, metrics).await
+                        .ok_or_else(|| MissingBlob(r.key.complete(&shard_id)))?;
                     for run_part in fetched.parts {
-                        for await batch_part in run_part.part_stream(shard_id, blob, metrics).boxed() {
+                        for await batch_part in
+                            run_part.part_stream(shard_id, blob, metrics).boxed()
+                        {
                             yield Cow::Owned(batch_part?.into_owned());
                         }
                     }
@@ -1292,14 +1295,18 @@ pub enum HollowBlobRef<'a, T> {
 }
 
 /// A rollup that is currently being computed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
 pub struct ActiveRollup {
     pub seqno: SeqNo,
     pub start_ms: u64,
 }
 
 /// A garbage collection request that is currently being computed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Arbitrary, Serialize
+)]
 pub struct ActiveGc {
     pub seqno: SeqNo,
     pub start_ms: u64,
@@ -3023,7 +3030,9 @@ pub(crate) mod tests {
         )
     }
 
-    pub fn any_critical_reader_state<T: Arbitrary>() -> impl Strategy<Value = CriticalReaderState<T>>
+    pub fn any_critical_reader_state<T>() -> impl Strategy<Value = CriticalReaderState<T>>
+    where
+        T: Arbitrary,
     {
         Strategy::prop_map(
             (

@@ -64,8 +64,11 @@ impl Keyword {
     pub fn is_always_reserved(self) -> bool {
         matches!(
             self,
-            // Keywords that can appear at the top-level of a SELECT statement.
-            WITH | SELECT | FROM | WHERE | GROUP | HAVING | QUALIFY | WINDOW | ORDER | LIMIT | OFFSET | FETCH | OPTIONS | RETURNING |
+            // Keywords that can appear at the top-level of a SELECT
+            // statement.
+            WITH | SELECT | FROM | WHERE | GROUP | HAVING |
+            QUALIFY | WINDOW | ORDER | LIMIT | OFFSET | FETCH |
+            OPTIONS | RETURNING |
             // Set operations.
             UNION | EXCEPT | INTERSECT
         )

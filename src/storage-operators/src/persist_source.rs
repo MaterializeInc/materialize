@@ -73,7 +73,17 @@ use crate::metrics::BackpressureMetrics;
 /// is a simple batch counter, though we may change it to eg. reflect progress through the keyspace
 /// in the future.)
 #[derive(
-    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+    Copy,
+    Clone,
+    PartialEq,
+    Default,
+    Eq,
+    PartialOrd,
+    Ord,
+    Debug,
+    Serialize,
+    Deserialize,
+    Hash
 )]
 pub struct Subtime(u64);
 
@@ -1234,7 +1244,13 @@ mod tests {
         non_granular_consumer: bool,
     ) {
         timely::execute::execute_directly(move |worker| {
-            let (backpressure_probe, consumer_tx, mut backpressure_status_rx, finalizer_tx, _token) =
+            let (
+                backpressure_probe,
+                consumer_tx,
+                mut backpressure_status_rx,
+                finalizer_tx,
+                _token,
+            ) =
                 // Set up the top-level non-granular scope.
                 worker.dataflow::<u64, _, _>(|scope| {
                     let (non_granular_feedback_handle, non_granular_feedback) =

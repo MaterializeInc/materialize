@@ -806,7 +806,11 @@ impl Optimizer {
     pub fn physical_optimizer(ctx: &mut TransformCtx) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn Transform>> = transforms![
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()),
+            Box::new(
+                ReprTypecheck::new(ctx.repr_typecheck())
+                    .disallow_new_globals()
+                    .strict_join_equivalences(),
+            ),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -860,16 +864,23 @@ impl Optimizer {
             // Get as much as possible. This is because a fork in the plan involves copying the
             // data. (But we need `ProjectionPushdown` to skip joins, because it can't deal with
             // filled in JoinImplementations.)
-            Box::new(ProjectionPushdown::skip_joins()); if ctx.features.enable_projection_pushdown_after_relation_cse,
+            Box::new(ProjectionPushdown::skip_joins());
+                if ctx.features.enable_projection_pushdown_after_relation_cse,
             // Plans look nicer if we tidy MFPs again after ProjectionPushdown.
-            Box::new(CanonicalizeMfp); if ctx.features.enable_projection_pushdown_after_relation_cse,
+            Box::new(CanonicalizeMfp);
+                if ctx.features.enable_projection_pushdown_after_relation_cse,
             // Do a last run of constant folding. Importantly, this also runs `NormalizeLets`!
             // We need `NormalizeLets` at the end of the MIR pipeline for various reasons:
             // - The rendering expects some invariants about Let/LetRecs.
             // - `CollectIndexRequests` needs a normalized plan.
             //   https://github.com/MaterializeInc/database-issues/issues/6371
             Box::new(fold_constants_fixpoint(true)),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().disallow_dummy().strict_join_equivalences()),
+            Box::new(
+                ReprTypecheck::new(ctx.repr_typecheck())
+                    .disallow_new_globals()
+                    .disallow_dummy()
+                    .strict_join_equivalences(),
+            ),
         ];
         Self {
             name: "physical",

@@ -62,7 +62,18 @@ use tokio::sync::{mpsc, oneshot};
 use crate::client::{AppendOnlyUpdate, StatusUpdate, TableData};
 use crate::statistics::WebhookStatistics;
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord
+)]
 pub enum IntrospectionType {
     /// We're not responsible for appending to this collection automatically, but we should
     /// automatically bump the write frontier from time to time.

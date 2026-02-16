@@ -305,7 +305,18 @@ fn pg_size_pretty(mut a: Numeric) -> Result<String, EvalError> {
     ))
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AdjustNumericScale(pub NumericMaxScale);
 
 impl<'a> EagerUnaryFunc<'a> for AdjustNumericScale {

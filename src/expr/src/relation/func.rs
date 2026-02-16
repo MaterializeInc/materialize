@@ -481,8 +481,11 @@ where
     datums
         .next()
         .map_or(vec![], |(first_datum, first_order_row)| {
-            // Folding with (last order_by row, last assigned rank, row number, output vec)
-            datums.fold((first_order_row, 1, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_order_row)| {
+            // Folding with (last order_by row, last assigned rank,
+            // row number, output vec)
+            datums.fold(
+                (first_order_row, 1, 1, vec![(first_datum, 1)]),
+                |mut acc, (next_datum, next_order_row)| {
                 let (ref mut acc_row, ref mut acc_rank, ref mut acc_row_num, ref mut output) = acc;
                 *acc_row_num += 1;
                 // Identity is based on the order_by expression
@@ -549,8 +552,11 @@ where
     datums
         .next()
         .map_or(vec![], |(first_datum, first_order_row)| {
-            // Folding with (last order_by row, last assigned rank, output vec)
-            datums.fold((first_order_row, 1, vec![(first_datum, 1)]), |mut acc, (next_datum, next_order_row)| {
+            // Folding with (last order_by row, last assigned rank,
+            // output vec)
+            datums.fold(
+                (first_order_row, 1, vec![(first_datum, 1)]),
+                |mut acc, (next_datum, next_order_row)| {
                 let (ref mut acc_row, ref mut acc_rank, ref mut output) = acc;
                 // Identity is based on the order_by expression
                 if *acc_row != next_order_row {
@@ -1784,13 +1790,35 @@ impl OneByOneAggr for NaiveOneByOneAggr {
 
 /// Identify whether the given aggregate function is Lag or Lead, since they share
 /// implementations.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum LagLeadType {
     Lag,
     Lead,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum AggregateFunc {
     MaxNumeric,
     MaxInt16,
@@ -2341,7 +2369,9 @@ impl AggregateFunc {
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
-                let output_type_inner = Self::lag_lead_output_type_inner_from_encoded_args(fields[0].unwrap_record_element_type()[1]);
+                let encoded_args = fields[0].unwrap_record_element_type()[1];
+                let output_type_inner =
+                    Self::lag_lead_output_type_inner_from_encoded_args(encoded_args);
                 let column_name = Self::lag_lead_result_column_name(lag_lead_type);
 
                 SqlScalarType::List {
@@ -2432,7 +2462,8 @@ impl AggregateFunc {
                     .nullable(false);
                 let args_type = fields[0].unwrap_record_element_type()[1];
                 let arg_types = args_type.unwrap_record_element_type();
-                let out_fields = arg_types.iter().zip_eq(wrapped_aggregates).map(|(arg_type, wrapped_agg)| {
+                let out_fields = arg_types.iter().zip_eq(wrapped_aggregates).map(
+                    |(arg_type, wrapped_agg)| {
                     (
                         ColumnName::from(wrapped_agg.name()),
                         wrapped_agg.output_type((**arg_type).clone().nullable(true)),
@@ -2462,19 +2493,30 @@ impl AggregateFunc {
                 let original_row_type = fields[0].unwrap_record_element_type()[0]
                     .clone()
                     .nullable(false);
-                let encoded_args_type = fields[0].unwrap_record_element_type()[1].unwrap_record_element_type();
+                let encoded_args_type = fields[0]
+                    .unwrap_record_element_type()[1]
+                    .unwrap_record_element_type();
 
                 SqlScalarType::List {
                     element_type: Box::new(SqlScalarType::Record {
                         fields: [
-                            (ColumnName::from("?fused_value_window_func?"), SqlScalarType::Record {
-                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(|(arg_type, func)| {
+                            (
+                                ColumnName::from("?fused_value_window_func?"),
+                                SqlScalarType::Record {
+                                fields: encoded_args_type.into_iter().zip_eq(funcs).map(
+                                    |(arg_type, func)| {
                                     match func {
-                                        AggregateFunc::LagLead { lag_lead: lag_lead_type, .. } => {
-                                            (
-                                                Self::lag_lead_result_column_name(lag_lead_type),
-                                                Self::lag_lead_output_type_inner_from_encoded_args(arg_type)
-                                            )
+                                        AggregateFunc::LagLead {
+                                            lag_lead: lag_lead_type, ..
+                                        } => {
+                                            let name = Self::lag_lead_result_column_name(
+                                                lag_lead_type,
+                                            );
+                                            let ty = Self
+                                                ::lag_lead_output_type_inner_from_encoded_args(
+                                                    arg_type,
+                                                );
+                                            (name, ty)
                                         },
                                         AggregateFunc::FirstValue { .. } => {
                                             (
@@ -3093,7 +3135,18 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CaptureGroupDesc {
     pub index: u32,
     pub name: Option<String>,
@@ -3112,7 +3165,7 @@ pub struct CaptureGroupDesc {
     Deserialize,
     Hash,
     MzReflect,
-    Default,
+    Default
 )]
 pub struct AnalyzedRegexOpts {
     pub case_insensitive: bool,
@@ -3135,7 +3188,18 @@ impl FromStr for AnalyzedRegexOpts {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 
 impl AnalyzedRegex {
@@ -3257,7 +3321,18 @@ fn mz_acl_explode<'a>(
 
 /// When adding a new `TableFunc` variant, please consider adding it to
 /// `TableFunc::with_ordinality`!
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum TableFunc {
     AclExplode,
     MzAclExplode,
@@ -3336,7 +3411,18 @@ pub enum TableFunc {
 ///
 /// Private enum variant of `TableFunc`. Don't construct this directly, but use
 /// `TableFunc::with_ordinality` instead.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 struct WithOrdinality {
     inner: Box<TableFunc>,
 }

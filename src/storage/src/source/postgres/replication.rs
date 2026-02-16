@@ -119,6 +119,12 @@ use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo,
 use crate::source::probe;
 use crate::source::types::{Probe, SignaledFuture, SourceMessage, StackedCollection};
 
+/// A logical replication message from the server.
+type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
+
+/// A decoded row from a transaction with source information.
+type DecodedRow = (u32, usize, Result<Row, DefiniteError>, Diff);
+
 /// Postgres epoch is 2000-01-01T00:00:00Z
 static PG_EPOCH: LazyLock<SystemTime> =
     LazyLock::new(|| UNIX_EPOCH + Duration::from_secs(946_684_800));
@@ -617,11 +623,7 @@ async fn raw_stream<'a>(
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
-    Result<
-        impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
-        + 'a,
-        DefiniteError,
-    >,
+    Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
 > {
     if let Err(err) = ensure_publication_exists(&*metadata_client, publication).await? {
@@ -829,16 +831,13 @@ async fn raw_stream<'a>(
 /// message. The BEGIN message must have already been consumed from the stream before calling this
 /// function.
 fn extract_transaction<'a>(
-    stream: impl AsyncStream<
-        Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>,
-    > + 'a,
+    stream: impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a,
     metadata_client: &'a Client,
     commit_lsn: MzOffset,
     table_info: &'a mut BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-) -> impl AsyncStream<Item = Result<(u32, usize, Result<Row, DefiniteError>, Diff), TransientError>> + 'a
-{
+) -> impl AsyncStream<Item = Result<DecodedRow, TransientError>> + 'a {
     use LogicalReplicationMessage::*;
     let mut row = Row::default();
     async_stream::try_stream!({

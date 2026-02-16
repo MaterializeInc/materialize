@@ -1352,7 +1352,9 @@ where
                         // To rate limit appends to persist we add artificial latency, and will
                         // finish no sooner than this instant.
                         let batch_duration_ms = match self.id {
-                            GlobalId::User(_) => Duration::from_millis(self.user_batch_duration_ms.load(Ordering::Relaxed)),
+                            GlobalId::User(_) => Duration::from_millis(
+                                self.user_batch_duration_ms.load(Ordering::Relaxed),
+                            ),
                             // For non-user collections, always just use the default.
                             _ => STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION_DEFAULT,
                         };
@@ -1377,13 +1379,19 @@ where
                         interval.reset();
 
 
-                        let mut all_rows = Vec::with_capacity(batch.iter().map(|(rows, _)| rows.len()).sum());
+                        let capacity: usize = batch
+                            .iter()
+                            .map(|(rows, _)| rows.len())
+                            .sum();
+                        let mut all_rows = Vec::with_capacity(capacity);
                         let mut responders = Vec::with_capacity(batch.len());
 
                         for (updates, responder) in batch.drain(..) {
                             let rows = self.process_updates(updates);
 
-                            all_rows.extend(rows.map(|(row, diff)| TimestamplessUpdate { row, diff}));
+                            all_rows.extend(
+                                rows.map(|(row, diff)| TimestamplessUpdate { row, diff }),
+                            );
                             responders.push(responder);
                         }
 

@@ -63,13 +63,12 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     scope.scoped("differential logging", move |scope| {
         let enable_logging = config.enable_logging;
         let (logs, token) = if enable_logging {
-            event_queue.links
-                .mz_replay(
-                    scope,
-                    "differential logs",
-                    config.interval,
-                    event_queue.activator,
-                )
+            event_queue.links.mz_replay(
+                scope,
+                "differential logs",
+                config.interval,
+                event_queue.activator,
+            )
         } else {
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
@@ -176,11 +175,16 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         for (variant, collection) in logs {
             let variant = LogVariant::Differential(variant);
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>,
+                );
                 let trace = collection
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .mz_arrange_core::<
+                        _,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,
@@ -190,7 +194,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             }
         }
 
-        Return { collections, }
+        Return { collections }
     })
 }
 

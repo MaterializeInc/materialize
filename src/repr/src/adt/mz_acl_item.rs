@@ -263,7 +263,17 @@ impl Arbitrary for AclMode {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize,
+    Arbitrary
 )]
 pub struct MzAclItem {
     /// Role that this item grants privileges to.
@@ -507,7 +517,17 @@ impl FixedSizeCodec<MzAclItem> for PackedMzAclItem {
 ///
 /// See: <https://github.com/postgres/postgres/blob/7f5b19817eaf38e70ad1153db4e644ee9456853e/src/include/utils/acl.h#L48-L59>
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize,
+    Arbitrary
 )]
 pub struct AclItem {
     /// Role that this item grants privileges to.
@@ -694,7 +714,17 @@ impl FixedSizeCodec<AclItem> for PackedAclItem {
 }
 
 /// A container of [`MzAclItem`]s that is optimized to look up an [`MzAclItem`] by the grantee.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PrivilegeMap(
     #[serde(serialize_with = "mz_ore::serde::map_key_to_string")] BTreeMap<RoleId, Vec<MzAclItem>>,
 );

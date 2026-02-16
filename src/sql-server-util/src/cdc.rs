@@ -331,8 +331,9 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                             }
                         }
 
-                        let ddl_history = crate::inspect::get_ddl_history(self.client, instance, instance_lsn, &db_max_lsn)
-                            .await?;
+                        let ddl_history = crate::inspect::get_ddl_history(
+                            self.client, instance, instance_lsn, &db_max_lsn,
+                        ).await?;
                         for (table, ddl_events) in ddl_history {
                             for ddl_event in ddl_events {
                                 yield CdcEvent::SchemaUpdate {
@@ -502,7 +503,7 @@ pub enum CdcError {
     Hash,
     Serialize,
     Deserialize,
-    Arbitrary,
+    Arbitrary
 )]
 pub struct Lsn {
     /// Virtual Log File sequence number.

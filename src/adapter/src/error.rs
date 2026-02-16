@@ -303,7 +303,7 @@ impl AdapterError {
         match self {
             AdapterError::AmbiguousSystemColumnReference => {
                 Some("This is a current limitation in Materialize".into())
-            },
+            }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
@@ -330,17 +330,15 @@ impl AdapterError {
                 specify size via SIZE option."
                     .into(),
             ),
-             AdapterError::InvalidTableMutationSelection {
+            AdapterError::InvalidTableMutationSelection {
                 object_name,
                 object_type,
-            } => Some(
-                    format!(
-                    "{object_type} '{}' may not be used in this operation; \
+            } => Some(format!(
+                "{object_type} '{}' may not be used in this operation; \
                      the selection may refer to views and materialized views, but transitive \
                      dependencies must not include sources or source-export tables",
-                    object_name.quoted()
-                    )
-            ),
+                object_name.quoted()
+            )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
                  safe mode, which limits the features that are available."
@@ -357,19 +355,24 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
-            AdapterError::DependentObject(dependent_objects) => {
-                Some(dependent_objects
+            AdapterError::DependentObject(dependent_objects) => Some(
+                dependent_objects
                     .iter()
-                    .map(|(role_name, err_msgs)| err_msgs
-                        .iter()
-                        .map(|err_msg| format!("{role_name}: {err_msg}"))
-                        .join("\n"))
-                    .join("\n"))
-            },
-            AdapterError::Storage(storage_error) => {
-                storage_error.source().map(|source_error| source_error.to_string_with_causes())
-            }
-            AdapterError::ReadOnlyTransaction => Some("SELECT queries cannot be combined with other query types, including SUBSCRIBE.".into()),
+                    .map(|(role_name, err_msgs)| {
+                        err_msgs
+                            .iter()
+                            .map(|err_msg| format!("{role_name}: {err_msg}"))
+                            .join("\n")
+                    })
+                    .join("\n"),
+            ),
+            AdapterError::Storage(storage_error) => storage_error
+                .source()
+                .map(|source_error| source_error.to_string_with_causes()),
+            AdapterError::ReadOnlyTransaction => Some(
+                "SELECT queries cannot be combined with other query types, including SUBSCRIBE."
+                    .into(),
+            ),
             AdapterError::InvalidAlter(_, e) => e.detail(),
             AdapterError::Optimizer(e) => e.detail(),
             AdapterError::ConnectionValidation(e) => e.detail(),
@@ -377,30 +380,46 @@ impl AdapterError {
                 Some(format!(
                     "The specified last refresh is at {}, while the earliest possible time to compute the materialized \
                     view is {}.",
-                    last_refresh,
-                    earliest_possible,
+                    last_refresh, earliest_possible,
                 ))
             }
-            AdapterError::UnallowedOnCluster { cluster, .. } => (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(||
-                format!("The transaction is executing on the {cluster} cluster, maybe having been routed there by the first statement in the transaction.")
-            ),
+            AdapterError::UnallowedOnCluster { cluster, .. } => {
+                (cluster == MZ_CATALOG_SERVER_CLUSTER.name).then(|| {
+                    format!(
+                        "The transaction is executing on the \
+                        {cluster} cluster, maybe having been routed \
+                        there by the first statement in the transaction."
+                    )
+                })
+            }
             AdapterError::InputNotReadableAtRefreshAtTime(oracle_read_ts, least_valid_read) => {
                 Some(format!(
                     "The requested REFRESH AT time is {}, \
                     but not all input collections are readable earlier than [{}].",
                     oracle_read_ts,
                     if least_valid_read.len() == 1 {
-                        format!("{}", least_valid_read.as_option().expect("antichain contains exactly 1 timestamp"))
+                        format!(
+                            "{}",
+                            least_valid_read
+                                .as_option()
+                                .expect("antichain contains exactly 1 timestamp")
+                        )
                     } else {
                         // This can't occur currently
                         format!("{:?}", least_valid_read)
                     }
                 ))
             }
-            AdapterError::RtrTimeout(name) => Some(format!("{name} failed to ingest data up to the real-time recency point")),
-            AdapterError::RtrDropFailure(name) => Some(format!("{name} dropped before ingesting data to the real-time recency point")),
-            AdapterError::UserSessionsDisallowed => Some("Your organization has been blocked. Please contact support.".to_string()),
-            AdapterError::NetworkPolicyDenied(reason)=> Some(format!("{reason}.")),
+            AdapterError::RtrTimeout(name) => Some(format!(
+                "{name} failed to ingest data up to the real-time recency point"
+            )),
+            AdapterError::RtrDropFailure(name) => Some(format!(
+                "{name} dropped before ingesting data to the real-time recency point"
+            )),
+            AdapterError::UserSessionsDisallowed => {
+                Some("Your organization has been blocked. Please contact support.".to_string())
+            }
+            AdapterError::NetworkPolicyDenied(reason) => Some(format!("{reason}.")),
             AdapterError::ReplacementSchemaMismatch(diff) => {
                 let mut lines: Vec<_> = diff.column_diffs.iter().map(|(idx, diff)| {
                     let pos = idx + 1;
@@ -436,7 +455,7 @@ impl AdapterError {
                         if keys.is_empty() {
                             "(none)".to_string()
                         } else {
-                           keys.iter()
+                            keys.iter()
                                 .map(|key| {
                                     let cols = key.iter().map(|c| c.as_str()).join(", ");
                                     format!("{{{cols}}}")
@@ -455,7 +474,7 @@ impl AdapterError {
             AdapterError::ReplaceMaterializedViewSealed { .. } => Some(
                 "The materialized view has already computed its output until the end of time, \
                  so replacing its definition would have no effect."
-                .into(),
+                    .into(),
             ),
             _ => None,
         }

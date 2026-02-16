@@ -55,7 +55,18 @@ impl<T> Deref for WallclockLagFn<T> {
 }
 
 /// Identifier of a replica.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum ReplicaId {
     /// A user replica.
     User(u64),

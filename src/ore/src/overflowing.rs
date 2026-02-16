@@ -33,7 +33,18 @@ use std::ops::{Add, AddAssign, Div, Mul, Neg, Rem, Sub, SubAssign};
 ///
 /// The non-aborting modes simply return the result of the operation, which can
 /// include overflows.
-#[derive(Debug, Default, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Default,
+    Ord,
+    PartialOrd,
+    Eq,
+    PartialEq,
+    Copy,
+    Clone,
+    Serialize,
+    Deserialize
+)]
 #[cfg_attr(feature = "proptest", derive(Arbitrary))]
 pub struct Overflowing<T>(T);
 

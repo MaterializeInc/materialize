@@ -330,7 +330,17 @@ impl From<DefiniteError> for DataflowError {
 /// A reference to a MySQL table. (schema_name, table_name)
 /// NOTE: We do not use `mz_sql_parser::ast:UnresolvedItemName` because the serialization
 /// behavior is not what we need for mysql.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub(crate) struct MySqlTableName(pub(crate) String, pub(crate) String);
 
 impl MySqlTableName {

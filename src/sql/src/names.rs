@@ -55,7 +55,17 @@ use crate::plan::PlanError;
 /// `FullItemName`.
 ///
 /// [`normalize::unresolved_item_name`]: crate::normalize::unresolved_item_name
-#[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
 pub struct FullItemName {
     /// The database name.
     pub database: RawDatabaseSpecifier,
@@ -117,7 +127,17 @@ static_assertions::assert_not_impl_any!(QualifiedItemName: fmt::Display);
 ///
 /// This is like a [`FullItemName`], but either the database or schema name may be
 /// omitted.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash
+)]
 pub struct PartialItemName {
     pub database: Option<String>,
     pub schema: Option<String>,
@@ -192,7 +212,17 @@ impl From<PartialItemName> for UnresolvedItemName {
 }
 
 /// A fully-qualified human readable name of a schema in the catalog.
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct FullSchemaName {
     /// The database name
     pub database: RawDatabaseSpecifier,
@@ -245,7 +275,17 @@ impl fmt::Display for PartialSchemaName {
 }
 
 /// A human readable name of a database.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub enum RawDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
     /// explicitly, but by omission.
@@ -274,7 +314,17 @@ impl From<Option<String>> for RawDatabaseSpecifier {
 
 /// An id of a database.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum ResolvedDatabaseSpecifier {
     /// The "ambient" database, which is always present and is not named
@@ -330,7 +380,18 @@ impl From<Option<DatabaseId>> for ResolvedDatabaseSpecifier {
  * their Id.
  */
 /// An id of a schema.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub enum SchemaSpecifier {
     /// A temporary schema
     Temporary,
@@ -864,7 +925,17 @@ impl AstInfo for Aug {
 
 /// The identifier for a schema.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum SchemaId {
     User(u64),
@@ -914,7 +985,17 @@ impl FromStr for SchemaId {
 
 /// The identifier for a database.
 #[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub enum DatabaseId {
     User(u64),

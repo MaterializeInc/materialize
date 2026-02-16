@@ -480,7 +480,17 @@ impl LoadGenerator {
 // Used to identify a view of a load-generator source
 // such that the source dataflow can output data to the correct
 // data output for a source-export using this view
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum LoadGeneratorOutput {
     // Used for outputting to the primary source output
     Default,
@@ -489,7 +499,17 @@ pub enum LoadGeneratorOutput {
     Tpch(TpchView),
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum AuctionView {
     Organizations,
     Users,
@@ -498,7 +518,17 @@ pub enum AuctionView {
     Bids,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum MarketingView {
     Customers,
     Impressions,
@@ -508,7 +538,17 @@ pub enum MarketingView {
     ConversionPredictions,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord
+)]
 pub enum TpchView {
     Supplier,
     Part,

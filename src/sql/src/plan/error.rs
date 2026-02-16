@@ -374,7 +374,11 @@ impl PlanError {
             Self::CsrPurification(e) => e.detail(),
             Self::KafkaSinkPurification(e) => e.detail(),
             Self::IcebergSinkPurification(e) => e.detail(),
-            Self::CreateReplicaFailStorageObjects { current_replica_count: current, internal_replica_count: internal, hypothetical_replica_count: target } => {
+            Self::CreateReplicaFailStorageObjects {
+                current_replica_count: current,
+                internal_replica_count: internal,
+                hypothetical_replica_count: target,
+            } => {
                 Some(format!(
                     "Currently have {} replica{}{}; command would result in {}",
                     current,
@@ -864,10 +868,21 @@ impl fmt::Display for PlanError {
             Self::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
-            Self::CopyFromTargetTableDropped { target_name: name } => write!(f, "COPY FROM's target table {} was dropped", name.quoted()),
-            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value"),
-            Self::InvalidReplacement { item_type, item_name, replacement_type, replacement_name } => {
-                write!(f, "cannot replace {item_type} {item_name} with {replacement_type} {replacement_name}")
+            Self::CopyFromTargetTableDropped { target_name: name } => {
+                write!(f, "COPY FROM's target table {} was dropped", name.quoted())
+            }
+            Self::InvalidAsOfUpTo => write!(
+                f,
+                "AS OF or UP TO should be castable to a (non-null) mz_timestamp value",
+            ),
+            Self::InvalidReplacement {
+                item_type, item_name, replacement_type, replacement_name,
+            } => {
+                write!(
+                    f,
+                    "cannot replace {item_type} {item_name} \
+                     with {replacement_type} {replacement_name}",
+                )
             }
         }
     }

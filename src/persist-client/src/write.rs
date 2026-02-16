@@ -66,7 +66,17 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
 );
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct WriterId(pub(crate) [u8; 16]);
 

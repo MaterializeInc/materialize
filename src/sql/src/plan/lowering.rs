@@ -2449,7 +2449,11 @@ impl OnPredicates {
                         lhs_cnt + usize::from(matches!(p, OnPredicate::Lhs(..))),
                         rhs_cnt + usize::from(matches!(p, OnPredicate::Rhs(..))),
                         eq_cnt + usize::from(matches!(p, OnPredicate::Eq(..))),
-                        eq_cols + usize::from(matches!(p, OnPredicate::Eq(lhs, rhs) if lhs.is_column() && rhs.is_column())),
+                        eq_cols
+                            + usize::from(matches!(
+                                p,
+                                OnPredicate::Eq(lhs, rhs) if lhs.is_column() && rhs.is_column()
+                            )),
                         theta_cnt + usize::from(matches!(p, OnPredicate::Theta(..))),
                     )
                 },

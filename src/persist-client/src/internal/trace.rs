@@ -2577,7 +2577,9 @@ pub(crate) mod tests {
                 &to_replace,
             ).unwrap();
 
-            prop_assert!(new_batch.run_meta.len() == batch.run_meta.len() - runs.len() + to_replace.run_meta.len());
+            let expected_len = batch.run_meta.len() - runs.len()
+                + to_replace.run_meta.len();
+            prop_assert!(new_batch.run_meta.len() == expected_len);
         });
     }
 

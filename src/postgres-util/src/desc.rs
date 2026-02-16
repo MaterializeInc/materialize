@@ -145,7 +145,17 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
 }
 
 /// Describes a column in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
 pub struct PostgresColumnDesc {
     /// The name of the column.
     pub name: String,
@@ -208,7 +218,17 @@ impl RustType<ProtoPostgresColumnDesc> for PostgresColumnDesc {
 }
 
 /// Describes a key in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, PartialOrd, Ord, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    Arbitrary
+)]
 pub struct PostgresKeyDesc {
     /// This key is derived from the `pg_constraint` with this OID.
     pub oid: Oid,

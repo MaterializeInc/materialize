@@ -284,8 +284,17 @@ where
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let (output, errors) = collection
-            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _,>, RowRowSpine<_, _>>("Arranged DistinctBy")
-            .reduce_pair::<_, RowRowBuilder<_, _,>, RowRowSpine<_, _>, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                "Arranged DistinctBy",
+            )
+            .reduce_pair::<
+                _,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+                _,
+                RowErrBuilder<_, _>,
+                RowErrSpine<_, _>,
+            >(
                 "DistinctBy",
                 "DistinctByErrorCheck",
                 move |key, _input, output| {
@@ -486,12 +495,34 @@ where
             let keyed = partial.map(move |(key, val)| pairer.merge(&key, &val));
             if validating {
                 let (oks, errs) = self
-                    .build_reduce_inaccumulable_distinct::<_,RowValBuilder<Result<(), String>, _,_>, RowValSpine<Result<(), String>, _, _>>(keyed, None)
-                    .as_collection(|k, v| (k.to_row(), v.as_ref().map(|&()| ()).map_err(|m| m.as_str().into())))
-                    .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>("Demux Errors", move |(key_val, result)| match result {
-                        Ok(()) => Ok(pairer.split(&key_val)),
-                        Err(m) => Err(EvalError::Internal(m).into()),
-                    });
+                    .build_reduce_inaccumulable_distinct::<
+                        _,
+                        RowValBuilder<Result<(), String>, _, _>,
+                        RowValSpine<Result<(), String>, _, _>,
+                    >(keyed, None)
+                    .as_collection(|k, v| {
+                        (
+                            k.to_row(),
+                            v.as_ref()
+                                .map(|&()| ())
+                                .map_err(|m| m.as_str().into()),
+                        )
+                    })
+                    .map_fallible::<
+                        CapacityContainerBuilder<_>,
+                        CapacityContainerBuilder<_>,
+                        _,
+                        _,
+                        _,
+                    >(
+                        "Demux Errors",
+                        move |(key_val, result)| match result {
+                            Ok(()) => Ok(pairer.split(&key_val)),
+                            Err(m) => {
+                                Err(EvalError::Internal(m).into())
+                            }
+                        },
+                    );
                 err_output = Some(errs);
                 partial = oks;
             } else {
@@ -600,7 +631,7 @@ where
 
             let errs = if !fused_unnest_list {
                 arranged
-                    .mz_reduce_abelian::<_,  RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+                    .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
                         &format!("{name} Error Check"),
                         move |key, source, target| {
                             // Negative counts would be surprising, but until we are 100% certain we won't
@@ -612,10 +643,12 @@ where
                                         continue;
                                     }
                                     let value = value.to_row();
-                                    let message = "Non-positive accumulation in ReduceInaccumulable";
+                                    let message =
+                                        "Non-positive accumulation in ReduceInaccumulable";
                                     error_logger
                                         .log(message, &format!("value={value:?}, count={count}"));
-                                    target.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                                    let err = EvalError::Internal(message.into());
+                                    target.push((err.into(), Diff::ONE));
                                     return;
                                 }
                             }
@@ -634,13 +667,14 @@ where
                             let mut datums_local = datums2.borrow();
                             datums_local.extend(datum_iter);
                             datums_local.push(
-                                func2.eval_with_fast_window_agg::<_, window_agg_helpers::OneByOneAggrImpls>(
-                                    iter,
-                                    &temp_storage,
+                                func2.eval_with_fast_window_agg::<
+                                    _,
+                                    window_agg_helpers::OneByOneAggrImpls,
+                                >(
+                                    iter, &temp_storage
                                 ),
                             );
-                            if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                            {
+                            if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
                                 target.push((e.into(), Diff::ONE));
                             }
                         },
@@ -970,7 +1004,11 @@ where
     {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
-                .build_bucketed_negated_output::<_, RowValBuilder<_,_,_>, RowValSpine<Result<Row, Row>, _, _>>(
+                .build_bucketed_negated_output::<
+                    _,
+                    RowValBuilder<_, _, _>,
+                    RowValSpine<Result<Row, Row>, _, _>,
+                >(
                     input,
                     aggr_funcs.clone(),
                 );
@@ -1340,8 +1378,19 @@ where
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
         let (arranged_output, arranged_errs) = collection
-            .mz_arrange::<RowBatcher<_,_>, RowBuilder<_,_>, RowSpine<_, (Vec<Accum>, Diff)>>("ArrangeAccumulable [val: empty]")
-            .reduce_pair::<_, RowRowBuilder<_,_>, RowRowSpine<_, _>, _, RowErrBuilder<_,_>, RowErrSpine<_, _>>(
+            .mz_arrange::<
+                RowBatcher<_, _>,
+                RowBuilder<_, _>,
+                RowSpine<_, (Vec<Accum>, Diff)>,
+            >("ArrangeAccumulable [val: empty]")
+            .reduce_pair::<
+                _,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+                _,
+                RowErrBuilder<_, _>,
+                RowErrSpine<_, _>,
+            >(
                 "ReduceAccumulable",
                 "AccumulableErrorCheck",
                 {
@@ -1398,7 +1447,9 @@ where
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"
                                     );
-                                    output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                                    let err =
+                                        EvalError::Internal(message.into());
+                                    output.push((err.into(), Diff::ONE));
                                 }
                             }
                             _ => (), // no more errors to check for at this point!
@@ -1803,7 +1854,17 @@ type AccumCount = mz_ore::Overflowing<i128>;
 /// point representation has less precision than a double. It is entirely possible
 /// that the values of the accumulator overflow, thus we have to use wrapping arithmetic
 /// to preserve group guarantees.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 enum Accum {
     /// Accumulates boolean values.
     Bool {

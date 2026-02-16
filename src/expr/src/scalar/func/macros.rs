@@ -145,7 +145,11 @@ mod test {
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
 macro_rules! derive_unary {
     ($($name:ident),*) => {
-        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        #[derive(
+            Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
+            serde::Serialize, serde::Deserialize, Hash,
+            mz_lowertest::MzReflect,
+        )]
         pub enum UnaryFunc {
             $($name($name),)*
         }
@@ -224,7 +228,11 @@ macro_rules! derive_unary {
 /// the inner type name, write e.g. `AddInt16(AddInt16)`.
 macro_rules! derive_binary {
     ($($name:ident ( $variant:ident )),* $(,)?) => {
-        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        #[derive(
+            Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
+            serde::Serialize, serde::Deserialize, Hash,
+            mz_lowertest::MzReflect,
+        )]
         pub enum BinaryFunc {
             $($name($variant),)*
         }
@@ -248,7 +256,9 @@ macro_rules! derive_binary {
                 input_type_b: SqlColumnType,
             ) -> SqlColumnType {
                 match self {
-                    $(Self::$name(f) => LazyBinaryFunc::output_type(f, input_type_a, input_type_b),)*
+                    $(Self::$name(f) => {
+                        LazyBinaryFunc::output_type(f, input_type_a, input_type_b)
+                    },)*
                 }
             }
 

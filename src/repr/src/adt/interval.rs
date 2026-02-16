@@ -28,7 +28,18 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.interval.rs"));
 /// An interval of time meant to express SQL intervals.
 ///
 /// Obtained by parsing an `INTERVAL '<value>' <unit> [TO <precision>]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Hash, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Hash,
+    Deserialize
+)]
 pub struct Interval {
     /// A possibly negative number of months for field types like `YEAR`
     pub months: i32,

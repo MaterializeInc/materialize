@@ -27,7 +27,17 @@ use mz_ore::cast::CastLossy;
 /// 30kB since it can't have a lower unit, but 30.1MB will be rounded to 30822kB.
 /// For [`ByteSize`], the value is an integer and the base unit is bytes (`B`).
 #[derive(
-    Arbitrary, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
+    Arbitrary,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default
 )]
 pub struct ByteSize(u64);
 
@@ -140,7 +150,17 @@ impl FromStr for ByteSize {
 
 /// Valid units for representing bytes
 #[derive(
-    Arbitrary, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Default,
+    Arbitrary,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Default
 )]
 pub enum BytesUnit {
     #[default]

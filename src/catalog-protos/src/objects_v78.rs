@@ -12,49 +12,114 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ConfigKey {
     pub key: String,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ConfigValue {
     pub value: u64,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SettingKey {
     pub name: String,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SettingValue {
     pub value: String,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct IdAllocKey {
     pub name: String,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct IdAllocValue {
     pub next_id: u64,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct GidMappingKey {
     pub schema_name: String,
@@ -63,7 +128,16 @@ pub struct GidMappingKey {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct GidMappingValue {
     pub id: u64,
@@ -72,14 +146,33 @@ pub struct GidMappingValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterKey {
     pub id: Option<ClusterId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterValue {
     pub name: String,
@@ -89,7 +182,16 @@ pub struct ClusterValue {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterIntrospectionSourceIndexKey {
     pub cluster_id: Option<ClusterId>,
@@ -97,7 +199,17 @@ pub struct ClusterIntrospectionSourceIndexKey {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterIntrospectionSourceIndexValue {
     pub index_id: u64,
@@ -106,14 +218,33 @@ pub struct ClusterIntrospectionSourceIndexValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterReplicaKey {
     pub id: Option<ReplicaId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterReplicaValue {
     pub cluster_id: Option<ClusterId>,
@@ -123,14 +254,33 @@ pub struct ClusterReplicaValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct DatabaseKey {
     pub id: Option<DatabaseId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct DatabaseValue {
     pub name: String,
@@ -140,14 +290,33 @@ pub struct DatabaseValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SchemaKey {
     pub id: Option<SchemaId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SchemaValue {
     pub database_id: Option<DatabaseId>,
@@ -158,14 +327,33 @@ pub struct SchemaValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ItemKey {
     pub gid: Option<CatalogItemId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ItemValue {
     pub schema_id: Option<SchemaId>,
@@ -179,7 +367,17 @@ pub struct ItemValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ItemVersion {
     pub global_id: Option<GlobalId>,
@@ -187,14 +385,33 @@ pub struct ItemVersion {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleKey {
     pub id: Option<RoleId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleValue {
     pub name: String,
@@ -205,14 +422,33 @@ pub struct RoleValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleAuthKey {
     pub id: Option<RoleId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleAuthValue {
     pub password_hash: Option<String>,
@@ -221,14 +457,33 @@ pub struct RoleAuthValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct NetworkPolicyKey {
     pub id: Option<NetworkPolicyId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct NetworkPolicyValue {
     pub name: String,
@@ -239,21 +494,48 @@ pub struct NetworkPolicyValue {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ServerConfigurationKey {
     pub name: String,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ServerConfigurationValue {
     pub value: String,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct AuditLogKey {
     #[proptest(filter = "Option::is_some")]
@@ -263,14 +545,34 @@ pub struct AuditLogKey {
 pub mod audit_log_key {
     use super::*;
 
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub enum Event {
         V1(AuditLogEventV1),
     }
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct CommentKey {
     pub object: Option<comment_key::Object>,
@@ -281,7 +583,16 @@ pub mod comment_key {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Object {
         Table(CatalogItemId),
@@ -304,7 +615,16 @@ pub mod comment_key {
     }
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum SubComponent {
         ColumnPos(u64),
@@ -312,21 +632,49 @@ pub mod comment_key {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct CommentValue {
     pub comment: String,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SourceReferencesKey {
     pub source: Option<CatalogItemId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SourceReferencesValue {
     pub references: Vec<SourceReference>,
@@ -335,7 +683,16 @@ pub struct SourceReferencesValue {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SourceReference {
     pub name: String,
@@ -344,47 +701,113 @@ pub struct SourceReference {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct StorageCollectionMetadataKey {
     pub id: Option<GlobalId>,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct StorageCollectionMetadataValue {
     pub shard: String,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct UnfinalizedShardKey {
     pub shard: String,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct TxnWalShardValue {
     pub shard: String,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct Empty {}
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct StringWrapper {
     pub inner: String,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct Duration {
     pub secs: u64,
@@ -392,28 +815,67 @@ pub struct Duration {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct EpochMillis {
     pub millis: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct Timestamp {
     pub internal: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct Version {
     pub value: u64,
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct CatalogItem {
     pub value: Option<catalog_item::Value>,
@@ -423,20 +885,49 @@ pub mod catalog_item {
     use super::*;
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct V1 {
         pub create_sql: String,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub enum Value {
         V1(V1),
     }
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct CatalogItemId {
     pub value: Option<catalog_item_id::Value>,
@@ -446,7 +937,16 @@ pub mod catalog_item_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -457,21 +957,51 @@ pub mod catalog_item_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SystemCatalogItemId {
     pub value: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct IntrospectionSourceIndexCatalogItemId {
     pub value: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct GlobalId {
     pub value: Option<global_id::Value>,
@@ -481,7 +1011,16 @@ pub mod global_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -493,21 +1032,51 @@ pub mod global_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SystemGlobalId {
     pub value: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct IntrospectionSourceIndexGlobalId {
     pub value: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterId {
     pub value: Option<cluster_id::Value>,
@@ -517,7 +1086,16 @@ pub mod cluster_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -526,7 +1104,17 @@ pub mod cluster_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct DatabaseId {
     pub value: Option<database_id::Value>,
@@ -536,7 +1124,16 @@ pub mod database_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -545,7 +1142,17 @@ pub mod database_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ResolvedDatabaseSpecifier {
     pub spec: Option<resolved_database_specifier::Spec>,
@@ -555,7 +1162,16 @@ pub mod resolved_database_specifier {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Spec {
         Ambient(Empty),
@@ -564,7 +1180,17 @@ pub mod resolved_database_specifier {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SchemaId {
     pub value: Option<schema_id::Value>,
@@ -574,7 +1200,16 @@ pub mod schema_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -583,7 +1218,17 @@ pub mod schema_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SchemaSpecifier {
     pub spec: Option<schema_specifier::Spec>,
@@ -593,7 +1238,16 @@ pub mod schema_specifier {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Spec {
         Temporary(Empty),
@@ -602,7 +1256,17 @@ pub mod schema_specifier {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ResolvedSchema {
     pub database: Option<ResolvedDatabaseSpecifier>,
@@ -610,7 +1274,17 @@ pub struct ResolvedSchema {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ReplicaId {
     pub value: Option<replica_id::Value>,
@@ -620,7 +1294,16 @@ pub mod replica_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -629,7 +1312,17 @@ pub mod replica_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterReplicaId {
     pub cluster_id: Option<ClusterId>,
@@ -637,7 +1330,17 @@ pub struct ClusterReplicaId {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct NetworkPolicyId {
     pub value: Option<network_policy_id::Value>,
@@ -647,7 +1350,16 @@ pub mod network_policy_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -656,7 +1368,17 @@ pub mod network_policy_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ReplicaLogging {
     pub log_logging: bool,
@@ -664,7 +1386,16 @@ pub struct ReplicaLogging {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct OptimizerFeatureOverride {
     pub name: String,
@@ -672,7 +1403,17 @@ pub struct OptimizerFeatureOverride {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterScheduleRefreshOptions {
     #[proptest(filter = "Option::is_some")]
@@ -680,7 +1421,17 @@ pub struct ClusterScheduleRefreshOptions {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterSchedule {
     pub value: Option<cluster_schedule::Value>,
@@ -690,7 +1441,16 @@ pub mod cluster_schedule {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         Manual(Empty),
@@ -699,7 +1459,16 @@ pub mod cluster_schedule {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ClusterConfig {
     pub workload_class: Option<String>,
@@ -710,7 +1479,16 @@ pub mod cluster_config {
     use super::*;
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct ManagedCluster {
         pub size: String,
@@ -721,7 +1499,17 @@ pub mod cluster_config {
         pub schedule: Option<ClusterSchedule>,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub enum Variant {
         Unmanaged(Empty),
         Managed(ManagedCluster),
@@ -729,7 +1517,16 @@ pub mod cluster_config {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct ReplicaConfig {
     #[proptest(filter = "Option::is_some")]
@@ -742,7 +1539,16 @@ pub mod replica_config {
     use super::*;
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct UnmanagedLocation {
         pub storagectl_addrs: Vec<String>,
@@ -750,7 +1556,16 @@ pub mod replica_config {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct ManagedLocation {
         pub size: String,
@@ -760,7 +1575,17 @@ pub mod replica_config {
         pub pending: bool,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub enum Location {
         Unmanaged(UnmanagedLocation),
         Managed(ManagedLocation),
@@ -768,7 +1593,17 @@ pub mod replica_config {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleId {
     pub value: Option<role_id::Value>,
@@ -778,7 +1613,16 @@ pub mod role_id {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Value {
         System(u64),
@@ -789,7 +1633,17 @@ pub mod role_id {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleAttributes {
     pub inherit: bool,
@@ -798,7 +1652,16 @@ pub struct RoleAttributes {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleMembership {
     pub map: Vec<role_membership::Entry>,
@@ -818,7 +1681,7 @@ pub mod role_membership {
         Ord,
         Serialize,
         Deserialize,
-        Arbitrary,
+        Arbitrary
     )]
     pub struct Entry {
         pub key: Option<RoleId>,
@@ -827,7 +1690,16 @@ pub mod role_membership {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct RoleVars {
     pub entries: Vec<role_vars::Entry>,
@@ -837,14 +1709,32 @@ pub mod role_vars {
     use super::*;
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SqlSet {
         pub entries: Vec<String>,
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Entry {
         pub key: String,
@@ -855,7 +1745,15 @@ pub mod role_vars {
         use super::*;
 
         #[derive(
-            Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+            Clone,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Serialize,
+            Deserialize,
+            Arbitrary
         )]
         pub enum Val {
             Flat(String),
@@ -865,7 +1763,16 @@ pub mod role_vars {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct NetworkPolicyRule {
     pub name: String,
@@ -878,14 +1785,32 @@ pub mod network_policy_rule {
     use super::*;
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Action {
         Allow(Empty),
     }
 
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub enum Direction {
         Ingress(Empty),
@@ -893,14 +1818,34 @@ pub mod network_policy_rule {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct AclMode {
     pub bitflags: u64,
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct MzAclItem {
     pub grantee: Option<RoleId>,
@@ -909,7 +1854,17 @@ pub struct MzAclItem {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct DefaultPrivilegesKey {
     pub role_id: Option<RoleId>,
@@ -920,7 +1875,17 @@ pub struct DefaultPrivilegesKey {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct DefaultPrivilegesValue {
     #[proptest(filter = "Option::is_some")]
@@ -928,7 +1893,17 @@ pub struct DefaultPrivilegesValue {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SystemPrivilegesKey {
     pub grantee: Option<RoleId>,
@@ -936,7 +1911,17 @@ pub struct SystemPrivilegesKey {
 }
 
 #[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct SystemPrivilegesValue {
     #[proptest(filter = "Option::is_some")]
@@ -944,7 +1929,16 @@ pub struct SystemPrivilegesValue {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct AuditLogEventV1 {
     pub id: u64,
@@ -963,7 +1957,16 @@ pub mod audit_log_event_v1 {
     use super::*;
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct IdFullNameV1 {
         pub id: String,
@@ -972,7 +1975,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct FullNameV1 {
         pub database: String,
@@ -981,7 +1993,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct IdNameV1 {
         pub id: String,
@@ -989,7 +2010,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RenameClusterV1 {
         pub id: String,
@@ -998,7 +2028,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RenameClusterReplicaV1 {
         pub cluster_id: String,
@@ -1008,7 +2047,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RenameItemV1 {
         pub id: String,
@@ -1019,7 +2067,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateClusterReplicaV1 {
         pub cluster_id: String,
@@ -1033,7 +2090,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateClusterReplicaV2 {
         pub cluster_id: String,
@@ -1050,7 +2116,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateClusterReplicaV3 {
         pub cluster_id: String,
@@ -1067,7 +2142,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateClusterReplicaV4 {
         pub cluster_id: String,
@@ -1083,7 +2167,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct DropClusterReplicaV1 {
         pub cluster_id: String,
@@ -1093,7 +2186,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct DropClusterReplicaV2 {
         pub cluster_id: String,
@@ -1106,7 +2208,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct DropClusterReplicaV3 {
         pub cluster_id: String,
@@ -1129,7 +2240,7 @@ pub mod audit_log_event_v1 {
         Ord,
         Serialize,
         Deserialize,
-        Arbitrary,
+        Arbitrary
     )]
     pub struct CreateOrDropClusterReplicaReasonV1 {
         #[proptest(filter = "Option::is_some")]
@@ -1140,7 +2251,16 @@ pub mod audit_log_event_v1 {
         use super::*;
 
         #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Serialize,
+            Deserialize,
+            Arbitrary
         )]
         pub enum Reason {
             Manual(Empty),
@@ -1150,7 +2270,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SchedulingDecisionsWithReasonsV1 {
         #[proptest(filter = "Option::is_some")]
@@ -1158,7 +2287,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SchedulingDecisionsWithReasonsV2 {
         #[proptest(filter = "Option::is_some")]
@@ -1166,7 +2304,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RefreshDecisionWithReasonV1 {
         pub objects_needing_refresh: Vec<String>,
@@ -1179,7 +2326,16 @@ pub mod audit_log_event_v1 {
         use super::*;
 
         #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Serialize,
+            Deserialize,
+            Arbitrary
         )]
         pub enum Decision {
             On(Empty),
@@ -1188,7 +2344,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RefreshDecisionWithReasonV2 {
         pub objects_needing_refresh: Vec<String>,
@@ -1202,7 +2367,16 @@ pub mod audit_log_event_v1 {
         use super::*;
 
         #[derive(
-            Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Serialize,
+            Deserialize,
+            Arbitrary
         )]
         pub enum Decision {
             On(Empty),
@@ -1211,7 +2385,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateSourceSinkV1 {
         pub id: String,
@@ -1221,7 +2404,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateSourceSinkV2 {
         pub id: String,
@@ -1232,7 +2424,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateSourceSinkV3 {
         pub id: String,
@@ -1242,7 +2443,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateSourceSinkV4 {
         pub id: String,
@@ -1253,7 +2463,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateIndexV1 {
         pub id: String,
@@ -1263,7 +2482,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct CreateMaterializedViewV1 {
         pub id: String,
@@ -1273,7 +2501,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct AlterSourceSinkV1 {
         pub id: String,
@@ -1284,7 +2521,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct AlterSetClusterV1 {
         pub id: String,
@@ -1295,7 +2541,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct GrantRoleV1 {
         pub role_id: String,
@@ -1304,7 +2559,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct GrantRoleV2 {
         pub role_id: String,
@@ -1314,7 +2578,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RevokeRoleV1 {
         pub role_id: String,
@@ -1322,7 +2595,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RevokeRoleV2 {
         pub role_id: String,
@@ -1332,7 +2614,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct UpdatePrivilegeV1 {
         pub object_id: String,
@@ -1342,7 +2633,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct AlterDefaultPrivilegeV1 {
         pub role_id: String,
@@ -1353,7 +2653,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct UpdateOwnerV1 {
         pub object_id: String,
@@ -1362,7 +2671,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SchemaV1 {
         pub id: String,
@@ -1371,7 +2689,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SchemaV2 {
         pub id: String,
@@ -1380,7 +2707,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RenameSchemaV1 {
         pub id: String,
@@ -1390,7 +2726,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct UpdateItemV1 {
         pub id: String,
@@ -1399,7 +2744,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct AlterRetainHistoryV1 {
         pub id: String,
@@ -1410,7 +2764,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct ToNewIdV1 {
         pub id: String,
@@ -1418,7 +2781,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct FromPreviousIdV1 {
         pub id: String,
@@ -1426,7 +2798,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SetV1 {
         pub name: String,
@@ -1434,7 +2815,16 @@ pub mod audit_log_event_v1 {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RotateKeysV1 {
         pub id: String,
@@ -1452,7 +2842,7 @@ pub mod audit_log_event_v1 {
         Ord,
         Arbitrary,
         IntoPrimitive,
-        TryFromPrimitive,
+        TryFromPrimitive
     )]
     #[repr(i32)]
     pub enum EventType {
@@ -1476,7 +2866,7 @@ pub mod audit_log_event_v1 {
         Ord,
         Arbitrary,
         IntoPrimitive,
-        TryFromPrimitive,
+        TryFromPrimitive
     )]
     #[repr(i32)]
     pub enum ObjectType {
@@ -1501,7 +2891,17 @@ pub mod audit_log_event_v1 {
         NetworkPolicy = 18,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     pub enum Details {
         CreateClusterReplicaV1(CreateClusterReplicaV1),
         CreateClusterReplicaV2(CreateClusterReplicaV2),
@@ -1544,7 +2944,16 @@ pub mod audit_log_event_v1 {
 }
 
 #[derive(
-    Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
 )]
 pub struct StateUpdateKind {
     pub kind: Option<state_update_kind::Kind>,
@@ -1554,7 +2963,16 @@ pub mod state_update_kind {
     use super::*;
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct AuditLog {
         #[proptest(filter = "Option::is_some")]
@@ -1562,7 +2980,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Cluster {
         pub key: Option<ClusterKey>,
@@ -1570,7 +2997,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct ClusterReplica {
         pub key: Option<ClusterReplicaKey>,
@@ -1578,7 +3014,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Comment {
         pub key: Option<CommentKey>,
@@ -1586,7 +3031,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Config {
         #[proptest(filter = "Option::is_some")]
@@ -1596,7 +3050,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Database {
         pub key: Option<DatabaseKey>,
@@ -1614,7 +3077,7 @@ pub mod state_update_kind {
         Ord,
         Serialize,
         Deserialize,
-        Arbitrary,
+        Arbitrary
     )]
     pub struct DefaultPrivileges {
         pub key: Option<DefaultPrivilegesKey>,
@@ -1632,7 +3095,7 @@ pub mod state_update_kind {
         Ord,
         Serialize,
         Deserialize,
-        Arbitrary,
+        Arbitrary
     )]
     pub struct FenceToken {
         pub deploy_generation: u64,
@@ -1640,7 +3103,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct IdAlloc {
         #[proptest(filter = "Option::is_some")]
@@ -1650,7 +3122,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct ClusterIntrospectionSourceIndex {
         pub key: Option<ClusterIntrospectionSourceIndexKey>,
@@ -1658,7 +3139,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Item {
         pub key: Option<ItemKey>,
@@ -1666,7 +3156,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Role {
         pub key: Option<RoleKey>,
@@ -1674,7 +3173,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct RoleAuth {
         pub key: Option<RoleAuthKey>,
@@ -1682,7 +3190,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct NetworkPolicy {
         pub key: Option<NetworkPolicyKey>,
@@ -1690,7 +3207,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Schema {
         pub key: Option<SchemaKey>,
@@ -1698,7 +3224,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct Setting {
         #[proptest(filter = "Option::is_some")]
@@ -1708,7 +3243,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct ServerConfiguration {
         #[proptest(filter = "Option::is_some")]
@@ -1718,7 +3262,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct SourceReferences {
         pub key: Option<SourceReferencesKey>,
@@ -1726,7 +3279,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct GidMapping {
         pub key: Option<GidMappingKey>,
@@ -1744,7 +3306,7 @@ pub mod state_update_kind {
         Ord,
         Serialize,
         Deserialize,
-        Arbitrary,
+        Arbitrary
     )]
     pub struct SystemPrivileges {
         pub key: Option<SystemPrivilegesKey>,
@@ -1752,7 +3314,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct StorageCollectionMetadata {
         pub key: Option<StorageCollectionMetadataKey>,
@@ -1760,7 +3331,16 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct UnfinalizedShard {
         #[proptest(filter = "Option::is_some")]
@@ -1768,14 +3348,33 @@ pub mod state_update_kind {
     }
 
     #[derive(
-        Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
     )]
     pub struct TxnWalShard {
         #[proptest(filter = "Option::is_some")]
         pub value: Option<TxnWalShardValue>,
     }
 
-    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+    #[derive(
+        Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
     // Serialize the top-level enum in the persist-backed catalog as internally tagged to set up
     // persist pushdown statistics for success.
     #[serde(tag = "kind")]
@@ -1817,7 +3416,7 @@ pub mod state_update_kind {
     Ord,
     Arbitrary,
     IntoPrimitive,
-    TryFromPrimitive,
+    TryFromPrimitive
 )]
 #[repr(i32)]
 pub enum CatalogItemType {
@@ -1846,7 +3445,7 @@ pub enum CatalogItemType {
     Ord,
     Arbitrary,
     IntoPrimitive,
-    TryFromPrimitive,
+    TryFromPrimitive
 )]
 #[repr(i32)]
 pub enum ObjectType {

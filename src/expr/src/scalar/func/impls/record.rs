@@ -17,7 +17,18 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastRecordToString {
     pub ty: SqlScalarType,
 }
@@ -72,7 +83,18 @@ impl fmt::Display for CastRecordToString {
 
 /// Casts between two record types by casting each element of `a` ("record1") using
 /// `cast_expr` and collecting the results into a new record ("record2").
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastRecord1ToRecord2 {
     pub return_ty: SqlScalarType,
     pub cast_exprs: Box<[MirScalarExpr]>,
@@ -133,7 +155,18 @@ impl fmt::Display for CastRecord1ToRecord2 {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct RecordGet(pub usize);
 
 impl LazyUnaryFunc for RecordGet {

@@ -21,7 +21,15 @@ pub mod v1 {
     use super::*;
 
     /// Describes an AWS VPC endpoint to create.
-    #[derive(CustomResource, Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
+    #[derive(
+        CustomResource,
+        Clone,
+        Debug,
+        Default,
+        Deserialize,
+        Serialize,
+        JsonSchema
+    )]
     #[serde(rename_all = "camelCase")]
     #[kube(
         group = "materialize.cloud",

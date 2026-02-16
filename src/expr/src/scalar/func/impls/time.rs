@@ -87,7 +87,18 @@ where
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractTime(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTime {
@@ -109,7 +120,18 @@ impl fmt::Display for ExtractTime {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartTime(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTime {
@@ -141,7 +163,18 @@ pub fn timezone_time(tz: Timezone, t: NaiveTime, wall_time: &NaiveDateTime) -> N
     t + offset
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct TimezoneTime {
     pub tz: Timezone,
     pub wall_time: NaiveDateTime,

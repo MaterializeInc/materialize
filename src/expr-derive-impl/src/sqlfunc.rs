@@ -312,7 +312,11 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     });
 
     let result = quote! {
-        #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        #[derive(
+            proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
+            Debug, Eq, PartialEq, serde::Serialize,
+            serde::Deserialize, Hash, mz_lowertest::MzReflect,
+        )]
         pub struct #struct_name;
 
         impl<'a> crate::func::EagerUnaryFunc<'a> for #struct_name {
@@ -473,7 +477,11 @@ fn binary_func(
     });
 
     let result = quote! {
-        #[derive(proptest_derive::Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        #[derive(
+            proptest_derive::Arbitrary, Ord, PartialOrd, Clone,
+            Debug, Eq, PartialEq, serde::Serialize,
+            serde::Deserialize, Hash, mz_lowertest::MzReflect,
+        )]
         pub struct #struct_name;
 
         impl crate::func::binary::EagerBinaryFunc for #struct_name {
@@ -481,18 +489,32 @@ fn binary_func(
             type Input2<'a> = #input2_ty;
             type Output<'a> = #output_ty;
 
-            fn call<'a>(&self, a: Self::Input1<'a>, b: Self::Input2<'a>, temp_storage: &'a mz_repr::RowArena) -> Self::Output<'a> {
+            fn call<'a>(
+                &self,
+                a: Self::Input1<'a>,
+                b: Self::Input2<'a>,
+                temp_storage: &'a mz_repr::RowArena
+            ) -> Self::Output<'a> {
                 #fn_name(a, b #arena)
             }
 
-            fn output_type(&self, input_type_a: mz_repr::SqlColumnType, input_type_b: mz_repr::SqlColumnType) -> mz_repr::SqlColumnType {
+            fn output_type(
+                &self,
+                input_type_a: mz_repr::SqlColumnType,
+                input_type_b: mz_repr::SqlColumnType,
+            ) -> mz_repr::SqlColumnType {
                 use mz_repr::AsColumnType;
                 let output = #output_type;
-                let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(self);
+                let propagates_nulls =
+                    crate::func::binary::EagerBinaryFunc::propagates_nulls(self);
                 let nullable = output.nullable;
-                // The output is nullable if it is nullable by itself or the input is nullable
-                // and this function propagates nulls
-                output.nullable(nullable || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable)))
+                // The output is nullable if it is nullable by itself
+                // or the input is nullable and this function
+                // propagates nulls
+                let is_null = nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable));
+                output.nullable(is_null)
             }
 
             #could_error_fn

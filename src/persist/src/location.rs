@@ -43,7 +43,17 @@ use crate::error::Error;
 /// mutating requests up to and including that one are reflected in the read
 /// state.
 #[derive(
-    Arbitrary, Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Serialize, Deserialize,
+    Arbitrary,
+    Clone,
+    Copy,
+    Debug,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize
 )]
 pub struct SeqNo(pub u64);
 

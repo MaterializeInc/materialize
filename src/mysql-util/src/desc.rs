@@ -280,7 +280,17 @@ impl IsCompatible for MySqlColumnDesc {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Ord, PartialOrd, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Ord,
+    PartialOrd,
+    Arbitrary
+)]
 pub struct MySqlKeyDesc {
     /// The name of the index.
     pub name: String,

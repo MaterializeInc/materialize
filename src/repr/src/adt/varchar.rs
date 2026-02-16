@@ -36,7 +36,17 @@ pub struct VarChar<S: AsRef<str>>(pub S);
 ///
 /// [`SqlScalarType::VarChar`]: crate::SqlScalarType::VarChar
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
 )]
 pub struct VarCharMaxLength(pub(crate) u32);
 

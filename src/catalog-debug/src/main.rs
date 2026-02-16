@@ -281,12 +281,16 @@ macro_rules! for_collection {
         match $collection_type {
             CollectionType::AuditLog => $fn::<AuditLogCollection>($($arg),*).await?,
             CollectionType::ComputeInstance => $fn::<ClusterCollection>($($arg),*).await?,
-            CollectionType::ComputeIntrospectionSourceIndex => $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?,
+            CollectionType::ComputeIntrospectionSourceIndex => {
+                $fn::<ClusterIntrospectionSourceIndexCollection>($($arg),*).await?
+            }
             CollectionType::ComputeReplicas => $fn::<ClusterReplicaCollection>($($arg),*).await?,
             CollectionType::Comments => $fn::<CommentCollection>($($arg),*).await?,
             CollectionType::Config => $fn::<ConfigCollection>($($arg),*).await?,
             CollectionType::Database => $fn::<DatabaseCollection>($($arg),*).await?,
-            CollectionType::DefaultPrivileges => $fn::<DefaultPrivilegeCollection>($($arg),*).await?,
+            CollectionType::DefaultPrivileges => {
+                $fn::<DefaultPrivilegeCollection>($($arg),*).await?
+            }
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
             CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
@@ -295,11 +299,21 @@ macro_rules! for_collection {
             CollectionType::Schema => $fn::<SchemaCollection>($($arg),*).await?,
             CollectionType::Setting => $fn::<SettingCollection>($($arg),*).await?,
             CollectionType::SourceReferences => $fn::<SourceReferencesCollection>($($arg),*).await?,
-            CollectionType::SystemConfiguration => $fn::<SystemConfigurationCollection>($($arg),*).await?,
-            CollectionType::SystemGidMapping => $fn::<SystemItemMappingCollection>($($arg),*).await?,
-            CollectionType::SystemPrivileges => $fn::<SystemPrivilegeCollection>($($arg),*).await?,
-            CollectionType::StorageCollectionMetadata => $fn::<StorageCollectionMetadataCollection>($($arg),*).await?,
-            CollectionType::UnfinalizedShard => $fn::<UnfinalizedShardsCollection>($($arg),*).await?,
+            CollectionType::SystemConfiguration => {
+                $fn::<SystemConfigurationCollection>($($arg),*).await?
+            }
+            CollectionType::SystemGidMapping => {
+                $fn::<SystemItemMappingCollection>($($arg),*).await?
+            }
+            CollectionType::SystemPrivileges => {
+                $fn::<SystemPrivilegeCollection>($($arg),*).await?
+            }
+            CollectionType::StorageCollectionMetadata => {
+                $fn::<StorageCollectionMetadataCollection>($($arg),*).await?
+            }
+            CollectionType::UnfinalizedShard => {
+                $fn::<UnfinalizedShardsCollection>($($arg),*).await?
+            }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
         }
     };

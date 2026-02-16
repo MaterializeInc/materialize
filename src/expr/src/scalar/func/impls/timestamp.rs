@@ -71,7 +71,18 @@ fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date,
     Ok(a.naive_utc().date().try_into()?)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastTimestampToTimestampTz {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
@@ -120,7 +131,18 @@ impl fmt::Display for CastTimestampToTimestampTz {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AdjustTimestampPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
@@ -168,7 +190,18 @@ impl fmt::Display for AdjustTimestampPrecision {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastTimestampTzToTimestamp {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
@@ -216,7 +249,18 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
     pub to: Option<TimestampPrecision>,
@@ -309,7 +353,18 @@ where
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractInterval(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractInterval {
@@ -331,7 +386,18 @@ impl fmt::Display for ExtractInterval {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartInterval(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartInterval {
@@ -399,7 +465,18 @@ pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTimestamp {
@@ -425,7 +502,18 @@ impl fmt::Display for ExtractTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for ExtractTimestampTz {
@@ -454,7 +542,18 @@ impl fmt::Display for ExtractTimestampTz {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTimestamp {
@@ -476,7 +575,18 @@ impl fmt::Display for DatePartTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DatePartTimestampTz {
@@ -527,7 +637,18 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DateTruncTimestamp(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DateTruncTimestamp {
@@ -556,7 +677,18 @@ impl fmt::Display for DateTruncTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
 impl<'a> EagerUnaryFunc<'a> for DateTruncTimestampTz {
@@ -641,7 +773,18 @@ fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     .map(|dt| dt.with_nanosecond(nanos).unwrap())
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct TimezoneTimestamp(pub Timezone);
 
 impl<'a> EagerUnaryFunc<'a> for TimezoneTimestamp {
@@ -666,7 +809,18 @@ impl fmt::Display for TimezoneTimestamp {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct TimezoneTimestampTz(pub Timezone);
 
 impl<'a> EagerUnaryFunc<'a> for TimezoneTimestampTz {
@@ -693,7 +847,18 @@ impl fmt::Display for TimezoneTimestampTz {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub struct ToCharTimestamp {
     pub format_string: String,
     pub format: DateTimeFormat,
@@ -718,7 +883,18 @@ impl fmt::Display for ToCharTimestamp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    MzReflect
+)]
 pub struct ToCharTimestampTz {
     pub format_string: String,
     pub format: DateTimeFormat,

@@ -41,7 +41,7 @@ const PUBLIC_BYTE: u8 = b'p';
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub enum RoleId {
     System(u64),

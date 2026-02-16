@@ -480,7 +480,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             let client = match replication_client {
                 Some(client) => {
                     let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
-                    let (snapshot_id, snapshot_lsn) = export_snapshot(&client, &tmp_slot, true).await?;
+                    let (snapshot_id, snapshot_lsn) =
+                        export_snapshot(&client, &tmp_slot, true).await?;
 
                     // Check PostgreSQL version. Ctid range scans are only efficient on PG >= 14
                     // due to improvements in TID range scan support.
@@ -504,7 +505,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         table_oids.iter().map(|&oid| (oid, 0u64)).collect()
                     };
 
-                    report_snapshot_size(&client, &tables_to_snapshot, metrics, &config, &export_statistics).await?;
+                    report_snapshot_size(
+                        &client,
+                        &tables_to_snapshot,
+                        metrics,
+                        &config,
+                        &export_statistics,
+                    )
+                    .await?;
 
                     let upstream_info = {
                         // As part of retrieving the schema info, RLS policies are checked to ensure the
@@ -655,8 +663,10 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                     // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
                     // emulate's PG's rules for name formatting.
-                    let namespace = Ident::new_unchecked(&info.desc.namespace).to_ast_string_stable();
-                    let table = Ident::new_unchecked(&info.desc.name).to_ast_string_stable();
+                    let namespace = Ident::new_unchecked(&info.desc.namespace)
+                        .to_ast_string_stable();
+                    let table = Ident::new_unchecked(&info.desc.name)
+                        .to_ast_string_stable();
                     let column_list = info
                         .desc
                         .columns
@@ -679,7 +689,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                     let mut snapshot_staged = 0;
-                    let mut update = ((oid, output_index, Ok(vec![])), MzOffset::minimum(), Diff::ONE);
+                    let mut update =
+                        ((oid, output_index, Ok(vec![])), MzOffset::minimum(), Diff::ONE);
                     while let Some(bytes) = stream.try_next().await? {
                         let data = update.0 .2.as_mut().unwrap();
                         data.clear();
@@ -687,11 +698,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         raw_handle.give_fueled(&data_cap_set[0], &update).await;
                         snapshot_staged += 1;
                         if snapshot_staged % 1000 == 0 {
-                            export_statistics[&(oid, output_index)].set_snapshot_records_staged(snapshot_staged);
+                            let stat = &export_statistics[&(oid, output_index)];
+                            stat.set_snapshot_records_staged(snapshot_staged);
                         }
                     }
-                    // final update for snapshot_staged, using the staged values as the total is an estimate
-                    export_statistics[&(oid, output_index)].set_snapshot_records_staged(snapshot_staged);
+                    // final update for snapshot_staged, using the staged
+                    // values as the total is an estimate
+                    let stat = &export_statistics[&(oid, output_index)];
+                    stat.set_snapshot_records_staged(snapshot_staged);
                 }
             }
 

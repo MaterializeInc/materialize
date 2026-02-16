@@ -22,7 +22,18 @@ use serde::{Deserialize, Serialize};
 
 /// An ordered identifier for a pair of key and val schemas registered to a
 /// shard.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct SchemaId(pub usize);
 

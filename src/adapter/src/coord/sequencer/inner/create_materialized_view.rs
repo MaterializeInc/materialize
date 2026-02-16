@@ -476,9 +476,11 @@ impl Coordinator {
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
+                        let global_mir_plan =
+                            optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+                        let global_lir_plan =
+                            optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan))
                     };
@@ -756,7 +758,9 @@ impl Coordinator {
             Ok(_) => Ok(ExecuteResponse::CreatedMaterializedView),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                    mz_catalog::memory::error::ErrorKind::Sql(
+                        CatalogError::ItemAlreadyExists(_, _),
+                    ),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {

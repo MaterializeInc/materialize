@@ -560,15 +560,24 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
         match self {
-            CreateOrDropClusterReplicaReasonV1::Manual => crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
-                reason: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Manual(Empty {})
-            },
-            CreateOrDropClusterReplicaReasonV1::Schedule => crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
-                reason: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::Schedule(Empty {})
-            },
-            CreateOrDropClusterReplicaReasonV1::System => crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
-                reason: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1Reason::System(Empty {})
-            },
+            CreateOrDropClusterReplicaReasonV1::Manual => {
+                use crate::objects::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Manual(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::Schedule => {
+                use crate::objects::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::Schedule(Empty {}),
+                }
+            }
+            CreateOrDropClusterReplicaReasonV1::System => {
+                use crate::objects::audit_log_event_v1 as ev;
+                ev::CreateOrDropClusterReplicaReasonV1 {
+                    reason: ev::CreateOrDropClusterReplicaReasonV1Reason::System(Empty {}),
+                }
+            }
         }
     }
 

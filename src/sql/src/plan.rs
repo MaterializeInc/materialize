@@ -598,7 +598,17 @@ pub struct CreateClusterReplicaPlan {
 }
 
 /// Configuration of introspection for a cluster replica.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialOrd, Ord, PartialEq, Eq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq
+)]
 pub struct ComputeReplicaIntrospectionConfig {
     /// Whether to introspect the introspection.
     pub debugging: bool,
@@ -1699,7 +1709,17 @@ pub struct NetworkPolicyRule {
     pub direction: NetworkPolicyRuleDirection,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Ord,
+    PartialOrd,
+    Hash
+)]
 pub enum NetworkPolicyRuleAction {
     Allow,
 }
@@ -2109,7 +2129,18 @@ impl Params {
 }
 
 /// Controls planning of a SQL query.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    Copy
+)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
     pub ignore_if_exists_errors: bool,

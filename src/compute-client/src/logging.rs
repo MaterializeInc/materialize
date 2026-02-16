@@ -35,7 +35,18 @@ pub struct LoggingConfig {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum LogVariant {
     /// TODO(database-issues#7533): Add documentation.
     Timely(TimelyLog),
@@ -64,7 +75,18 @@ impl From<ComputeLog> for LogVariant {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum TimelyLog {
     /// TODO(database-issues#7533): Add documentation.
     Operates,
@@ -91,7 +113,18 @@ pub enum TimelyLog {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-#[derive(Hash, Eq, Ord, PartialEq, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum DifferentialLog {
     /// TODO(database-issues#7533): Add documentation.
     ArrangementBatches,
@@ -110,7 +143,18 @@ pub enum DifferentialLog {
 }
 
 /// Variants of compute introspection sources.
-#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(
+    Hash,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize
+)]
 pub enum ComputeLog {
     /// Installed dataflow exports.
     DataflowCurrent,

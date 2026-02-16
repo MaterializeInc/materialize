@@ -396,8 +396,16 @@ where
             errors.push(errs.as_collection());
 
             let arranged = keyed
-                .mz_arrange_core::<_, Col2ValBatcher<_, _,_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, S::Timestamp, Diff>),"JoinStage"
+                .mz_arrange_core::<
+                    _,
+                    Col2ValBatcher<_, _, _, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >(
+                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                        columnar_exchange::<Row, Row, S::Timestamp, Diff>,
+                    ),
+                    "JoinStage"
                 );
             joined = JoinedFlavor::Local(arranged);
         }

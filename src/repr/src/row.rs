@@ -433,7 +433,15 @@ mod columnar {
 
     use crate::{Row, RowRef};
 
-    #[derive(Copy, Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+    #[derive(
+        Copy,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        serde::Serialize,
+        serde::Deserialize
+    )]
     pub struct Rows<BC = Vec<u64>, VC = Vec<u8>> {
         /// Bounds container; provides indexed access to offsets.
         pub bounds: BC,

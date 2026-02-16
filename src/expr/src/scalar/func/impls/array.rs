@@ -17,7 +17,18 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastArrayToListOneDim;
 
 impl LazyUnaryFunc for CastArrayToListOneDim {
@@ -87,7 +98,18 @@ impl fmt::Display for CastArrayToListOneDim {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastArrayToString {
     pub ty: SqlScalarType,
 }
@@ -141,7 +163,18 @@ impl fmt::Display for CastArrayToString {
     }
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastArrayToJsonb {
     pub cast_element: Box<MirScalarExpr>,
 }
@@ -236,7 +269,18 @@ impl fmt::Display for CastArrayToJsonb {
 /// Casts an array of one type to an array of another type. Does so by casting
 /// each element of the first array to the desired inner type and collecting
 /// the results into a new array.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CastArrayToArray {
     pub return_ty: SqlScalarType,
     pub cast_expr: Box<MirScalarExpr>,

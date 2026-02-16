@@ -342,9 +342,9 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let mut arrangement_heap_size_out = OutputBuilder::from(arrangement_heap_size_out);
         let (arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
         let mut arrangement_heap_capacity_out = OutputBuilder::from(arrangement_heap_capacity_out);
-        let (arrangement_heap_allocations_out, arrangement_heap_allocations) =
-            demux.new_output();
-        let mut arrangement_heap_allocations_out = OutputBuilder::from(arrangement_heap_allocations_out);
+        let (arrangement_heap_allocations_out, arrangement_heap_allocations) = demux.new_output();
+        let mut arrangement_heap_allocations_out =
+            OutputBuilder::from(arrangement_heap_allocations_out);
         let (error_count_out, error_count) = demux.new_output();
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
@@ -380,12 +380,15 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                         import_frontier: import_frontier.session_with_builder(&cap),
                         peek: peek.session_with_builder(&cap),
                         peek_duration: peek_duration.session_with_builder(&cap),
-                        arrangement_heap_allocations: arrangement_heap_allocations.session_with_builder(&cap),
-                        arrangement_heap_capacity: arrangement_heap_capacity.session_with_builder(&cap),
+                        arrangement_heap_allocations: arrangement_heap_allocations
+                            .session_with_builder(&cap),
+                        arrangement_heap_capacity: arrangement_heap_capacity
+                            .session_with_builder(&cap),
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
-                        operator_hydration_status: operator_hydration_status.session_with_builder(&cap),
+                        operator_hydration_status: operator_hydration_status
+                            .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
@@ -427,11 +430,16 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         for (variant, stream) in logs {
             let variant = LogVariant::Compute(variant);
             if config.index_logs.contains_key(&variant) {
+                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, Timestamp, Diff>,
+                );
                 let trace = stream
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, Timestamp, Diff>),
-                        &format!("Arrange {variant:?}"),
-                    )
+                    .mz_arrange_core::<
+                        _,
+                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {
                     trace,

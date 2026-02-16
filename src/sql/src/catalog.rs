@@ -528,7 +528,17 @@ pub struct RoleAttributesRaw {
 }
 
 /// Attributes belonging to a [`CatalogRole`].
-#[derive(Debug, Clone, Eq, Serialize, Deserialize, PartialEq, Ord, PartialOrd, Arbitrary)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Arbitrary
+)]
 pub struct RoleAttributes {
     /// Indicates whether the role has inheritance of privileges.
     pub inherit: bool,
@@ -874,7 +884,18 @@ pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
 }
 
 /// The type of a [`CatalogItem`].
-#[derive(Debug, Deserialize, Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(
+    Debug,
+    Deserialize,
+    Clone,
+    Copy,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize
+)]
 pub enum CatalogItemType {
     /// A table.
     Table,
@@ -1483,7 +1504,18 @@ impl Error for CatalogError {}
 
 // Enum variant docs would be useless here.
 #[allow(missing_docs)]
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects stored in the catalog.
 pub enum ObjectType {
     Table,
@@ -1603,7 +1635,18 @@ impl Display for ObjectType {
     }
 }
 
-#[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Hash, Copy, Deserialize, Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Copy,
+    Deserialize,
+    Serialize
+)]
 /// The types of objects in the system.
 pub enum SystemObjectType {
     /// Catalog object type.

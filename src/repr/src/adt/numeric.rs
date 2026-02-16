@@ -113,7 +113,7 @@ pub mod str_serde {
     Hash,
     Serialize,
     Deserialize,
-    MzReflect,
+    MzReflect
 )]
 pub struct NumericMaxScale(pub(crate) u8);
 
@@ -841,7 +841,9 @@ mod tests {
         }
 
         #[mz_ore::test]
-        fn optional_numeric_max_scale_protobuf_roundtrip(expect in any::<Option<NumericMaxScale>>()) {
+        fn optional_numeric_max_scale_protobuf_roundtrip(
+            expect in any::<Option<NumericMaxScale>>(),
+        ) {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);

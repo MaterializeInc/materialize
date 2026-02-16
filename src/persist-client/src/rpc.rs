@@ -355,9 +355,12 @@ impl GrpcPubSubClient {
                     // If we have active subscriptions, resend them.
                     for id in sender.subscriptions() {
                         debug!("re-subscribing to shard: {id}");
-                        yield create_request(proto_pub_sub_message::Message::Subscribe(ProtoSubscribe {
-                            shard_id: id.into_proto(),
-                        }));
+                        let msg = proto_pub_sub_message::Message::Subscribe(
+                            ProtoSubscribe {
+                                shard_id: id.into_proto(),
+                            },
+                        );
+                        yield create_request(msg);
                     }
 
                     // Forward on messages from the broadcast channel, reconnecting if necessary.

@@ -37,7 +37,7 @@ use crate::CatalogItemId;
     Serialize,
     Deserialize,
     MzReflect,
-    Columnar,
+    Columnar
 )]
 pub enum GlobalId {
     /// System namespace.

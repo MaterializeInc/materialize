@@ -13,7 +13,16 @@ use std::net::SocketAddr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Clone, Copy, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    JsonSchema
+)]
 pub enum AuthenticatorKind {
     /// Authenticate users using Frontegg.
     Frontegg,

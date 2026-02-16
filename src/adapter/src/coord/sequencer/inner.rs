@@ -21,6 +21,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
@@ -114,6 +115,9 @@ use crate::session::{
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
 use crate::{PeekResponseUnary, ReadHolds};
+
+/// A future that resolves to a real-time recency timestamp.
+type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>;
 
 mod cluster;
 mod copy_from;
@@ -651,8 +655,7 @@ impl Coordinator {
         match transact_result {
             Ok(()) => Ok(ExecuteResponse::CreatedSource),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -797,8 +800,7 @@ impl Coordinator {
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -824,8 +826,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
+                kind: ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::DatabaseAlreadyExists { name: plan.name });
                 Ok(ExecuteResponse::CreatedDatabase)
@@ -848,8 +849,7 @@ impl Coordinator {
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
+                kind: ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
             })) if plan.if_not_exists => {
                 session.add_notice(AdapterNotice::SchemaAlreadyExists {
                     name: plan.schema_name,
@@ -1037,8 +1037,7 @@ impl Coordinator {
         match catalog_result {
             Ok(()) => Ok(ExecuteResponse::CreatedTable),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session_mut()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -1096,8 +1095,7 @@ impl Coordinator {
         match result {
             Ok(()) => {}
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
@@ -1673,9 +1671,13 @@ impl Coordinator {
         for (default_privilege_object, default_privilege_acls) in
             self.catalog().default_privileges()
         {
-            if matches!(&default_privilege_object.database_id, Some(database_id) if dropped_databases.contains(database_id))
-                || matches!(&default_privilege_object.schema_id, Some(schema_id) if dropped_schemas.contains(schema_id))
-            {
+            if matches!(
+                &default_privilege_object.database_id,
+                Some(database_id) if dropped_databases.contains(database_id),
+            ) || matches!(
+                &default_privilege_object.schema_id,
+                Some(schema_id) if dropped_schemas.contains(schema_id),
+            ) {
                 for default_privilege_acl in default_privilege_acls {
                     default_privilege_revokes.insert((
                         default_privilege_object.clone(),
@@ -2129,9 +2131,7 @@ impl Coordinator {
                             // Re-verify this id exists.
                             let _ = self.catalog().try_get_entry(id).ok_or_else(|| {
                                 AdapterError::Catalog(mz_catalog::memory::error::Error {
-                                    kind: mz_catalog::memory::error::ErrorKind::Sql(
-                                        CatalogError::UnknownItem(id.to_string()),
-                                    ),
+                                    kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
                                 })
                             })?;
                         }
@@ -2272,8 +2272,7 @@ impl Coordinator {
         &self,
         source_ids: impl Iterator<Item = GlobalId>,
         real_time_recency_timeout: Duration,
-    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
-    {
+    ) -> Result<Option<RtrTimestampFuture>, AdapterError> {
         let item_ids = source_ids
             .map(|gid| {
                 self.catalog
@@ -2325,8 +2324,7 @@ impl Coordinator {
         &self,
         session: &Session,
         source_ids: impl Iterator<Item = GlobalId>,
-    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
-    {
+    ) -> Result<Option<RtrTimestampFuture>, AdapterError> {
         let vars = session.vars();
 
         if vars.real_time_recency()
@@ -2537,9 +2535,9 @@ impl Coordinator {
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
                             mz_catalog::memory::error::Error {
-                                kind: mz_catalog::memory::error::ErrorKind::Sql(
-                                    CatalogError::UnknownItem(plan.id.to_string()),
-                                ),
+                                kind: ErrorKind::Sql(CatalogError::UnknownItem(
+                                    plan.id.to_string(),
+                                )),
                             },
                         )));
                         return;
@@ -2647,9 +2645,7 @@ impl Coordinator {
             None => {
                 ctx.retire(Err(AdapterError::Catalog(
                     mz_catalog::memory::error::Error {
-                        kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
-                            id.to_string(),
-                        )),
+                        kind: ErrorKind::Sql(CatalogError::UnknownItem(id.to_string())),
                     },
                 )));
                 return;
@@ -2843,8 +2839,8 @@ impl Coordinator {
                 return_if_err!(style.prep_scalar_expr(expr), ctx);
             }
 
-            let make_diffs =
-                move |mut rows: Box<dyn RowIterator>| -> Result<(Vec<(Row, Diff)>, u64), AdapterError> {
+            let make_diffs = move |mut rows: Box<dyn RowIterator>|
+                  -> Result<(Vec<(Row, Diff)>, u64), AdapterError> {
                     let arena = RowArena::new();
                     let mut diffs = Vec::new();
                     let mut datum_vec = mz_repr::DatumVec::new();

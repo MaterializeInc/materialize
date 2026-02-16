@@ -1611,18 +1611,35 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
                 error_at_recursion_limit,
                 seen: _,
             } = MutRecBlockOptionExtracted::try_from(options.clone())?;
-            let limit = match (recursion_limit, return_at_recursion_limit, error_at_recursion_limit) {
+            let limit = match (
+                recursion_limit,
+                return_at_recursion_limit,
+                error_at_recursion_limit,
+            ) {
                 (None, None, None) => None,
-                (Some(max_iters), None, None) => Some((max_iters, LetRecLimit::RETURN_AT_LIMIT_DEFAULT)),
+                (Some(max_iters), None, None) => {
+                    Some((max_iters, LetRecLimit::RETURN_AT_LIMIT_DEFAULT))
+                }
                 (None, Some(max_iters), None) => Some((max_iters, true)),
                 (None, None, Some(max_iters)) => Some((max_iters, false)),
                 _ => {
-                    return Err(InvalidWmrRecursionLimit("More than one recursion limit given. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT.".to_owned()));
+                    return Err(InvalidWmrRecursionLimit(
+                        "More than one recursion limit given. \
+                         Please give at most one of RECURSION LIMIT, \
+                         ERROR AT RECURSION LIMIT, \
+                         RETURN AT RECURSION LIMIT."
+                            .to_owned(),
+                    ));
                 }
-            }.try_map(|(max_iters, return_at_limit)| Ok::<LetRecLimit, PlanError>(LetRecLimit {
-                max_iters: NonZeroU64::new(*max_iters).ok_or(InvalidWmrRecursionLimit("Recursion limit has to be greater than 0.".to_owned()))?,
-                return_at_limit: *return_at_limit,
-            }))?;
+            }
+            .try_map(|(max_iters, return_at_limit)| {
+                Ok::<LetRecLimit, PlanError>(LetRecLimit {
+                    max_iters: NonZeroU64::new(*max_iters).ok_or(InvalidWmrRecursionLimit(
+                        "Recursion limit has to be greater than 0.".to_owned(),
+                    ))?,
+                    return_at_limit: *return_at_limit,
+                })
+            })?;
 
             let mut bindings = Vec::new();
             for (id, value, shadowed_val) in cte_bindings.into_iter() {
@@ -5430,11 +5447,12 @@ fn plan_function<'a>(
             }));
         }
         Func::ValueWindow(impls) => {
-            let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by, scalar_args) =
-                plan_window_function_non_aggr(ecx, f)?;
+            let window_plan = plan_window_function_non_aggr(ecx, f)?;
+            let (ignore_nulls, order_by_exprs, col_orders, window_frame, partition_by, win_args) =
+                window_plan;
 
             let (args_encoded, func) =
-                func::select_impl(ecx, FuncSpec::Func(name), impls, scalar_args, vec![])?;
+                func::select_impl(ecx, FuncSpec::Func(name), impls, win_args, vec![])?;
 
             if ignore_nulls {
                 match func {

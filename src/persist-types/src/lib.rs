@@ -168,7 +168,18 @@ pub trait Codec64: Sized + Clone + Debug + 'static {
 ///
 /// This structure can be durably written down or transmitted for use by other
 /// processes. This location can contain any number of persist shards.
-#[derive(Arbitrary, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[derive(
+    Arbitrary,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize
+)]
 pub struct PersistLocation {
     /// Uri string that identifies the blob store.
     pub blob_uri: SensitiveUrl,
@@ -193,7 +204,17 @@ impl PersistLocation {
 /// or otherwise used as an interchange format. It can be parsed back using
 /// [str::parse] or [std::str::FromStr::from_str].
 #[derive(
-    Arbitrary, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+    Arbitrary,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
 )]
 #[serde(try_from = "String", into = "String")]
 pub struct ShardId([u8; 16]);

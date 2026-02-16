@@ -740,7 +740,17 @@ impl<'a, const UPPER: bool> RangeBound<Datum<'a>, UPPER> {
 }
 
 #[derive(
-    Arbitrary, Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub enum InvalidRangeError {
     MisorderedRangeBounds,

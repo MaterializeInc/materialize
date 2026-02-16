@@ -77,7 +77,14 @@ pub mod v1alpha1 {
     }
 
     #[derive(
-        CustomResource, Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema,
+        CustomResource,
+        Clone,
+        Debug,
+        Default,
+        PartialEq,
+        Deserialize,
+        Serialize,
+        JsonSchema
     )]
     #[serde(rename_all = "camelCase")]
     #[kube(

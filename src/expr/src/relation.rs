@@ -2544,7 +2544,17 @@ impl VisitChildren<Self> for MirRelationExpr {
 
 /// Specification for an ordering by a column.
 #[derive(
-    Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect,
+    Debug,
+    Clone,
+    Copy,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
 )]
 pub struct ColumnOrder {
     /// The column index.
@@ -2582,7 +2592,18 @@ where
 }
 
 /// Describes an aggregation expression.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct AggregateExpr {
     /// Names the aggregation function.
     pub func: AggregateFunc,
@@ -3283,7 +3304,18 @@ impl AggregateExpr {
 }
 
 /// Describe a join implementation in dataflow.
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum JoinImplementation {
     /// Perform a sequence of binary differential dataflow joins.
     ///
@@ -3367,7 +3399,18 @@ impl JoinImplementation {
 ///
 /// This has more than one version. `new` instantiates the appropriate version based on a
 /// feature flag.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum JoinInputCharacteristics {
     /// Old version, with `enable_join_prioritize_arranged` turned off.
     V1(JoinInputCharacteristicsV1),
@@ -3433,7 +3476,18 @@ impl JoinInputCharacteristics {
 }
 
 /// Newer version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned on.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct JoinInputCharacteristicsV2 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3500,7 +3554,18 @@ impl JoinInputCharacteristicsV2 {
 }
 
 /// Old version of `JoinInputCharacteristics`, with `enable_join_prioritize_arranged` turned off.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Debug, Clone, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct JoinInputCharacteristicsV1 {
     /// An excellent indication that record count will not increase.
     pub unique_key: bool,
@@ -3856,7 +3921,18 @@ where
 ///
 /// Window frames define a subset of the partition , and only a subset of
 /// window functions make use of the window frame.
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct WindowFrame {
     /// ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -3936,7 +4012,18 @@ impl WindowFrame {
 }
 
 /// Describe how frame bounds are interpreted
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Debug,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub enum WindowFrameUnits {
     /// Each row is treated as the unit of work for bounds
     Rows,
@@ -3962,7 +4049,18 @@ impl Display for WindowFrameUnits {
 ///
 /// The order between frame bounds is significant, as Postgres enforces
 /// some restrictions there.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, MzReflect, PartialOrd, Ord)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    PartialEq,
+    Eq,
+    Hash,
+    MzReflect,
+    PartialOrd,
+    Ord
+)]
 pub enum WindowFrameBound {
     /// `UNBOUNDED PRECEDING`
     UnboundedPreceding,
@@ -3989,7 +4087,18 @@ impl Display for WindowFrameBound {
 }
 
 /// Maximum iterations for a LetRec.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 pub struct LetRecLimit {
     /// Maximum number of iterations to evaluate.
     pub max_iters: NonZeroU64,
@@ -4024,7 +4133,17 @@ impl Display for LetRecLimit {
 
 /// For a global Get, this indicates whether we are going to read from Persist or from an index.
 /// (See comment in MirRelationExpr::Get.)
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Hash
+)]
 pub enum AccessStrategy {
     /// It's either a local Get (a CTE), or unknown at the time.
     /// `prune_and_annotate_dataflow_index_imports` decides it for global Gets, and thus switches to

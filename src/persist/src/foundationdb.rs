@@ -330,7 +330,8 @@ impl Consensus for FdbConsensus {
                     loop {
                         let values = trx.get_range(&range, 1, false).await?;
                         for value in &values {
-                            let key: String = self.keys.unpack(value.key()).map_err(FdbBindingError::PackError)?;
+                            let key: String = self.keys.unpack(value.key())
+                                .map_err(FdbBindingError::PackError)?;
                             keys.push(key);
                         }
                         if let Some(last) = values.last() {

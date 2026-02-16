@@ -59,7 +59,17 @@ pub(crate) mod types;
 
 pub type UpsertValue = Result<Row, Box<UpsertError>>;
 
-#[derive(Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Hash,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
 pub struct UpsertKey([u8; 32]);
 
 impl Debug for UpsertKey {

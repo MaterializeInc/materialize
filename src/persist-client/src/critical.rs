@@ -30,7 +30,17 @@ use crate::stats::SnapshotStats;
 use crate::{GarbageCollector, ShardId, parse_id};
 
 /// An opaque identifier for a reader of a persist durable TVC (aka shard).
-#[derive(Arbitrary, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Arbitrary,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct CriticalReaderId(pub(crate) [u8; 16]);
 

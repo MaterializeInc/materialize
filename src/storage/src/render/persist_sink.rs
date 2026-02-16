@@ -1193,7 +1193,11 @@ where
                             // select!, which would require cancel safety of
                             // `wait_for_upper_past()`, which it doesn't
                             // advertise.
-                            let _ = tokio::time::timeout(Duration::from_secs(1), read_only_rx.changed()).await;
+                            let _ = tokio::time::timeout(
+                                Duration::from_secs(1),
+                                read_only_rx.changed(),
+                            )
+                            .await;
 
                             if !*read_only_rx.borrow() {
                                 if collection_id.is_user() {
@@ -1299,8 +1303,10 @@ where
                     Ok(()) => {
                         // Only update these metrics when we know that _we_ were
                         // successful.
+                        let committed =
+                            batch_metrics.inserts + batch_metrics.retractions;
                         source_statistics
-                            .inc_updates_committed_by(batch_metrics.inserts + batch_metrics.retractions);
+                            .inc_updates_committed_by(committed);
                         metrics.processed_batches.inc();
                         metrics.row_inserts.inc_by(batch_metrics.inserts);
                         metrics.row_retractions.inc_by(batch_metrics.retractions);
@@ -1344,7 +1350,8 @@ where
                             // First, construct a new batch description with the
                             // lower advanced to the current shard upper.
                             let new_batch_lower = mismatch.current.clone();
-                            let new_done_batch_metadata = (new_batch_lower.clone(), batch_upper.clone());
+                            let new_done_batch_metadata =
+                                (new_batch_lower.clone(), batch_upper.clone());
 
                             // Retain any batches that are still in advance of
                             // the new lower, and delete any batches that are

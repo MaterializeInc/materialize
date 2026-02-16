@@ -1271,7 +1271,7 @@ impl CachedStatisticsOracle {
     pub async fn new<T: TimelyTimestamp>(
         ids: &BTreeSet<GlobalId>,
         as_of: &Antichain<T>,
-        storage_collections: &dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T>,
+        storage_collections: &dyn StorageCollections<Timestamp = T>,
     ) -> Result<Self, StorageError<T>> {
         let mut cache = BTreeMap::new();
 

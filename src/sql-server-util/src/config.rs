@@ -88,7 +88,17 @@ pub enum TunnelConfig {
 ///
 /// Mirror of [`tiberius::EncryptionLevel`] but we define our own so we can
 /// implement traits like [`Serialize`].
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Arbitrary, Serialize, Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Arbitrary,
+    Serialize,
+    Deserialize
+)]
 pub enum EncryptionLevel {
     /// Do not use encryption at all.
     None,
@@ -123,7 +133,17 @@ impl From<EncryptionLevel> for tiberius::EncryptionLevel {
 }
 
 /// Policy that dictates validation of the SQL-SERVER certificate.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Arbitrary, Serialize, Deserialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Arbitrary,
+    Serialize,
+    Deserialize
+)]
 pub enum CertificateValidationPolicy {
     /// Don't validate the server's certificate; trust all certificates.
     TrustAll,

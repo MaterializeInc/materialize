@@ -16,6 +16,7 @@
 //! ID generation utilities.
 
 use hibitset::BitSet;
+use serde::{Serialize, Serializer};
 use std::borrow::Borrow;
 use std::fmt;
 use std::hash::Hash;
@@ -94,21 +95,12 @@ pub type AtomicIdGen = AtomicGen<u64>;
 
 /// IdAllocator common traits.
 pub trait IdGenerator:
-    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + serde::Serialize + fmt::Display
+    From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + Serialize + fmt::Display
 {
 }
 
 impl<T> IdGenerator for T where
-    T: From<u8>
-        + AddAssign
-        + Sub
-        + PartialOrd
-        + Copy
-        + Eq
-        + Hash
-        + Ord
-        + serde::Serialize
-        + fmt::Display
+    T: From<u8> + AddAssign + Sub + PartialOrd + Copy + Eq + Hash + Ord + Serialize + fmt::Display
 {
 }
 
@@ -302,10 +294,10 @@ impl<T: IdGenerator, A: IdAllocatorInner> fmt::Display for IdHandle<T, A> {
     }
 }
 
-impl<T: IdGenerator, A: IdAllocatorInner> serde::Serialize for IdHandle<T, A> {
+impl<T: IdGenerator, A: IdAllocatorInner> Serialize for IdHandle<T, A> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
-        S: serde::Serializer,
+        S: Serializer,
     {
         self.unhandled().serialize(serializer)
     }
