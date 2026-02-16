@@ -1,0 +1,31 @@
+yarn-error.log
+/node_modules
+.pnp.*
+.yarn/*
+yarn-error.log
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+/trufflehog.log
+
+# Playwrite E2E tests
+/e2e-tests/state*.json
+/test-results
+
+# Vite
+/dist
+
+# Vercel
+.vercel
+
+# Allow people to set up their own shell-local environments:
+.direnv
+.envrc
+.env
+
+.vscode
+
+# Test logs
+/log

@@ -781,6 +781,35 @@ steps:
           # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
           queue: hetzner-x86-64-4cpu-8gb
 
+  - group: Console tests
+    key: console-tests
+    steps:
+      - id: console-lint
+        label: ":npm: Console lint and typecheck"
+        command: bin/ci-builder run stable ci/test/console/console-lint.sh
+        inputs:
+          - console/**
+          - ci/test/console/**
+        depends_on: []
+        timeout_in_minutes: 15
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
+      - id: console-test
+        label: ":npm: Console unit tests"
+        command: bin/ci-builder run stable ci/test/console/console-test.sh
+        inputs:
+          - console/**
+          - ci/test/console/**
+        depends_on: []
+        timeout_in_minutes: 15
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
