@@ -14,7 +14,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, UpdateCollection};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -291,7 +291,7 @@ pub struct SubscribeBatch<T = mz_repr::Timestamp> {
     /// All updates greater than `lower` and not greater than `upper`.
     ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
-    pub updates: Result<Vec<(T, Row, Diff)>, String>,
+    pub updates: Result<Vec<UpdateCollection<T>>, String>,
 }
 
 impl<T> SubscribeBatch<T> {
@@ -299,10 +299,7 @@ impl<T> SubscribeBatch<T> {
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         use bytesize::ByteSize;
         if let Ok(updates) = &self.updates {
-            let total_size: usize = updates
-                .iter()
-                .map(|(_time, row, _diff)| row.byte_len())
-                .sum();
+            let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {
                 self.updates = Err(format!(
                     "result exceeds max size of {}",

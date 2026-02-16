@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -2067,7 +2068,15 @@ where
                     }
 
                     if let Ok(updates) = updates.as_mut() {
-                        updates.retain(|(time, _data, _diff)| lower.less_equal(time));
+                        for updates in updates {
+                            let offset = updates.times().partition_point(|t| {
+                                // True for times that are strictly less than lower (and should be skipped)
+                                // and false otherwise.
+                                !lower.less_equal(t)
+                            });
+                            let (_, past_lower) = mem::take(updates).split_at(offset);
+                            *updates = past_lower;
+                        }
                     }
                     self.deliver_response(ComputeControllerResponse::SubscribeResponse(
                         subscribe_id,
