@@ -63,3 +63,26 @@
     - name: "`<name>`"
       description: |
         The name of the source you want to alter.
+
+- name: "syntax-set-timestamp-interval"
+  code: |
+    ALTER SOURCE [IF EXISTS] <name> SET (TIMESTAMP INTERVAL [=] <interval>);
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the source you want to alter.
+    - name: "`<interval>`"
+      description: |
+        The interval at which timestamps are assigned to the data read from
+        this source. Accepts positive [interval](/sql/types/interval/) values
+        (e.g. `'500ms'`, `'1s'`). The value must be between the system
+        parameters `min_timestamp_interval` and `max_timestamp_interval`.
+        Default: `1s`.
+
+- name: "syntax-reset-timestamp-interval"
+  code: |
+    ALTER SOURCE [IF EXISTS] <name> RESET (TIMESTAMP INTERVAL);
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the source you want to alter.

@@ -12,6 +12,7 @@ Use `ALTER SOURCE` to:
 - Rename a source.
 - Change owner of a source.
 - Change retain history configuration for the source.
+- Change timestamp interval for the source.
 
 ## Syntax
 
@@ -61,6 +62,19 @@ To reset the retention history to the default for a source:
 {{% include-syntax file="examples/alter_source" example="syntax-reset-retain-history" %}}
 
 {{< /tab >}}
+{{< tab "(Re)Set timestamp interval" >}}
+
+### (Re)Set timestamp interval
+
+To set the timestamp interval for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-set-timestamp-interval" %}}
+
+To reset the timestamp interval to the system default for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-reset-timestamp-interval" %}}
+
+{{< /tab >}}
 {{< /tabs >}}
 
 
@@ -105,6 +119,20 @@ To drop a subsource, use the [`DROP SOURCE`](/sql/drop-source/) command:
 
 ```mzsql
 DROP SOURCE tbl_a, b CASCADE;
+```
+
+### Changing the timestamp interval
+
+To set a custom timestamp interval for a source:
+
+```mzsql
+ALTER SOURCE kafka_src SET (TIMESTAMP INTERVAL = '500ms');
+```
+
+To reset the timestamp interval to the system default:
+
+```mzsql
+ALTER SOURCE kafka_src RESET (TIMESTAMP INTERVAL);
 ```
 
 ## Privileges
