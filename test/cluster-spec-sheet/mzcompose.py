@@ -20,7 +20,7 @@ import re
 import shlex
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Hashable
+from collections.abc import Callable
 from textwrap import dedent
 from typing import Any
 
@@ -30,6 +30,7 @@ import psycopg
 from psycopg import InterfaceError, OperationalError
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mz_version import MzVersion
 from materialize.mzcompose import _wait_for_pg
 from materialize.mzcompose.composition import (
     Composition,
@@ -65,6 +66,8 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
     "max_credit_consumption_rate": "1024",
 }
+
+VERSION = f"{MzVersion.parse_cargo()}--pr.g{os.getenv('BUILDKITE_COMMIT')}"
 
 SERVICES = [
     # Overridden below
@@ -1930,6 +1933,10 @@ class CopyFromStdinEnvdStrongScalingScenario(Scenario):
 
     Uses psycopg's COPY protocol to send pre-generated tab-delimited data,
     exercising the parallel decode + persist pipeline in environmentd.
+
+    Note that this doesn't scale well in Cloud at the moment, but scales well
+    locally. We might be bound by the incoming postgres connection, S3, or CRDB
+    throughput.
     """
 
     NUM_ROWS = 100_000_000
@@ -2184,7 +2191,7 @@ def cloud_disable_enable_and_wait(
     disable_region(target.composition, hard=False)
 
     if environmentd_cpu_allocation is None:
-        target.composition.run("mz", "region", "enable", rm=True)
+        target.composition.run("mz", "region", "enable", "--version", VERSION, rm=True)
     else:
         target.composition.run(
             "mz",
@@ -2192,6 +2199,8 @@ def cloud_disable_enable_and_wait(
             "enable",
             "--environmentd-cpu-allocation",
             str(environmentd_cpu_allocation),
+            "--version",
+            VERSION,
             rm=True,
         )
 
@@ -2876,6 +2885,8 @@ def run_scenario_envd_strong_scaling(
                 "enable",
                 "--environmentd-cpu-allocation",
                 "2",
+                "--version",
+                VERSION,
                 rm=True,
             )
 
@@ -3167,11 +3178,10 @@ def plot(
     df2 = data.pivot_table(
         index=[x],
         columns=["test_name"],
-        values=[value],
+        values=value,
         aggfunc="min",
     ).sort_index(axis=1)
-    (level, _dropped) = labels_to_drop(df2)
-    filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
+    filtered = df2.dropna(axis=1, how="all")
     if filtered.empty:
         print(f"Warning: No data to plot for {title}")
         return
@@ -3206,19 +3216,6 @@ def plot(
         bbox_to_anchor=(1.0, 1.0),
     )
     save_plot(plot_dir, filtered, f"{title} (Normalized)", f"{slug}_normalized")
-
-
-def labels_to_drop(
-    data: pd.DataFrame,
-) -> tuple[list[Hashable], dict[str, str]]:
-    unique = []
-    dropped = {}
-    for level in range(data.columns.nlevels):
-        labels = data.columns.get_level_values(level)
-        if len(set(labels)) == 1:
-            unique.append(data.columns.names[level])
-            dropped[data.columns.names[level]] = labels[0]
-    return unique, dropped
 
 
 def upload_cluster_results_to_test_analytics(
