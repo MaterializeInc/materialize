@@ -19,6 +19,8 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+use crate::rc_vec::RcVec;
+
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::difference::{Multiply, Semigroup};
@@ -521,14 +523,14 @@ where
     }
 }
 
-/// Implementation of [`CollectionExt`] for collections with `Rc<Vec<...>>` containers.
+/// Implementation of [`CollectionExt`] for collections with `RcVec<Vec<...>>` containers.
 ///
-/// Each method uses `Rc::make_mut` inside the operator body to get owned access to items,
+/// Each method uses `RcVec::make_mut` inside the operator body to get owned access to items,
 /// which is zero-cost when the `Rc` refcount is 1 (the common case in point-to-point dataflow
 /// channels). This avoids the need for a separate `unshared()` conversion operator before
 /// calling these methods.
 impl<G, D1, R> CollectionExt<G, D1, R>
-    for Collection<G, Rc<Vec<(D1, <G as ScopeParent>::Timestamp, R)>>>
+    for Collection<G, RcVec<Vec<(D1, <G as ScopeParent>::Timestamp, R)>>>
 where
     G: Scope,
     G::Timestamp: Data,
@@ -560,7 +562,7 @@ where
                             let mut ok_session = ok_output.session_with_builder(&time);
                             let mut err_session = err_output.session_with_builder(&time);
                             for container in data {
-                                for (d1, t, r) in Rc::make_mut(container).drain(..) {
+                                for (d1, t, r) in RcVec::make_mut(container).drain(..) {
                                     for item in logic(d1) {
                                         match item {
                                             Ok(d2) => {
@@ -605,7 +607,7 @@ where
                     input.for_each_time(|time, data| {
                         let mut session = output.session(&time);
                         for container in data {
-                            session.give_container(Rc::make_mut(container));
+                            session.give_container(RcVec::make_mut(container));
                         }
                     });
                 }
@@ -633,7 +635,7 @@ where
                         input.for_each_time(|time, data| {
                             let mut session = output.session_with_builder(&time);
                             for container in data {
-                                for (x, t, d) in Rc::make_mut(container).drain(..) {
+                                for (x, t, d) in RcVec::make_mut(container).drain(..) {
                                     let (x, d2) = logic(x);
                                     session.give((x, t, d2.multiply(&d)));
                                 }
@@ -662,7 +664,7 @@ where
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
                         for container in data {
-                            for (x, t, d) in Rc::make_mut(container).drain(..) {
+                            for (x, t, d) in RcVec::make_mut(container).drain(..) {
                                 if d.is_positive() {
                                     ok_session.give((x, t, d))
                                 } else {
@@ -689,14 +691,12 @@ where
             > + 'static,
     {
         if must_consolidate {
-            // Unshare, consolidate, re-share.
-            use timely::dataflow::operators::rc::SharedStream;
             let vec_collection: VecCollection<G, D1, R> =
                 self.inner.unshared().as_collection();
             vec_collection
                 .consolidate_named_if::<Ba>(true, name)
                 .inner
-                .shared()
+                .shared_rcvec()
                 .as_collection()
         } else {
             self
@@ -714,13 +714,12 @@ where
                 Time = G::Timestamp,
             > + 'static,
     {
-        use timely::dataflow::operators::rc::SharedStream;
         let vec_collection: VecCollection<G, D1, R> =
             self.inner.unshared().as_collection();
         vec_collection
             .consolidate_named::<Ba>(name)
             .inner
-            .shared()
+            .shared_rcvec()
             .as_collection()
     }
 }
@@ -737,7 +736,7 @@ pub trait RcCollectionExt<G: Scope> {
 }
 
 impl<G, D, R, T, TOuter> RcCollectionExt<G>
-    for Collection<G, Rc<Vec<(D, timely::order::Product<TOuter, differential_dataflow::dynamic::pointstamp::PointStamp<T>>, R)>>>
+    for Collection<G, RcVec<Vec<(D, timely::order::Product<TOuter, differential_dataflow::dynamic::pointstamp::PointStamp<T>>, R)>>>
 where
     G: Scope<Timestamp = timely::order::Product<TOuter, differential_dataflow::dynamic::pointstamp::PointStamp<T>>>,
     D: Data,
@@ -781,7 +780,7 @@ where
                     vec.truncate(level - 1);
                     new_time.inner = PointStamp::new(vec);
                     let new_cap = cap.delayed(&new_time);
-                    for (_data, time, _diff) in Rc::make_mut(data).iter_mut() {
+                    for (_data, time, _diff) in RcVec::make_mut(data).iter_mut() {
                         let mut vec = std::mem::take(&mut time.inner).into_inner();
                         vec.truncate(level - 1);
                         time.inner = PointStamp::new(vec);
@@ -1010,23 +1009,30 @@ where
     }
 }
 
-/// Convert a stream of shared containers into a stream of owned containers
+/// Convert a stream of owned containers into a stream of `RcVec`-wrapped containers.
+pub trait SharedRcVecStream<S: Scope, C> {
+    /// Wrap each container in an `RcVec` for cheap cloning.
+    fn shared_rcvec(&self) -> StreamCore<S, RcVec<C>>;
+}
+
+impl<S: Scope, C: Container> SharedRcVecStream<S, C> for StreamCore<S, C> {
+    fn shared_rcvec(&self) -> StreamCore<S, RcVec<C>> {
+        self.unary(Pipeline, "SharedRcVec", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, data| {
+                    let mut session = output.session(&time);
+                    for data in data {
+                        session.give_container(&mut RcVec::from(std::mem::take(data)));
+                    }
+                });
+            }
+        })
+    }
+}
+
+/// Convert a stream of shared containers into a stream of owned containers.
 pub trait UnsharedStream<S: Scope, C> {
-    /// Convert a stream of shared containers into a stream of owned containers
-    ///
-    /// # Examples
-    /// ```
-    /// use timely::dataflow::operators::{ToStream, InspectCore};
-    /// use timely::dataflow::operators::rc::SharedStream;
-    /// use mz_timely_util::operators::UnsharedStream;
-    ///
-    /// timely::example(|scope| {
-    ///     (0..10).to_stream(scope)
-    ///            .shared()
-    ///            .unshared()
-    ///            .inspect_container(|x| println!("seen: {:?}", x));
-    /// });
-    /// ```
+    /// Convert a stream of shared containers into a stream of owned containers.
     fn unshared(&self) -> StreamCore<S, C>;
 }
 
@@ -1038,6 +1044,21 @@ impl<S: Scope, C: Container> UnsharedStream<S, C> for StreamCore<S, Rc<C>> {
                     let mut session = output.session(&time);
                     for container in containers {
                         session.give_container(Rc::make_mut(container));
+                    }
+                });
+            }
+        })
+    }
+}
+
+impl<S: Scope, C: Container + Clone> UnsharedStream<S, C> for StreamCore<S, RcVec<C>> {
+    fn unshared(&self) -> StreamCore<S, C> {
+        self.unary(Pipeline, "Unshared", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, containers| {
+                    let mut session = output.session(&time);
+                    for container in containers {
+                        session.give_container(RcVec::make_mut(container));
                     }
                 });
             }

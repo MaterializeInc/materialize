@@ -23,6 +23,7 @@ pub mod columnar;
 pub mod containers;
 pub mod operator;
 pub mod order;
+pub mod rc_vec;
 pub mod pact;
 pub mod panic;
 pub mod probe;

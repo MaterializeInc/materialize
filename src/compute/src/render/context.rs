@@ -30,12 +30,11 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::operator::{CollectionExt, StreamExt, UnsharedStream};
+use mz_timely_util::operator::{CollectionExt, SharedRcVecStream, StreamExt, UnsharedStream};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::OutputBuilderSession;
-use timely::dataflow::operators::rc::SharedStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
@@ -414,8 +413,8 @@ where
     ) -> Self {
         Self {
             collection: Some((
-                oks.inner.shared().as_collection(),
-                errs.inner.shared().as_collection(),
+                oks.inner.shared_rcvec().as_collection(),
+                errs.inner.shared_rcvec().as_collection(),
             )),
             arranged: BTreeMap::default(),
         }
@@ -838,8 +837,8 @@ where
             let (oks, errs) =
                 self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
             self.collection = Some((
-                oks.inner.shared().as_collection(),
-                errs.inner.shared().as_collection(),
+                oks.inner.shared_rcvec().as_collection(),
+                errs.inner.shared_rcvec().as_collection(),
             ));
         }
         for (key, _, thinning) in collections.arranged {
