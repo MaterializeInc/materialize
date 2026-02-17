@@ -168,38 +168,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         non_default_testdrive_vars = []
 
         if args.replicas > 1:
-            c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
-            # Make sure a replica named 'r1' always exists
-            replica_names = [
-                "r1" if replica_id == 0 else f"replica{replica_id}"
-                for replica_id in range(0, args.replicas)
-            ]
-            replica_string = ",".join(
-                f"{replica_name} (SIZE '{materialized.default_replica_size}')"
-                for replica_name in replica_names
-            )
-            c.sql(
-                f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
-                user="mz_system",
-                port=6877,
-            )
-
-            # Note that any command that outputs SHOW CLUSTERS will have output
-            # that depends on the number of replicas testdrive has. This means
-            # it might be easier to skip certain tests if the number of replicas
-            # is > 1.
-            c.sql(
-                f"""
-                CREATE CLUSTER testdrive_single_replica_cluster SIZE = '{materialized.default_replica_size}';
-                GRANT ALL PRIVILEGES ON CLUSTER testdrive_single_replica_cluster TO materialize;
-                """,
-                user="mz_system",
-                port=6877,
-            )
-
-            non_default_testdrive_vars.append(f"--var=replicas={args.replicas}")
-            non_default_testdrive_vars.append(
-                "--var=single-replica-cluster=testdrive_single_replica_cluster"
+            non_default_testdrive_vars.extend(
+                c.recreate_quickstart_cluster(
+                    args.replicas, materialized.default_replica_size
+                )
             )
 
         if args.default_size != 1:
@@ -389,38 +361,10 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             non_default_testdrive_vars = []
 
             if args.replicas > 1:
-                c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
-                # Make sure a replica named 'r1' always exists
-                replica_names = [
-                    "r1" if replica_id == 0 else f"replica{replica_id}"
-                    for replica_id in range(0, args.replicas)
-                ]
-                replica_string = ",".join(
-                    f"{replica_name} (SIZE '{mz_old.default_replica_size}')"
-                    for replica_name in replica_names
-                )
-                c.sql(
-                    f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
-                    user="mz_system",
-                    port=6877,
-                )
-
-                # Note that any command that outputs SHOW CLUSTERS will have output
-                # that depends on the number of replicas testdrive has. This means
-                # it might be easier to skip certain tests if the number of replicas
-                # is > 1.
-                c.sql(
-                    f"""
-                    CREATE CLUSTER testdrive_single_replica_cluster SIZE = '{mz_old.default_replica_size}';
-                    GRANT ALL PRIVILEGES ON CLUSTER testdrive_single_replica_cluster TO materialize;
-                    """,
-                    user="mz_system",
-                    port=6877,
-                )
-
-                non_default_testdrive_vars.append(f"--var=replicas={args.replicas}")
-                non_default_testdrive_vars.append(
-                    "--var=single-replica-cluster=testdrive_single_replica_cluster"
+                non_default_testdrive_vars.extend(
+                    c.recreate_quickstart_cluster(
+                        args.replicas, mz_old.default_replica_size
+                    )
                 )
 
             non_default_testdrive_vars.append(

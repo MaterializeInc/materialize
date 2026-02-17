@@ -1547,6 +1547,52 @@ class Composition:
             "unsafe_enable_unorchestrated_cluster_replicas", "true", **kwargs
         )
 
+    def recreate_quickstart_cluster(
+        self,
+        replicas: int,
+        replica_size: str,
+        single_replica_cluster: bool = True,
+    ) -> list[str]:
+        """Drop and recreate the ``quickstart`` cluster with multiple replicas.
+
+        Returns a list of testdrive ``--var`` arguments reflecting the new
+        replica configuration.  When *single_replica_cluster* is ``True``
+        (the default), a helper cluster with a single replica is also
+        created so that tests which must run on exactly one replica can
+        target it.
+        """
+        self.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
+        # Make sure a replica named 'r1' always exists
+        replica_names = [
+            "r1" if replica_id == 0 else f"replica{replica_id}"
+            for replica_id in range(0, replicas)
+        ]
+        replica_string = ",".join(
+            f"{name} (SIZE '{replica_size}')" for name in replica_names
+        )
+        self.sql(
+            f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
+            user="mz_system",
+            port=6877,
+        )
+
+        testdrive_vars: list[str] = [f"--var=replicas={replicas}"]
+
+        if single_replica_cluster:
+            self.sql(
+                f"""
+                CREATE CLUSTER testdrive_single_replica_cluster SIZE = '{replica_size}';
+                GRANT ALL PRIVILEGES ON CLUSTER testdrive_single_replica_cluster TO materialize;
+                """,
+                user="mz_system",
+                port=6877,
+            )
+            testdrive_vars.append(
+                "--var=single-replica-cluster=testdrive_single_replica_cluster"
+            )
+
+        return testdrive_vars
+
     def enable_minio_versioning(self) -> None:
         self.up("minio", Service("mc", idle=True))
         self.exec(

@@ -19,7 +19,7 @@ from textwrap import dedent
 from typing import Protocol
 
 from materialize import buildkite
-from materialize.checks.common import KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD
+from materialize.checks.common import KAFKA_SCHEMA
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -34,11 +34,6 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 from materialize.util import selected_by_name
-
-
-def schema() -> str:
-    return dedent(KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD)
-
 
 SERVICES = [
     Redpanda(),
@@ -285,7 +280,7 @@ class KafkaSinkDisruption:
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
         c.testdrive(
-            schema()
+            KAFKA_SCHEMA
             + dedent(
                 """
                 # We specify the progress topic explicitly so we can delete it in a test later,
@@ -587,7 +582,7 @@ def delete_sink_topic(c: Composition, seed: int) -> None:
 
     # Write new data to source otherwise nothing will encounter the missing topic
     c.testdrive(
-        schema()
+        KAFKA_SCHEMA
         + dedent(
             """
             $ kafka-ingest topic=source-topic format=avro schema=${schema}
