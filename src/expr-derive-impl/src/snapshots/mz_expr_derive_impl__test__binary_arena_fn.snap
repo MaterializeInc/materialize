@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc()]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {\n    unimplemented!()\n}\n"
+expression: "#[sqlfunc(test = true)]\nfn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {\n    unimplemented!()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,

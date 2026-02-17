@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = \"Option<bool>\",\n    is_infix_op = true,\n    sqlname = \"test\",\n    propagates_nulls = true\n)]\nfn complex_output_type_fn<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    unimplemented!()\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = \"Option<bool>\",\n    is_infix_op = true,\n    sqlname = \"test\",\n    propagates_nulls = true,\n    test = true,\n)]\nfn complex_output_type_fn<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n) -> Result<Datum<'a>, EvalError> {\n    unimplemented!()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/binary.rs
-expression: "#[sqlfunc()]\n#[allow(dead_code)]\nfn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {\n    Ok(a + b)\n}\n"
+expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {\n    Ok(a + b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
