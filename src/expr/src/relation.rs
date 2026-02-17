@@ -35,8 +35,8 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType, Row,
-    RowIterator, SqlColumnType, SqlRelationType, SqlScalarType,
+    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, Row, RowIterator,
+    SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -392,16 +392,12 @@ impl MirRelationExpr {
     /// It is meant to be used during post-order traversals to compute relation
     /// schemas incrementally.
     pub fn typ_with_input_types(&self, input_types: &[SqlRelationType]) -> SqlRelationType {
-        let repr_types = input_types.iter().map(ReprRelationType::from).collect_vec();
-
-        let column_types =
-            self.repr_col_with_input_repr_cols(repr_types.iter().map(|i| &i.column_types));
+        let column_types = self.col_with_input_cols(input_types.iter().map(|i| &i.column_types));
         let unique_keys = self.keys_with_input_keys(
             input_types.iter().map(|i| i.arity()),
             input_types.iter().map(|i| &i.keys),
         );
-        SqlRelationType::new(column_types.iter().map(SqlColumnType::from_repr).collect())
-            .with_keys(unique_keys)
+        SqlRelationType::new(column_types).with_keys(unique_keys)
     }
 
     /// Reports the column types of the relation given the column types of the

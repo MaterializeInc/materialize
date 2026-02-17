@@ -1998,9 +1998,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     for service in ("materialized", "clusterd1"):
         p = c.invoke("logs", service, capture=True)
         for line in p.stdout.splitlines():
-            assert (
-                " ERROR " not in line or "repr type error" in line
-            ), f"found non-repr-type ERROR in service {service}: {line}"
+            assert " ERROR " not in line, f"found ERROR in service {service}: {line}"
 
 
 def workflow_test_drop_during_reconciliation(c: Composition) -> None:
