@@ -3529,13 +3529,7 @@ impl SqlScalarType {
         }
 
         ::tracing::error!("repr type error: base_eq failed for {self:?} and {other:?}");
-        // SqlScalarType::base_eq does not consider nullability at all, but `ReprScalarType::eq` does
-        // To reconcile these differences, we check "compatibility", i.e., if we can union the types wthout error.
-        // Since ReprScalarType::union is a glorified nullability compositor, a successful union means the types
-        // are equal (modulo nullability)
-        ReprScalarType::from(self)
-            .union(&ReprScalarType::from(other))
-            .is_ok()
+        ReprScalarType::from(self) == ReprScalarType::from(other)
     }
 
     // Determines equality among scalar types that ignores any custom OIDs or
