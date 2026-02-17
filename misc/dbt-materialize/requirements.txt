@@ -9,7 +9,7 @@ colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.22.5
 dbt-common==1.37.2
-dbt-core==1.11.4
+dbt-core==1.11.5
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.10.0
