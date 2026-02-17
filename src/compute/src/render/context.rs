@@ -421,6 +421,20 @@ where
         }
     }
 
+    /// Construct a new collection bundle directly from `RcCollection` streams.
+    ///
+    /// Unlike [`Self::from_collections`], this avoids the `shared()` conversion when the
+    /// collections are already `Rc`-wrapped.
+    pub fn from_rc_collections(
+        oks: RcCollection<S, Row, Diff>,
+        errs: RcCollection<S, DataflowError, Diff>,
+    ) -> Self {
+        Self {
+            collection: Some((oks, errs)),
+            arranged: BTreeMap::default(),
+        }
+    }
+
     /// Inserts arrangements by the expressions on which they are keyed.
     pub fn from_expressions(
         exprs: Vec<MirScalarExpr>,
@@ -837,7 +851,6 @@ where
                     .collection
                     .clone()
                     .expect("Collection constructed above");
-                let oks = oks.inner.unshared().as_collection();
                 let errs = errs.inner.unshared().as_collection();
                 let (oks, errs_keyed) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
@@ -860,7 +873,7 @@ where
     /// columns in the key are not included in the value.
     fn arrange_collection(
         name: &String,
-        oks: VecCollection<S, Row, Diff>,
+        oks: RcCollection<S, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (

@@ -135,9 +135,10 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, SharedRow, SqlRelationType};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::{CollectionExt, StreamExt, UnsharedStream};
+use mz_timely_util::operator::{CollectionExt, RcCollectionExt, StreamExt, UnsharedStream};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
+use timely::PartialOrder;
 use timely::communication::Allocate;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -999,15 +1000,9 @@ where
                 let (oks, err) = bundle.collection.unwrap();
                 self.insert_id(
                     Id::Local(id),
-                    CollectionBundle::from_collections(
-                        oks.inner
-                            .unshared()
-                            .as_collection()
-                            .leave_dynamic(level + 1),
-                        err.inner
-                            .unshared()
-                            .as_collection()
-                            .leave_dynamic(level + 1),
+                    CollectionBundle::from_rc_collections(
+                        oks.leave_dynamic(level + 1),
+                        err.leave_dynamic(level + 1),
                     ),
                 );
             }
