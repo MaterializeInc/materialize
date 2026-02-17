@@ -17,13 +17,11 @@ expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn infallible3(a: f32
 )]
 pub struct Infallible3;
 impl crate::func::binary::EagerBinaryFunc for Infallible3 {
-    type Input1<'a> = f32;
-    type Input2<'a> = f32;
+    type Input<'a> = (f32, f32);
     type Output<'a> = Option<f32>;
     fn call<'a>(
         &self,
-        a: Self::Input1<'a>,
-        b: Self::Input2<'a>,
+        (a, b): Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output<'a> {
         infallible3(a, b)

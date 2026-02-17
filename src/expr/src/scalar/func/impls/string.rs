@@ -1296,14 +1296,12 @@ pub struct RegexpReplace {
 }
 
 impl binary::EagerBinaryFunc for RegexpReplace {
-    type Input1<'a> = &'a str;
-    type Input2<'a> = &'a str;
+    type Input<'a> = (&'a str, &'a str);
     type Output<'a> = Cow<'a, str>;
 
     fn call<'a>(
         &self,
-        source: Self::Input1<'a>,
-        replacement: Self::Input2<'a>,
+        (source, replacement): Self::Input<'a>,
         _temp_storage: &'a RowArena,
     ) -> Self::Output<'a> {
         // WARNING: This function has potential OOM risk if used with an inflationary

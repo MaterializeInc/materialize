@@ -490,14 +490,12 @@ fn binary_func(
         pub struct #struct_name;
 
         impl crate::func::binary::EagerBinaryFunc for #struct_name {
-            type Input1<'a> = #input1_ty;
-            type Input2<'a> = #input2_ty;
+            type Input<'a> = (#input1_ty, #input2_ty);
             type Output<'a> = #output_ty;
 
             fn call<'a>(
                 &self,
-                a: Self::Input1<'a>,
-                b: Self::Input2<'a>,
+                (a, b): Self::Input<'a>,
                 temp_storage: &'a mz_repr::RowArena
             ) -> Self::Output<'a> {
                 #fn_name(a, b #arena)

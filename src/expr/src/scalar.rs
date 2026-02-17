@@ -2041,7 +2041,7 @@ impl MirScalarExpr {
             )),
             MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, expr1, expr2)
+                func.eval(datums, temp_storage, &[expr1, expr2])
             }
             MirScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
             MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {

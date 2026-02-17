@@ -1946,6 +1946,19 @@ pub trait InputDatumType<'a, E>: Sized {
     /// Try to convert a Result whose Ok variant is a Datum into this native Rust type (Self). If
     /// it fails the error variant will contain the original result.
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>>;
+
+    /// Try to convert a number of datums to a Result whose Ok variant is a native Rust type (Self)
+    /// representing a number of datums obtained from the iterator.
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        // TODO: Consider removing default implementation, only relevant for single-element datum
+        //   types.
+        match iter.next() {
+            Some(next) => Self::try_from_result(next).map_err(|e| e.map(Some)),
+            None => Err(Ok(None)),
+        }
+    }
 }
 
 /// A bridge between native Rust types and SQL runtime types represented in Datums
@@ -2057,6 +2070,11 @@ impl<'a, E, B: InputDatumType<'a, E>> InputDatumType<'a, E> for Result<B, E> {
     fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
         B::try_from_result(res).map(Ok)
     }
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        B::try_from_iter(iter).map(Ok)
+    }
 }
 
 impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Result<B, E> {
@@ -2070,6 +2088,34 @@ impl<'a, E, B: OutputDatumType<'a, E>> OutputDatumType<'a, E> for Result<B, E> {
         self.and_then(|inner| inner.into_result(temp_storage))
     }
 }
+
+macro_rules! impl_tuple_input_datum_type {
+    ($($T:ident),+) => {
+        #[allow(non_snake_case)]
+        impl<'a, E, $($T: InputDatumType<'a, E>),+> InputDatumType<'a, E> for ($($T,)+) {
+            fn try_from_result(_res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+                unimplemented!("Not possible")
+            }
+            fn try_from_iter(
+                iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+            ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+                $(
+                    let $T = <$T>::try_from_iter(iter)?;
+                )+
+                Ok(($($T,)+))
+            }
+            fn nullable() -> bool {
+                $( <$T>::nullable() )||+
+            }
+        }
+    }
+}
+
+impl_tuple_input_datum_type!(T0);
+impl_tuple_input_datum_type!(T0, T1);
+impl_tuple_input_datum_type!(T0, T1, T2);
+impl_tuple_input_datum_type!(T0, T1, T2, T3);
+impl_tuple_input_datum_type!(T0, T1, T2, T3, T4);
 
 /// A wrapper type that excludes `NULL` values, even if `B` allows them.
 ///

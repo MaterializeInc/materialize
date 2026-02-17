@@ -17,13 +17,11 @@ expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible1(a: f32, 
 )]
 pub struct Fallible1;
 impl crate::func::binary::EagerBinaryFunc for Fallible1 {
-    type Input1<'a> = f32;
-    type Input2<'a> = f32;
+    type Input<'a> = (f32, f32);
     type Output<'a> = Result<f32, EvalError>;
     fn call<'a>(
         &self,
-        a: Self::Input1<'a>,
-        b: Self::Input2<'a>,
+        (a, b): Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output<'a> {
         fallible1(a, b)

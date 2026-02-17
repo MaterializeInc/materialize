@@ -242,11 +242,10 @@ macro_rules! derive_binary {
                 &'a self,
                 datums: &[Datum<'a>],
                 temp_storage: &'a RowArena,
-                a: &'a MirScalarExpr,
-                b: &'a MirScalarExpr,
+                exprs: &[&'a MirScalarExpr],
             ) -> Result<Datum<'a>, EvalError> {
                 match self {
-                    $(Self::$name(f) => f.eval(datums, temp_storage, a, b),)*
+                    $(Self::$name(f) => f.eval(datums, temp_storage, exprs),)*
                 }
             }
 
