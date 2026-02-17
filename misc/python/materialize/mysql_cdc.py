@@ -92,9 +92,7 @@ def workflow_schema_change_restart(
         )
 
     with c.override(Testdrive(no_reset=True), create_mysql(mysql_version)):
-        # Restart mz
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         c.run_testdrive_files(
             *MySql.default_testdrive_args(),

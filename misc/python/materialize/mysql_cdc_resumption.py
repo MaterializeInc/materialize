@@ -64,11 +64,6 @@ def restart_mysql(c: Composition) -> None:
     c.up("mysql")
 
 
-def restart_mz(c: Composition) -> None:
-    c.kill("materialized")
-    c.up("materialized")
-
-
 def end(c: Composition) -> None:
     """Validate the data at the end."""
     run_testdrive_files(c, "verify-data.td", "cleanup.td")
@@ -125,7 +120,7 @@ def restart_mysql_during_snapshot(c: Composition) -> None:
 
 def restart_mz_during_snapshot(c: Composition) -> None:
     run_testdrive_files(c, "alter-mz.td")
-    restart_mz(c)
+    c.restart_mz()
 
     run_testdrive_files(c, "delete-rows-t1.td", "delete-rows-t2.td", "alter-table.td")
 
@@ -166,7 +161,7 @@ def restart_mz_during_replication(c: Composition) -> None:
         "alter-mz.td",
     )
 
-    restart_mz(c)
+    c.restart_mz()
 
     run_testdrive_files(c, "delete-rows-t2.td")
 
@@ -181,7 +176,7 @@ def fix_mysql_schema_while_mz_restarts(c: Composition) -> None:
         "verify-data.td",
         "alter-table-fix.td",
     )
-    restart_mz(c)
+    c.restart_mz()
 
 
 def verify_no_snapshot_reingestion(c: Composition) -> None:
@@ -190,7 +185,7 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
     """
     run_testdrive_files(c, "wait-for-snapshot.td", "mysql-disable-select-permission.td")
 
-    restart_mz(c)
+    c.restart_mz()
 
     run_testdrive_files(
         c,

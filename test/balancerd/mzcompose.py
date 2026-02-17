@@ -547,8 +547,7 @@ def workflow_mz_restarted(c: Composition) -> None:
     cursor.execute("CREATE TABLE restart_mz (f1 INTEGER)")
     cursor.execute("START TRANSACTION")
     cursor.execute("INSERT INTO restart_mz VALUES (1)")
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
     try:
         cursor.execute("INSERT INTO restart_mz VALUES (2)")
         raise RuntimeError("execute() expected to fail")

@@ -84,8 +84,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # Test restart - verify timestamp oracle state is preserved
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         input=dedent(

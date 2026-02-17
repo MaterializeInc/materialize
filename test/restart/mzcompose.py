@@ -91,8 +91,7 @@ def workflow_retain_history(c: Composition) -> None:
     check_retain_history_for(names)
 
     # Ensure that RETAIN HISTORY is respected on boot.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
     check_retain_history_for(names)
 
     c.kill("materialized")
@@ -103,8 +102,7 @@ def workflow_github_2454(c: Composition) -> None:
     c.run_testdrive_files("github-2454.td")
 
     # Ensure MZ can boot
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
     c.kill("materialized")
 
 
@@ -152,8 +150,7 @@ def workflow_github_5108(c: Composition) -> None:
     )
 
     # Restart mz
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -201,8 +198,7 @@ def workflow_audit_log(c: Composition) -> None:
     log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
 
     # Restart mz.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Verify the audit log entries are still present and have not changed.
     restart_log = c.sql_query("SELECT * FROM mz_audit_events ORDER BY id")
@@ -256,8 +252,7 @@ def workflow_storage_managed_collections(c: Composition) -> None:
         )
 
     # Restart mz.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Verify the shard mappings are still present and have not changed.
     restart_user_shards: list[str] = []
@@ -299,8 +294,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     )
 
     # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -333,8 +327,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     # Assert that the persisted allowed_cluster_replica_sizes (a setting that
     # supports multiple values) is correctly restored on restart.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -526,8 +519,7 @@ def workflow_drop_materialize_database(c: Composition) -> None:
     )
 
     # Restart mz.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Verify that materialize hasn't blown up
     c.sql("SELECT 1")
@@ -611,8 +603,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     )
 
     # Restart mz.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Verify that we have fewer events now
     # 14 resp. because the truncation default is 5, and the restarted
@@ -662,8 +653,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     # The default retention interval is 30 days, so we don't expect truncation
     # after a restart.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -682,8 +672,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     # Reduce the retention interval to force a truncation.
     c.alter_system_set("replica_metrics_history_retention_interval", "'1s'")
 
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -700,8 +689,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     )
 
     # Verify that this also works a second time.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.testdrive(
         service="testdrive_no_reset",
@@ -819,8 +807,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
 
     # Restart mz. We expect the index on t2(y) to not be visible to ix1 and mv1
     # after the restart as well.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Verify that mv1 and ix1 depend on t1_y_idx but not on t2_y_idx.
     depends_on(c, "mv1", "t1_y_idx", True)

@@ -44,8 +44,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--no-reset",
         "before-restart.td",
     )
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
     c.run_testdrive_files(
         f"--seed={args.seed}",
         "--no-reset",

@@ -1547,6 +1547,11 @@ class Composition:
             "unsafe_enable_unorchestrated_cluster_replicas", "true", **kwargs
         )
 
+    def restart_mz(self, service: str = "materialized") -> None:
+        """Kill and restart a Materialized service."""
+        self.kill(service)
+        self.up(service)
+
     def recreate_quickstart_cluster(
         self,
         replicas: int,

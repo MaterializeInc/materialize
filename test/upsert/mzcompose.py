@@ -383,8 +383,7 @@ def workflow_incident_49(c: Composition) -> None:
 
             c.run_testdrive_files("incident-49/01-setup.td")
 
-            c.kill("materialized")
-            c.up("materialized")
+            c.restart_mz()
 
             c.run_testdrive_files("incident-49/02-after-rehydration.td")
 

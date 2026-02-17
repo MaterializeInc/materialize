@@ -119,11 +119,6 @@ def restart_sql_server(c: Composition) -> None:
     )
 
 
-def restart_mz(c: Composition) -> None:
-    c.kill("materialized")
-    c.up("materialized")
-
-
 def end(c: Composition) -> None:
     """Validate the data at the end."""
     run_testdrive_files(
@@ -159,7 +154,7 @@ def restart_sql_server_during_snapshot(c: Composition) -> None:
 
 def restart_mz_during_snapshot(c: Composition) -> None:
     c.run_testdrive_files("alter-mz.td")
-    restart_mz(c)
+    c.restart_mz()
 
     run_testdrive_files(
         c,
@@ -208,7 +203,7 @@ def restart_mz_during_replication(c: Composition) -> None:
         "alter-mz.td",
     )
 
-    restart_mz(c)
+    c.restart_mz()
 
     run_testdrive_files(
         c,
@@ -226,7 +221,7 @@ def fix_sql_server_schema_while_mz_restarts(c: Composition) -> None:
         "verify-data.td",
         "alter-table-fix.td",
     )
-    restart_mz(c)
+    c.restart_mz()
 
 
 def verify_no_snapshot_reingestion(c: Composition) -> None:
@@ -239,7 +234,7 @@ def verify_no_snapshot_reingestion(c: Composition) -> None:
         "sql-server-disable-select-permission.td",
     )
 
-    restart_mz(c)
+    c.restart_mz()
 
     run_testdrive_files(
         c,

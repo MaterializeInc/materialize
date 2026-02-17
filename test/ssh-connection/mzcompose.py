@@ -54,11 +54,6 @@ SERVICES = [
 ]
 
 
-def restart_mz(c: Composition) -> None:
-    c.kill("materialized")
-    c.up("materialized")
-
-
 # restart the bastion, wiping its keys in the process
 def restart_bastion(c: Composition) -> None:
     c.kill("ssh-bastion-host")
@@ -108,7 +103,7 @@ def workflow_basic_ssh_features(c: Composition, redpanda: bool = False) -> None:
     c.run_testdrive_files("ssh-connections.td")
 
     # Check that objects can be restored correctly
-    restart_mz(c)
+    c.restart_mz()
 
 
 def workflow_validate_connection(c: Composition) -> None:
@@ -515,7 +510,7 @@ def workflow_ssh_key_after_restart(c: Composition) -> None:
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
     )[0]
 
-    restart_mz(c)
+    c.restart_mz()
 
     (restart_primary, restart_secondary) = c.sql_query(
         "SELECT public_key_1, public_key_2 FROM mz_ssh_tunnel_connections;"
@@ -553,7 +548,7 @@ def workflow_rotated_ssh_key_after_restart(c: Composition) -> None:
 
     c.sql("ALTER CONNECTION thancred ROTATE KEYS;")
 
-    restart_mz(c)
+    c.restart_mz()
 
     primary_public_key_after_restart = c.sql_query(
         """

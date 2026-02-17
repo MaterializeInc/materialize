@@ -31,7 +31,6 @@ from materialize.pg_cdc_resumption import (
     fix_pg_schema_while_mz_restarts,
     initialize,
     pg_out_of_disk_space,
-    restart_mz,
     restart_mz_during_replication,
     restart_mz_during_snapshot,
     restart_pg_during_replication,
@@ -110,7 +109,7 @@ def restart_mz_after_initial_snapshot(c: Composition) -> None:
         "delete-rows-t1.td",
     )
 
-    restart_mz(c)
+    c.restart_mz()
 
     c.run_testdrive_files(
         "delete-rows-t2.td",

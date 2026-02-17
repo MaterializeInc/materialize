@@ -459,8 +459,7 @@ def workflow_test_github_4444(c: Composition) -> None:
     )
 
     # Restart environmentd to trigger a reconciliation on clusterd.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     print("Sleeping to wait for frontier updates")
     time.sleep(10)
@@ -568,8 +567,7 @@ def workflow_test_github_4587(c: Composition) -> None:
         )
 
         # Restart environmentd to trigger a reconciliation on clusterd.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         # verify again that we can query the introspection source
         c.testdrive(
@@ -599,8 +597,7 @@ def workflow_test_github_4587(c: Composition) -> None:
         cursor.execute("FETCH ALL c;")
 
         # Restart environmentd to trigger yet another reconciliation on clusterd.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         # Verify yet again that we can query the introspection source and now the table.
         # The subscribe should have been dropped during reconciliation, so we expect to not find a
@@ -1205,8 +1202,7 @@ def workflow_test_github_7645(c: Composition) -> None:
             """
         )[0][0]
 
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         c.run_testdrive_files(
             f"--var=rehydration-latency={latency}",
@@ -1261,8 +1257,7 @@ def workflow_test_remote_storage(c: Composition) -> None:
 
         c.run_testdrive_files("storage/01-create-sources.td")
 
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
         c.kill("clusterd1")
         c.up("clusterd1", "clusterd2")
         c.run_testdrive_files("storage/02-after-environmentd-restart.td")
@@ -1736,8 +1731,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
         time.sleep(10)
 
         # Restart environmentd to trigger a reconciliation.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         # Perform queries to ensure reconciliation has finished.
         c.sql(
@@ -1831,8 +1825,7 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         c.sql("DROP INDEX idx")
 
         # Restart environmentd to trigger a replanning and reconciliation.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         # Perform queries to ensure reconciliation has finished.
         c.sql(
@@ -1911,8 +1904,7 @@ def workflow_test_compute_reconciliation_no_errors(c: Composition) -> None:
     c.sql("DROP MATERIALIZED VIEW mv2")
 
     # Restart environmentd to trigger a reconciliation.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Perform a query to ensure reconciliation has finished.
     c.sql(
@@ -3172,8 +3164,7 @@ def workflow_test_metrics_retention_across_restart(c: Composition) -> None:
     validate_since(index_since1, "index_since1")
 
     # Restart Materialize.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # The env has been up for less than 30d, so the since should not have
     # changed.
@@ -3700,13 +3691,11 @@ def workflow_test_github_cloud_7998(
         c.run_testdrive_files("github-cloud-7998/check.td")
 
         # Trigger an environment bootstrap.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
         c.run_testdrive_files("github-cloud-7998/check.td")
 
         # Run a second bootstrap check, just to be sure.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
         c.run_testdrive_files("github-cloud-7998/check.td")
 
 
@@ -3750,8 +3739,7 @@ def workflow_test_github_7000(c: Composition, parser: WorkflowArgumentParser) ->
 
         # Trigger an environment bootstrap, and see if envd comes up without
         # panicking.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
 
 def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -4043,8 +4031,7 @@ def workflow_test_refresh_mv_warmup(
         )
 
         # Restart environmentd
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         c.testdrive(
             input=dedent(
@@ -4368,8 +4355,7 @@ def workflow_test_refresh_mv_restart(
         # 1. (quick restart)
         c.testdrive(input=before_restart)
         check_introspection()
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
         check_introspection()
         c.testdrive(input=after_restart)
         check_read_frontiers_not_stuck(c, ["t"])
@@ -4445,8 +4431,7 @@ def workflow_test_refresh_mv_restart(
         )
 
         check_introspection()
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
         check_introspection()
         c.testdrive(
             input=dedent(
@@ -4593,8 +4578,7 @@ def workflow_test_github_8734(c: Composition) -> None:
         check_read_frontiers_not_stuck(c, ["t"])
 
         # Restart envd, then verify that the table's frontier still advances.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         c.sql("SELECT * FROM mv")
 
@@ -4686,8 +4670,7 @@ def workflow_test_github_7798(c: Composition, parser: WorkflowArgumentParser) ->
         check_frontiers_advance()
 
         # Restart envd to force a storage reconciliation.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         check_frontiers_advance()
 
@@ -4904,8 +4887,7 @@ def workflow_test_adhoc_system_indexes(
 
     # Make sure everything the new indexes survive a restart.
 
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     output = c.sql_query(
         """
@@ -5269,8 +5251,7 @@ def workflow_test_zero_downtime_reconfigure(
         ), "pending replica should be in mz_pending_cluster_replicas"
 
         # Restart environmentd
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         # Ensure there is no pending replica
         replicas = c.sql_query(
@@ -5553,8 +5534,7 @@ def workflow_test_constant_sink(c: Composition) -> None:
             )
         )
 
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         c.testdrive(
             dedent(
@@ -5853,8 +5833,7 @@ def workflow_test_operator_hydration_status_reconciliation(c: Composition) -> No
         )
 
         # Restart envd to force a reconciliation on clusterd1.
-        c.kill("materialized")
-        c.up("materialized")
+        c.restart_mz()
 
         # Verify that the operators still show up as hydrated.
         c.testdrive(
@@ -6242,8 +6221,7 @@ def workflow_github_10018(c: Composition):
     assert "mv2" in result[0][1], result
 
     # Restart envd. This used to panic due to incorrect item ordering during bootstrap.
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # Verify the system is functional after restart.
     c.sql("INSERT INTO t VALUES (1)")

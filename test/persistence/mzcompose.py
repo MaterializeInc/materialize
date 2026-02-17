@@ -71,18 +71,15 @@ def workflow_kafka_sources(
 
     c.run_testdrive_files(f"--seed={seed}", f"kafka-sources/*{td_test}*-before.td")
 
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     # And restart again, for extra stress
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.run_testdrive_files(f"--seed={seed}", f"kafka-sources/*{td_test}*-after.td")
 
     # Do one more restart, just in case and just confirm that Mz is able to come up
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.kill("materialized")
     c.rm("materialized", "testdrive", destroy_volumes=True)
@@ -103,11 +100,9 @@ def workflow_user_tables(
         f"user-tables/table-persistence-before-{td_test}.td",
     )
 
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.run_testdrive_files(
         f"--seed={seed}",
@@ -149,8 +144,7 @@ def run_one_failpoint(c: Composition, failpoint: str, action: str) -> None:
 
     time.sleep(2)
     # kill Mz if the failpoint has not killed it
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
     c.run_testdrive_files(f"--seed={seed}", "failpoints/after.td")
 

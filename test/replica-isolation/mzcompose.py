@@ -240,8 +240,7 @@ def restart_replica(c: Composition) -> None:
 
 
 def restart_environmentd(c: Composition) -> None:
-    c.kill("materialized")
-    c.up("materialized")
+    c.restart_mz()
 
 
 def drop_create_replica(c: Composition) -> None:
