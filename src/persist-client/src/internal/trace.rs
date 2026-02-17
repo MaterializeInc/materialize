@@ -66,7 +66,7 @@ use serde::{Serialize, Serializer};
 use timely::PartialOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowBatch, RunId};
@@ -1210,6 +1210,14 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
             replacement_desc.upper(),
             existing_desc.upper()
         );
+        if !PartialOrder::less_equal(existing_desc.since(), replacement_desc.since()) {
+            error!(
+                "batch since should advance, but {:?} !<= {:?}",
+                existing_desc.since(),
+                replacement_desc.since()
+            );
+            return ApplyMergeResult::NotAppliedInvalidSince;
+        }
 
         let batch = &batch.batch;
         let run_ids = runs.iter().cloned().collect::<Vec<_>>();
