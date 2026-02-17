@@ -9,6 +9,7 @@
 
 //! Utilities for binary functions.
 
+use mz_ore::assert_none;
 use mz_repr::{Datum, InputDatumType, OutputDatumType, RowArena, SqlColumnType};
 
 use crate::{EvalError, MirScalarExpr};
@@ -157,7 +158,6 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
 }
 
 pub use derive::BinaryFunc;
-use mz_ore::assert_none;
 
 mod derive {
     use std::fmt;
