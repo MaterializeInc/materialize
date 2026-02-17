@@ -4546,12 +4546,7 @@ pub enum ReprScalarType {
 }
 
 impl ReprScalarType {
-    /// Returns the union of two `ReprScalarType` or an error.
-    ///
-    /// Errors can only occur if the two types are built somewhere using different constructors.
-    /// Note that `ReprScalarType::Record` holds a `ReprColumnType`, and so nullability information
-    /// is unioned.
-    pub fn union(&self, scalar_type: &ReprScalarType) -> Result<Self, anyhow::Error> {
+    pub(crate) fn union(&self, scalar_type: &ReprScalarType) -> Result<Self, anyhow::Error> {
         match (self, scalar_type) {
             (ReprScalarType::Bool, ReprScalarType::Bool) => Ok(ReprScalarType::Bool),
             (ReprScalarType::Int16, ReprScalarType::Int16) => Ok(ReprScalarType::Int16),
