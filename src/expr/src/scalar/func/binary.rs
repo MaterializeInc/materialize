@@ -99,15 +99,6 @@ pub(crate) trait EagerBinaryFunc {
     }
 }
 
-/// Utility to validate the number of parameters. `T` is the function, `arity` is the expected
-/// arity of the function. Panics (on debug builds) when the provided `arity` is definitely
-/// incompatible with the function.
-fn validate_arity<T: EagerBinaryFunc>(arity: usize) {
-    let (min_arity, max_arity) = T::Input::arity();
-    debug_assert!(arity >= min_arity);
-    debug_assert!(arity <= max_arity.unwrap_or(usize::MAX));
-}
-
 impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     fn eval<'a>(
         &'a self,
@@ -115,7 +106,6 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
         temp_storage: &'a RowArena,
         exprs: &[&'a MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
-        validate_arity::<T>(exprs.len());
         let mut datums = exprs
             .into_iter()
             .map(|expr| expr.eval(datums, temp_storage));
@@ -138,8 +128,6 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     }
 
     fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
-        validate_arity::<T>(input_types.len());
-
         self.output_type(input_types)
     }
 
