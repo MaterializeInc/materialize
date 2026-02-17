@@ -60,6 +60,20 @@ For an example, see [Create a table (PostgreSQL
 source)](/sql/create-table/#create-a-table-postgresql-source).
 
 {{< /tab >}}
+{{< tab "SQL Server source table" >}}
+### SQL Server source table
+
+{{< private-preview />}}
+
+{{< note >}}
+{{% include-example file="examples/create_table_sql_server"
+example="syntax-version-requirement" %}}
+{{< /note >}}
+
+{{% include-syntax file="examples/create_table_sql_server"
+example="syntax" %}}
+
+{{< /tab >}}
 
 {{< /tabs >}}
 

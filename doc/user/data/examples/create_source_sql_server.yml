@@ -22,6 +22,9 @@
     - name: "**EXCLUDE COLUMNS** ( `<col1>` [, ...] )"
       description: |
         Optional. Exclude specific columns that cannot be decoded or should not be included in the subsources created in Materialize.
+    - name: "**TEXT COLUMNS** ( `<col1>` [, ...] )"
+      description: |
+        Optional. If specified, decode data from the specified columns in the subsource(s) as `text` for the listed column(s), such as for unsupported data types.
     - name: "**FOR** `<table_schema_specification>`"
       description: |
         Specifies which tables to create subsources for. The following `<table_schema_specification>`s are supported:
