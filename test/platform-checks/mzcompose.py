@@ -146,7 +146,7 @@ SERVICES = [
     ),  # Started by some Scenarios, defined here only for the teardown
     *create_mzs(azurite=False, default_replication_factor=1),
     Persistcli(),
-    SshBastionHost(),
+    SshBastionHost(max_startups="10"),
 ]
 
 
