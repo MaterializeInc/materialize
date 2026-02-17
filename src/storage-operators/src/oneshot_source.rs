@@ -273,7 +273,11 @@ where
                     .into_iter()
                     .partition(|(o, _checksum)| filter.filter::<S>(o));
                 tracing::info!(%worker_id, ?include, ?exclude, "listed objects");
-
+                if include.is_empty() {
+                    let err = StorageErrorXKind::NoMatchingFiles.with_context("discover");
+                    start_handle.give(&start_cap, Err(err));
+                    return;
+                }
                 include
                     .into_iter()
                     .for_each(|object| start_handle.give(&start_cap, Ok(object)))
@@ -1039,6 +1043,8 @@ pub enum StorageErrorXKind {
     MissingField(Arc<str>),
     #[error("failed while evaluating the provided mfp: '{0}'")]
     MfpEvalError(Arc<str>),
+    #[error("no matching files found at the given url")]
+    NoMatchingFiles,
     #[error("something went wrong: {0}")]
     Generic(String),
 }
