@@ -1524,16 +1524,33 @@ class Composition:
             print_prefix=print_prefix,
         )
 
+    def sql_as_mz_system(self, sql: str | Composed, **kwargs: Any) -> None:
+        """Run SQL as ``mz_system`` on the internal port.
+
+        Convenience wrapper around ``self.sql()`` that sets
+        ``user="mz_system"`` and ``port=6877``.  Any extra keyword
+        arguments (e.g. ``service="mz_old"``, ``print_statement=False``)
+        are forwarded.
+        """
+        self.sql(sql, port=6877, user="mz_system", **kwargs)
+
+    def sql_query_as_mz_system(self, sql: str, **kwargs: Any) -> Any:
+        """Execute a SQL query as ``mz_system`` and return results.
+
+        Convenience wrapper around ``self.sql_query()`` that sets
+        ``user="mz_system"`` and ``port=6877``.  Any extra keyword
+        arguments (e.g. ``service="mz_old"``) are forwarded.
+        """
+        return self.sql_query(sql, port=6877, user="mz_system", **kwargs)
+
     def alter_system_set(self, name: str, value: object, **kwargs: Any) -> None:
         """Run ``ALTER SYSTEM SET <name> = <value>`` as ``mz_system``.
 
         Any extra keyword arguments (e.g. ``service="mz_old"``,
         ``print_statement=False``) are forwarded to ``self.sql()``.
         """
-        self.sql(
+        self.sql_as_mz_system(
             f"ALTER SYSTEM SET {name} = {value}",
-            port=6877,
-            user="mz_system",
             **kwargs,
         )
 
@@ -1566,7 +1583,7 @@ class Composition:
         created so that tests which must run on exactly one replica can
         target it.
         """
-        self.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
+        self.sql_as_mz_system("DROP CLUSTER quickstart CASCADE")
         # Make sure a replica named 'r1' always exists
         replica_names = [
             "r1" if replica_id == 0 else f"replica{replica_id}"
@@ -1575,22 +1592,16 @@ class Composition:
         replica_string = ",".join(
             f"{name} (SIZE '{replica_size}')" for name in replica_names
         )
-        self.sql(
-            f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
-            user="mz_system",
-            port=6877,
-        )
+        self.sql_as_mz_system(f"CREATE CLUSTER quickstart REPLICAS ({replica_string})")
 
         testdrive_vars: list[str] = [f"--var=replicas={replicas}"]
 
         if single_replica_cluster:
-            self.sql(
+            self.sql_as_mz_system(
                 f"""
                 CREATE CLUSTER testdrive_single_replica_cluster SIZE = '{replica_size}';
                 GRANT ALL PRIVILEGES ON CLUSTER testdrive_single_replica_cluster TO materialize;
-                """,
-                user="mz_system",
-                port=6877,
+                """
             )
             testdrive_vars.append(
                 "--var=single-replica-cluster=testdrive_single_replica_cluster"

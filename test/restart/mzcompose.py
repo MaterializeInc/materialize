@@ -441,11 +441,7 @@ def workflow_network_policies(c: Composition) -> None:
 
     # assert we can't change the network policy to one that doesn't exist.
     try:
-        c.sql_query(
-            "ALTER SYSTEM SET network_policy='apples'",
-            port=6877,
-            user="mz_system",
-        )
+        c.sql_query_as_mz_system("ALTER SYSTEM SET network_policy='apples'")
     except InternalError_ as e:
         assert (
             e.diag.message_primary
@@ -457,21 +453,13 @@ def workflow_network_policies(c: Composition) -> None:
         )
 
     # close network policies
-    c.sql(
-        "CREATE NETWORK POLICY closed (RULES ())",
-        port=6877,
-        user="mz_system",
-    )
+    c.sql_as_mz_system("CREATE NETWORK POLICY closed (RULES ())")
     c.alter_system_set("network_policy", "'closed'")
     assert_new_connection_fails()
 
     # can't drop the actively set network policy.
     try:
-        c.sql_query(
-            "DROP NETWORK POLICY closed",
-            port=6877,
-            user="mz_system",
-        )
+        c.sql_query_as_mz_system("DROP NETWORK POLICY closed")
     except InternalError_ as e:
         assert (
             e.diag.message_primary
@@ -481,19 +469,15 @@ def workflow_network_policies(c: Composition) -> None:
         raise RuntimeError("DROP NETWORK POLICY didn't return the expected error")
 
     # open the closed network policy
-    c.sql(
-        "ALTER NETWORK POLICY closed SET (RULES (open (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/0')))",
-        port=6877,
-        user="mz_system",
+    c.sql_as_mz_system(
+        "ALTER NETWORK POLICY closed SET (RULES (open (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/0')))"
     )
     assert_can_connect()
     cursor = c.sql_cursor()
 
     # shut down the closed network policy
-    c.sql(
-        "ALTER NETWORK POLICY closed SET (RULES (closed (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/32')))",
-        port=6877,
-        user="mz_system",
+    c.sql_as_mz_system(
+        "ALTER NETWORK POLICY closed SET (RULES (closed (ACTION='allow', DIRECTION='ingress', ADDRESS='0.0.0.0/32')))"
     )
     assert_new_connection_fails()
 
@@ -501,22 +485,14 @@ def workflow_network_policies(c: Composition) -> None:
     assert cursor.execute("SELECT 1").fetchall() == [(1,)]
 
     c.alter_system_set("network_policy", "'default'")
-    c.sql(
-        "DROP NETWORK POLICY closed",
-        port=6877,
-        user="mz_system",
-    )
+    c.sql_as_mz_system("DROP NETWORK POLICY closed")
 
 
 def workflow_drop_materialize_database(c: Composition) -> None:
     c.up("materialized")
 
     # Drop materialize database
-    c.sql(
-        "DROP DATABASE materialize",
-        port=6877,
-        user="mz_system",
-    )
+    c.sql_as_mz_system("DROP DATABASE materialize")
 
     # Restart mz.
     c.restart_mz()
@@ -525,15 +501,9 @@ def workflow_drop_materialize_database(c: Composition) -> None:
     c.sql("SELECT 1")
 
     # Restore for next tests
-    c.sql(
-        "CREATE DATABASE materialize",
-        port=6877,
-        user="mz_system",
-    )
-    c.sql(
-        "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO materialize",
-        port=6877,
-        user="mz_system",
+    c.sql_as_mz_system("CREATE DATABASE materialize")
+    c.sql_as_mz_system(
+        "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO materialize"
     )
 
 

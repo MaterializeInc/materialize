@@ -118,20 +118,17 @@ class MzStart(Action):
             "max_materialized_views",
             "max_sinks",
         ]:
-            c.sql(
-                f"ALTER SYSTEM SET {config_param} TO 1000",
-                user="mz_system",
-                port=6877,
+            c.alter_system_set(
+                config_param,
+                1000,
                 print_statement=False,
                 service=state.mz_service,
             )
 
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER CLUSTER quickstart SET (MANAGED = false);
             """,
-            user="mz_system",
-            port=6877,
             service=state.mz_service,
         )
 

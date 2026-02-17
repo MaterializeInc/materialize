@@ -196,13 +196,11 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
     ):
         c.up("mz_first")
 
-        c.sql(
+        c.sql_as_mz_system(
             """
                 ALTER SYSTEM SET max_tables = 1000;
                 ALTER SYSTEM SET max_materialized_views = 1000;
             """,
-            port=6877,
-            user="mz_system",
             service="mz_first",
         )
 

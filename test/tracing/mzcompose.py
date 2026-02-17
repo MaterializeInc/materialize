@@ -70,10 +70,8 @@ def workflow_with_everything(c: Composition) -> None:
     assert info["current_level_filter"] == "trace"
 
     # revert the sentry directives and make sure we go back
-    c.sql(
+    c.sql_as_mz_system(
         "ALTER SYSTEM RESET sentry_filters",
-        user="mz_system",
-        port=6877,
         print_statement=False,
     )
     info = requests.get(f"http://localhost:{port}/api/tracing").json()

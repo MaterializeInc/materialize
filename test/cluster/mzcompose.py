@@ -165,7 +165,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Make sure cluster1 is owned by the system so it doesn't get dropped
         # between testdrive runs.
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
@@ -180,9 +180,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
             );
 
             GRANT ALL ON CLUSTER cluster1 TO materialize;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
         c.run_testdrive_files(*args.glob)
@@ -191,7 +189,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.up("clusterd3")
         c.up("clusterd4")
 
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
 
@@ -201,9 +199,7 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
                 COMPUTECTL ADDRESSES ['clusterd3:2101', 'clusterd4:2101'],
                 COMPUTE ADDRESSES ['clusterd3:2102', 'clusterd4:2102'],
                 WORKERS 2;
-        """,
-            port=6877,
-            user="mz_system",
+        """
         )
         c.run_testdrive_files(*args.glob)
 
@@ -213,10 +209,10 @@ def workflow_test_smoke(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.run_testdrive_files(*args.glob)
 
         # Leave only replica 2 up and verify that tests still pass.
-        c.sql("DROP CLUSTER REPLICA cluster1.replica1", port=6877, user="mz_system")
+        c.sql_as_mz_system("DROP CLUSTER REPLICA cluster1.replica1")
         c.run_testdrive_files(*args.glob)
 
-        c.sql("DROP CLUSTER cluster1 CASCADE", port=6877, user="mz_system")
+        c.sql_as_mz_system("DROP CLUSTER cluster1 CASCADE")
 
 
 def workflow_test_github_3553(c: Composition) -> None:
@@ -1277,11 +1273,9 @@ def workflow_test_drop_quickstart_cluster(c: Composition) -> None:
 
     c.up("materialized")
 
-    c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
-    c.sql(
-        "CREATE CLUSTER quickstart REPLICAS (quickstart (SIZE 'scale=1,workers=1'))",
-        user="mz_system",
-        port=6877,
+    c.sql_as_mz_system("DROP CLUSTER quickstart CASCADE")
+    c.sql_as_mz_system(
+        "CREATE CLUSTER quickstart REPLICAS (quickstart (SIZE 'scale=1,workers=1'))"
     )
 
 
@@ -1611,13 +1605,11 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1", "clusterd2")
 
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
             ALTER SYSTEM SET enable_introspection_subscribes = false;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
         # Helper function to get reconciliation metrics for clusterd.
@@ -1710,7 +1702,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
 
         # Replace the `mz_catalog_server` replica with an unorchestrated one so we
         # can test reconciliation of system indexes too.
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER CLUSTER mz_catalog_server SET (MANAGED = false);
             DROP CLUSTER REPLICA mz_catalog_server.r1;
@@ -1721,9 +1713,7 @@ def workflow_test_compute_reconciliation_reuse(c: Composition) -> None:
                 COMPUTE ADDRESSES ['clusterd2:2102'],
                 WORKERS 1
             );
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
         # Give the dataflows some time to make progress and get compacted.
@@ -1762,13 +1752,11 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
     ):
         c.up("materialized", "clusterd1")
 
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;
             ALTER SYSTEM SET enable_introspection_subscribes = false;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
         # Helper function to get reconciliation metrics for clusterd.
@@ -3256,27 +3244,15 @@ def workflow_test_workload_class_in_metrics(c: Composition) -> None:
 
     check_workload_class(None)
 
-    c.sql(
-        "ALTER CLUSTER test SET (WORKLOAD CLASS 'production')",
-        port=6877,
-        user="mz_system",
-    )
+    c.sql_as_mz_system("ALTER CLUSTER test SET (WORKLOAD CLASS 'production')")
 
     check_workload_class("production")
 
-    c.sql(
-        "ALTER CLUSTER test SET (WORKLOAD CLASS 'staging')",
-        port=6877,
-        user="mz_system",
-    )
+    c.sql_as_mz_system("ALTER CLUSTER test SET (WORKLOAD CLASS 'staging')")
 
     check_workload_class("staging")
 
-    c.sql(
-        "ALTER CLUSTER test RESET (WORKLOAD CLASS)",
-        port=6877,
-        user="mz_system",
-    )
+    c.sql_as_mz_system("ALTER CLUSTER test RESET (WORKLOAD CLASS)")
 
     check_workload_class(None)
 
@@ -3446,11 +3422,7 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
 
     c.up("materialized")
 
-    c.sql(
-        f"ALTER SYSTEM SET max_connections = {num_conns + 4};",
-        port=6877,
-        user="mz_system",
-    )
+    c.alter_system_set("max_connections", num_conns + 4)
 
     for i in range(3):
         threads = []
@@ -3598,16 +3570,11 @@ def workflow_test_incident_70(c: Composition) -> None:
     ):
         c.up("minio", "materialized")
 
-        c.sql(
-            f"ALTER SYSTEM SET max_connections = {num_conns + 5};",
-            port=6877,
-            user="mz_system",
-        )
+        c.alter_system_set("max_connections", num_conns + 5)
 
-        c.sql(
-            f"ALTER SYSTEM SET persist_reader_lease_duration = '{persist_reader_lease_duration_in_sec}s';",
-            port=6877,
-            user="mz_system",
+        c.alter_system_set(
+            "persist_reader_lease_duration",
+            f"'{persist_reader_lease_duration_in_sec}s'",
         )
 
         mz_view_create_statements = []
@@ -3751,13 +3718,11 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
     ):
         c.up("materialized")
 
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
             ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
-        """,
-            port=6877,
-            user="mz_system",
+        """
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
@@ -4824,13 +4789,11 @@ def workflow_test_adhoc_system_indexes(
 
     # The system user should be able to create a new index on a catalog object
     # in the mz_catalog_server cluster.
-    c.sql(
+    c.sql_as_mz_system(
         """
         SET cluster = mz_catalog_server;
         CREATE INDEX mz_test_idx1 ON mz_tables (char_length(name));
-        """,
-        port=6877,
-        user="mz_system",
+        """
     )
 
     output = c.sql_query(
@@ -4851,15 +4814,13 @@ def workflow_test_adhoc_system_indexes(
     # The system user should be able to create a new index on an unstable
     # catalog object in the mz_catalog_server cluster if
     # `unsafe_enable_unstable_dependencies` is set.
-    c.sql(
+    c.sql_as_mz_system(
         """
         ALTER SYSTEM SET unsafe_enable_unstable_dependencies = on;
         SET cluster = mz_catalog_server;
         CREATE INDEX mz_test_idx2 ON mz_internal.mz_compute_hydration_statuses (hydrated);
         ALTER SYSTEM SET unsafe_enable_unstable_dependencies = off;
-        """,
-        port=6877,
-        user="mz_system",
+        """
     )
 
     output = c.sql_query(
@@ -4907,13 +4868,11 @@ def workflow_test_adhoc_system_indexes(
     ), output
 
     # Make sure the new indexes can be dropped again.
-    c.sql(
+    c.sql_as_mz_system(
         """
         DROP INDEX mz_test_idx1;
         DROP INDEX mz_internal.mz_test_idx2;
-        """,
-        port=6877,
-        user="mz_system",
+        """
     )
 
     output = c.sql_query(
@@ -5212,12 +5171,10 @@ def workflow_test_zero_downtime_reconfigure(
 
         def zero_downtime_alter():
             try:
-                c.sql(
+                c.sql_as_mz_system(
                     """
                     ALTER CLUSTER cluster1 SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '10s')
-                    """,
-                    port=6877,
-                    user="mz_system",
+                    """
                 )
             except OperationalError:
                 # We expect the network to drop during this
@@ -5275,12 +5232,10 @@ def workflow_test_zero_downtime_reconfigure(
             )
             == [("scale=1,workers=1",)]
         )
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
 
@@ -5296,7 +5251,7 @@ def workflow_crash_on_replica_expiration_mv(
         offset = 20
 
         c.up("materialized", "clusterd1")
-        c.sql(
+        c.sql_as_mz_system(
             f"""
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
             ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
@@ -5315,19 +5270,15 @@ def workflow_crash_on_replica_expiration_mv(
             CREATE TABLE t (x int);
             INSERT INTO t VALUES (42);
             CREATE MATERIALIZED VIEW mv AS SELECT * FROM t WHERE x < 84;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
         c.sleep(offset + 10)
 
-        results = c.sql_query(
+        results = c.sql_query_as_mz_system(
             """
             SELECT * from mv;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
         assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
 
@@ -5356,7 +5307,7 @@ def workflow_crash_on_replica_expiration_index(
         offset = 20
 
         c.up("materialized", "clusterd1")
-        c.sql(
+        c.sql_as_mz_system(
             f"""
             ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = 'true';
             ALTER SYSTEM SET compute_replica_expiration_offset = '{offset}s';
@@ -5376,19 +5327,15 @@ def workflow_crash_on_replica_expiration_index(
             INSERT INTO t VALUES (42);
             CREATE VIEW mv AS SELECT * FROM t WHERE x < 84;
             CREATE DEFAULT INDEX ON mv;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
 
         c.sleep(offset + 10)
 
-        results = c.sql_query(
+        results = c.sql_query_as_mz_system(
             """
             SELECT * from mv;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
         assert results == [(42,)], f"Results mismatch: expected [42], found {results}"
 
@@ -5608,13 +5555,11 @@ def workflow_test_memory_limiter(c: Composition) -> None:
             )
 
         # Test 1: The MV should be able to hydrate with a memory limit of 2 GiB.
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET memory_limiter_usage_bias = 2;
             ALTER SYSTEM SET memory_limiter_burst_factor = 0;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
         setup_workload()
         c.up("clusterd1")
@@ -5624,13 +5569,11 @@ def workflow_test_memory_limiter(c: Composition) -> None:
         c.kill("clusterd1")
 
         # Test 2: The MV should be unable to hydrate with a memory limit of 205 MiB.
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET memory_limiter_usage_bias = 0.2;
             ALTER SYSTEM SET memory_limiter_burst_factor = 0;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
         setup_workload()
         c.up("clusterd1", wait=False)
@@ -5645,13 +5588,11 @@ def workflow_test_memory_limiter(c: Composition) -> None:
 
         # Test 3: The MV should be able to hydrate with a memory limit of 1 GiB
         # and a burst budget of 10 GiB-seconds.
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET memory_limiter_usage_bias = 1;
             ALTER SYSTEM SET memory_limiter_burst_factor = 10;
-            """,
-            port=6877,
-            user="mz_system",
+            """
         )
         setup_workload()
         c.up("clusterd1")
@@ -6118,9 +6059,7 @@ def workflow_test_slow_seqno_hold(c: Composition):
         [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
 
         def get_reader_seqno():
-            [(state_json,)] = c.sql_query(
-                f"INSPECT SHARD '{gid}'", port=6877, user="mz_system"
-            )
+            [(state_json,)] = c.sql_query_as_mz_system(f"INSPECT SHARD '{gid}'")
             leased_readers = state_json["leased_readers"]
             if not leased_readers:
                 return None, None

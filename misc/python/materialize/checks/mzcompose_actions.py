@@ -258,7 +258,7 @@ class UseClusterdCompute(MzcomposeAction):
         c = e.mzcompose_composition()
 
         c.enable_unorchestrated_cluster_replicas()
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER CLUSTER quickstart SET (MANAGED = false);
             DROP CLUSTER REPLICA quickstart.r1;
@@ -269,8 +269,6 @@ class UseClusterdCompute(MzcomposeAction):
                 COMPUTE ADDRESSES ['clusterd_compute_1:2102'],
                 WORKERS 1;
             """,
-            port=6877,
-            user="mz_system",
         )
 
 
@@ -348,14 +346,12 @@ class DropCreateDefaultReplica(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER CLUSTER quickstart SET (MANAGED = false);
             DROP CLUSTER REPLICA quickstart.r1;
             CREATE CLUSTER REPLICA quickstart.r1 SIZE 'scale=1,workers=1';
             """,
-            port=6877,
-            user="mz_system",
         )
 
 

@@ -1811,11 +1811,9 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("mz_old")
-    c.sql(
+    c.sql_as_mz_system(
         "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
         service="mz_old",
-        port=6877,
-        user="mz_system",
     )
 
     mz_tables_gid = c.sql_query(
@@ -1907,11 +1905,9 @@ def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
 
     c.down(destroy_volumes=True)
     c.up("mz_old")
-    c.sql(
+    c.sql_as_mz_system(
         "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
         service="mz_old",
-        port=6877,
-        user="mz_system",
     )
 
     mz_tables_gid = c.sql_query(
@@ -2044,7 +2040,7 @@ def workflow_materialized_view_correction_pruning(c: Composition) -> None:
 def setup(c: Composition) -> None:
     # Make sure cluster is owned by the system so it doesn't get dropped
     # between testdrive runs.
-    c.sql(
+    c.sql_as_mz_system(
         """
         DROP CLUSTER IF EXISTS cluster CASCADE;
         CREATE CLUSTER cluster SIZE 'scale=2,workers=4';
@@ -2056,8 +2052,6 @@ def setup(c: Composition) -> None:
         ALTER SYSTEM SET max_materialized_views = 100;
     """,
         service="mz_old",
-        port=6877,
-        user="mz_system",
     )
 
 

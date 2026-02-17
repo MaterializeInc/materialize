@@ -148,21 +148,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         if args.replicas > 1:
             c.alter_system_set("max_replicas_per_cluster", 32)
-            c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
+            c.sql_as_mz_system("DROP CLUSTER quickstart CASCADE")
             replica_names = [f"r{replica_id}" for replica_id in range(0, args.replicas)]
             replica_string = ",".join(
                 f"{replica_name} (SIZE 'scale=1,workers=4')"
                 for replica_name in replica_names
             )
-            c.sql(
+            c.sql_as_mz_system(
                 f"CREATE CLUSTER quickstart REPLICAS ({replica_string})",
-                user="mz_system",
-                port=6877,
             )
-            c.sql(
+            c.sql_as_mz_system(
                 "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO materialize",
-                user="mz_system",
-                port=6877,
             )
 
         c.sql(

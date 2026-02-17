@@ -1960,7 +1960,7 @@ def setup(c: Composition, workers: int) -> None:
         password=app_password(ADMIN_USER),
     )
 
-    c.sql(
+    c.sql_as_mz_system(
         f"""
         DROP CLUSTER quickstart cascade;
         CREATE CLUSTER quickstart REPLICAS (
@@ -2004,8 +2004,6 @@ def setup(c: Composition, workers: int) -> None:
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
         GRANT ALL PRIVILEGES ON CLUSTER quickstart TO "{ADMIN_USER}";
     """,
-        port=6877,
-        user="mz_system",
     )
 
 
@@ -2401,22 +2399,16 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 )
 
             c.enable_unorchestrated_cluster_replicas()
-            c.sql(
+            c.sql_as_mz_system(
                 f"CREATE CLUSTER cluster_u{cluster_id} REPLICAS ("
                 + ",".join(replica_definitions)
                 + ")",
-                port=6877,
-                user="mz_system",
             )
-            c.sql(
+            c.sql_as_mz_system(
                 f"GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO materialize",
-                port=6877,
-                user="mz_system",
             )
-            c.sql(
+            c.sql_as_mz_system(
                 f'GRANT ALL PRIVILEGES ON CLUSTER cluster_u{cluster_id} TO "{ADMIN_USER}"',
-                port=6877,
-                user="mz_system",
             )
 
         # Construct some dataflows in each cluster

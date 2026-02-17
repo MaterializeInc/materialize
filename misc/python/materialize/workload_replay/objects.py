@@ -38,16 +38,12 @@ def run_create_objects_part_1(
     c: Composition, services: set[str], workload: dict[str, Any], verbose: bool
 ) -> None:
     """Create clusters, databases, schemas, types, connections, and prepare sources."""
-    c.sql(
+    c.sql_as_mz_system(
         "DROP CLUSTER IF EXISTS quickstart CASCADE",
-        user="mz_system",
-        port=6877,
         print_statement=verbose,
     )
-    c.sql(
+    c.sql_as_mz_system(
         "DROP DATABASE IF EXISTS materialize CASCADE",
-        user="mz_system",
-        port=6877,
         print_statement=verbose,
     )
     c.alter_system_set("max_schemas_per_database", 1000000, print_statement=verbose)
@@ -70,16 +66,14 @@ def run_create_objects_part_1(
             create_sql = cluster["create_sql"].replace(
                 "REPLICATION FACTOR = 0", "REPLICATION FACTOR = 1"
             )
-            c.sql(create_sql, user="mz_system", port=6877, print_statement=verbose)
+            c.sql_as_mz_system(create_sql, print_statement=verbose)
         else:
             raise ValueError("Handle unmanaged clusters")
 
     print("Creating databases")
     for db in workload["databases"]:
-        c.sql(
+        c.sql_as_mz_system(
             SQL("CREATE DATABASE {}").format(Identifier(db)),
-            user="mz_system",
-            port=6877,
             print_statement=verbose,
         )
 
@@ -88,10 +82,8 @@ def run_create_objects_part_1(
         for schema in schemas:
             if schema == "public":
                 continue
-            c.sql(
+            c.sql_as_mz_system(
                 SQL("CREATE SCHEMA {}.{}").format(Identifier(db), Identifier(schema)),
-                user="mz_system",
-                port=6877,
                 print_statement=verbose,
             )
 
@@ -99,10 +91,8 @@ def run_create_objects_part_1(
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for typ in items["types"].values():
-                c.sql(
+                c.sql_as_mz_system(
                     typ["create_sql"],
-                    user="mz_system",
-                    port=6877,
                     print_statement=verbose,
                 )
 
@@ -167,7 +157,7 @@ def run_create_objects_part_1(
                             )
                         )
                         existing_dbs["postgres"].add(ref_database)
-                    c.sql(
+                    c.sql_as_mz_system(
                         SQL(
                             "CREATE CONNECTION {}.{}.{} TO POSTGRES (HOST postgres, DATABASE {}, PASSWORD SECRET pgpass, USER postgres)"
                         ).format(
@@ -176,17 +166,13 @@ def run_create_objects_part_1(
                             Identifier(name),
                             Literal(ref_database),
                         ),
-                        user="mz_system",
-                        port=6877,
                         print_statement=verbose,
                     )
                 elif connection["type"] == "mysql":
-                    c.sql(
+                    c.sql_as_mz_system(
                         SQL(
                             "CREATE CONNECTION {}.{}.{} TO MYSQL (HOST mysql, PASSWORD SECRET mysqlpass, USER root)"
                         ).format(Identifier(db), Identifier(schema), Identifier(name)),
-                        user="mz_system",
-                        port=6877,
                         print_statement=verbose,
                     )
                 elif connection["type"] == "sql-server":
@@ -212,7 +198,7 @@ def run_create_objects_part_1(
                             )
                         )
                         existing_dbs["sql-server"].add(ref_database)
-                    c.sql(
+                    c.sql_as_mz_system(
                         SQL(
                             "CREATE CONNECTION {}.{}.{} TO SQL SERVER (HOST 'sql-server', PASSWORD SECRET sql_server_pass, USER {}, DATABASE {}, PORT 1433)"
                         ).format(
@@ -222,35 +208,27 @@ def run_create_objects_part_1(
                             Identifier(SqlServer.DEFAULT_USER),
                             Identifier(ref_database),
                         ),
-                        user="mz_system",
-                        port=6877,
                         print_statement=verbose,
                     )
                 elif connection["type"] == "kafka":
-                    c.sql(
+                    c.sql_as_mz_system(
                         SQL(
                             "CREATE CONNECTION {}.{}.{} TO KAFKA (BROKER 'kafka', SECURITY PROTOCOL PLAINTEXT)"
                         ).format(Identifier(db), Identifier(schema), Identifier(name)),
-                        user="mz_system",
-                        port=6877,
                         print_statement=verbose,
                     )
                 elif connection["type"] == "confluent-schema-registry":
-                    c.sql(
+                    c.sql_as_mz_system(
                         SQL(
                             "CREATE CONNECTION {}.{}.{} TO CONFLUENT SCHEMA REGISTRY (URL 'http://schema-registry:8081')"
                         ).format(Identifier(db), Identifier(schema), Identifier(name)),
-                        user="mz_system",
-                        port=6877,
                         print_statement=verbose,
                     )
                 elif connection["type"] == "ssh-tunnel":
-                    c.sql(
+                    c.sql_as_mz_system(
                         SQL(
                             "CREATE CONNECTION {}.{}.{} TO SSH TUNNEL (HOST 'ssh-bastion-host', USER 'mz', PORT 22)"
                         ).format(Identifier(db), Identifier(schema), Identifier(name)),
-                        user="mz_system",
-                        port=6877,
                         print_statement=verbose,
                     )
                 elif connection["type"] in ("aws-privatelink", "aws"):
@@ -406,10 +384,8 @@ def run_create_objects_part_2(
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for name, source in items["sources"].items():
-                c.sql(
+                c.sql_as_mz_system(
                     source["create_sql"],
-                    user="mz_system",
-                    port=6877,
                     print_statement=verbose,
                 )
 
@@ -439,10 +415,8 @@ def run_create_objects_part_2(
                             create_sql,
                             flags=re.IGNORECASE | re.DOTALL,
                         )
-                        c.sql(
+                        c.sql_as_mz_system(
                             create_sql,
-                            user="mz_system",
-                            port=6877,
                             print_statement=verbose,
                         )
 
@@ -450,10 +424,8 @@ def run_create_objects_part_2(
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for table in items["tables"].values():
-                c.sql(
+                c.sql_as_mz_system(
                     table["create_sql"],
-                    user="mz_system",
-                    port=6877,
                     print_statement=verbose,
                 )
 
@@ -473,7 +445,7 @@ def run_create_objects_part_2(
         progress = False
         for create in pending.copy():
             try:
-                c.sql(create, user="mz_system", port=6877, print_statement=verbose)
+                c.sql_as_mz_system(create, print_statement=verbose)
             except psycopg.Error as e:
                 if "unknown catalog item" in str(e):
                     continue

@@ -453,10 +453,8 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
     table.add_rows(rows)
     print(f"== pg_replication_slots ==\n{table}")
 
-    rows = c.sql_query(
-        user="mz_system",
-        port=6877,
-        sql="""
+    rows = c.sql_query_as_mz_system(
+        """
             select coalesce(mzs.name, mzt.name) as name, read_frontier, write_frontier
             from mz_internal.mz_frontiers mzf
                 left join mz_sources mzs on (mzf.object_id = mzs.id)
@@ -469,10 +467,8 @@ def workflow_pg_restart_postgres(c: Composition) -> None:
     table.add_rows(rows)
     print(f"== mz_frontiers ==\n{table}")
 
-    rows = c.sql_query(
-        user="mz_system",
-        port=6877,
-        sql="""
+    rows = c.sql_query_as_mz_system(
+        """
         select id, name, last_status_change_at, status, error, details
         from mz_internal.mz_source_statuses;
         """,

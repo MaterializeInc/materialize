@@ -145,14 +145,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             """,
             service=mz_server,
         )
-        c.sql(
+        c.sql_as_mz_system(
             """
             ALTER SYSTEM SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             ALTER SYSTEM SET CLUSTER_REPLICA TO 'r1';
             """,
             service=mz_server,
-            port=6877,
-            user="mz_system",
         )
 
     seed = args.seed or random.randint(0, 2**31 - args.num_sqlsmith)

@@ -99,10 +99,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             # (Re)start Materialize and enable AWS connections.
             c.down()
             c.up("materialized")
-            c.sql(
-                port=6877,
-                user="mz_system",
-                sql="""
+            c.sql_as_mz_system(
+                """
                 ALTER SYSTEM SET enable_connection_validation_syntax = true;
                 ALTER SYSTEM SET enable_iceberg_sink = true;
                 ALTER SYSTEM SET enable_s3_tables_region_check = true;
