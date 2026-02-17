@@ -1,14 +1,15 @@
-from materialize import MZ_ROOT
+import datetime
+import decimal
+import uuid
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from mypy_boto3_s3 import S3Client
+from materialize import MZ_ROOT
+
 
 def generate_parquet_files(s3: S3Client):
-    import datetime
-    import decimal
-    import uuid
-
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     record_col = pa.struct(
         [
             pa.field("name", pa.string()),

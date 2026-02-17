@@ -17,7 +17,6 @@ import glob
 import os
 
 import boto3
-from mypy_boto3_s3 import S3Client
 
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import (

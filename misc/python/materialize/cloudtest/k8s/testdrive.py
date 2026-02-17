@@ -7,12 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import boto3
 import json
 import os
 import subprocess
 import sys
 from inspect import Traceback
+
+import boto3
 
 from kubernetes.client import V1Container, V1EnvVar, V1ObjectMeta, V1Pod, V1PodSpec
 
