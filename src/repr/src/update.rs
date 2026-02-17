@@ -11,18 +11,25 @@ use crate::{Diff, RowRef};
 use bytes::Bytes;
 use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt::Debug;
 use std::ops::{Deref, Range};
 use std::sync::Arc;
 use timely::progress::Timestamp;
 
 /// An immutable, shared slice. Morally, this is [bytes::Bytes] but with fewer features
 /// and supporting arbitrary types.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SharedSlice<T> {
     /// The range of offsets in the backing data that are present in the slice.
     /// (This allows us to subset the slice without reallocating.)
     range: Range<usize>,
     data: Arc<[T]>,
+}
+
+impl<T: Debug> Debug for SharedSlice<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SharedSlice").field(&&self[..]).finish()
+    }
 }
 
 impl<T> SharedSlice<T> {
@@ -279,8 +286,24 @@ impl<T> UpdateCollection<T> {
         )
     }
 
+    pub fn rows(&self) -> &Rows {
+        &self.rows
+    }
+
     pub fn times(&self) -> &[T] {
         &*self.times
+    }
+
+    pub fn diffs(&self) -> &[Diff] {
+        &self.diffs
+    }
+
+    pub fn count(&self) -> Result<usize, std::num::TryFromIntError> {
+        let mut sum = 0usize;
+        for diff in self.diffs.iter() {
+            sum += usize::try_from(diff.into_inner())?;
+        }
+        Ok(sum)
     }
 
     pub fn byte_len(&self) -> usize {

@@ -1921,8 +1921,6 @@ pub enum QueryWhen {
     FreshestTableWrite,
     /// The peek should occur at the timestamp described by the specified
     /// expression.
-    ///
-    /// The expression may have any type.
     AtTimestamp(Timestamp),
     /// Same as Immediately, but will also advance to at least the specified
     /// expression.

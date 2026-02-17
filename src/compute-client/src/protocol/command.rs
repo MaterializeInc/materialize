@@ -431,8 +431,10 @@ pub struct Peek<T = mz_repr::Timestamp> {
     ///
     /// Used in responses and cancellation requests.
     pub uuid: Uuid,
-    /// The logical timestamp at which the collection is queried.
+    /// The logical timestamp at which the collection is queried - the as-of of the read.
     pub timestamp: T,
+    /// The upper limit on the set of times to read.
+    pub until: Option<T>,
     /// Actions to apply to the result set before returning them.
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.

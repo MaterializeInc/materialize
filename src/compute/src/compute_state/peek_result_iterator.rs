@@ -5,16 +5,14 @@
 
 //! Code for extracting a peek result out of compute state/an arrangement.
 
-use std::iter::FusedIterator;
-use std::num::NonZeroI64;
-use std::ops::Range;
-
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
-use timely::order::PartialOrder;
+use std::iter::FusedIterator;
+use std::ops::Range;
 
 pub struct PeekResultIterator<Tr>
 where
@@ -25,10 +23,12 @@ where
     cursor: Tr::Cursor,
     storage: Tr::Storage,
     map_filter_project: mz_expr::SafeMfpPlan,
-    peek_timestamp: mz_repr::Timestamp,
+    since_timestamp: mz_repr::Timestamp,
+    until_timestamp: Option<mz_repr::Timestamp>,
     row_builder: Row,
     datum_vec: DatumVec,
     literals: Option<Literals<Tr>>,
+    extracted_updates: Vec<(Row, mz_repr::Timestamp, Diff)>,
 }
 
 /// Helper to handle literals in peeks
@@ -99,14 +99,15 @@ where
             Key<'a>: ToDatumIter + Eq,
             KeyOwn = Row,
             Val<'a>: ToDatumIter,
-            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            TimeGat<'a> = &'a mz_repr::Timestamp,
             DiffGat<'a> = &'a Diff,
         >,
 {
     pub fn new(
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
-        peek_timestamp: mz_repr::Timestamp,
+        since_timestamp: mz_repr::Timestamp,
+        until_timestamp: Option<mz_repr::Timestamp>,
         literal_constraints: Option<&mut [Row]>,
         trace_reader: &mut Tr,
     ) -> Self {
@@ -119,14 +120,16 @@ where
             cursor,
             storage,
             map_filter_project,
-            peek_timestamp,
+            since_timestamp,
+            until_timestamp,
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
             literals,
+            extracted_updates: Vec::with_capacity(1),
         }
     }
 
-    /// Returns `true` if the iterator has no more literals to process, or if there are no literals at all.
+    /// Returns `true` if the iterator has no more literals to process.
     fn literals_exhausted(&self) -> bool {
         self.literals.as_ref().map_or(false, Literals::is_exhausted)
     }
@@ -137,7 +140,7 @@ impl<Tr> FusedIterator for PeekResultIterator<Tr> where
             Key<'a>: ToDatumIter + Eq,
             KeyOwn = Row,
             Val<'a>: ToDatumIter,
-            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            TimeGat<'a> = &'a mz_repr::Timestamp,
             DiffGat<'a> = &'a Diff,
         >
 {
@@ -149,14 +152,18 @@ where
             Key<'a>: ToDatumIter + Eq,
             KeyOwn = Row,
             Val<'a>: ToDatumIter,
-            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            TimeGat<'a> = &'a mz_repr::Timestamp,
             DiffGat<'a> = &'a Diff,
         >,
 {
-    type Item = Result<(Row, NonZeroI64), String>;
+    type Item = Result<(Row, mz_repr::Timestamp, Diff), String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let result = loop {
+            if let Some(result) = self.extracted_updates.pop() {
+                break Ok(result);
+            }
+
             if self.literals_exhausted() {
                 return None;
             }
@@ -173,16 +180,10 @@ where
             }
 
             match self.extract_current_row() {
-                Ok(Some(row)) => break Ok(row),
-                Ok(None) => {
-                    // Have to keep stepping and try with the next val.
-                    self.cursor.step_val(&self.storage);
-                }
+                Ok(()) => self.cursor.step_val(&self.storage),
                 Err(err) => break Err(err),
             }
         };
-
-        self.cursor.step_val(&self.storage);
 
         Some(result)
     }
@@ -194,14 +195,14 @@ where
             Key<'a>: ToDatumIter + Eq,
             KeyOwn = Row,
             Val<'a>: ToDatumIter,
-            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            TimeGat<'a> = &'a mz_repr::Timestamp,
             DiffGat<'a> = &'a Diff,
         >,
 {
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
     /// errors that arise from evaluating the MapFilterProject.
-    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, String> {
+    fn extract_current_row(&mut self) -> Result<(), String> {
         // TODO: This arena could be maintained and reused for longer,
         // but it wasn't clear at what interval we should flush
         // it to ensure we don't accidentally spike our memory use.
@@ -235,34 +236,20 @@ where
             .map(|row| row.cloned())
             .map_err_to_string_with_causes()?
         {
-            let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
-                if time.less_equal(&self.peek_timestamp) {
-                    copies += diff;
+                let time = self.since_timestamp.max(*time);
+                if self.until_timestamp.map_or(false, |until| until <= time) {
+                    return;
                 }
+                self.extracted_updates.push((result.clone(), time, *diff))
             });
-            let copies: i64 = if copies.is_negative() {
-                let row = &*borrow;
-                tracing::error!(
-                    target = %self.target_id, diff = %copies, ?row,
-                    "index peek encountered negative multiplicities in ok trace",
-                );
-                return Err(format!(
-                    "Invalid data in source, \
-                             saw retractions ({}) for row that does not exist: {:?}",
-                    -copies, row,
-                ));
-            } else {
-                copies.into_inner()
-            };
-            // if copies > 0 ... otherwise skip
-            if let Some(copies) = NonZeroI64::new(copies) {
-                Ok(Some((result, copies)))
-            } else {
-                Ok(None)
-            }
+            // TODO: gross!
+            consolidate_updates(&mut self.extracted_updates);
+            self.extracted_updates.reverse();
+
+            Ok(())
         } else {
-            Ok(None)
+            Ok(())
         }
     }
 
