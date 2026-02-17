@@ -242,10 +242,10 @@ oracle read timestamp. However, actually applying the write bumps the oracle
 read timestamp to at least the write timestamp, so at write time it holds that
 `write_ts <= oracle_read_ts`. The linearization invariant is maintained.
 
-### Single `InternalTimestamped` write per group commit round
+### Single timestamped write write per group commit round
 
-Only one `InternalTimestamped` write is processed per group commit round. This
-is correct because:
+Only one timestamped write is processed per group commit round. This is correct
+because:
 
 1. Each timestamped write is computed independently, based on the state at its
    own read timestamp
@@ -254,6 +254,18 @@ is correct because:
    after one succeeds the other's diff is stale)
 3. After committing at timestamp T, the oracle advances past T, so additional
    writes at T would fail anyway. We fail them early to avoid unnecessary work.
+
+### Timeouts
+
+We have to be careful about bounding the lifetime of the occ loop, both in
+wallclock time and number of retries. With the old approach, a read-then-write
+could take arbitrarily long, and block the rest of the system. With the new
+approach, the occ loop might try arbitrarily long, without ever succeeding. It
+will not block the rest of the system, though, which is a big benefit.
+
+As a safety net, we should bound the lifetime of the occ loop with our existing
+statement timeout, and potentially add a hard upper limit on the number of
+attempts per occ loop.
 
 ### Comparison with the old approach
 
@@ -351,3 +363,17 @@ This preserves the familiar lock-based model but has significant drawbacks:
 The OCC approach avoids all of these issues. Contention is handled by retrying,
 which is simple and local. The cost is paid only when there _is_ actual
 contention, and the subscribe ensures that retries are based on fresh data.
+
+## Alternative: an occ loop running on `clusterd`
+
+Instead of sending subscribe results back to `environmentd` and running the OCC
+loop there, we could run the OCC loop right on the cluster. This should work,
+if we give `clusterd` access to the timestamp oracle. A benefit of this
+approach is that we take `environmentd` as much out of the processing path as
+possible, and so we get better distribution of work.
+
+Another school of thought will say that we _want_ `environmentd` to be in the
+path, because we can maybe be smarter about how we commit data to persist.
+There's a separation between data layer, which comes up with the changes and
+runs the dataflow, and the control layer, which takes pointers to the changes
+and appends them durably, with maybe some smarts in the middle.
