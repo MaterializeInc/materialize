@@ -33,7 +33,7 @@ disable = true
 # Skill-specific parameters
 [params]
   # Sections to exclude from skill generation
-  excludeFromSkill = ["releases", "self-managed", "about", "get-started"]
+  excludeFromSkill = []
 
 [cascade]
   aliases = []

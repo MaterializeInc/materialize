@@ -61,7 +61,8 @@ Apache License, Version 2.0. */}}
           All Topics
         </button>
         <div>
-          {{ partial "breadcrumbs.html" . }} {{ block "main" . }}{{ end }}
+          {{ partial "breadcrumbs.html" . }}
+          {{ block "main" . }}{{ end }}
         </div>
 
         <a href="#top" class="back-to-top">Back to top &uarr;</a>
@@ -342,6 +343,7 @@ Apache License, Version 2.0. */}}
       preferenceButton.addEventListener("click", () => {
         window.Osano.cm.showDrawer('osano-cm-dom-info-dialog-open');
       })
+
     </script>
     {{ if .Params.mermaid }}
     <script type="module">

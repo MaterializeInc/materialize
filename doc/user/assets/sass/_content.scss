@@ -733,6 +733,21 @@ p+p {
             }
         }
     }
+
+    .title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+
+        h1 {
+            margin-bottom: 0;
+        }
+
+        .btn-ghost {
+            flex-shrink: 0;
+            margin-left: var(--milli);
+        }
+    }
 }
 
 #helpful {
