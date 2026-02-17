@@ -362,9 +362,13 @@ mod container {
 
 mod bytes_container {
 
+    use std::cell::Cell;
+
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
+    use mz_ore::cast::CastFrom;
+    use mz_ore::collections::HashMap;
     use mz_ore::region::Region;
 
     /// A slice container with four bytes overhead per slice.
@@ -386,6 +390,20 @@ mod bytes_container {
             for batch in self.batches.iter() {
                 batch.offsets.heap_size(&mut callback);
                 callback(batch.storage.len(), batch.storage.capacity());
+                callback(
+                    batch.indices.len() * std::mem::size_of::<u32>(),
+                    batch.indices.capacity() * std::mem::size_of::<u32>(),
+                );
+                // Report dedup HashMap memory if still present (during building).
+                let dedup = batch.dedup.take();
+                if let Some(ref map) = dedup {
+                    // Approximate HashMap heap: capacity * (key + value + bucket metadata).
+                    let entry_size = std::mem::size_of::<u64>()
+                        + std::mem::size_of::<u32>()
+                        + std::mem::size_of::<usize>();
+                    callback(map.len() * entry_size, map.capacity() * entry_size);
+                }
+                batch.dedup.set(dedup);
             }
         }
     }
@@ -474,6 +492,8 @@ mod bytes_container {
             if let Some(batch) = self.batches.last_mut() {
                 let success = batch.try_push(item);
                 if !success {
+                    // Release dedup map before spilling to a new batch.
+                    batch.finish_building();
                     // double the lengths from `batch`.
                     let item_cap = 2 * batch.offsets.len();
                     let byte_cap = std::cmp::max(2 * batch.storage.capacity(), item.len());
@@ -491,6 +511,11 @@ mod bytes_container {
     pub struct BytesBatch {
         offsets: crate::row_spine::OffsetOptimized,
         storage: Region<u8>,
+        indices: Vec<u32>,
+        /// Dedup map used only during building. Wrapped in `Cell` so that
+        /// `index()` (which takes `&self`) can lazily drop it on first read,
+        /// since `BatchContainer` has no explicit "done building" lifecycle hook.
+        dedup: Cell<Option<HashMap<u64, u32>>>,
         len: usize,
     }
 
@@ -498,25 +523,73 @@ mod bytes_container {
         /// Either accepts the slice and returns true,
         /// or does not and returns false.
         fn try_push(&mut self, slice: &[u8]) -> bool {
-            if self.storage.len() + slice.len() <= self.storage.capacity() {
-                self.storage.extend_from_slice(slice);
-                self.offsets.push_into(self.storage.len());
-                self.len += 1;
-                true
-            } else {
-                false
+            let hash = Self::hash_bytes(slice);
+            // Check for duplicate. `get_mut()` is zero-cost with `&mut self`.
+            if let Some(ref dedup) = *self.dedup.get_mut() {
+                if let Some(&phys_idx) = dedup.get(&hash) {
+                    let lower = self.offsets.index(usize::cast_from(phys_idx));
+                    let upper = self.offsets.index(usize::cast_from(phys_idx) + 1);
+                    if &self.storage[lower..upper] == slice {
+                        self.indices.push(phys_idx);
+                        self.len += 1;
+                        return true;
+                    }
+                }
             }
+            // Need to store bytes.
+            if self.storage.len() + slice.len() > self.storage.capacity() {
+                return false;
+            }
+            let phys_idx = u32::try_from(self.offsets.len() - 1).expect("physical index overflow");
+            self.storage.extend_from_slice(slice);
+            self.offsets.push_into(self.storage.len());
+            self.indices.push(phys_idx);
+            if let Some(ref mut dedup) = *self.dedup.get_mut() {
+                dedup.entry(hash).or_insert(phys_idx);
+            }
+            self.len += 1;
+            true
+        }
+
+        fn hash_bytes(bytes: &[u8]) -> u64 {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            hasher.finish()
         }
         #[inline]
         fn index(&self, index: usize) -> &[u8] {
-            let lower = self.offsets.index(index);
-            let upper = self.offsets.index(index + 1);
+            // Lazily drop the dedup map on first read. After the first call
+            // this is a no-op (takes None, drops None).
+            drop(self.dedup.take());
+            let phys = if self.indices.is_empty() {
+                // No dedup occurred; indices were compacted away.
+                index
+            } else {
+                usize::cast_from(self.indices[index])
+            };
+            let lower = self.offsets.index(phys);
+            let upper = self.offsets.index(phys + 1);
             &self.storage[lower..upper]
         }
         #[inline(always)]
         fn len(&self) -> usize {
-            debug_assert_eq!(self.len, self.offsets.len() - 1);
+            debug_assert!(self.indices.is_empty() || self.len == self.indices.len());
             self.len
+        }
+
+        fn finish_building(&mut self) {
+            *self.dedup.get_mut() = None;
+            // If no deduplication occurred (indices is an identity mapping),
+            // free the indices vec to avoid 4 bytes/entry of pure overhead.
+            let is_identity = self
+                .indices
+                .iter()
+                .enumerate()
+                .all(|(i, &idx)| usize::cast_from(idx) == i);
+            if is_identity {
+                self.indices = Vec::new();
+            }
         }
 
         fn with_capacities(item_cap: usize, byte_cap: usize) -> Self {
@@ -526,8 +599,150 @@ mod bytes_container {
             Self {
                 offsets,
                 storage: Region::new_auto(byte_cap.next_power_of_two()),
+                indices: Vec::with_capacity(item_cap),
+                dedup: Cell::new(Some(HashMap::new())),
                 len: 0,
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use differential_dataflow::trace::implementations::BatchContainer;
+
+        #[mz_ore::test]
+        fn test_dedup_correctness() {
+            let mut container = BytesContainer::with_capacity(100);
+            container.push_into(b"hello".as_slice());
+            container.push_into(b"world".as_slice());
+            container.push_into(b"hello".as_slice());
+            container.push_into(b"foo".as_slice());
+            container.push_into(b"world".as_slice());
+
+            assert_eq!(container.len(), 5);
+            assert_eq!(container.index(0), b"hello");
+            assert_eq!(container.index(1), b"world");
+            assert_eq!(container.index(2), b"hello");
+            assert_eq!(container.index(3), b"foo");
+            assert_eq!(container.index(4), b"world");
+
+            // Verify dedup actually saved storage: only 3 physical entries
+            let batch = &container.batches[0];
+            assert_eq!(batch.offsets.len() - 1, 3); // 3 unique physical entries
+            assert_eq!(batch.indices.len(), 5); // 5 logical entries
+        }
+
+        #[mz_ore::test]
+        fn test_empty_and_single_byte_slices() {
+            let mut container = BytesContainer::with_capacity(100);
+            container.push_into(b"".as_slice());
+            container.push_into(b"x".as_slice());
+            container.push_into(b"".as_slice());
+            container.push_into(b"x".as_slice());
+
+            assert_eq!(container.len(), 4);
+            assert_eq!(container.index(0), b"");
+            assert_eq!(container.index(1), b"x");
+            assert_eq!(container.index(2), b"");
+            assert_eq!(container.index(3), b"x");
+        }
+
+        #[mz_ore::test]
+        fn test_finish_building_drops_dedup() {
+            let mut container = BytesContainer::with_capacity(100);
+            container.push_into(b"hello".as_slice());
+            container.push_into(b"hello".as_slice());
+
+            // Dedup map should exist before finishing.
+            assert!(container.batches[0].dedup.get_mut().is_some());
+
+            container.batches[0].finish_building();
+
+            // Dedup map should be dropped.
+            assert!(container.batches[0].dedup.get_mut().is_none());
+            // Indices should be compacted since both point to same physical entry.
+            assert!(!container.batches[0].indices.is_empty());
+
+            // Reads still work after finishing.
+            assert_eq!(container.len(), 2);
+            assert_eq!(container.index(0), b"hello");
+            assert_eq!(container.index(1), b"hello");
+        }
+
+        #[mz_ore::test]
+        fn test_batch_spill() {
+            // Use a very small capacity to force batch spill.
+            let mut container = BytesContainer::with_capacity(1);
+            // First push fits in the initial batch.
+            container.push_into(b"ab".as_slice());
+            // This should spill to a new batch since capacity is tiny.
+            container.push_into(b"cd".as_slice());
+            container.push_into(b"ab".as_slice());
+
+            assert_eq!(container.len(), 3);
+            assert_eq!(container.index(0), b"ab");
+            assert_eq!(container.index(1), b"cd");
+            assert_eq!(container.index(2), b"ab");
+
+            // Should have spilled: first batch's dedup dropped.
+            assert!(container.batches.len() >= 2);
+            assert!(container.batches[0].dedup.get_mut().is_none());
+            // Spilled batch with unique entries should have compacted indices.
+            assert!(container.batches[0].indices.is_empty());
+        }
+
+        #[mz_ore::test]
+        fn test_lazy_dedup_drop_on_index() {
+            let mut container = BytesContainer::with_capacity(100);
+            container.push_into(b"hello".as_slice());
+            container.push_into(b"world".as_slice());
+
+            // Dedup map should exist before any reads.
+            assert!(container.batches[0].dedup.get_mut().is_some());
+
+            // Reading via index() should lazily drop the dedup map.
+            assert_eq!(container.index(0), b"hello");
+            assert!(container.batches[0].dedup.get_mut().is_none());
+
+            // Subsequent reads still work fine.
+            assert_eq!(container.index(1), b"world");
+        }
+
+        #[mz_ore::test]
+        fn test_indices_compacted_when_no_dedup() {
+            let mut container = BytesContainer::with_capacity(100);
+            container.push_into(b"aaa".as_slice());
+            container.push_into(b"bbb".as_slice());
+            container.push_into(b"ccc".as_slice());
+
+            // All unique strings — force finish_building.
+            container.batches[0].finish_building();
+
+            // Indices should be compacted (freed) since no dedup occurred.
+            assert!(container.batches[0].indices.is_empty());
+
+            // Reads still work via direct indexing.
+            assert_eq!(container.index(0), b"aaa");
+            assert_eq!(container.index(1), b"bbb");
+            assert_eq!(container.index(2), b"ccc");
+        }
+
+        #[mz_ore::test]
+        fn test_indices_kept_when_dedup_occurred() {
+            let mut container = BytesContainer::with_capacity(100);
+            container.push_into(b"hello".as_slice());
+            container.push_into(b"hello".as_slice()); // duplicate
+
+            // Force finish_building.
+            container.batches[0].finish_building();
+
+            // Indices should NOT be compacted since dedup occurred.
+            assert!(!container.batches[0].indices.is_empty());
+            assert_eq!(container.batches[0].indices.len(), 2);
+
+            assert_eq!(container.index(0), b"hello");
+            assert_eq!(container.index(1), b"hello");
         }
     }
 }
