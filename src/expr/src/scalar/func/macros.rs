@@ -249,14 +249,10 @@ macro_rules! derive_binary {
                 }
             }
 
-            pub fn output_type(
-                &self,
-                input_type_a: SqlColumnType,
-                input_type_b: SqlColumnType,
-            ) -> SqlColumnType {
+            pub fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
                 match self {
                     $(Self::$name(f) => {
-                        LazyBinaryFunc::output_type(f, input_type_a, input_type_b)
+                        LazyBinaryFunc::output_type(f, input_types)
                     },)*
                 }
             }

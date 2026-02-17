@@ -3942,10 +3942,10 @@ impl AbstractExpr for HirScalarExpr {
                 expr2,
                 func,
                 name: _,
-            } => func.output_type(
+            } => func.output_type(&[
                 expr1.typ(outers, inner, params),
                 expr2.typ(outers, inner, params),
-            ),
+            ]),
             HirScalarExpr::CallVariadic {
                 exprs,
                 func,

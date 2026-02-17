@@ -899,7 +899,7 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             })
         };
 
-        let col_type = func.output_type(left.col_type, right.col_type);
+        let col_type = func.output_type(&[left.col_type, right.col_type]);
 
         let range = mapped_spec.intersect(ResultSpec::has_type(&col_type, fallible));
         ColumnSpec { col_type, range }
@@ -1319,7 +1319,7 @@ mod tests {
                             if !binary_typecheck(&func, &type_left, &type_right) {
                                 return None;
                             }
-                            let type_out = func.output_type(type_left, type_right);
+                            let type_out = func.output_type(&[type_left, type_right]);
                             let expr_out = MirScalarExpr::CallBinary {
                                 func,
                                 expr1: Box::new(expr_left),

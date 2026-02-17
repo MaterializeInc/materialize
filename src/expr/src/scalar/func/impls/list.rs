@@ -347,17 +347,12 @@ impl EagerBinaryFunc for ListLengthMax {
             }
         }
     }
-    fn output_type(
-        &self,
-        input_type_a: SqlColumnType,
-        input_type_b: SqlColumnType,
-    ) -> SqlColumnType {
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
         let output = Self::Output::as_column_type();
         let propagates_nulls = self.propagates_nulls();
         let nullable = output.nullable;
-        output.nullable(
-            nullable || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable)),
-        )
+        let input_nullable = input_types.iter().any(|t| t.nullable);
+        output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
 impl fmt::Display for ListLengthMax {

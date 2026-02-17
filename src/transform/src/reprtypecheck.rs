@@ -1527,10 +1527,10 @@ impl Typecheck {
             CallBinary { expr1, expr2, func } => {
                 let typ_in1 = tc.typecheck_scalar(expr1, source, column_types)?;
                 let typ_in2 = tc.typecheck_scalar(expr2, source, column_types)?;
-                let typ_out = func.output_type(
+                let typ_out = func.output_type(&[
                     SqlColumnType::from_repr(&typ_in1),
                     SqlColumnType::from_repr(&typ_in2),
-                );
+                ]);
                 Ok(ReprColumnType::from(&typ_out))
             }
             CallVariadic { exprs, func } => Ok(ReprColumnType::from(

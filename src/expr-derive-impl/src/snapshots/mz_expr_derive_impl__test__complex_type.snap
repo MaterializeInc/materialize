@@ -17,21 +17,18 @@ expression: "#[sqlfunc(\n    is_monotone = (true, true),\n    output_type = \"Op
 )]
 pub struct ComplexOutputTypeFn;
 impl crate::func::binary::EagerBinaryFunc for ComplexOutputTypeFn {
-    type Input1<'a> = Datum<'a>;
-    type Input2<'a> = Datum<'a>;
+    type Input<'a> = (Datum<'a>, Datum<'a>);
     type Output<'a> = Result<Datum<'a>, EvalError>;
     fn call<'a>(
         &self,
-        a: Self::Input1<'a>,
-        b: Self::Input2<'a>,
+        (a, b): Self::Input<'a>,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output<'a> {
         complex_output_type_fn(a, b)
     }
     fn output_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
+        input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = <Option<bool>>::as_column_type();
@@ -39,8 +36,8 @@ impl crate::func::binary::EagerBinaryFunc for ComplexOutputTypeFn {
             self,
         );
         let nullable = output.nullable;
-        let is_null = nullable
-            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || (propagates_nulls && inputs_nullable);
         output.nullable(is_null)
     }
     fn introduces_nulls(&self) -> bool {

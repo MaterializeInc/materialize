@@ -1310,18 +1310,13 @@ impl binary::EagerBinaryFunc for RegexpReplace {
         self.regex.replacen(source, self.limit, replacement)
     }
 
-    fn output_type(
-        &self,
-        input_type_a: SqlColumnType,
-        input_type_b: SqlColumnType,
-    ) -> SqlColumnType {
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
         use mz_repr::AsColumnType;
         let output = <Self::Output<'_> as AsColumnType>::as_column_type();
         let propagates_nulls = binary::EagerBinaryFunc::propagates_nulls(self);
         let nullable = output.nullable;
-        output.nullable(
-            nullable || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable)),
-        )
+        let input_nullable = input_types.iter().any(|t| t.nullable);
+        output.nullable(nullable || (propagates_nulls && input_nullable))
     }
 }
 

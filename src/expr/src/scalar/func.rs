@@ -1529,7 +1529,7 @@ range_fn!(overright, overright, "&>");
 range_fn!(adjacent, adjacent, "-|-");
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "+",
     propagates_nulls = true,
@@ -1544,7 +1544,7 @@ fn range_union<'a>(
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "*",
     propagates_nulls = true,
@@ -1559,7 +1559,7 @@ fn range_intersection<'a>(
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "-",
     propagates_nulls = true,
@@ -1773,7 +1773,7 @@ fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.unwrap_map_value_type().clone().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.unwrap_map_value_type().clone().nullable(true)",
     is_infix_op = true,
     sqlname = "->",
     propagates_nulls = true,
@@ -2734,7 +2734,7 @@ fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     sqlname = "array_remove",
     propagates_nulls = false,
     introduces_nulls = false
@@ -2819,7 +2819,7 @@ fn array_contains_array_rev<'a>(a: Array<'a>, b: Array<'a>) -> bool {
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
@@ -2930,7 +2930,7 @@ fn array_array_concat<'a>(
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
@@ -2950,7 +2950,7 @@ fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) 
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
@@ -2969,8 +2969,9 @@ fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     })
 }
 
+// Note that the output type corresponds to the _second_ parameter's input type.
 #[sqlfunc(
-    output_type_expr = "input_type_b.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[1].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "||",
     propagates_nulls = false,
@@ -2990,7 +2991,7 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
 }
 
 #[sqlfunc(
-    output_type_expr = "input_type_a.scalar_type.without_modifiers().nullable(true)",
+    output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     sqlname = "list_remove",
     propagates_nulls = false,
     introduces_nulls = false

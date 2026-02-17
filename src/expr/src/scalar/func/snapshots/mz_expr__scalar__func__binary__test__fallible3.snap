@@ -28,8 +28,7 @@ impl crate::func::binary::EagerBinaryFunc for Fallible3 {
     }
     fn output_type(
         &self,
-        input_type_a: mz_repr::SqlColumnType,
-        input_type_b: mz_repr::SqlColumnType,
+        input_types: &[mz_repr::SqlColumnType],
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
         let output = Self::Output::as_column_type();
@@ -37,8 +36,8 @@ impl crate::func::binary::EagerBinaryFunc for Fallible3 {
             self,
         );
         let nullable = output.nullable;
-        let is_null = nullable
-            || (propagates_nulls && (input_type_a.nullable || input_type_b.nullable));
+        let inputs_nullable = input_types.iter().any(|it| it.nullable);
+        let is_null = nullable || (propagates_nulls && inputs_nullable);
         output.nullable(is_null)
     }
 }

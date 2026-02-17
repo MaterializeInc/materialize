@@ -1959,6 +1959,15 @@ pub trait InputDatumType<'a, E>: Sized {
             None => Err(Ok(None)),
         }
     }
+
+    /// The number of datums consumed by this datum type. The first element in the tuple
+    /// is the minimal amount consumed, the last the maximal amount.
+    ///
+    /// Note that this cannot capture the arity requirements of complex types, such as `Vec<(A, B)>`
+    /// which would require a multiple of two.
+    fn arity() -> (usize, Option<usize>) {
+        (1, Some(1))
+    }
 }
 
 /// A bridge between native Rust types and SQL runtime types represented in Datums
@@ -2106,6 +2115,18 @@ macro_rules! impl_tuple_input_datum_type {
             }
             fn nullable() -> bool {
                 $( <$T>::nullable() )||+
+            }
+            fn arity() -> (usize, Option<usize>) {
+                let mut arity = (0, Some(0));
+                $(
+                    let (min, max) = <$T>::arity();
+                    arity.0 += min;
+                    arity.1 = match (arity.1, max) {
+                        (None, _) | (_, None) => None,
+                        (Some(prev_max), Some(max)) => Some(prev_max + max),
+                    };
+                )+
+                arity
             }
         }
     }
