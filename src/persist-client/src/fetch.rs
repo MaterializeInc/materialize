@@ -1295,7 +1295,7 @@ where
                 registered_desc
             );
         } else {
-            assert!(
+            soft_assert_or_log!(
                 PartialOrder::less_equal(inline_desc.since(), registered_desc.since()),
                 "key={} inline={:?} registered={:?}",
                 printable_name,
