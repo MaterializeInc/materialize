@@ -2518,9 +2518,22 @@ impl Coordinator {
         match optimized_mir.into_inner() {
             selection if selection.as_const().is_some() && plan.returning.is_empty() => {
                 let catalog = self.owned_catalog();
+                let global_id = catalog.get_entry(&plan.id).latest_global_id();
+                let builder_fut = self
+                    .controller
+                    .storage_collections
+                    .create_update_builder(global_id);
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
-                    let result =
-                        Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
+                    // Box the future to avoid blowing up the size of the
+                    // enclosing async state machine.
+                    let result = Box::pin(Self::insert_constant_batched(
+                        &catalog,
+                        ctx.session_mut(),
+                        plan.id,
+                        selection,
+                        builder_fut,
+                    ))
+                    .await;
                     ctx.retire(result);
                 });
             }

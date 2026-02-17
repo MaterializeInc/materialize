@@ -17,7 +17,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use futures::FutureExt;
-use futures::future::LocalBoxFuture;
+use futures::future::{BoxFuture, LocalBoxFuture};
 use futures::stream::FuturesOrdered;
 use http::Uri;
 use inner::return_if_err;
@@ -43,14 +43,17 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::{Raw, Statement};
-use mz_storage_client::client::TableData;
+use mz_storage_client::client::{TableData, TimestamplessUpdateBuilder};
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
+use smallvec::smallvec;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::oneshot;
@@ -806,10 +809,14 @@ impl Coordinator {
 
     /// Inserts the rows from `constants` into the table identified by `target_id`.
     ///
+    /// Prefer [`Self::insert_constant_batched`] which stages rows directly to
+    /// Persist, avoiding memory pressure on the coordinator for large INSERTs.
+    ///
     /// # Panics
     ///
     /// Panics if `target_id` doesn't refer to a table.
     /// Panics if `constants` is not an `MirRelationExpr::Constant`.
+    #[allow(dead_code)]
     pub(crate) fn insert_constant(
         catalog: &Catalog,
         session: &mut Session,
@@ -853,6 +860,84 @@ impl Coordinator {
                 constants.pretty(),
             ),
         }
+    }
+
+    /// Inserts the constant rows from `constants` into the table identified by
+    /// `target_id`, staging them directly to Persist as a batch.
+    ///
+    /// This is an optimized version of [`Self::insert_constant`] that avoids
+    /// holding all rows in coordinator memory by writing them to Persist blob
+    /// storage early and carrying only a lightweight `ProtoBatch` handle.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `constants` is not an `MirRelationExpr::Constant`.
+    pub(crate) async fn insert_constant_batched(
+        catalog: &Catalog,
+        session: &mut Session,
+        target_id: CatalogItemId,
+        constants: MirRelationExpr,
+        builder_fut: BoxFuture<
+            'static,
+            Result<
+                TimestamplessUpdateBuilder<SourceData, (), Timestamp, StorageDiff>,
+                StorageError<Timestamp>,
+            >,
+        >,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // Insert can be queued, so we need to re-verify the id exists.
+        let desc = match catalog.try_get_entry(&target_id) {
+            Some(table) => {
+                // Inserts always happen at the latest version of a table.
+                table.relation_desc_latest().expect("table has desc")
+            }
+            None => {
+                return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: mz_catalog::memory::error::ErrorKind::Sql(CatalogError::UnknownItem(
+                        target_id.to_string(),
+                    )),
+                }));
+            }
+        };
+
+        // Extract and validate rows before building the batch to avoid
+        // orphaned blobs in Persist for invalid INSERTs.
+        let (rows, ..) = constants
+            .as_const()
+            .expect("insert_constant_batched called on non-constant MirRelationExpr");
+        let rows = rows.clone()?;
+
+        for (row, _) in &rows {
+            for (i, datum) in row.iter().enumerate() {
+                desc.constraints_met(i, &datum)?;
+            }
+        }
+
+        // Build a Persist batch, spilling to blob storage automatically.
+        let mut builder = builder_fut
+            .await
+            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{e}")))?;
+
+        let mut affected_rows = Diff::from(0);
+        for (row, diff) in rows {
+            affected_rows += diff;
+            builder
+                .add(&SourceData(Ok(row)), &(), &diff.into_inner())
+                .await;
+        }
+        let affected_rows =
+            usize::try_from(affected_rows.into_inner()).expect("positive Diff must fit");
+
+        let proto_batch = builder.finish().await;
+
+        // Store as TableData::Batches (like COPY FROM does), so group commit
+        // can append the pre-staged batch directly without re-uploading.
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+            id: target_id,
+            rows: TableData::Batches(smallvec![proto_batch]),
+        }]))?;
+
+        Ok(ExecuteResponse::Inserted(affected_rows))
     }
 
     #[mz_ore::instrument(level = "debug")]

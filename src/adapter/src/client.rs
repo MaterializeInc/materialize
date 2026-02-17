@@ -918,11 +918,30 @@ impl SessionClient {
             rows,
         )
         .err_into()
-        .and_then(|values| optimizer.optimize(values).err_into())
-        .and_then(|values| {
-            // Copied rows must always be constants.
-            Coordinator::insert_constant(&catalog, self.session(), target_id, values.into_inner())
-        });
+        .and_then(|values| optimizer.optimize(values).err_into());
+
+        // Stage copied rows directly to Persist as a batch, avoiding holding
+        // all rows in coordinator memory.
+        let result = match result {
+            Ok(values) => {
+                let global_id = catalog.get_entry(&target_id).latest_global_id();
+                let builder_fut = self
+                    .peek_client()
+                    .storage_collections
+                    .create_update_builder(global_id);
+                // Box the future to avoid blowing up the enclosing
+                // async state machine size (hits pgwire recursion limit).
+                Box::pin(Coordinator::insert_constant_batched(
+                    &catalog,
+                    self.session(),
+                    target_id,
+                    values.into_inner(),
+                    builder_fut,
+                ))
+                .await
+            }
+            Err(e) => Err(e),
+        };
         self.retire_execute(ctx_extra, (&result).into());
         result
     }
