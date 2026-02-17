@@ -152,8 +152,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     metrics: PgSourceMetrics,
 ) -> (
     StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    Stream<G, Infallible>,
-    Option<Stream<G, Probe<MzOffset>>>,
+    Stream<G, Probe<MzOffset>>,
     Stream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -162,7 +161,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (data_output, data_stream) = builder.new_output();
-    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
@@ -182,12 +180,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [
-                data_cap_set,
-                upper_cap_set,
-                definite_error_cap_set,
-                probe_cap,
-            ]: &mut [_; 4] = caps.try_into().unwrap();
+            let [data_cap_set, definite_error_cap_set, probe_cap]: &mut [_; 3] =
+                caps.try_into().unwrap();
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
@@ -317,7 +311,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             for stat in config.statistics.values() {
                 stat.set_offset_committed(resume_lsn.offset);
             }
-            upper_cap_set.downgrade([&resume_lsn]);
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
 
             // Emitting an initial probe before we start waiting for rewinds ensures that we will
@@ -464,13 +457,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 "new_upper={data_upper} tx_lsn={commit_lsn}",
                             );
                             data_upper = commit_lsn + 1;
-                            // We are about to ingest a transaction which has the possiblity to be
-                            // very big and we certainly don't want to hold the data in memory. For
-                            // this reason we eagerly downgrade the upper capability in order for
-                            // the reclocking machinery to mint a binding that includes
-                            // this transaction and therefore be able to pass the data of the
-                            // transaction through as we stream it.
-                            upper_cap_set.downgrade([&data_upper]);
                             while let Some((oid, output_index, event, diff)) = tx.try_next().await?
                             {
                                 let event = event.map_err(Into::into);
@@ -555,7 +541,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     if rewinds.is_empty() {
                         data_cap_set.downgrade([&data_upper]);
                     }
-                    upper_cap_set.downgrade([&data_upper]);
                 }
             }
             // We never expect the replication stream to gracefully end
@@ -606,8 +591,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     (
         replication_updates,
-        upper_stream,
-        Some(probe_stream),
+        probe_stream,
         errors,
         button.press_on_drop(),
     )

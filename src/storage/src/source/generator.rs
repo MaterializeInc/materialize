@@ -13,11 +13,12 @@ use std::ops::Rem;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::iter::IteratorExt;
+use mz_ore::now::NowFn;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{
@@ -25,12 +26,15 @@ use mz_storage_types::sources::load_generator::{
     LoadGeneratorSourceConnection,
 };
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
-use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::{Scope, Stream};
-use timely::progress::Antichain;
+use timely::progress::{Antichain, Timestamp};
 use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -207,9 +211,8 @@ impl SourceRender for LoadGeneratorSourceConnection {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<MzOffset>>>,
+        Stream<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -218,10 +221,17 @@ impl SourceRender for LoadGeneratorSourceConnection {
             self.as_of,
             self.up_to,
         );
-        let (updates, uppers, health, button) =
+        let (updates, progress, health, button) =
             generator_kind.render(scope, config, committed_uppers, start_signal);
 
-        (updates, uppers, health, None, button)
+        let probe_stream = synthesize_probes(
+            config.id,
+            &progress,
+            config.timestamp_interval,
+            config.now_fn.clone(),
+        );
+
+        (updates, health, probe_stream, button)
     }
 }
 
@@ -449,4 +459,70 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         health_stream,
         vec![button.press_on_drop()],
     )
+}
+
+/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
+/// interval.
+///
+/// This is used as a fallback for sources that don't support probing the frontier of the upstream
+/// system.
+fn synthesize_probes<G>(
+    source_id: GlobalId,
+    progress: &Stream<G, Infallible>,
+    interval: Duration,
+    now_fn: NowFn,
+) -> Stream<G, Probe<G::Timestamp>>
+where
+    G: Scope,
+{
+    let scope = progress.scope();
+
+    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
+    let is_active_worker = active_worker == scope.index();
+
+    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
+    let mut input = op.new_input_for(progress, Pipeline, &output);
+
+    op.build(|caps| async move {
+        if !is_active_worker {
+            return;
+        }
+
+        let [cap] = caps.try_into().expect("one capability per output");
+
+        let mut ticker =
+            super::probe::Ticker::new(move || interval, now_fn.clone());
+
+        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
+        let mut frontier = minimum_frontier.clone();
+        loop {
+            tokio::select! {
+                event = input.next() => match event {
+                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
+                    Some(AsyncEvent::Data(..)) => unreachable!(),
+                    None => break,
+                },
+                // We only report a probe if the source upper frontier is not the minimum frontier.
+                // This makes it so the first remap binding corresponds to the snapshot of the
+                // source, and because the first binding always maps to the minimum *target*
+                // frontier we guarantee that the source will never appear empty.
+                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
+                    let probe = Probe {
+                        probe_ts,
+                        upstream_frontier: frontier.clone(),
+                    };
+                    output.give(&cap, probe);
+                }
+            }
+        }
+
+        let probe = Probe {
+            probe_ts: now_fn().into(),
+            upstream_frontier: Antichain::new(),
+        };
+        output.give(&cap, probe);
+    });
+
+    output_stream
 }

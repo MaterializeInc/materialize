@@ -10,7 +10,6 @@
 //! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -113,9 +112,8 @@ impl SourceRender for SqlServerSourceConnection {
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        TimelyStream<G, Infallible>,
         TimelyStream<G, HealthStatusMessage>,
-        Option<TimelyStream<G, Probe<Self::Time>>>,
+        TimelyStream<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -161,7 +159,7 @@ impl SourceRender for SqlServerSourceConnection {
             .metrics
             .get_sql_server_source_metrics(config.id, config.worker_id);
 
-        let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
+        let (repl_updates, repl_errs, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             source_outputs.clone(),
@@ -224,9 +222,8 @@ impl SourceRender for SqlServerSourceConnection {
 
         (
             data_collections,
-            uppers,
             health,
-            Some(progress_probes),
+            progress_probes,
             vec![repl_token, progress_token],
         )
     }

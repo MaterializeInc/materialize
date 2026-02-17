@@ -51,7 +51,6 @@
 //! trigger a restart of the dataflow.
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::fmt;
 use std::io;
 use std::rc::Rc;
@@ -110,9 +109,8 @@ impl SourceRender for MySqlSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<GtidPartition>>>,
+        Stream<G, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -163,7 +161,7 @@ impl SourceRender for MySqlSourceConnection {
             metrics.snapshot_metrics.clone(),
         );
 
-        let (repl_updates, uppers, repl_err, repl_token) = replication::render(
+        let (repl_updates, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self.clone(),
@@ -234,9 +232,8 @@ impl SourceRender for MySqlSourceConnection {
 
         (
             data_collections,
-            uppers,
             health,
-            Some(probe_stream),
+            probe_stream,
             vec![snapshot_token, repl_token, stats_token],
         )
     }

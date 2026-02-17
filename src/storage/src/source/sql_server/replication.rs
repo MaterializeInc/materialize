@@ -10,7 +10,7 @@
 //! Code to render the ingestion dataflow of a [`SqlServerSourceConnection`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert::Infallible;
+
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -66,7 +66,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     metrics: SqlServerSourceMetrics,
 ) -> (
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
-    TimelyStream<G, Infallible>,
     TimelyStream<G, ReplicationError>,
     PressOnDropButton,
 ) {
@@ -74,7 +73,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let (data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -85,9 +83,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let [
                 data_cap_set,
-                upper_cap_set,
                 definite_error_cap_set,
-            ]: &mut [_; 3] = caps.try_into().unwrap();
+            ]: &mut [_; 2] = caps.try_into().unwrap();
 
             let connection_config = source
                 .connection
@@ -483,7 +480,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             );
                         }
 
-                        upper_cap_set.downgrade(Antichain::from_elem(next_lsn));
                     }
                     // We've got new data! Let's process it.
                     CdcEvent::Data {
@@ -610,7 +606,6 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
     (
         data_stream.as_collection(),
-        upper_stream,
         error_stream,
         button.press_on_drop(),
     )

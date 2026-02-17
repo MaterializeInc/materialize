@@ -13,7 +13,6 @@
 // #![allow(missing_docs)]
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
@@ -76,10 +75,10 @@ pub trait SourceRender {
     /// First, a source must produce a collection that is produced by the rendered dataflow and
     /// must contain *definite*[^1] data for all times beyond the resumption frontier.
     ///
-    /// Second, a source must produce a progress stream that will be used to drive reclocking.
-    /// The frontier of this stream decides for which upstream offsets bindings can be minted.
+    /// Second, a source must produce a stream of health status updates.
     ///
-    /// Third, a source must produce a stream of health status updates.
+    /// Third, a source must produce a probe stream that periodically reports the upstream
+    /// frontier. This is used to drive reclocking and mint new bindings.
     ///
     /// Finally, the source is expected to return an opaque token that when dropped will cause the
     /// source to immediately drop all capabilities and advance its frontier to the empty antichain.
@@ -93,9 +92,8 @@ pub trait SourceRender {
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<Self::Time>>>,
+        Stream<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );
 }

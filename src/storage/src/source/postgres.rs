@@ -81,7 +81,6 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::convert::Infallible;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -132,9 +131,8 @@ impl SourceRender for PostgresSourceConnection {
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        Stream<G, Infallible>,
         Stream<G, HealthStatusMessage>,
-        Option<Stream<G, Probe<MzOffset>>>,
+        Stream<G, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
@@ -185,7 +183,7 @@ impl SourceRender for PostgresSourceConnection {
                 metrics.snapshot_metrics.clone(),
             );
 
-        let (repl_updates, uppers, probe_stream, repl_err, repl_token) = replication::render(
+        let (repl_updates, probe_stream, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self,
@@ -260,7 +258,6 @@ impl SourceRender for PostgresSourceConnection {
 
         (
             data_collections,
-            uppers,
             health,
             probe_stream,
             vec![snapshot_token, repl_token],

@@ -25,7 +25,6 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
-use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -45,7 +44,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
-    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
+    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::operator::ConcatenateFlatten;
@@ -70,7 +69,6 @@ use tracing::trace;
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
-use crate::source::probe;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
 use crate::statistics::SourceStatistics;
@@ -222,7 +220,7 @@ where
 
     let reclocked_exports2 = &mut reclocked_exports;
     let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
-        let (exports, _source_upper, health_stream, source_tokens) = source_render_operator(
+        let (exports, health_stream, source_tokens) = source_render_operator(
             scope,
             config,
             source_connection,
@@ -260,9 +258,7 @@ where
 }
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
-/// collection timestamped with the source specific timestamp type. Also returns a second stream
-/// that can be used to learn about the `source_upper` that all the source reader instances know
-/// about.
+/// collection timestamped with the source specific timestamp type.
 fn source_render_operator<G, C>(
     scope: &mut G,
     config: &RawSourceCreationConfig,
@@ -272,7 +268,6 @@ fn source_render_operator<G, C>(
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    Stream<G, Infallible>,
     Stream<G, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
@@ -282,15 +277,13 @@ where
 {
     let source_id = config.id;
     let worker_id = config.worker_id;
-    let now_fn = config.now_fn.clone();
-    let timestamp_interval = config.timestamp_interval;
 
     let resume_uppers = resume_uppers.inspect(move |upper| {
         let upper = upper.pretty();
         trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
     });
 
-    let (exports, progress, health, probes, tokens) =
+    let (exports, health, probe_stream, tokens) =
         source_connection.render(scope, config, resume_uppers, start_signal);
 
     let mut export_collections = BTreeMap::new();
@@ -385,11 +378,6 @@ where
         });
     }
 
-    let probe_stream = match probes {
-        Some(stream) => stream,
-        None => synthesize_probes(source_id, &progress, timestamp_interval, now_fn),
-    };
-
     // Broadcasting does more work than necessary, which would be to exchange the probes to the
     // worker that will be the one minting the bindings but we'd have to thread this information
     // through and couple the two functions enough that it's not worth the optimization (I think).
@@ -400,7 +388,6 @@ where
 
     (
         export_collections,
-        progress,
         health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
         tokens,
     )
@@ -686,67 +673,3 @@ where
     WatchStream::from_changes(rx)
 }
 
-/// Synthesizes a probe stream that produces the frontier of the given progress stream at the given
-/// interval.
-///
-/// This is used as a fallback for sources that don't support probing the frontier of the upstream
-/// system.
-fn synthesize_probes<G>(
-    source_id: GlobalId,
-    progress: &Stream<G, Infallible>,
-    interval: Duration,
-    now_fn: NowFn,
-) -> Stream<G, Probe<G::Timestamp>>
-where
-    G: Scope,
-{
-    let scope = progress.scope();
-
-    let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();
-    let is_active_worker = active_worker == scope.index();
-
-    let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
-    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
-    let mut input = op.new_input_for(progress, Pipeline, &output);
-
-    op.build(|caps| async move {
-        if !is_active_worker {
-            return;
-        }
-
-        let [cap] = caps.try_into().expect("one capability per output");
-
-        let mut ticker = probe::Ticker::new(move || interval, now_fn.clone());
-
-        let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
-        let mut frontier = minimum_frontier.clone();
-        loop {
-            tokio::select! {
-                event = input.next() => match event {
-                    Some(AsyncEvent::Progress(progress)) => frontier = progress,
-                    Some(AsyncEvent::Data(..)) => unreachable!(),
-                    None => break,
-                },
-                // We only report a probe if the source upper frontier is not the minimum frontier.
-                // This makes it so the first remap binding corresponds to the snapshot of the
-                // source, and because the first binding always maps to the minimum *target*
-                // frontier we guarantee that the source will never appear empty.
-                probe_ts = ticker.tick(), if frontier != minimum_frontier => {
-                    let probe = Probe {
-                        probe_ts,
-                        upstream_frontier: frontier.clone(),
-                    };
-                    output.give(&cap, probe);
-                }
-            }
-        }
-
-        let probe = Probe {
-            probe_ts: now_fn().into(),
-            upstream_frontier: Antichain::new(),
-        };
-        output.give(&cap, probe);
-    });
-
-    output_stream
-}
