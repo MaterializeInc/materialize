@@ -41,7 +41,6 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Diff, GlobalId, RelationDesc, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
@@ -55,7 +54,6 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
-use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
@@ -195,8 +193,6 @@ where
 
     let mut tokens = vec![];
 
-    let (ingested_upper_tx, ingested_upper_rx) =
-        watch::channel(MutableAntichain::new_bottom(C::Time::minimum()));
     let (probed_upper_tx, probed_upper_rx) = watch::channel(None);
 
     let source_metrics = Arc::new(config.metrics.get_source_metrics(id, worker_id));
@@ -208,7 +204,6 @@ where
         storage_state,
         config.clone(),
         probed_upper_rx,
-        ingested_upper_rx,
         timestamp_desc,
     );
     // Need to broadcast the remap changes to all workers.
@@ -227,7 +222,7 @@ where
 
     let reclocked_exports2 = &mut reclocked_exports;
     let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
-        let (exports, source_upper, health_stream, source_tokens) = source_render_operator(
+        let (exports, _source_upper, health_stream, source_tokens) = source_render_operator(
             scope,
             config,
             source_connection,
@@ -256,8 +251,6 @@ where
             reclocked_exports2.insert(id, reclocked);
         }
 
-        source_upper.capture_into(FrontierCapture(ingested_upper_tx));
-
         (health_stream.leave(), source_tokens)
     });
 
@@ -266,24 +259,10 @@ where
     (reclocked_exports, health, tokens)
 }
 
-pub struct FrontierCapture<T>(watch::Sender<MutableAntichain<T>>);
-
-impl<T: Timestamp> EventPusher<T, Vec<Infallible>> for FrontierCapture<T> {
-    fn push(&mut self, event: Event<T, Vec<Infallible>>) {
-        match event {
-            Event::Progress(changes) => self.0.send_modify(|frontier| {
-                frontier.update_iter(changes);
-            }),
-            Event::Messages(_, _) => unreachable!(),
-        }
-    }
-}
-
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
 /// collection timestamped with the source specific timestamp type. Also returns a second stream
 /// that can be used to learn about the `source_upper` that all the source reader instances know
-/// about. This second stream will be used by the `remap_operator` to mint new timestamp bindings
-/// into the remap shard.
+/// about.
 fn source_render_operator<G, C>(
     scope: &mut G,
     config: &RawSourceCreationConfig,
@@ -437,7 +416,6 @@ fn remap_operator<G, FromTime>(
     storage_state: &crate::storage_state::StorageState,
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
-    mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
     remap_relation_desc: RelationDesc,
 ) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
 where
@@ -450,7 +428,7 @@ where
         source_exports: _,
         worker_id,
         worker_count,
-        timestamp_interval,
+        timestamp_interval: _,
         remap_metadata,
         as_of,
         resume_uppers: _,
@@ -525,65 +503,24 @@ where
         drop(cap);
         cap_set.downgrade(initial_batch.upper);
 
-        let mut ticker = tokio::time::interval(timestamp_interval);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
         let mut prev_probe_ts: Option<mz_repr::Timestamp> = None;
-        let timestamp_interval_ms: u64 = timestamp_interval
-            .as_millis()
-            .try_into()
-            .expect("huge duration");
 
         while !cap_set.is_empty() {
-            // Check the reclocking strategy in every iteration, to make it possible to change it
-            // without restarting the source pipeline.
-            let reclock_to_latest =
-                dyncfgs::STORAGE_RECLOCK_TO_LATEST.get(&config.config.config_set());
-
-            // If we are reclocking to the latest offset then we only mint bindings after a
-            // successful probe. Otherwise we fall back to the earlier behavior where we just
-            // record the ingested frontier.
-            let mut new_probe = None;
-            if reclock_to_latest {
-                new_probe = probed_upper
-                    .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
-                        (None, Some(_)) => true,
-                        (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
-                        _ => false,
+            // We only mint bindings after a successful probe.
+            let new_probe = probed_upper
+                .wait_for(|new_probe| match (prev_probe_ts, new_probe) {
+                    (None, Some(_)) => true,
+                    (Some(prev_ts), Some(new)) => prev_ts < new.probe_ts,
+                    _ => false,
+                })
+                .await
+                .map(|probe| (*probe).clone())
+                .unwrap_or_else(|_| {
+                    Some(Probe {
+                        probe_ts: now_fn().into(),
+                        upstream_frontier: Antichain::new(),
                     })
-                    .await
-                    .map(|probe| (*probe).clone())
-                    .unwrap_or_else(|_| {
-                        Some(Probe {
-                            probe_ts: now_fn().into(),
-                            upstream_frontier: Antichain::new(),
-                        })
-                    });
-            } else {
-                while prev_probe_ts >= new_probe.as_ref().map(|p| p.probe_ts) {
-                    ticker.tick().await;
-                    // We only proceed if the source upper frontier is not the minimum frontier. This
-                    // makes it so the first binding corresponds to the snapshot of the source, and
-                    // because the first binding always maps to the minimum *target* frontier we
-                    // guarantee that the source will never appear empty.
-                    let upstream_frontier = ingested_upper
-                        .wait_for(|f| *f.frontier() != [FromTime::minimum()])
-                        .await
-                        .unwrap()
-                        .frontier()
-                        .to_owned();
-
-                    let now = (now_fn)();
-                    let mut probe_ts = now - now % timestamp_interval_ms;
-                    if (now % timestamp_interval_ms) != 0 {
-                        probe_ts += timestamp_interval_ms;
-                    }
-                    new_probe = Some(Probe {
-                        probe_ts: probe_ts.into(),
-                        upstream_frontier,
-                    });
-                }
-            };
+                });
 
             let probe = new_probe.expect("known to be Some");
             prev_probe_ts = Some(probe.probe_ts);

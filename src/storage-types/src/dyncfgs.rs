@@ -290,14 +290,6 @@ pub const STORAGE_SUSPEND_AND_RESTART_DELAY: Config<Duration> = Config::new(
     "Delay interval when reconnecting to a source / sink after halt.",
 );
 
-/// Whether to mint reclock bindings based on the latest probed frontier or the currently ingested
-/// frontier.
-pub const STORAGE_RECLOCK_TO_LATEST: Config<bool> = Config::new(
-    "storage_reclock_to_latest",
-    true,
-    "Whether to mint reclock bindings based on the latest probed offset or the latest ingested offset.",
-);
-
 /// Whether to use the new continual feedback upsert operator.
 pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
@@ -373,7 +365,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SINK_PROGRESS_SEARCH)
         .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
-        .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
