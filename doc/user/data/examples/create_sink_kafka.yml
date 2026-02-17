@@ -48,7 +48,7 @@
         The name of the Kafka topic to write to.
     - name: "**COMPRESSION TYPE** `<compression_type>`"
       description: |
-        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `lz4`
     - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
       description: |
         Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
@@ -163,7 +163,7 @@
         The name of the Kafka topic to write to.
     - name: "**COMPRESSION TYPE** `<compression_type>`"
       description: |
-        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `lz4`
     - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
       description: |
         Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
@@ -246,7 +246,7 @@
         The name of the Kafka topic to write to.
     - name: "**COMPRESSION TYPE** `<compression_type>`"
       description: |
-        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `lz4`
     - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
       description: |
         Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.
@@ -340,7 +340,7 @@
         The name of the Kafka topic to write to.
     - name: "**COMPRESSION TYPE** `<compression_type>`"
       description: |
-        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: {{< if-unreleased "v0.112" >}}`none`{{< /if-unreleased >}}{{< if-released "v0.112" >}}`lz4`{{< /if-released >}}
+        Optional. The type of compression to apply to messages before they are sent to Kafka: `none`, `gzip`, `snappy`, `lz4`, or `zstd`.<br>Default: `lz4`
     - name: "**TRANSACTIONAL ID PREFIX** `'<transactional_id_prefix>'`"
       description: |
         Optional. The prefix of the transactional ID to use when producing to the Kafka topic.<br>Default: `materialize-{REGION ID}-{CONNECTION ID}-{SINK ID}`.

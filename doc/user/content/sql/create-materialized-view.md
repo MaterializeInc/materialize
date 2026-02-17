@@ -13,13 +13,9 @@ Use `CREATE MATERIALIZED VIEW` to:
   results](/concepts/reaction-time) by persisting them in durable storage and
   incrementally updating them as new data arrives.
 
-{{< if-released "v26.10" >}}
-
 - Create a replacement for an existing materialized view that can be applied in
   place with [`ALTER MATERIALIZED VIEW ... APPLY
   REPLACEMENT`](/sql/alter-materialized-view/).
-
-{{< /if-released >}}
 
 Materialized views are particularly useful when you need **cross-cluster
 access** to results or want to sink data to external systems like
@@ -47,8 +43,6 @@ offers lower latency for direct querying within that cluster.
 
 {{< /tab >}}
 
-{{< if-released "v26.10" >}}
-
 {{< tab "CREATE REPLACEMENT MATERIALIZED VIEW" >}}
 
 ### Create replacement materialized view
@@ -65,7 +59,6 @@ information, see [Creating replacement materialized
 views](#creating-replacement-materialized-views).
 
 {{< /tab >}}
-{{< /if-released >}}
 {{< /tabs >}}
 
 ## Details
@@ -294,7 +287,6 @@ JOIN mz_internal.mz_materialized_view_refreshes r ON r.materialized_view_id = rs
 JOIN mz_materialized_views mv ON rs.materialized_view_id = mv.id;
 ```
 
-{{< if-released "v26.10" >}}
 ### Creating replacement materialized views
 
 {{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
@@ -329,8 +321,6 @@ guide for a step-by-step tutorial.
 "/headless/replacement-views/replacement-view-target-restrictions" %}}
 
 {{% include-headless "/headless/replacement-views/replacement-view-index-restrictions" %}}
-
-{{< /if-released >}}
 
 ## Examples
 
@@ -375,7 +365,6 @@ AS SELECT ... FROM ...;
 things like querying materialized views from different clusters, indexed vs.
 non-indexed, and so on."
 
-{{< if-released "v26.10" >}}
 ### Creating a replacement materialized view
 
 {{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
@@ -394,7 +383,6 @@ See also:
 - [Replace materialized views guide
 ](/transform-data/updating-materialized-views/replace-materialized-view/)
 
-{{< /if-released >}}
 
 ## Privileges
 
