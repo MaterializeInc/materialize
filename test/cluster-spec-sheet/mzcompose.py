@@ -1987,6 +1987,7 @@ class CopyFromStdinEnvdStrongScalingScenario(Scenario):
                     repetition,
                     None,
                     elapsed,
+                    qps=rows_per_sec,
                 )
 
                 with runner.connection as cur:

@@ -2696,6 +2696,22 @@ where
         {
             Ok(writer) => writer,
             Err(e) => {
+                // Drain remaining CopyData/CopyDone/CopyFail messages from the
+                // socket. Since CopyInResponse was already sent, the client may
+                // have pipelined copy data that we must consume before returning
+                // the error, otherwise they'd be misinterpreted as top-level
+                // protocol messages and cause a deadlock.
+                loop {
+                    match self.conn.recv().await? {
+                        Some(FrontendMessage::CopyData(_)) => {}
+                        Some(FrontendMessage::CopyDone) | Some(FrontendMessage::CopyFail(_)) => {
+                            break;
+                        }
+                        Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                        Some(_) => break,
+                        None => return Ok(State::Done),
+                    }
+                }
                 self.adapter_client.retire_execute(
                     std::mem::take(ctx_extra),
                     StatementEndedExecutionReason::Errored {

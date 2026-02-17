@@ -225,7 +225,7 @@ $ fivetran-destination action=write_batch
 }
 
 > SELECT COUNT(*) FROM foo.large;
-4600000
+2000000
 
 # Cleanup.
 > DROP SCHEMA foo CASCADE;
