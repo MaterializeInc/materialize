@@ -19,13 +19,19 @@ if [[ "$BUILDKITE_PULL_REQUEST" = false ]]; then
 fi
 
 cd doc/user
+
+# Build main docs to public/
 hugo --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
+
+# Build skill docs to public/markdown-docs/
+hugo --config config.toml,config.skill.toml --gc --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds sitemap,robotsTXT,taxonomy
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]
 name = "preview"
 url = "s3://materialize-website-previews?region=us-east-1&prefix=materialize/$BUILDKITE_PULL_REQUEST/"
 EOF
+# Single deploy: public/ contains both main site and markdown-docs/
 hugo deploy --config config.toml,config.deployment.toml --force
 
 curl -fsSL \

@@ -18,7 +18,7 @@
 #   directory is cleaned before generation.
 #   Default: .claude/skills/materialize-docs.
 #   For publishing to the website,
-#   we will output to doc/user/static/markdown-docs directory.
+#   we will output to doc/user/public/markdown-docs directory.
 #
 # Examples:
 #   bin/gen-claude-skill                         # Generate to default location
@@ -28,7 +28,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# For publishing to the website, we will output to doc/user/static/markdown-docs
+# For publishing to the website, we will output to doc/user/public/markdown-docs
 # directory. The OUTPUT_DIR directory is cleaned before generation.
 OUTPUT_DIR="${1:-.claude/skills/materialize-docs}"
 
