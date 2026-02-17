@@ -3298,7 +3298,7 @@ impl SqlScalarType {
             return true;
         }
 
-        ::tracing::error!("repr type error: base_eq failed for {self:?} and {other:?}");
+        ::tracing::trace!("repr type error: base_eq failed for {self:?} and {other:?}");
         ReprScalarType::from(self) == ReprScalarType::from(other)
     }
 
