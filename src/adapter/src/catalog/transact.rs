@@ -1576,7 +1576,11 @@ impl Catalog {
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
 
-                    if entry.item().is_storage_collection() {
+                    // Drop associated storage collections, unless the dropped item is a
+                    // replacement, in which case the replacement target owns the storage
+                    // collection.
+                    if entry.item().is_storage_collection() && entry.replacement_target().is_none()
+                    {
                         storage_collections_to_drop.extend(entry.global_ids());
                     }
 

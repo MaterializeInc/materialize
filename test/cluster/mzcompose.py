@@ -6411,3 +6411,59 @@ def workflow_test_mv_apply_replacement_wait(c: Composition) -> None:
 
     thread.join(timeout=10)
     assert not thread.is_alive(), "APPLY REPLACEMENT should have completed"
+
+
+def workflow_github_10086(c: Composition) -> None:
+    """
+    Regression test for database-issues#10086, in which dropping a replacement
+    MV incorrectly seals the target shard after an envd restart.
+    """
+
+    c.up("materialized")
+
+    # Create a materialized view and a replacement.
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t;
+        SELECT * FROM mv;
+        """
+    )
+
+    # Drop the replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp")
+
+    # Let frontier information propagate.
+    time.sleep(2)
+
+    # Verify that the write frontier of `mv` is not empty.
+    upper_empty = c.sql_query(
+        """
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """
+    )[0][0]
+    assert not upper_empty
+
+    # Restart Materialize.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.sql("SELECT * FROM mv")
+
+    # Let frontier information propagate.
+    time.sleep(2)
+
+    # Verify that the write frontier of `mv` is not empty.
+    upper_empty = c.sql_query(
+        """
+        SELECT write_frontier IS NULL
+        FROM mz_internal.mz_frontiers
+        JOIN mz_materialized_views ON id = object_id
+        WHERE name = 'mv'
+        """
+    )[0][0]
+    assert not upper_empty

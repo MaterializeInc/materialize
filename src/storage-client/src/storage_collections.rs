@@ -2250,15 +2250,6 @@ where
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");
 
-        for id in identifiers.iter() {
-            let metadata = storage_metadata.get_collection_shard::<T>(*id);
-            mz_ore::soft_assert_or_log!(
-                matches!(metadata, Err(StorageError::IdentifierMissing(_))),
-                "dropping {id}, but drop was not synchronized with storage \
-                controller via `synchronize_collections`"
-            );
-        }
-
         // Policies that advance the since to the empty antichain. We do still
         // honor outstanding read holds, and collections will only be dropped
         // once those are removed as well.
@@ -2270,10 +2261,24 @@ where
 
         for id in identifiers {
             // Make sure it's still there, might already have been deleted.
-            if self_collections.contains_key(&id) {
-                finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));
+            let Some(collection) = self_collections.get(&id) else {
+                continue;
+            };
+
+            // Unless the collection has a primary, its shard must have been previously removed
+            // by `StorageCollections::prepare_state`.
+            if collection.primary.is_none() {
+                let metadata = storage_metadata.get_collection_shard::<T>(id);
+                mz_ore::soft_assert_or_log!(
+                    matches!(metadata, Err(StorageError::IdentifierMissing(_))),
+                    "dropping {id}, but drop was not synchronized with storage \
+                     controller via `prepare_state`"
+                );
             }
+
+            finalized_policies.push((id, ReadPolicy::ValidFrom(Antichain::new())));
         }
+
         self.set_read_policies_inner(&mut self_collections, finalized_policies);
 
         drop(self_collections);

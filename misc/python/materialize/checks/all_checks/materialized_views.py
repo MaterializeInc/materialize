@@ -10,7 +10,7 @@ import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check, disabled
+from materialize.checks.checks import Check
 from materialize.checks.executors import Executor
 from materialize.mz_version import MzVersion
 
@@ -310,10 +310,9 @@ class MaterializedViewsRefresh(Check):
         )
 
 
-@disabled("due to https://github.com/MaterializeInc/database-issues/issues/10086")
 class MaterializedViewReplacement(Check):
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.8.0")
+        return self.base_version >= MzVersion.parse_mz("v26.13.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(

@@ -1805,13 +1805,6 @@ where
         let mut collections_to_drop = Vec::new();
 
         for id in ids.iter() {
-            let metadata = storage_metadata.get_collection_shard::<T>(*id);
-            mz_ore::soft_assert_or_log!(
-                matches!(metadata, Err(StorageError::IdentifierMissing(_))),
-                "dropping {id}, but drop was not synchronized with storage \
-                controller via `synchronize_collections`"
-            );
-
             let collection_state = self.collections.get(id);
 
             if let Some(collection_state) = collection_state {
