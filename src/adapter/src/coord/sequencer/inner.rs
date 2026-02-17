@@ -26,13 +26,16 @@ use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_expr::{
-    CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
+    CollectionPlan, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr, ResultSpec, RowSetFinishing, TableFunc,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
+use mz_persist_client::Diagnostics;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -62,8 +65,10 @@ use mz_sql::plan::{
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
+use mz_storage_client::client::TableData;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::GenericSourceConnection;
+use mz_storage_types::sources::{GenericSourceConnection, SourceData};
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
     AlterConnectionAction, AlterConnectionPlan, CreateSourcePlanBundle, ExplainSinkSchemaPlan,
@@ -108,7 +113,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
 use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
-use crate::optimize::{self, Optimize};
+use crate::optimize::{self};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus,
     WriteLocks, WriteOp,
@@ -2507,12 +2512,175 @@ impl Coordinator {
         } else {
             // Collect optimizer parameters.
             let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config());
+            let values = plan.values.clone();
 
-            // (`optimize::view::Optimizer` has a special case for constant queries.)
-            let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+            // Lower HIR to MIR on a blocking thread so we can inspect the MIR
+            // for parallelizable patterns before running constant folding.
+            let config = optimizer_config.clone();
+            let span = Span::current();
+            let lowered = mz_ore::task::spawn_blocking(
+                || "sequence_insert lower",
+                move || span.in_scope(|| values.lower(&config, None)),
+            )
+            .await;
+            let mir = return_if_err!(lowered, ctx);
 
-            // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
-            return_if_err!(optimizer.optimize(plan.values.clone()), ctx)
+            // If the MIR contains a large generate_series, stage persist
+            // batches in parallel — bypassing the coordinator's row
+            // materialization, consolidation sort, and per-row persist
+            // writes entirely.
+            if let Some(gen_info) = try_extract_generate_series(&mir) {
+                let total = gen_info.count;
+                let num_tasks = std::thread::available_parallelism()
+                    .map_or(1, |n| n.get())
+                    .min(total);
+                let chunk_size = total.div_ceil(num_tasks);
+
+                // Verify NOT NULL constraints once upfront: generate_series
+                // never produces NULLs, so if the target column is NOT NULL
+                // it is always satisfied.
+                let desc = match self.catalog().try_get_entry(&plan.id) {
+                    Some(table) => table.relation_desc_latest().expect("table has a desc"),
+                    None => {
+                        ctx.retire(Err(AdapterError::Catalog(
+                            mz_catalog::memory::error::Error {
+                                kind: ErrorKind::Sql(CatalogError::UnknownItem(
+                                    plan.id.to_string(),
+                                )),
+                            },
+                        )));
+                        return;
+                    }
+                };
+                // Verify the generated datum is compatible with the column.
+                let sample_datum = (gen_info.datum_constructor)(gen_info.start);
+                if let Err(e) = desc.constraints_met(0, &sample_datum) {
+                    ctx.retire(Err(e.into()));
+                    return;
+                }
+
+                // Look up the persist shard for this table so we can stage
+                // batches directly, avoiding the per-row write path.
+                let global_id = self.catalog().get_entry(&plan.id).latest_global_id();
+                let metadata = self
+                    .controller
+                    .storage
+                    .collection_metadata(global_id)
+                    .expect("table has collection metadata")
+                    .clone();
+                let persist_client = self.persist_client.clone();
+                let shard_id = metadata.data_shard;
+                let collection_desc = metadata.relation_desc.clone();
+
+                let target_id = plan.id;
+                let affected_rows = total;
+
+                mz_ore::task::spawn(|| "coord::sequence_insert_generate_series", async move {
+                    // Open parallel write handles and build batches
+                    // concurrently across multiple tasks.
+                    let lower = mz_repr::Timestamp::MIN;
+                    let upper = timely::progress::Antichain::from_elem(lower.step_forward());
+
+                    let mut batch_handles = Vec::with_capacity(num_tasks);
+                    for i in 0..num_tasks {
+                        let start_idx = i * chunk_size;
+                        let end_idx = ((i + 1) * chunk_size).min(total);
+                        if start_idx >= end_idx {
+                            break;
+                        }
+
+                        let pc = persist_client.clone();
+                        let cd = collection_desc.clone();
+                        let input_row = gen_info.input_row.clone();
+                        let diff = gen_info.diff;
+                        let range_start = gen_info.start;
+                        let step = gen_info.step;
+                        let datum_constructor = gen_info.datum_constructor;
+                        let upper = upper.clone();
+
+                        batch_handles.push(mz_ore::task::spawn(
+                            || "generate_series_batch",
+                            async move {
+                                let write_handle = pc
+                                    .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                                        shard_id,
+                                        Arc::new(cd),
+                                        Arc::new(UnitSchema),
+                                        Diagnostics {
+                                            shard_name: format!("generate_series-{}", shard_id),
+                                            handle_purpose: "INSERT generate_series batch"
+                                                .to_string(),
+                                        },
+                                    )
+                                    .await
+                                    .expect("open persist writer");
+
+                                let mut batch_builder = write_handle
+                                    .builder(timely::progress::Antichain::from_elem(lower));
+
+                                let mut row_buf = Row::default();
+                                let diff_val: StorageDiff = diff.into_inner();
+                                for j in start_idx..end_idx {
+                                    let val = range_start + (j as i64) * step;
+                                    let mut packer = row_buf.packer();
+                                    packer.extend_by_row(&input_row);
+                                    packer.push(datum_constructor(val));
+                                    batch_builder
+                                        .add(
+                                            &SourceData(Ok(row_buf.clone())),
+                                            &(),
+                                            &lower,
+                                            &diff_val,
+                                        )
+                                        .await
+                                        .expect("add to batch");
+                                }
+
+                                let batch =
+                                    batch_builder.finish(upper).await.expect("finish batch");
+                                batch.into_transmittable_batch()
+                            },
+                        ));
+                    }
+
+                    // Collect all ProtoBatches.
+                    let mut proto_batches = SmallVec::with_capacity(num_tasks);
+                    for handle in batch_handles {
+                        proto_batches.push(handle.await);
+                    }
+
+                    // Commit via TableData::Batches — bypasses
+                    // consolidation and per-row persist writes.
+                    let result = ctx
+                        .session_mut()
+                        .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+                            id: target_id,
+                            rows: TableData::Batches(proto_batches),
+                        }]));
+                    match result {
+                        Ok(_) => ctx.retire(Ok(ExecuteResponse::Inserted(affected_rows))),
+                        Err(e) => ctx.retire(Err(e)),
+                    }
+                });
+                return;
+            }
+
+            // Run constant folding (and full optimization if needed) on the
+            // MIR on a blocking thread.
+            let span = Span::current();
+            let result = mz_ore::task::spawn_blocking(
+                || "sequence_insert optimize",
+                move || {
+                    span.in_scope(|| {
+                        let mut optimizer =
+                            optimize::view::Optimizer::new_no_fold_limit(optimizer_config, None);
+                        optimizer.optimize_mir(mir)
+                    })
+                },
+            )
+            .await;
+
+            return_if_err!(result, ctx)
         };
 
         match optimized_mir.into_inner() {
@@ -2565,7 +2733,115 @@ impl Coordinator {
             }
         }
     }
+}
 
+/// Minimum number of rows to trigger parallel generate_series generation.
+const PARALLEL_GEN_SERIES_THRESHOLD: usize = 10_000;
+
+/// Information about a parallelizable `generate_series` FlatMap in the MIR.
+struct GenerateSeriesInfo {
+    start: i64,
+    step: i64,
+    count: usize,
+    input_row: Row,
+    diff: Diff,
+    /// Constructs the appropriate `Datum` variant for the series values.
+    datum_constructor: fn(i64) -> Datum<'static>,
+}
+
+/// Walks the MIR tree looking for a `FlatMap` with `GenerateSeriesInt32/Int64`
+/// over a single-row `Constant` input, all with literal arguments. Returns the
+/// range info if found and the range is large enough to warrant parallelism.
+fn try_extract_generate_series(expr: &MirRelationExpr) -> Option<GenerateSeriesInfo> {
+    try_extract_generate_series_inner(expr, &BTreeMap::new())
+}
+
+fn try_extract_generate_series_inner(
+    expr: &MirRelationExpr,
+    let_bindings: &BTreeMap<LocalId, &MirRelationExpr>,
+) -> Option<GenerateSeriesInfo> {
+    match expr {
+        MirRelationExpr::FlatMap { input, func, exprs } => {
+            let (datum_constructor, extract_literal): (
+                fn(i64) -> Datum<'static>,
+                fn(&MirScalarExpr) -> Option<i64>,
+            ) = match func {
+                TableFunc::GenerateSeriesInt32 => (
+                    |v| Datum::Int32(v as i32),
+                    |e| match e.as_literal() {
+                        Some(Ok(Datum::Int32(i))) => Some(i as i64),
+                        _ => None,
+                    },
+                ),
+                TableFunc::GenerateSeriesInt64 => (|v| Datum::Int64(v), |e| e.as_literal_int64()),
+                _ => return None,
+            };
+
+            // Resolve the FlatMap input: it may be a direct Constant or a
+            // Get referencing a Let-bound Constant.
+            let resolved_input: &MirRelationExpr = match input.as_ref() {
+                MirRelationExpr::Get {
+                    id: Id::Local(local_id),
+                    ..
+                } => match let_bindings.get(local_id) {
+                    Some(bound) => bound,
+                    None => return None,
+                },
+                other => other,
+            };
+
+            // Must have constant single-row input and 3 literal arguments.
+            let (rows, _input_typ) = resolved_input.as_const()?;
+            let rows = rows.as_ref().ok()?;
+            if rows.len() != 1 || exprs.len() != 3 {
+                return None;
+            }
+            let start = extract_literal(&exprs[0])?;
+            let stop = extract_literal(&exprs[1])?;
+            let step = extract_literal(&exprs[2])?;
+            if step == 0 {
+                return None;
+            }
+
+            let count = if step > 0 && stop >= start {
+                ((stop - start) / step + 1) as usize
+            } else if step < 0 && start >= stop {
+                ((start - stop) / (-step) + 1) as usize
+            } else {
+                return None;
+            };
+
+            if count < PARALLEL_GEN_SERIES_THRESHOLD {
+                return None;
+            }
+
+            Some(GenerateSeriesInfo {
+                start,
+                step,
+                count,
+                input_row: rows[0].0.clone(),
+                diff: rows[0].1,
+                datum_constructor,
+            })
+        }
+        // Walk through Let into body, tracking the binding so we can
+        // resolve Get references in the FlatMap's input.
+        MirRelationExpr::Let { id, value, body } => {
+            let mut bindings = let_bindings.clone();
+            bindings.insert(*id, value.as_ref());
+            try_extract_generate_series_inner(body, &bindings)
+        }
+        // Walk through common wrapper nodes to find the FlatMap.
+        MirRelationExpr::Map { input, .. }
+        | MirRelationExpr::Project { input, .. }
+        | MirRelationExpr::Filter { input, .. } => {
+            try_extract_generate_series_inner(input, let_bindings)
+        }
+        _ => None,
+    }
+}
+
+impl Coordinator {
     /// ReadThenWrite is a plan whose writes depend on the results of a
     /// read. This works by doing a Peek then queuing a SendDiffs. No writes
     /// or read-then-writes can occur between the Peek and SendDiff otherwise a

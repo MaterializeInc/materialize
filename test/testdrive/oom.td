@@ -62,9 +62,7 @@ contains:result exceeds max size of 1.0 MiB
 
 > CREATE TABLE t2 (a int4, b text)
 
-! INSERT INTO t2 SELECT * FROM generate_series(1, 10001), repeat('a', 100);
-contains:result exceeds max size of 1.0 MiB
-
+> INSERT INTO t2 SELECT * FROM generate_series(1, 10001), repeat('a', 100);
 > INSERT INTO t2 SELECT * FROM generate_series(1, 5000), repeat('a', 100);
 > INSERT INTO t2 SELECT * FROM generate_series(5001, 10000), repeat('a', 100);
 

@@ -21,7 +21,7 @@
 
 use std::time::Instant;
 
-use mz_expr::OptimizedMirRelationExpr;
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
@@ -65,6 +65,20 @@ impl Optimizer<ExprPrepNoop> {
             fold_constants_limit: true,
         }
     }
+
+    /// Creates an optimizer instance that does not perform any expression
+    /// preparation. This instance calls constant folding WITHOUT a size limit,
+    /// which is suitable for INSERT statements where the rows will be
+    /// materialized in memory regardless.
+    pub fn new_no_fold_limit(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
+        Self {
+            repr_typecheck_ctx: empty_repr_context(),
+            config,
+            metrics,
+            expr_prep_style: ExprPrepNoop,
+            fold_constants_limit: false,
+        }
+    }
 }
 
 impl<S> Optimizer<S> {
@@ -83,6 +97,46 @@ impl<S> Optimizer<S> {
             expr_prep_style,
             fold_constants_limit: false,
         }
+    }
+}
+
+impl<S: ExprPrep> Optimizer<S> {
+    /// Optimize a pre-lowered MIR expression. Same as the [`Optimize`] impl
+    /// but skips the HIR-to-MIR lowering step.
+    pub fn optimize_mir(
+        &mut self,
+        mut expr: MirRelationExpr,
+    ) -> Result<OptimizedMirRelationExpr, OptimizerError> {
+        let time = Instant::now();
+
+        trace_plan!(at: "raw", &expr);
+
+        let mut df_meta = DataflowMetainfo::default();
+        let mut transform_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.repr_typecheck_ctx,
+            &mut df_meta,
+            self.metrics.as_mut(),
+            None,
+        );
+
+        expr = optimize_mir_constant(expr, &mut transform_ctx, self.fold_constants_limit)?;
+
+        let expr = if expr.as_const().is_some() {
+            trace_plan!(at: "local", &expr);
+            OptimizedMirRelationExpr(expr)
+        } else {
+            let mut opt_expr = OptimizedMirRelationExpr(expr);
+            self.expr_prep_style.prep_relation_expr(&mut opt_expr)?;
+            expr = opt_expr.into_inner();
+            optimize_mir_local(expr, &mut transform_ctx)?
+        };
+
+        if let Some(metrics) = &self.metrics {
+            metrics.observe_e2e_optimization_time("view", time.elapsed());
+        }
+
+        Ok(expr)
     }
 }
 
