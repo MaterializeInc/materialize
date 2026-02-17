@@ -123,9 +123,26 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Supported data types
 
+{{< tabs >}}
+{{< tab "PostgreSQL" >}}
+#### PostgreSQL types
+
 {{% include-from-yaml data="postgres_source_details" name="postgres-supported-types" %}}
 
 {{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
+
+{{< /tab >}}
+{{< tab "SQL Server" >}}
+#### SqlServer types
+
+{{< include-md file="shared-content/sql-server-supported-types.md" >}}
+
+{{< include-md file="shared-content/sql-server-unsupported-type-handling.md" >}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
 
 ### Handling table schema changes
 
