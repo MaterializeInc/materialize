@@ -41,6 +41,8 @@
 /// * `introduces_nulls`: A boolean indicating whether the function introduces nulls. Applies to
 ///   all functions. If not specified, use the default implementation from the trait.
 ///   The default is to return the `nullable` property of the output type.
+/// * `test`: A boolean indicating whether to generate a snapshot test for the function.
+///   Defaults to `false`.
 ///
 /// # Limitations
 /// * The input and output types can contain lifetime parameters, as long as they are `'a`.

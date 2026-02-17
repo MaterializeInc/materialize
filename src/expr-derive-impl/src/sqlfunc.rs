@@ -41,6 +41,8 @@ pub(crate) struct Modifiers {
     propagates_nulls: Option<Expr>,
     /// Whether the function introduces nulls. Applies to all functions.
     introduces_nulls: Option<Expr>,
+    /// Whether to generate a snapshot test for the function. Defaults to false.
+    test: Option<bool>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -91,6 +93,7 @@ pub fn sqlfunc(
 ) -> darling::Result<TokenStream> {
     let attr_args = darling::ast::NestedMeta::parse_meta_list(attr.clone())?;
     let modifiers = Modifiers::from_list(&attr_args).unwrap();
+    let generate_tests = modifiers.test.unwrap_or(false);
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
     let tokens = match determine_parameters_arena(&func) {
@@ -105,7 +108,7 @@ pub fn sqlfunc(
         ))),
     }?;
 
-    let test = include_test.then(|| generate_test(attr, item, &func.sig.ident));
+    let test = (generate_tests && include_test).then(|| generate_test(attr, item, &func.sig.ident));
 
     Ok(quote! {
         #tokens
@@ -232,6 +235,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         could_error,
         propagates_nulls,
         introduces_nulls,
+        test: _,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -379,6 +383,7 @@ fn binary_func(
         could_error,
         propagates_nulls,
         introduces_nulls,
+        test: _,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {

@@ -62,7 +62,8 @@ mod test {
                 output_type = i16,
                 is_infix_op = true,
                 sqlname = "+",
-                propagates_nulls = true
+                propagates_nulls = true,
+                test = true,
         };
         let item = quote! {
             fn add_int16<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -79,7 +80,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: Datum<'a>) -> bool {
                 unimplemented!()
@@ -92,7 +93,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary_arena() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: Datum<'a>, temp_storage: &RowArena) -> bool {
                 unimplemented!()
@@ -105,7 +106,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary_ref() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: &i16) -> bool {
                 unimplemented!()
@@ -123,7 +124,8 @@ mod test {
                 output_type = "Option<bool>",
                 is_infix_op = true,
                 sqlname = "test",
-                propagates_nulls = true
+                propagates_nulls = true,
+                test = true,
         };
         let item = quote! {
             fn complex_output_type_fn<'a>(
@@ -140,7 +142,7 @@ mod test {
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_binary_arena() {
-        let attr = quote! {};
+        let attr = quote! {test = true};
         let item = quote! {
             fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
                 unimplemented!()
