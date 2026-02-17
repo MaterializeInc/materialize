@@ -144,16 +144,21 @@ class SubscribeParallelKafka(SubscribeParallel):
 class SubscribeNoSnapshotTable(Scenario):
     """Feature benchmarks related to SUBSCRIBE without a snapshot"""
 
-    SCALE = 7  # Controls the size of the snapshot we skip over.
+    SCALE = 6  # Controls the size of the snapshot we skip over.
 
     def benchmark(self) -> MeasurementSource:
         return Td(
             f"""
+             $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+             ALTER SYSTEM SET max_result_size = '100GB';
+
              $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
 
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 TEXT) WITH (RETAIN HISTORY FOR '1hr');
              > INSERT INTO s1 SELECT generate_series::text from generate_series(1, {self.n()});
+             > SELECT COUNT(*) FROM s1;
+             {self.n()}
 
              $ set-from-sql var=mz_now
              SELECT mz_now()::text;
@@ -177,7 +182,7 @@ class SubscribeNoSnapshotTable(Scenario):
 class SubscribeNoSnapshotIndex(Scenario):
     """Feature benchmarks related to SUBSCRIBE without a snapshot"""
 
-    SCALE = 7  # Controls the size of the snapshot we skip over.
+    SCALE = 6  # Controls the size of the snapshot we skip over.
 
     def benchmark(self) -> MeasurementSource:
         return Td(
@@ -185,7 +190,8 @@ class SubscribeNoSnapshotIndex(Scenario):
              $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
 
              $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-             ALTER SYSTEM SET enable_index_options = true
+             ALTER SYSTEM SET enable_index_options = true;
+             ALTER SYSTEM SET max_result_size = '100GB';
 
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 TEXT);
