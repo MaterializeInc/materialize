@@ -1684,7 +1684,7 @@ impl HirRelationExpr {
                         .iter_mut()
                         .zip_eq(input.typ(outers, params).column_types)
                     {
-                        *base_col = base_col.sql_union(&col).unwrap(); // HIR deliberately not using `union`
+                        *base_col = base_col.union(&col).unwrap();
                     }
                 }
                 SqlRelationType::new(base_cols)
@@ -3959,7 +3959,7 @@ impl AbstractExpr for HirScalarExpr {
             } => {
                 let then_type = then.typ(outers, inner, params);
                 let else_type = els.typ(outers, inner, params);
-                then_type.sql_union(&else_type).unwrap() // HIR deliberately not using `union`
+                then_type.union(&else_type).unwrap()
             }
             HirScalarExpr::Exists(_, _name) => SqlScalarType::Bool.nullable(true),
             HirScalarExpr::Select(expr, _name) => {

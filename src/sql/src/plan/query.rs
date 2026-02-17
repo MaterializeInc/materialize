@@ -2149,7 +2149,7 @@ fn plan_values(
         let col = coerce_homogeneous_exprs(ecx, plan_exprs(ecx, col)?, None)?;
         let mut col_type = ecx.column_type(&col[0]);
         for val in &col[1..] {
-            col_type = col_type.sql_union(&ecx.column_type(val))?; // HIR deliberately not using `union`
+            col_type = col_type.union(&ecx.column_type(val))?;
         }
         col_types.push(col_type);
         col_iters.push(col.into_iter());
@@ -2235,7 +2235,7 @@ fn plan_values_insert(
             if column >= types.len() {
                 types.push(ecx.column_type(&val));
             } else {
-                types[column] = types[column].sql_union(&ecx.column_type(&val))?; // HIR deliberately not using `union`
+                types[column] = types[column].union(&ecx.column_type(&val))?;
             }
             exprs.push(val);
         }

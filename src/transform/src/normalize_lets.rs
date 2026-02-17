@@ -312,10 +312,7 @@ mod support {
                         .column_types
                         .iter()
                         .zip_eq(typ.column_types.iter())
-                        .all(|(t1, t2)| {
-                            t1.scalar_type
-                                .base_eq_or_repr_eq_for_assertion(&t2.scalar_type)
-                        })
+                        .all(|(t1, t2)| t1.scalar_type.base_eq(&t2.scalar_type))
                     {
                         Err(crate::TransformError::Internal(format!(
                             "scalar types do not match: {:?} v {:?}",

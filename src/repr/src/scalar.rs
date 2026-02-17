@@ -3516,22 +3516,6 @@ impl SqlScalarType {
         self.eq_inner(other, false)
     }
 
-    /// Determines equality among scalar types that acknowledges custom OIDs,
-    /// falling back to representation type equality (which ignores OIDs and
-    /// other inessential, SQL-level difference) when that fails.
-    ///
-    /// This function should only be called in assertion-like contexts, where
-    /// we really expect `true` as the result---it calls `::tracing::error!`
-    /// when `base_eq` returns `false`.
-    pub fn base_eq_or_repr_eq_for_assertion(&self, other: &SqlScalarType) -> bool {
-        if self.base_eq(other) {
-            return true;
-        }
-
-        ::tracing::error!("repr type error: base_eq failed for {self:?} and {other:?}");
-        ReprScalarType::from(self) == ReprScalarType::from(other)
-    }
-
     // Determines equality among scalar types that ignores any custom OIDs or
     // embedded values.
     pub fn structural_eq(&self, other: &SqlScalarType) -> bool {

@@ -1314,7 +1314,9 @@ impl MirScalarExpr {
                                 Err(err) => {
                                     *e = MirScalarExpr::Literal(
                                         Err(err.clone()),
-                                        then.typ(column_types).union(&els.typ(column_types)),
+                                        then.typ(column_types)
+                                            .union(&els.typ(column_types))
+                                            .unwrap(),
                                     )
                                 }
                                 _ => unreachable!(),
@@ -1388,7 +1390,7 @@ impl MirScalarExpr {
                                 ) if f1 == f2
                                     && e1
                                         .typ(column_types)
-                                        .try_union(&e2.typ(column_types))
+                                        .union(&e2.typ(column_types))
                                         .is_ok() =>
                                 {
                                     *e = cond
@@ -1411,7 +1413,7 @@ impl MirScalarExpr {
                                     && e1a == e1b
                                     && e2a
                                         .typ(column_types)
-                                        .try_union(&e2b.typ(column_types))
+                                        .union(&e2b.typ(column_types))
                                         .is_ok() =>
                                 {
                                     *e = e1a.take().call_binary(
@@ -1434,7 +1436,7 @@ impl MirScalarExpr {
                                     && e2a == e2b
                                     && e1a
                                         .typ(column_types)
-                                        .try_union(&e1b.typ(column_types))
+                                        .union(&e1b.typ(column_types))
                                         .is_ok() =>
                                 {
                                     *e = cond
@@ -1987,7 +1989,7 @@ impl MirScalarExpr {
             MirScalarExpr::If { cond: _, then, els } => {
                 let then_type = then.typ(column_types);
                 let else_type = els.typ(column_types);
-                then_type.union(&else_type)
+                then_type.union(&else_type).unwrap()
             }
         }
     }

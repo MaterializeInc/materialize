@@ -1356,7 +1356,10 @@ impl VariadicFunc {
         use VariadicFunc::*;
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
-            Greatest | Least => input_types.into_iter().reduce(|l, r| l.union(&r)).unwrap(),
+            Greatest | Least => input_types
+                .into_iter()
+                .reduce(|l, r| l.union(&r).unwrap())
+                .unwrap(),
             Coalesce => {
                 // Note that the parser doesn't allow empty argument lists for variadic functions
                 // that use the standard function call syntax (ArrayCreate and co. are different
@@ -1364,7 +1367,7 @@ impl VariadicFunc {
                 let nullable = input_types.iter().all(|typ| typ.nullable);
                 input_types
                     .into_iter()
-                    .reduce(|l, r| l.union(&r))
+                    .reduce(|l, r| l.union(&r).unwrap())
                     .unwrap()
                     .nullable(nullable)
             }

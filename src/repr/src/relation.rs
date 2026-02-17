@@ -70,21 +70,13 @@ fn return_true() -> bool {
 }
 
 impl SqlColumnType {
-    /// Backports nullability information from `backport_typ` into `self`,
-    /// affecting the outer `.nullable` field but also record fields deeper
-    /// into the type.
     pub fn backport_nullability(&mut self, backport_typ: &SqlColumnType) {
         self.scalar_type
             .backport_nullability(&backport_typ.scalar_type);
         self.nullable = backport_typ.nullable;
     }
 
-    /// Unions two [`SqlColumnType`]s.
-    ///
-    /// Will return an error if the underlying scalar types are SQL-incompatible,
-    /// e.g., unioning a `Text` and a `Int32`... or, more surprisingly, unioning
-    /// a `Text` and a `VarChar`.
-    pub fn sql_union(&self, other: &Self) -> Result<Self, anyhow::Error> {
+    pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (&self.scalar_type, &other.scalar_type) {
             (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
                 Ok(SqlColumnType {
@@ -131,7 +123,7 @@ impl SqlColumnType {
                             other.scalar_type
                         );
                     } else {
-                        let union_column_type = typ.sql_union(other_typ)?;
+                        let union_column_type = typ.union(other_typ)?;
                         union_fields.push((name.clone(), union_column_type));
                     };
                 }
@@ -150,24 +142,6 @@ impl SqlColumnType {
                 other.scalar_type
             ),
         }
-    }
-
-    pub fn try_union(&self, other: &Self) -> Result<Self, anyhow::Error> {
-        self.sql_union(other).or_else(|e| {
-            ::tracing::trace!("repr type error: sql_union({self:?}, {other:?}): {e}");
-
-            let repr_self = ReprColumnType::from(self);
-            let repr_other = ReprColumnType::from(other);
-            repr_self
-                .union(&repr_other)
-                .map(|typ| SqlColumnType::from_repr(&typ))
-        })
-    }
-
-    pub fn union(&self, other: &Self) -> Self {
-        self.try_union(other).unwrap_or_else(|e| {
-            panic!("repr type error: after sql_union({self:?}, {other:?}) error: {e}")
-        })
     }
 
     /// Consumes this `SqlColumnType` and returns a new `SqlColumnType` with its

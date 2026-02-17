@@ -685,8 +685,6 @@ def compileSlowSltConfig() -> SltRunConfig:
         "test/sqllogictest/introspection/singlereplica_attribution_sources.slt",
         "test/sqllogictest/timedomain.slt",
         "test/sqllogictest/transactions.slt",
-        # depends on log sources
-        "test/sqllogictest/github-10045-10046-10052.slt",
         # depends on unmaterializable functions
         "test/sqllogictest/regclass.slt",
         "test/sqllogictest/regproc.slt",

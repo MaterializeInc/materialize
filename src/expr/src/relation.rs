@@ -532,8 +532,8 @@ impl MirRelationExpr {
                 for input_col_types in input_types {
                     for (base_col, col) in result.iter_mut().zip_eq(input_col_types) {
                         *base_col = base_col
-                            .try_union(col)
-                            .map_err(|e| format!("{e}\nin plan:\n{}", self.pretty()))?;
+                            .union(col)
+                            .map_err(|e| format!("{}\nin plan:\n{}", e, self.pretty()))?;
                     }
                 }
                 result
