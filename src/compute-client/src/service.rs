@@ -15,7 +15,6 @@ use std::mem;
 use async_trait::async_trait;
 use bytesize::ByteSize;
 use differential_dataflow::lattice::Lattice;
-use mz_expr::row::RowCollection;
 use mz_ore::cast::CastInto;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -235,7 +234,7 @@ where
         otel_ctx: OpenTelemetryContext,
     ) -> Option<ComputeResponse<T>> {
         let (merged, ready_shards) = self.peek_responses.entry(uuid).or_insert((
-            PeekResponse::Rows(vec![RowCollection::default()]),
+            PeekResponse::Rows(vec![UpdateCollection::default()]),
             BTreeSet::new(),
         ));
 

@@ -190,7 +190,7 @@ impl<T> FrontiersResponse<T> {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum PeekResponse {
     /// Returned rows of a successful peek.
-    Rows(Vec<RowCollection>),
+    Rows(Vec<UpdateCollection>),
     /// Results of the peek were stashed in persist batches.
     Stashed(Box<StashedPeekResponse>),
     /// Error of an unsuccessful peek.
@@ -232,7 +232,7 @@ pub struct StashedPeekResponse {
     ///
     /// We will have a mix of stashed responses and inline responses because the
     /// result sizes across different workers can and will vary.
-    pub inline_rows: Vec<RowCollection>,
+    pub inline_rows: Vec<UpdateCollection>,
 }
 
 impl StashedPeekResponse {
@@ -240,7 +240,11 @@ impl StashedPeekResponse {
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
-        let num_inline_rows: usize = self.inline_rows.iter().map(|r| r.count()).sum();
+        let num_inline_rows: usize = self
+            .inline_rows
+            .iter()
+            .map(|r| r.count().unwrap_or(0))
+            .sum();
         RowCollection::offset_limit(num_stashed_rows + num_inline_rows, offset, limit)
     }
 

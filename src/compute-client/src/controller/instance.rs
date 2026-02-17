@@ -60,7 +60,7 @@ use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
 use crate::metrics::{InstanceMetrics, ReplicaCollectionMetrics, ReplicaMetrics, UIntGauge};
 use crate::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekDescription, PeekTarget,
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
@@ -1605,7 +1605,7 @@ where
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
-        timestamp: T,
+        timestamps: PeekDescription<T>,
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
@@ -1622,7 +1622,7 @@ where
             return Err(ReadHoldIdMismatch(read_hold.id()));
         }
         read_hold
-            .try_downgrade(Antichain::from_elem(timestamp.clone()))
+            .try_downgrade(timestamps.downgrade_to())
             .map_err(|_| ReadHoldInsufficient(target_id))?;
 
         if let Some(target) = target_replica {
@@ -1650,7 +1650,7 @@ where
         let peek = Peek {
             literal_constraints,
             uuid,
-            timestamp,
+            timestamps,
             finishing,
             map_filter_project,
             // Obtain an `OpenTelemetryContext` from the thread-local tracing

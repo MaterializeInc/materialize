@@ -20,7 +20,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekDescription, PeekTarget,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
@@ -33,10 +33,10 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::row::RowCollection;
 use mz_expr::{RowComparator, SafeMfpPlan};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::iter::consolidate_update_iter;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
@@ -49,7 +49,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp, UpdateCollection};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -1130,7 +1130,7 @@ impl PendingPeek {
         let uuid = peek.uuid.into_bytes();
         ComputeEvent::Peek(PeekEvent {
             id,
-            time: peek.timestamp,
+            time: peek.timestamps.timestamp(),
             uuid,
             peek_type,
             installed,
@@ -1139,7 +1139,7 @@ impl PendingPeek {
 
     fn index(peek: Peek, mut trace_bundle: TraceBundle) -> Self {
         let empty_frontier = Antichain::new();
-        let timestamp_frontier = Antichain::from_elem(peek.timestamp);
+        let timestamp_frontier = peek.timestamps.downgrade_to();
         trace_bundle
             .oks_mut()
             .set_logical_compaction(timestamp_frontier.borrow());
@@ -1176,14 +1176,12 @@ impl PendingPeek {
         let peek_uuid = peek.uuid;
 
         let (result_tx, result_rx) = oneshot::channel();
-        let timestamp = peek.timestamp;
+        let timestamps = peek.timestamps.clone();
         let mfp_plan = peek.map_filter_project.clone();
         let max_results_needed = peek
             .finishing
             .limit
-            .map(|l| usize::cast_from(u64::from(l)))
-            .unwrap_or(usize::MAX)
-            + peek.finishing.offset;
+            .map(|l| usize::cast_from(u64::from(l)).saturating_add(peek.finishing.offset));
         let order_by = peek.finishing.order_by.clone();
 
         // Persist peeks can include at most one literal constraint.
@@ -1194,11 +1192,12 @@ impl PendingPeek {
 
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
             let start = Instant::now();
+            let comparator = RowComparator::new(order_by);
             let result = if active_worker {
                 PersistPeek::do_peek(
                     &persist_clients,
                     metadata,
-                    timestamp,
+                    timestamps,
                     literal_constraint,
                     mfp_plan,
                     max_result_size,
@@ -1209,7 +1208,17 @@ impl PendingPeek {
                 Ok(vec![])
             };
             let result = match result {
-                Ok(rows) => PeekResponse::Rows(vec![RowCollection::new(rows, &order_by)]),
+                Ok(mut rows) => {
+                    rows.sort_by(|(r0, t0, _), (r1, t1, _)| {
+                        t0.cmp(t1).then_with(|| {
+                            comparator.compare_rows(r0.as_row_ref(), r1.as_row_ref(), || r0.cmp(r1))
+                        })
+                    });
+                    let collection = UpdateCollection::from_iter(consolidate_update_iter(
+                        rows.iter().map(|(r, t, d)| (r.as_row_ref(), t, *d)),
+                    ));
+                    PeekResponse::Rows(vec![collection])
+                }
                 Err(e) => PeekResponse::Error(e.to_string()),
             };
             match result_tx.send((result, start.elapsed())) {
@@ -1269,12 +1278,12 @@ impl PersistPeek {
     async fn do_peek(
         persist_clients: &PersistClientCache,
         metadata: CollectionMetadata,
-        as_of: Timestamp,
+        timestamps: PeekDescription,
         literal_constraint: Option<Row>,
         mfp_plan: SafeMfpPlan,
         max_result_size: usize,
-        mut limit_remaining: usize,
-    ) -> Result<Vec<(Row, NonZeroUsize)>, String> {
+        mut limit_remaining: Option<usize>,
+    ) -> Result<Vec<(Row, Timestamp, Diff)>, String> {
         let client = persist_clients
             .open(metadata.persist_location)
             .await
@@ -1311,11 +1320,14 @@ impl PersistPeek {
             metrics,
             &mfp_plan,
             &metadata.relation_desc,
-            Antichain::from_elem(as_of),
+            timestamps.since().to_owned(),
         )
         .await
         .map_err(|since| {
-            format!("attempted to peek at {as_of}, but the since has advanced to {since:?}")
+            format!(
+                "attempted to peek at {as_of:?}, but the since has advanced to {since:?}",
+                as_of = timestamps.since()
+            )
         })?;
 
         // Re-used state for processing and building rows.
@@ -1330,11 +1342,11 @@ impl PersistPeek {
             Some(row) => row.iter().count(),
         };
 
-        'collect: while limit_remaining > 0 {
+        'collect: while limit_remaining.is_none_or(|limit| limit > 0) {
             let Some(batch) = cursor.next().await else {
                 break;
             };
-            for (data, _, d) in batch {
+            for (data, time, diff) in batch {
                 let row = data.map_err(|e| e.to_string())?;
 
                 if let Some(literal) = &literal_constraint {
@@ -1345,20 +1357,6 @@ impl PersistPeek {
                     }
                 }
 
-                let count: usize = d.try_into().map_err(|_| {
-                    error!(
-                        shard = %metadata.data_shard, diff = d, ?row,
-                        "persist peek encountered negative multiplicities",
-                    );
-                    format!(
-                        "Invalid data in source, \
-                         saw retractions ({}) for row that does not exist: {:?}",
-                        -d, row,
-                    )
-                })?;
-                let Some(count) = NonZeroUsize::new(count) else {
-                    continue;
-                };
                 let mut datum_local = datum_vec.borrow_with(&row);
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
@@ -1374,10 +1372,15 @@ impl PersistPeek {
                             ByteSize::b(u64::cast_from(max_result_size))
                         ));
                     }
-                    result.push((row, count));
-                    limit_remaining = limit_remaining.saturating_sub(count.get());
-                    if limit_remaining == 0 {
-                        break;
+                    result.push((row, time, diff.into()));
+                    if let Some(limit_remaining) = &mut limit_remaining {
+                        let Ok(count) = usize::try_from(diff) else {
+                            return Err(format!("negative diff in collection with limit: {diff}"));
+                        };
+                        *limit_remaining = limit_remaining.saturating_sub(count);
+                        if *limit_remaining == 0 {
+                            break;
+                        }
                     }
                 }
             }
@@ -1434,20 +1437,20 @@ impl IndexPeek {
         let method_start = Instant::now();
 
         self.trace_bundle.oks_mut().read_upper(upper);
-        if upper.less_equal(&self.peek.timestamp) {
+        if PartialOrder::less_than(&upper.borrow(), &self.peek.timestamps.upper()) {
             return PeekStatus::NotReady;
         }
         self.trace_bundle.errs_mut().read_upper(upper);
-        if upper.less_equal(&self.peek.timestamp) {
+        if PartialOrder::less_than(&upper.borrow(), &self.peek.timestamps.upper()) {
             return PeekStatus::NotReady;
         }
 
         let read_frontier = self.trace_bundle.compaction_frontier();
-        if !read_frontier.less_equal(&self.peek.timestamp) {
+        if !PartialOrder::less_equal(&read_frontier, &self.peek.timestamps.downgrade_to()) {
             let error = format!(
                 "Arrangement compaction frontier ({:?}) is beyond the time of the attempted read ({})",
                 read_frontier.elements(),
-                self.peek.timestamp,
+                self.peek.timestamps.timestamp(),
             );
             return PeekStatus::Ready(PeekResponse::Error(error));
         }
@@ -1486,7 +1489,7 @@ impl IndexPeek {
         while cursor.key_valid(&storage) {
             let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
-                if time.less_equal(&self.peek.timestamp) {
+                if self.peek.timestamps.contains(time) {
                     copies += diff;
                 }
             });
@@ -1536,7 +1539,7 @@ impl IndexPeek {
                 Key<'a>: ToDatumIter + Eq,
                 KeyOwn = Row,
                 Val<'a>: ToDatumIter,
-                TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+                TimeGat<'a> = &'a mz_repr::Timestamp,
                 DiffGat<'a> = &'a Diff,
             >,
     {
@@ -1551,7 +1554,7 @@ impl IndexPeek {
         let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
-            peek.timestamp,
+            peek.timestamps.clone(),
             peek.literal_constraints.clone().as_deref_mut(),
             oks_handle,
         );
@@ -1582,9 +1585,7 @@ impl IndexPeek {
                 Ok(row) => row,
                 Err(err) => return PeekStatus::Ready(PeekResponse::Error(err)),
             };
-            let (row, copies) = row;
-            let copies: NonZeroUsize = NonZeroUsize::try_from(copies).expect("fits into usize");
-
+            let (row, timestamp, copies) = row;
             total_size = total_size
                 .saturating_add(row.byte_len())
                 .saturating_add(count_byte_size);
@@ -1598,7 +1599,7 @@ impl IndexPeek {
                 )));
             }
 
-            results.push((row, copies));
+            results.push((row, timestamp, copies));
 
             // If we hold many more than `max_results` records, we can thin down
             // `results` using `self.finishing.ordering`.
@@ -1616,7 +1617,14 @@ impl IndexPeek {
                             .result_sort_seconds
                             .observe(sort_time_accum.as_secs_f64());
                         let row_collection_start = Instant::now();
-                        let collection = RowCollection::new(results, &peek.finishing.order_by);
+                        results.sort_by(|(r0, t0, _), (r1, t1, _)| {
+                            t0.cmp(t1)
+                                .then_with(|| comparator.compare_rows(r0, r1, || r0.cmp(r1)))
+                        });
+                        let collection = UpdateCollection::from_iter(consolidate_update_iter(
+                            results.iter().map(|(r, t, d)| (r.as_row_ref(), t, *d)),
+                        ));
+                        results.clear();
                         metrics
                             .row_collection_seconds
                             .observe(row_collection_start.elapsed().as_secs_f64());
@@ -1637,9 +1645,13 @@ impl IndexPeek {
                         sort_time_accum += sort_start.elapsed();
                         let dropped = results.drain(max_results..);
                         let dropped_size =
-                            dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
-                                acc.saturating_add(row.byte_len().saturating_add(count_byte_size))
-                            });
+                            dropped
+                                .into_iter()
+                                .fold(0, |acc: usize, (row, _time, _count)| {
+                                    acc.saturating_add(
+                                        row.byte_len().saturating_add(count_byte_size),
+                                    )
+                                });
                         total_size = total_size.saturating_sub(dropped_size);
                     }
                 }
@@ -1654,7 +1666,13 @@ impl IndexPeek {
             .observe(sort_time_accum.as_secs_f64());
 
         let row_collection_start = Instant::now();
-        let collection = RowCollection::new(results, &peek.finishing.order_by);
+        results.sort_by(|left, right| {
+            comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
+        });
+        let collection = UpdateCollection::from_iter(mz_ore::iter::consolidate_update_iter(
+            results.iter().map(|(r, t, d)| (r.as_row_ref(), t, *d)),
+        ));
+        results.clear();
         metrics
             .row_collection_seconds
             .observe(row_collection_start.elapsed().as_secs_f64());
@@ -1664,6 +1682,7 @@ impl IndexPeek {
 
 /// For keeping track of the state of pending or ready peeks, and managing
 /// control flow.
+#[derive(Debug)]
 enum PeekStatus {
     /// The frontiers of objects are not yet advanced enough, peek is still
     /// pending.
