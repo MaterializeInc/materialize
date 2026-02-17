@@ -90,6 +90,7 @@ SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
 SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
+SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
 
 SCENARIOS_CLUSTERD = [
     SCENARIO_AUCTION_STRONG,
@@ -102,6 +103,7 @@ SCENARIOS_CLUSTERD = [
 ]
 SCENARIOS_ENVIRONMENTD = [
     SCENARIO_QPS_ENVD_STRONG_SCALING,
+    SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
 ]
 ALL_SCENARIOS = SCENARIOS_CLUSTERD + SCENARIOS_ENVIRONMENTD
 
@@ -1923,6 +1925,76 @@ class QpsEnvdStrongScalingScenario(Scenario):
         # We'll also want to measure latency, including tail latency.
 
 
+class CopyFromStdinEnvdStrongScalingScenario(Scenario):
+    """Measure COPY FROM STDIN throughput as envd CPU count scales.
+
+    Uses psycopg's COPY protocol to send pre-generated tab-delimited data,
+    exercising the parallel decode + persist pipeline in environmentd.
+    """
+
+    NUM_ROWS = 100_000_000
+    NUM_COLS = 4  # (int, text, int, text)
+    REPETITIONS = 1  # Pretty slow and resource-intensive
+
+    def name(self) -> str:
+        return SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING
+
+    def materialize_views(self) -> list[str]:
+        return []
+
+    def setup(self) -> list[str]:
+        return []
+
+    def drop(self) -> list[str]:
+        return []
+
+    # Avoid Python from going OoM
+    CHUNK_SIZE = 100_000
+
+    def run(self, runner: ScenarioRunner) -> None:
+        # Pre-generate one chunk and reuse it for all writes.
+        chunk = "".join(
+            f"{i}\thello world\t{i * 2}\tsome text value here\n"
+            for i in range(self.CHUNK_SIZE)
+        )
+        num_chunks = self.NUM_ROWS // self.CHUNK_SIZE
+
+        for repetition in range(self.REPETITIONS):
+
+            def inner() -> None:
+                with runner.connection as cur:
+                    cur.execute("DROP TABLE IF EXISTS copy_t")
+                    cur.execute(
+                        "CREATE TABLE copy_t (f1 INTEGER, f2 TEXT, f3 INTEGER, f4 TEXT)"
+                    )
+
+                start_time = time.time()
+                with runner.connection as cur:
+                    with cur.copy("COPY copy_t FROM STDIN") as copy:
+                        for _ in range(num_chunks):
+                            copy.write(chunk)
+                end_time = time.time()
+
+                elapsed = end_time - start_time
+                rows_per_sec = self.NUM_ROWS / elapsed
+                print(
+                    f"    COPY FROM: {self.NUM_ROWS} rows in {elapsed:.2f}s "
+                    f"({rows_per_sec:.0f} rows/s)"
+                )
+                runner.add_result(
+                    "copy_from",
+                    "copy_from_stdin_1m_rows",
+                    repetition,
+                    None,
+                    elapsed,
+                )
+
+                with runner.connection as cur:
+                    cur.execute("DROP TABLE IF EXISTS copy_t")
+
+            runner.connection.retryable(inner)
+
+
 class SourceIngestionScenario(Scenario):
     def name(self) -> str:
         return "source_ingestion"
@@ -2465,6 +2537,17 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                     print("--- SCENARIO: Running QPS envd strong scaling")
                     run_scenario_envd_strong_scaling(
                         scenario=QpsEnvdStrongScalingScenario(
+                            1, target.replica_size_for_scale(1)
+                        ),
+                        results_writer=envd_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING:
+                    print("--- SCENARIO: Running COPY FROM STDIN envd strong scaling")
+                    run_scenario_envd_strong_scaling(
+                        scenario=CopyFromStdinEnvdStrongScalingScenario(
                             1, target.replica_size_for_scale(1)
                         ),
                         results_writer=envd_writer,
