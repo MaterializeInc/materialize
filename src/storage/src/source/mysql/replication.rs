@@ -137,8 +137,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
-            let [data_cap_set, definite_error_cap_set]: &mut [_; 2] =
-                caps.try_into().unwrap();
+            let [data_cap_set, definite_error_cap_set]: &mut [_; 2] = caps.try_into().unwrap();
 
             // Only run the replication reader on the worker responsible for it.
             if !config.responsible_for(REPL_READER) {
@@ -467,11 +466,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
 
     let errors = definite_errors.concat(&transient_errors.map(ReplicationError::from));
 
-    (
-        data_stream.as_collection(),
-        errors,
-        button.press_on_drop(),
-    )
+    (data_stream.as_collection(), errors, button.press_on_drop())
 }
 
 /// Produces the replication stream from the MySQL server. This will return all transactions

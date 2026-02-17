@@ -491,8 +491,7 @@ where
 
         let [cap] = caps.try_into().expect("one capability per output");
 
-        let mut ticker =
-            super::probe::Ticker::new(move || interval, now_fn.clone());
+        let mut ticker = super::probe::Ticker::new(move || interval, now_fn.clone());
 
         let minimum_frontier = Antichain::from_elem(Timestamp::minimum());
         let mut frontier = minimum_frontier.clone();

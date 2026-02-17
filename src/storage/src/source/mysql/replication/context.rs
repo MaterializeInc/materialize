@@ -105,5 +105,4 @@ impl<'a> ReplContext<'a> {
             res
         });
     }
-
 }

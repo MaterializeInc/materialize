@@ -43,9 +43,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{SourceConnection, SourceExport, SourceTimestamp};
 use mz_timely_util::antichain::AntichainExt;
-use mz_timely_util::builder_async::{
-    OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
-};
+use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::operator::ConcatenateFlatten;
 use mz_timely_util::reclock::reclock;
@@ -672,4 +670,3 @@ where
 
     WatchStream::from_changes(rx)
 }
-
