@@ -677,7 +677,21 @@ where
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
     pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, T>> {
-        self.arranged.get(key).map(|x| x.clone())
+        let res = self.arranged.get(key).map(|x| x.clone());
+        if res.is_some() {
+            return res;
+        }
+
+        tracing::error!("fell back to repr types keys on {key:?}");
+        let repr_keys = key
+            .iter()
+            .map(|expr| {
+                let mut expr = expr.clone();
+                expr.repr_canonicalize();
+                expr
+            })
+            .collect::<Vec<_>>();
+        self.arranged.get(&repr_keys).map(|x| x.clone())
     }
 }
 
