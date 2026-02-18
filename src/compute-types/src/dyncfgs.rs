@@ -330,7 +330,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 /// If set, skip fetching or processing the snapshot data for subscribes when possible.
 pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "compute_subscribe_snapshot_optimization",
-    false,
+    true,
     "If set, skip fetching or processing the snapshot data for subscribes when possible.",
 );
 
