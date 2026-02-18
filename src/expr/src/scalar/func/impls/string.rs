@@ -1208,74 +1208,13 @@ fn panic<'a>(a: &'a str) -> String {
     panic!("{}", a)
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct QuoteIdent;
-
-impl LazyUnaryFunc for QuoteIdent {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let d = a.eval(datums, temp_storage)?;
-        if d.is_null() {
-            return Ok(Datum::Null);
-        }
-        let v = d.unwrap_str();
-        let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
-            ident: v.into(),
-            detail: Some(err.to_string().into()),
-        })?;
-        let r = temp_storage.push_string(i.to_string());
-
-        Ok(Datum::String(r))
-    }
-
-    /// The output SqlColumnType of this function
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    /// Whether this function will produce NULL on NULL input
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    /// Whether this function will produce NULL on non-NULL input
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    /// Whether this function preserves uniqueness
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for QuoteIdent {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "quote_ident")
-    }
+#[sqlfunc(sqlname = "quote_ident", preserves_uniqueness = true)]
+fn quote_ident<'a>(a: &'a str) -> Result<String, EvalError> {
+    let i = mz_sql_parser::ast::Ident::new(a).map_err(|err| EvalError::InvalidIdentifier {
+        ident: a.into(),
+        detail: Some(err.to_string().into()),
+    })?;
+    Ok(i.to_string())
 }
 
 #[derive(

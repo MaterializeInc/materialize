@@ -9,7 +9,9 @@
 
 use std::fmt;
 
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
+use mz_repr::adt::array::Array;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -77,63 +79,13 @@ impl fmt::Display for CastInt2VectorToArray {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    sqlname = "int2vectortostr",
+    preserves_uniqueness = true,
+    inverse = to_unary!(super::CastStringToInt2Vector)
 )]
-pub struct CastInt2VectorToString;
-
-impl LazyUnaryFunc for CastInt2VectorToString {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let mut buf = String::new();
-        stringify_datum(&mut buf, a, &SqlScalarType::Int2Vector)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::String.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        true
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        to_unary!(super::CastStringToInt2Vector)
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for CastInt2VectorToString {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("int2vectortostr")
-    }
+fn cast_int2_vector_to_string<'a>(a: Array<'a>) -> Result<String, EvalError> {
+    let mut buf = String::new();
+    stringify_datum(&mut buf, Datum::Array(a), &SqlScalarType::Int2Vector)?;
+    Ok(buf)
 }

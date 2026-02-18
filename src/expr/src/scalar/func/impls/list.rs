@@ -9,6 +9,7 @@
 
 use std::fmt;
 
+use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
@@ -232,67 +233,12 @@ impl fmt::Display for CastList1ToList2 {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
-)]
-pub struct ListLength;
-
-impl LazyUnaryFunc for ListLength {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let count = a.unwrap_list().iter().count();
-        match count.try_into() {
-            Ok(c) => Ok(Datum::Int32(c)),
-            Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
-        }
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Int32.nullable(input_type.nullable)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for ListLength {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("list_length")
-    }
+#[sqlfunc(sqlname = "list_length")]
+fn list_length<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
+    let count = a.iter().count();
+    count
+        .try_into()
+        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))
 }
 
 /// The `list_length_max` implementation.
