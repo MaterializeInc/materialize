@@ -1965,39 +1965,23 @@ def setup(c: Composition, workers: int) -> None:
         DROP CLUSTER quickstart cascade;
         CREATE CLUSTER quickstart REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1_1:2100', 'clusterd_1_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1_1:2103', 'clusterd_1_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1_1:2101', 'clusterd_1_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1_1:2102', 'clusterd_1_1_2:2102'],
-                WORKERS {workers}
+                {Clusterd.replica_addresses("clusterd_1_1_1", "clusterd_1_1_2", workers=workers)}
             ),
             replica2 (
-                STORAGECTL ADDRESSES ['clusterd_1_2_1:2100', 'clusterd_1_2_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_2_1:2103', 'clusterd_1_2_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_2_1:2101', 'clusterd_1_2_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_2_1:2102', 'clusterd_1_2_2:2102'],
-                WORKERS {workers}
+                {Clusterd.replica_addresses("clusterd_1_2_1", "clusterd_1_2_2", workers=workers)}
             )
         );
         DROP CLUSTER IF EXISTS single_replica_cluster CASCADE;
         CREATE CLUSTER single_replica_cluster REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_2_1_1:2100', 'clusterd_2_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1_1:2103', 'clusterd_2_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1_1:2101', 'clusterd_2_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1_1:2102', 'clusterd_2_1_2:2102'],
-                WORKERS {workers}
+                {Clusterd.replica_addresses("clusterd_2_1_1", "clusterd_2_1_2", workers=workers)}
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
         DROP CLUSTER IF EXISTS single_worker_cluster CASCADE;
         CREATE CLUSTER single_worker_cluster REPLICAS (
             replica1 (
-                STORAGECTL ADDRESSES ['clusterd_3_1_1:2100'],
-                STORAGE ADDRESSES ['clusterd_3_1_1:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_3_1_1:2101'],
-                COMPUTE ADDRESSES ['clusterd_3_1_1:2102'],
-                WORKERS 1
+                {Clusterd.replica_addresses("clusterd_3_1_1", workers=1)}
             )
         );
         GRANT ALL PRIVILEGES ON CLUSTER single_replica_cluster TO materialize;
@@ -2387,15 +2371,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 replica_name = f"replica_u{cluster_id}_{replica_id}"
 
                 replica_definitions.append(
-                    f"{replica_name} (STORAGECTL ADDRESSES ["
-                    + ", ".join(f"'{n}:2100'" for n in nodes)
-                    + "], STORAGE ADDRESSES ["
-                    + ", ".join(f"'{n}:2103'" for n in nodes)
-                    + "], COMPUTECTL ADDRESSES ["
-                    + ", ".join(f"'{n}:2101'" for n in nodes)
-                    + "], COMPUTE ADDRESSES ["
-                    + ", ".join(f"'{n}:2102'" for n in nodes)
-                    + f"], WORKERS {args.workers})"
+                    f"{replica_name} ({Clusterd.replica_addresses(*nodes, workers=args.workers)})"
                 )
 
             c.enable_unorchestrated_cluster_replicas()

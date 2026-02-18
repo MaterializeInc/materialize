@@ -249,13 +249,10 @@ def drop_create_replica(c: Composition) -> None:
 
     c.testdrive(
         dedent(
-            """
+            f"""
             > DROP CLUSTER REPLICA cluster1.replica1
             > CREATE CLUSTER REPLICA cluster1.replica3
-              STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-              STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-              COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-              COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+              {Clusterd.replica_addresses("clusterd_1_1", "clusterd_1_2")}
             """
         )
     )
@@ -265,12 +262,9 @@ def create_invalid_replica(c: Composition) -> None:
     c.enable_unorchestrated_cluster_replicas()
     c.testdrive(
         dedent(
-            """
+            f"""
             > CREATE CLUSTER REPLICA cluster1.replica3
-              STORAGECTL ADDRESSES ['no_such_host:2100'],
-              STORAGE ADDRESSES ['no_such_host:2103'],
-              COMPUTECTL ADDRESSES ['no_such_host:2101'],
-              COMPUTE ADDRESSES ['no_such_host:2102']
+              {Clusterd.replica_addresses("no_such_host")}
             """
         )
     )
@@ -501,19 +495,13 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
             c.alter_system_set("enable_introspection_subscribes", "false")
 
         c.sql(
-            """
+            f"""
             CREATE CLUSTER cluster1 REPLICAS (
                 replica1 (
-                    STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+                    {Clusterd.replica_addresses("clusterd_1_1", "clusterd_1_2")}
                 ),
                 replica2 (
-                    STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                    STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                    COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                    COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+                    {Clusterd.replica_addresses("clusterd_2_1", "clusterd_2_2")}
                 )
             )
             """

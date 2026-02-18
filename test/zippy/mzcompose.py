@@ -251,13 +251,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             )
         else:
             c.sql(
-                """
+                f"""
                 CREATE CLUSTER storage REPLICAS (r2 (
-                    STORAGECTL ADDRESSES ['storaged:2100'],
-                    STORAGE ADDRESSES ['storaged:2103'],
-                    COMPUTECTL ADDRESSES ['storaged:2101'],
-                    COMPUTE ADDRESSES ['storaged:2102'],
-                    WORKERS 4
+                    {Clusterd.replica_addresses("storaged", workers=4)}
                 ))
             """
             )

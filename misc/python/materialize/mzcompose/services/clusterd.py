@@ -94,6 +94,35 @@ class Clusterd(Service):
 
         super().__init__(name=name, config=config)
 
+    @staticmethod
+    def replica_addresses(*hostnames: str, workers: int | None = None) -> str:
+        """Return the SQL address fragment for an unorchestrated replica.
+
+        Given one or more clusterd hostnames, returns the four ``…ADDRESSES``
+        lines (and optionally a ``WORKERS`` line) used in ``CREATE CLUSTER``
+        or ``CREATE CLUSTER REPLICA`` statements.
+
+        Example::
+
+            Clusterd.replica_addresses("clusterd1", workers=2)
+            # =>
+            # STORAGECTL ADDRESSES ['clusterd1:2100'],
+            # STORAGE ADDRESSES ['clusterd1:2103'],
+            # COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            # COMPUTE ADDRESSES ['clusterd1:2102'],
+            # WORKERS 2
+        """
+        addr_list = ", ".join(f"'{h}:{{port}}'" for h in hostnames)
+        lines = [
+            f"STORAGECTL ADDRESSES [{addr_list.format(port=2100)}]",
+            f"STORAGE ADDRESSES [{addr_list.format(port=2103)}]",
+            f"COMPUTECTL ADDRESSES [{addr_list.format(port=2101)}]",
+            f"COMPUTE ADDRESSES [{addr_list.format(port=2102)}]",
+        ]
+        if workers is not None:
+            lines.append(f"WORKERS {workers}")
+        return ",\n".join(lines)
+
 
 def timely_config(
     process_names: list[str],

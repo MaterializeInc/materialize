@@ -276,25 +276,19 @@ def run_test(c: Composition, disruption: Disruption, id: int) -> None:
         c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
-            """
+            f"""
             DROP CLUSTER IF EXISTS cluster1 CASCADE;
             CREATE CLUSTER cluster1 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd_1_1:2100', 'clusterd_1_2:2100'],
-                STORAGE ADDRESSES ['clusterd_1_1:2103', 'clusterd_1_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_1_1:2101', 'clusterd_1_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_1_1:2102', 'clusterd_1_2:2102']
+                {Clusterd.replica_addresses("clusterd_1_1", "clusterd_1_2")}
             ));
             """
         )
 
         c.sql(
-            """
+            f"""
             DROP CLUSTER IF EXISTS cluster2 CASCADE;
             CREATE CLUSTER cluster2 REPLICAS (replica1 (
-                STORAGECTL ADDRESSES ['clusterd_2_1:2100', 'clusterd_2_2:2100'],
-                STORAGE ADDRESSES ['clusterd_2_1:2103', 'clusterd_2_2:2103'],
-                COMPUTECTL ADDRESSES ['clusterd_2_1:2101', 'clusterd_2_2:2101'],
-                COMPUTE ADDRESSES ['clusterd_2_1:2102', 'clusterd_2_2:2102']
+                {Clusterd.replica_addresses("clusterd_2_1", "clusterd_2_2")}
             ));
             """
         )

@@ -735,7 +735,7 @@ SCENARIOS = [
     Scenario(
         name="table-index-hydration",
         pre_restart=dedent(
-            """
+            f"""
             > DROP CLUSTER REPLICA clusterd.r1;
 
             > CREATE TABLE t (a bigint, b bigint);
@@ -761,10 +761,7 @@ SCENARIOS = [
             > UPDATE t SET a = a + 1000000000;
 
             > CREATE CLUSTER REPLICA clusterd.r1
-              STORAGECTL ADDRESSES ['clusterd:2100'],
-              STORAGE ADDRESSES ['clusterd:2103'],
-              COMPUTECTL ADDRESSES ['clusterd:2101'],
-              COMPUTE ADDRESSES ['clusterd:2102'];
+              {Clusterd.replica_addresses("clusterd")};
 
             > SET CLUSTER = clusterd
 
@@ -858,10 +855,7 @@ SCENARIOS = [
         + dedent(
             f"""
             > CREATE CLUSTER REPLICA clusterd.r1
-              STORAGECTL ADDRESSES ['clusterd:2100'],
-              STORAGE ADDRESSES ['clusterd:2103'],
-              COMPUTECTL ADDRESSES ['clusterd:2101'],
-              COMPUTE ADDRESSES ['clusterd:2102'];
+              {Clusterd.replica_addresses("clusterd")};
 
             > SET CLUSTER = clusterd;
 
@@ -1305,12 +1299,12 @@ SCENARIOS = [
     Scenario(
         name="dataflow-logical-backpressure",
         pre_restart=dedent(
-            """
+            f"""
             # * Timestamp interval to quickly create a source with many distinct timestamps.
             # * Lgalloc disabled to force more memory pressure.
             # * Index options to enable retained history.
             # * Finally, enable backpressure.
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET min_timestamp_interval = '10ms';
             ALTER SYSTEM SET enable_lgalloc = false;
@@ -1335,10 +1329,7 @@ SCENARIOS = [
             512
 
             > CREATE CLUSTER REPLICA clusterd.r1
-              STORAGECTL ADDRESSES ['clusterd:2100'],
-              STORAGE ADDRESSES ['clusterd:2103'],
-              COMPUTECTL ADDRESSES ['clusterd:2101'],
-              COMPUTE ADDRESSES ['clusterd:2102'];
+              {Clusterd.replica_addresses("clusterd")};
 
             > SET CLUSTER = clusterd
 
@@ -1510,12 +1501,9 @@ def run_scenario(
         c.enable_unorchestrated_cluster_replicas()
 
         c.sql(
-            """
+            f"""
             CREATE CLUSTER clusterd REPLICAS (r1 (
-                STORAGECTL ADDRESSES ['clusterd:2100'],
-                STORAGE ADDRESSES ['clusterd:2103'],
-                COMPUTECTL ADDRESSES ['clusterd:2101'],
-                COMPUTE ADDRESSES ['clusterd:2102']
+                {Clusterd.replica_addresses("clusterd")}
             ))
         """
         )

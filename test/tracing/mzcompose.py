@@ -118,13 +118,9 @@ def workflow_clusterd(c: Composition) -> None:
     c.enable_unorchestrated_cluster_replicas()
 
     c.sql(
-        """
+        f"""
         CREATE CLUSTER c REPLICAS (r1 (
-            STORAGECTL ADDRESSES ['clusterd:2100'],
-            STORAGE ADDRESSES ['clusterd:2103'],
-            COMPUTECTL ADDRESSES ['clusterd:2101'],
-            COMPUTE ADDRESSES ['clusterd:2102'],
-            WORKERS 1
+            {Clusterd.replica_addresses("clusterd", workers=1)}
         ))
     """
     )
