@@ -308,6 +308,19 @@ impl SqlRelationType {
 
         self.keys = backport_typ.keys.clone();
     }
+
+    /// Lossily translates a [`ReprRelationType`] back to a [`SqlRelationType`].
+    /// This produces a 'canonical' type.
+    pub fn from_repr(repr: &ReprRelationType) -> Self {
+        SqlRelationType {
+            column_types: repr
+                .column_types
+                .iter()
+                .map(SqlColumnType::from_repr)
+                .collect(),
+            keys: repr.keys.clone(),
+        }
+    }
 }
 
 impl RustType<ProtoRelationType> for SqlRelationType {
@@ -465,6 +478,11 @@ impl ReprColumnType {
             scalar_type,
             nullable,
         })
+    }
+
+    pub fn nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
+        self
     }
 }
 

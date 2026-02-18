@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use itertools::Itertools;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{SqlColumnType, SqlScalarType};
+use mz_repr::{ReprColumnType, ReprScalarType};
 
 use crate::visit::Visit;
 use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
@@ -40,7 +40,7 @@ pub fn canonicalize_equivalences<'a, I>(
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
     input_column_types: I,
 ) where
-    I: Iterator<Item = &'a Vec<SqlColumnType>>,
+    I: Iterator<Item = &'a Vec<ReprColumnType>>,
 {
     let column_types = input_column_types
         .flat_map(|f| f.clone())
@@ -216,12 +216,12 @@ where
 /// null rejecting predicate for the same sub-expression.
 pub fn canonicalize_predicates(
     predicates: &mut Vec<MirScalarExpr>,
-    column_types: &[SqlColumnType],
+    column_types: &[ReprColumnType],
 ) {
     soft_assert_or_log!(
         predicates
             .iter()
-            .all(|p| p.typ(column_types).scalar_type == SqlScalarType::Bool),
+            .all(|p| p.repr_typ(column_types).scalar_type == ReprScalarType::Bool),
         "cannot canonicalize predicates that are not of type bool"
     );
 
@@ -369,7 +369,7 @@ pub fn canonicalize_predicates(
         (p.is_literal_false() || p.is_literal_null()) &&
         // This extra check is only needed if we determine that the soft-assert
         // at the top of this function would ever fail for a good reason.
-        p.typ(column_types).scalar_type == SqlScalarType::Bool
+        p.repr_typ(column_types).scalar_type == ReprScalarType::Bool
     }) {
         // all rows get filtered away if any predicate is null or false.
         *predicates = vec![MirScalarExpr::literal_false()]
@@ -390,7 +390,7 @@ fn replace_subexpr_and_reduce(
     predicate: &mut MirScalarExpr,
     replace_if_equal_to: &MirScalarExpr,
     replace_with: &MirScalarExpr,
-    column_types: &[SqlColumnType],
+    column_types: &[ReprColumnType],
 ) -> bool {
     let mut changed = false;
     #[allow(deprecated)]

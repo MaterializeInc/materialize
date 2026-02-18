@@ -380,6 +380,66 @@ impl MirRelationExpr {
         type_stack.pop().unwrap()
     }
 
+    /// Reports the representation type of the relation.
+    ///
+    /// This method determines the type through recursive traversal of the
+    /// relation expression, drawing from the types of base collections.
+    /// As such, this is not an especially cheap method, and should be used
+    /// judiciously.
+    ///
+    /// The relation type is computed incrementally with a recursive post-order
+    /// traversal, that accumulates the input types for the relations yet to be
+    /// visited in `type_stack`.
+    pub fn repr_typ(&self) -> ReprRelationType {
+        let mut type_stack = Vec::new();
+        #[allow(deprecated)]
+        self.visit_pre_post_nolimit(
+            &mut |e: &MirRelationExpr| -> Option<Vec<&MirRelationExpr>> {
+                match &e {
+                    MirRelationExpr::Let { body, .. } => {
+                        // Do not traverse the value sub-graph, since it's not relevant for
+                        // determining the relation type of Let operators.
+                        Some(vec![&*body])
+                    }
+                    MirRelationExpr::LetRec { body, .. } => {
+                        // Do not traverse the value sub-graph, since it's not relevant for
+                        // determining the relation type of Let operators.
+                        Some(vec![&*body])
+                    }
+                    _ => None,
+                }
+            },
+            &mut |e: &MirRelationExpr| {
+                match e {
+                    MirRelationExpr::Let { .. } => {
+                        let body_typ = type_stack.pop().unwrap();
+                        // Insert a dummy relation type for the value, since `typ_with_input_types`
+                        // won't look at it, but expects the relation type of the body to be second.
+                        type_stack.push(ReprRelationType::empty());
+                        type_stack.push(body_typ);
+                    }
+                    MirRelationExpr::LetRec { values, .. } => {
+                        let body_typ = type_stack.pop().unwrap();
+                        // Insert dummy relation types for the values, since `typ_with_input_types`
+                        // won't look at them, but expects the relation type of the body to be last.
+                        type_stack.extend(
+                            std::iter::repeat(ReprRelationType::empty()).take(values.len()),
+                        );
+                        type_stack.push(body_typ);
+                    }
+                    _ => {}
+                }
+                let num_inputs = e.num_inputs();
+                let relation_type =
+                    e.repr_typ_with_input_types(&type_stack[type_stack.len() - num_inputs..]);
+                type_stack.truncate(type_stack.len() - num_inputs);
+                type_stack.push(relation_type);
+            },
+        );
+        assert_eq!(type_stack.len(), 1);
+        type_stack.pop().unwrap()
+    }
+
     /// Reports the schema of the relation given the schema of the input relations.
     ///
     /// `input_types` is required to contain the schemas for the input relations of
@@ -402,6 +462,27 @@ impl MirRelationExpr {
         );
         SqlRelationType::new(column_types.iter().map(SqlColumnType::from_repr).collect())
             .with_keys(unique_keys)
+    }
+
+    /// Reports the representation type of the relation given the repr types of the input relations.
+    ///
+    /// `input_types` is required to contain the schemas for the input relations of
+    /// the current relation in the same order as they are visited by `try_visit_children`
+    /// method, even though not all may be used for computing the schema of the
+    /// current relation. For example, `Let` expects two input types, one for the
+    /// value relation and one for the body, in that order, but only the one for the
+    /// body is used to determine the type of the `Let` relation.
+    ///
+    /// It is meant to be used during post-order traversals to compute relation
+    /// schemas incrementally.
+    pub fn repr_typ_with_input_types(&self, input_types: &[ReprRelationType]) -> ReprRelationType {
+        let column_types =
+            self.repr_col_with_input_repr_cols(input_types.iter().map(|i| &i.column_types));
+        let unique_keys = self.keys_with_input_keys(
+            input_types.iter().map(|i| i.arity()),
+            input_types.iter().map(|i| &i.keys),
+        );
+        ReprRelationType::new(column_types).with_keys(unique_keys)
     }
 
     /// Reports the column types of the relation given the column types of the

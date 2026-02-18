@@ -21,9 +21,9 @@ use dec::OrderedDecimal;
 use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_ore::{Overflowing, soft_panic_no_log};
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
 use proptest::prelude::*;
@@ -3614,7 +3614,7 @@ impl SqlScalarType {
             return true;
         }
 
-        ::tracing::trace!("repr type error: base_eq failed for {self:?} and {other:?}");
+        soft_panic_no_log!("repr type error: base_eq failed for {self:?} and {other:?}");
         // SqlScalarType::base_eq does not consider nullability at all, but `ReprScalarType::eq` does
         // To reconcile these differences, we check "compatibility", i.e., if we can union the types wthout error.
         // Since ReprScalarType::union is a glorified nullability compositor, a successful union means the types
@@ -3622,6 +3622,11 @@ impl SqlScalarType {
         ReprScalarType::from(self)
             .union(&ReprScalarType::from(other))
             .is_ok()
+    }
+
+    /// Canonicalizes this scalar type, by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        *self = SqlScalarType::from_repr(&ReprScalarType::from(&*self));
     }
 
     // Determines equality among scalar types that ignores any custom OIDs or
@@ -4632,6 +4637,14 @@ pub enum ReprScalarType {
 }
 
 impl ReprScalarType {
+    /// Returns a `ReprColumnType` with the given nullability.
+    pub fn nullable(self, nullable: bool) -> ReprColumnType {
+        ReprColumnType {
+            scalar_type: self,
+            nullable,
+        }
+    }
+
     /// Returns the union of two `ReprScalarType` or an error.
     ///
     /// Errors can only occur if the two types are built somewhere using different constructors.
