@@ -1483,15 +1483,21 @@ where
             // we don't special case it to CTs.
             let not_self_dep = |x: &GlobalId| *x != id;
 
+            // Make sure we never schedule a collection before its input compute collections have
+            // been scheduled. Scheduling in the wrong order can lead to deadlocks.
+            let mut deps_scheduled = true;
+
             // Check dependency frontiers to determine if all inputs are
             // available. An input is available when its frontier is greater
             // than the `as_of`, i.e., all input data up to and including the
             // `as_of` has been sealed.
             let compute_deps = collection.compute_dependency_ids().filter(not_self_dep);
-            let compute_frontiers = compute_deps.map(|id| {
+            let mut compute_frontiers = Vec::new();
+            for id in compute_deps {
                 let dep = &self.expect_collection(id);
-                dep.write_frontier()
-            });
+                deps_scheduled &= dep.scheduled;
+                compute_frontiers.push(dep.write_frontier());
+            }
 
             let storage_deps = collection.storage_dependency_ids().filter(not_self_dep);
             let storage_frontiers = self
@@ -1500,11 +1506,11 @@ where
                 .expect("must exist");
             let storage_frontiers = storage_frontiers.into_iter().map(|f| f.write_frontier);
 
-            let ready = compute_frontiers
-                .chain(storage_frontiers)
-                .all(|frontier| PartialOrder::less_than(&as_of, &frontier));
+            let mut frontiers = compute_frontiers.into_iter().chain(storage_frontiers);
+            let frontiers_ready =
+                frontiers.all(|frontier| PartialOrder::less_than(&as_of, &frontier));
 
-            ready
+            deps_scheduled && frontiers_ready
         };
 
         if ready {
