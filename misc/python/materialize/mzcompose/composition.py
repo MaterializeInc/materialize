@@ -1733,6 +1733,18 @@ class Composition:
         else:
             self.restore_postgres(mz_service, restart_mz)
 
+    def exec_metadata_store_sql(self, sql: str) -> None:
+        """Execute a SQL statement against the metadata store (CockroachDB or Postgres)."""
+        store = self.metadata_store()
+        if store == "cockroach":
+            self.exec("cockroach", "cockroach", "sql", "--insecure", "-e", sql)
+        elif store == "postgres-metadata":
+            self.exec("postgres-metadata", "psql", "--command", sql)
+        else:
+            raise RuntimeError(
+                f"Unsupported metadata store {store} for exec_metadata_store_sql"
+            )
+
     def await_mz_deployment_status(
         self,
         status: DeploymentStatus,
