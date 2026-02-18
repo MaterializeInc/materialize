@@ -11,14 +11,15 @@
 Functional test for the native (non-Debezium) MySQL sources.
 """
 
-import threading
 from textwrap import dedent
 
 from materialize.mysql_cdc import (
-    _make_inserts,
     workflow_cdc,  # noqa: F401
     workflow_replica_connection,  # noqa: F401
     workflow_schema_change_restart,  # noqa: F401
+)
+from materialize.mysql_cdc import (
+    workflow_many_inserts as _workflow_many_inserts,
 )
 from materialize.mysql_util import (
     create_mysql,
@@ -62,97 +63,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> None:
-    """
-    Tests a scenario that caused a consistency issue in the past. We insert a
-    large number of rows into a table, then create a source for that table while
-    simultaneously inserting many more rows into the table in a background
-    thread, then finally verify that the correct count of rows is captured by
-    the source.
-
-    In earlier incarnations of the MySQL source, the source accidentally failed
-    to snapshot inside of a repeatable read transaction.
-    """
-    mysql_version = get_targeted_mysql_version(parser)
-    with c.override(create_mysql(mysql_version)):
-        c.up("materialized", "mysql", Service("testdrive", idle=True))
-
-        # Records to before creating the source.
-        (initial_sql, initial_records) = _make_inserts(txns=1, txn_size=1_000_000)
-
-        # Records to insert concurrently with creating the source.
-        (concurrent_sql, concurrent_records) = _make_inserts(txns=1000, txn_size=100)
-
-        # Set up the MySQL server with the initial records, set up the connection to
-        # the MySQL server in Materialize.
-        c.testdrive(
-            dedent(
-                f"""
-                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-                ALTER SYSTEM SET max_mysql_connections = 100
-
-                $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
-
-                > CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'
-                > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
-
-                $ mysql-execute name=mysql
-                DROP DATABASE IF EXISTS public;
-                CREATE DATABASE public;
-                USE public;
-                DROP TABLE IF EXISTS many_inserts;
-                CREATE TABLE many_inserts (pk SERIAL PRIMARY KEY, f2 BIGINT);
-                """
-            )
-            + dedent(initial_sql)
-            + dedent(
-                """
-                > DROP SOURCE IF EXISTS s1 CASCADE;
-                """
-            )
-        )
-
-    # Start inserting in the background.
-
-    def do_inserts(c: Composition):
-        x = dedent(
-            f"""
-            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
-
-            $ mysql-execute name=mysql
-            USE public;
-            {concurrent_sql}
-            """
-        )
-        c.testdrive(args=["--no-reset"], input=x)
-
-    insert_thread = threading.Thread(target=do_inserts, args=(c,))
-    print("--- Start many concurrent inserts")
-    insert_thread.start()
-
-    # Create the source.
-    c.testdrive(
-        args=["--no-reset"],
-        input=dedent(
-            """
+    _workflow_many_inserts(
+        c,
+        parser,
+        create_source_sql="""
             > CREATE SOURCE s1
                 FROM MYSQL CONNECTION mysql_conn;
             > CREATE TABLE many_inserts FROM SOURCE s1 (REFERENCE public.many_inserts);
-            """
-        ),
-    )
-
-    # Ensure the source eventually sees the right number of records.
-    insert_thread.join()
-
-    print("--- Validate concurrent inserts")
-    c.testdrive(
-        args=["--no-reset"],
-        input=dedent(
-            f"""
-            > SELECT count(*) FROM many_inserts
-            {initial_records + concurrent_records}
-            """
-        ),
+            """,
     )
 
 
