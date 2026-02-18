@@ -82,136 +82,23 @@ impl fmt::Display for CastRangeToString {
     }
 }
 
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    sqlname = "rangelower",
+    is_monotone = true,
+    introduces_nulls = true,
+    output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
 )]
-pub struct RangeLower;
-
-impl LazyUnaryFunc for RangeLower {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let r = a.unwrap_range();
-        Ok(Datum::from(
-            r.inner.map(|inner| inner.lower.bound).flatten(),
-        ))
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        input_type
-            .scalar_type
-            .unwrap_range_element_type()
-            .clone()
-            .nullable(true)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        true
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        true // Ranges are sorted by lower first.
-    }
+fn range_lower<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+    a.inner.map(|inner| inner.lower.bound).flatten()
 }
 
-impl fmt::Display for RangeLower {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("rangelower")
-    }
-}
-
-#[derive(
-    Ord,
-    PartialOrd,
-    Clone,
-    Debug,
-    Eq,
-    PartialEq,
-    Serialize,
-    Deserialize,
-    Hash,
-    MzReflect
+#[sqlfunc(
+    sqlname = "rangeupper",
+    introduces_nulls = true,
+    output_type_expr = input_type.scalar_type.unwrap_range_element_type().clone().nullable(true)
 )]
-pub struct RangeUpper;
-
-impl LazyUnaryFunc for RangeUpper {
-    fn eval<'a>(
-        &'a self,
-        datums: &[Datum<'a>],
-        temp_storage: &'a RowArena,
-        a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
-        }
-        let r = a.unwrap_range();
-        Ok(Datum::from(
-            r.inner.map(|inner| inner.upper.bound).flatten(),
-        ))
-    }
-
-    fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
-        input_type
-            .scalar_type
-            .unwrap_range_element_type()
-            .clone()
-            .nullable(true)
-    }
-
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
-
-    fn introduces_nulls(&self) -> bool {
-        true
-    }
-
-    fn preserves_uniqueness(&self) -> bool {
-        false
-    }
-
-    fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
-    }
-
-    fn is_monotone(&self) -> bool {
-        false
-    }
-}
-
-impl fmt::Display for RangeUpper {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("rangeupper")
-    }
+fn range_upper<'a>(a: Range<Datum<'a>>) -> Option<Datum<'a>> {
+    a.inner.map(|inner| inner.upper.bound).flatten()
 }
 
 #[sqlfunc(sqlname = "range_empty")]
