@@ -74,6 +74,10 @@ impl LazyUnaryFunc for CastRangeToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn repr_canonicalize(&mut self) {
+        self.ty.repr_canonicalize();
+    }
 }
 
 impl fmt::Display for CastRangeToString {

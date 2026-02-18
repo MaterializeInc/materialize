@@ -1654,6 +1654,53 @@ impl VariadicFunc {
             | VariadicFunc::RegexpReplace => false,
         }
     }
+
+    pub fn repr_canonicalize(&mut self) {
+        match self {
+            VariadicFunc::Coalesce
+            | VariadicFunc::Greatest
+            | VariadicFunc::Least
+            | VariadicFunc::Concat
+            | VariadicFunc::ConcatWs
+            | VariadicFunc::MakeTimestamp
+            | VariadicFunc::PadLeading
+            | VariadicFunc::Substr
+            | VariadicFunc::Replace
+            | VariadicFunc::JsonbBuildArray
+            | VariadicFunc::JsonbBuildObject
+            | VariadicFunc::ListIndex
+            | VariadicFunc::ListSliceLinear
+            | VariadicFunc::SplitPart
+            | VariadicFunc::RegexpMatch
+            | VariadicFunc::HmacString
+            | VariadicFunc::HmacBytes
+            | VariadicFunc::ErrorIfNull
+            | VariadicFunc::DateBinTimestamp
+            | VariadicFunc::DateBinTimestampTz
+            | VariadicFunc::DateDiffTimestamp
+            | VariadicFunc::DateDiffTimestampTz
+            | VariadicFunc::DateDiffDate
+            | VariadicFunc::DateDiffTime
+            | VariadicFunc::And
+            | VariadicFunc::Or
+            | VariadicFunc::MakeAclItem
+            | VariadicFunc::MakeMzAclItem
+            | VariadicFunc::Translate
+            | VariadicFunc::ArrayPosition
+            | VariadicFunc::StringToArray
+            | VariadicFunc::TimezoneTime
+            | VariadicFunc::RegexpSplitToArray
+            | VariadicFunc::ArrayIndex { offset: _ }
+            | VariadicFunc::RecordCreate { field_names: _ }
+            | VariadicFunc::RegexpReplace => (),
+            VariadicFunc::MapBuild { value_type: typ }
+            | VariadicFunc::ArrayCreate { elem_type: typ }
+            | VariadicFunc::ArrayToString { elem_type: typ }
+            | VariadicFunc::ListCreate { elem_type: typ }
+            | VariadicFunc::RangeCreate { elem_type: typ }
+            | VariadicFunc::ArrayFill { elem_type: typ } => typ.repr_canonicalize(),
+        }
+    }
 }
 
 impl std::fmt::Display for VariadicFunc {

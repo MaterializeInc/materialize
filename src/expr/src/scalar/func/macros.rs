@@ -201,6 +201,11 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
                 }
             }
+            pub fn repr_canonicalize(&mut self) {
+                match self {
+                    $(Self::$name(f) => LazyUnaryFunc::repr_canonicalize(f),)*
+                }
+            }
         }
 
         impl fmt::Display for UnaryFunc {
@@ -290,6 +295,11 @@ macro_rules! derive_binary {
             pub fn is_monotone(&self) -> (bool, bool) {
                 match self {
                     $(Self::$name(f) => LazyBinaryFunc::is_monotone(f),)*
+                }
+            }
+            pub fn repr_canonicalize(&mut self) {
+                match self {
+                    $(Self::$name(f) => LazyBinaryFunc::repr_canonicalize(f),)*
                 }
             }
         }

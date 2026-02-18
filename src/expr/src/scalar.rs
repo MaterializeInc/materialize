@@ -671,6 +671,20 @@ impl MirScalarExpr {
         }
     }
 
+    /// Canonicalizes any types in the scalar expression by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        self.visit_pre_mut(|e| {
+            use MirScalarExpr::*;
+            match e {
+                Column(..) | CallUnmaterializable(_) | If { .. } => (),
+                Literal(_, typ) => typ.repr_canonicalize(),
+                CallUnary { func, .. } => func.repr_canonicalize(),
+                CallBinary { func, .. } => func.repr_canonicalize(),
+                CallVariadic { func, .. } => func.repr_canonicalize(),
+            }
+        })
+    }
+
     /// Reduces a complex expression where possible.
     ///
     /// This function uses nullability information present in `column_types`,

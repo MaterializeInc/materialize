@@ -99,6 +99,10 @@ impl LazyUnaryFunc for CastArrayToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn repr_canonicalize(&mut self) {
+        self.ty.repr_canonicalize();
+    }
 }
 
 impl fmt::Display for CastArrayToString {
@@ -202,6 +206,10 @@ impl LazyUnaryFunc for CastArrayToJsonb {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn repr_canonicalize(&mut self) {
+        self.cast_element.repr_canonicalize();
+    }
 }
 
 impl fmt::Display for CastArrayToJsonb {
@@ -276,6 +284,11 @@ impl LazyUnaryFunc for CastArrayToArray {
 
     fn is_monotone(&self) -> bool {
         false
+    }
+
+    fn repr_canonicalize(&mut self) {
+        self.return_ty.repr_canonicalize();
+        self.cast_expr.repr_canonicalize();
     }
 }
 

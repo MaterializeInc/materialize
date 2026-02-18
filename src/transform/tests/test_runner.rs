@@ -34,6 +34,7 @@ mod tests {
     use mz_transform::dataflow::{
         DataflowMetainfo, optimize_dataflow_demand_inner, optimize_dataflow_filters_inner,
     };
+    use mz_transform::reprize::ReprizeSqlTypes;
     use mz_transform::{Optimizer, Transform, TransformCtx, reprtypecheck};
     use proc_macro2::TokenTree;
 
@@ -423,8 +424,11 @@ mod tests {
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
-                .map(|(id, rel)| {
+                .map(|(id, mut rel)| {
                     transform_ctx.set_global_id(id);
+                    ReprizeSqlTypes
+                        .transform(&mut rel, &mut transform_ctx)
+                        .unwrap();
                     let local_mir_plan = log_optimizer
                         .optimize(rel, &mut transform_ctx)
                         .unwrap()

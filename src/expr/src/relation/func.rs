@@ -2705,6 +2705,81 @@ impl AggregateFunc {
             _ => false,
         }
     }
+
+    /// Canonicalizes any types in the aggregate function by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        match self {
+            AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
+            | AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxUInt16
+            | AggregateFunc::MaxUInt32
+            | AggregateFunc::MaxUInt64
+            | AggregateFunc::MaxMzTimestamp
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxTime
+            | AggregateFunc::MinNumeric
+            | AggregateFunc::MinInt16
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinUInt16
+            | AggregateFunc::MinUInt32
+            | AggregateFunc::MinUInt64
+            | AggregateFunc::MinMzTimestamp
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
+            | AggregateFunc::MinTime
+            | AggregateFunc::SumInt16
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumUInt16
+            | AggregateFunc::SumUInt32
+            | AggregateFunc::SumUInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::Count
+            | AggregateFunc::Any
+            | AggregateFunc::All
+            | AggregateFunc::Dummy
+            | AggregateFunc::JsonbAgg { .. }
+            | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::ArrayConcat { .. }
+            | AggregateFunc::ListConcat { .. }
+            | AggregateFunc::StringAgg { .. }
+            | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::WindowAggregate { .. } => (),
+            AggregateFunc::FusedValueWindowFunc { funcs, .. }
+            | AggregateFunc::FusedWindowAggregate {
+                wrapped_aggregates: funcs,
+                ..
+            } => {
+                for func in funcs.iter_mut() {
+                    func.repr_canonicalize();
+                }
+            }
+            AggregateFunc::MapAgg { value_type, .. } => value_type.repr_canonicalize(),
+        }
+    }
 }
 
 fn jsonb_each<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
@@ -3458,6 +3533,40 @@ impl TableFunc {
             // IMPORTANT: Before adding a new table function here, consider negative diffs:
             // `WithOrdinality::eval` will panic if the inner table function emits a negative diff.
             TableFunc::WithOrdinality(_) => None,
+        }
+    }
+
+    /// Canonicalizes any types in the table function by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        use TableFunc::*;
+        match self {
+            AclExplode
+            | MzAclExplode
+            | JsonbEach
+            | JsonbEachStringify
+            | JsonbObjectKeys
+            | JsonbArrayElements
+            | JsonbArrayElementsStringify
+            | RegexpExtract(_)
+            | CsvExtract(_)
+            | GenerateSeriesInt32
+            | GenerateSeriesInt64
+            | GenerateSeriesTimestamp
+            | GenerateSeriesTimestampTz
+            | Repeat
+            | GenerateSubscriptsArray
+            | RegexpMatches
+            | WithOrdinality(_) => (),
+            GuardSubquerySize { column_type: typ }
+            | UnnestArray { el_typ: typ }
+            | UnnestList { el_typ: typ }
+            | UnnestMap { value_type: typ } => typ.repr_canonicalize(),
+            Wrap { types, .. } => {
+                for typ in types.iter_mut() {
+                    typ.repr_canonicalize();
+                }
+            }
+            TabletizedScalar { relation, .. } => relation.repr_canonicalize(),
         }
     }
 }
