@@ -115,6 +115,14 @@
         "deprecated": false
       },
       {
+        "name": "fdbClusterConfigMapName",
+        "type": "String",
+        "description": "The name of a ConfigMap containing a FoundationDB cluster file.\nThe ConfigMap must contain a `cluster-file` key whose value is the\nFoundationDB cluster file contents. When set, orchestratord will\nmount the cluster file and set the `FDB_CLUSTER_FILE` environment\nvariable automatically.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "environmentdResourceRequirements",
         "type": "io.k8s.api.core.v1.ResourceRequirements",
         "description": "Resource requirements for the environmentd pod.",

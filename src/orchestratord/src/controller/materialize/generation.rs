@@ -974,6 +974,35 @@ fn create_environmentd_statefulset_object(
         args.extend(extra_args.iter().cloned());
     }
 
+    // Mount the FoundationDB cluster file if configured.
+    if let Some(ref name) = mz.spec.fdb_cluster_config_map_name {
+        volumes.push(Volume {
+            name: "fdb-cluster".to_string(),
+            config_map: Some(ConfigMapVolumeSource {
+                default_mode: Some(0o400),
+                name: name.to_owned(),
+                items: Some(vec![KeyToPath {
+                    key: "cluster-file".to_string(),
+                    path: "fdb.cluster".to_string(),
+                    ..Default::default()
+                }]),
+                optional: Some(false),
+            }),
+            ..Default::default()
+        });
+        volume_mounts.push(VolumeMount {
+            name: "fdb-cluster".to_string(),
+            mount_path: "/fdb-cluster".to_string(),
+            read_only: Some(true),
+            ..Default::default()
+        });
+        env.push(EnvVar {
+            name: "FDB_CLUSTER_FILE".to_string(),
+            value: Some("/fdb-cluster/fdb.cluster".to_string()),
+            ..Default::default()
+        });
+    }
+
     let probe = Probe {
         initial_delay_seconds: Some(1),
         failure_threshold: Some(12),
