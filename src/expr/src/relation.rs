@@ -3303,6 +3303,12 @@ impl AggregateExpr {
     pub fn is_count_asterisk(&self) -> bool {
         self.func == AggregateFunc::Count && self.expr.is_literal_true() && !self.distinct
     }
+
+    /// Canonicalizes any types in the aggregate expression by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        self.func.repr_canonicalize();
+        self.expr.repr_canonicalize();
+    }
 }
 
 /// Describe a join implementation in dataflow.
@@ -3386,6 +3392,40 @@ impl JoinImplementation {
             Self::DeltaQuery(..) => Some("delta"),
             Self::IndexedFilter(..) => Some("indexed_filter"),
             Self::Unimplemented => None,
+        }
+    }
+
+    /// Canonicalizes any types in the join implementation by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        use JoinImplementation::*;
+        match self {
+            Differential((_, first_keys, _), rest) => {
+                for exprs in first_keys.iter_mut() {
+                    for expr in exprs.iter_mut() {
+                        expr.repr_canonicalize();
+                    }
+                }
+                for (_, keys, _) in rest.iter_mut() {
+                    for expr in keys.iter_mut() {
+                        expr.repr_canonicalize();
+                    }
+                }
+            }
+            DeltaQuery(paths) => {
+                for path in paths.iter_mut() {
+                    for (_, keys, _) in path.iter_mut() {
+                        for expr in keys.iter_mut() {
+                            expr.repr_canonicalize();
+                        }
+                    }
+                }
+            }
+            IndexedFilter(_, _, index_keys, _) => {
+                for key in index_keys.iter_mut() {
+                    key.repr_canonicalize();
+                }
+            }
+            Unimplemented => (),
         }
     }
 }

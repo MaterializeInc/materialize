@@ -74,6 +74,10 @@ impl LazyUnaryFunc for CastMapToString {
     fn is_monotone(&self) -> bool {
         false
     }
+
+    fn repr_canonicalize(&mut self) {
+        self.ty.repr_canonicalize();
+    }
 }
 
 impl fmt::Display for CastMapToString {
@@ -163,6 +167,10 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
 
     fn is_monotone(&self) -> bool {
         false
+    }
+
+    fn repr_canonicalize(&mut self) {
+        self.value_type.repr_canonicalize();
     }
 }
 

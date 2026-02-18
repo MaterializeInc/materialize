@@ -100,6 +100,11 @@ impl SqlColumnType {
         self.nullable = backport_typ.nullable;
     }
 
+    /// Canonicalizes this column type, by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        self.scalar_type.repr_canonicalize();
+    }
+
     /// Compute the least upper bound of two column types at the SQL level.
     ///
     /// Two types are compatible when they are equal, share the same base type
@@ -348,6 +353,13 @@ impl SqlRelationType {
         }
 
         self.keys = backport_typ.keys.clone();
+    }
+
+    /// Canonicalizes this type, by round-tripping through repr types.
+    pub fn repr_canonicalize(&mut self) {
+        for col in self.column_types.iter_mut() {
+            col.repr_canonicalize();
+        }
     }
 }
 

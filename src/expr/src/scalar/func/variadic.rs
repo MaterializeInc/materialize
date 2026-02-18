@@ -2722,4 +2722,51 @@ impl VariadicFunc {
             | VariadicFunc::RegexpReplace(_) => false,
         }
     }
+
+    pub fn repr_canonicalize(&mut self) {
+        match self {
+            VariadicFunc::Coalesce(_)
+            | VariadicFunc::Greatest(_)
+            | VariadicFunc::Least(_)
+            | VariadicFunc::Concat(_)
+            | VariadicFunc::ConcatWs(_)
+            | VariadicFunc::MakeTimestamp(_)
+            | VariadicFunc::PadLeading(_)
+            | VariadicFunc::Substr(_)
+            | VariadicFunc::Replace(_)
+            | VariadicFunc::JsonbBuildArray(_)
+            | VariadicFunc::JsonbBuildObject(_)
+            | VariadicFunc::ListIndex(_)
+            | VariadicFunc::ListSliceLinear(_)
+            | VariadicFunc::SplitPart(_)
+            | VariadicFunc::RegexpMatch(_)
+            | VariadicFunc::HmacString(_)
+            | VariadicFunc::HmacBytes(_)
+            | VariadicFunc::ErrorIfNull(_)
+            | VariadicFunc::DateBinTimestamp(_)
+            | VariadicFunc::DateBinTimestampTz(_)
+            | VariadicFunc::DateDiffTimestamp(_)
+            | VariadicFunc::DateDiffTimestampTz(_)
+            | VariadicFunc::DateDiffDate(_)
+            | VariadicFunc::DateDiffTime(_)
+            | VariadicFunc::And(_)
+            | VariadicFunc::Or(_)
+            | VariadicFunc::MakeAclItem(_)
+            | VariadicFunc::MakeMzAclItem(_)
+            | VariadicFunc::Translate(_)
+            | VariadicFunc::ArrayPosition(_)
+            | VariadicFunc::StringToArray(_)
+            | VariadicFunc::TimezoneTime(_)
+            | VariadicFunc::RegexpSplitToArray(_)
+            | VariadicFunc::ArrayIndex(_)
+            | VariadicFunc::RecordCreate(_)
+            | VariadicFunc::RegexpReplace(_) => (),
+            VariadicFunc::MapBuild(inner) => inner.value_type.repr_canonicalize(),
+            VariadicFunc::ArrayCreate(inner) => inner.elem_type.repr_canonicalize(),
+            VariadicFunc::ArrayToString(inner) => inner.elem_type.repr_canonicalize(),
+            VariadicFunc::ListCreate(inner) => inner.elem_type.repr_canonicalize(),
+            VariadicFunc::RangeCreate(inner) => inner.elem_type.repr_canonicalize(),
+            VariadicFunc::ArrayFill(inner) => inner.elem_type.repr_canonicalize(),
+        }
+    }
 }
