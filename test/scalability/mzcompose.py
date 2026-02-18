@@ -213,7 +213,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     baseline_endpoint, other_endpoints = get_baseline_and_other_endpoints(
         c, args, regression_against_target
     )
-    workload_classes = get_workload_classes(args)
+    workload_classes = buildkite.shard_list(
+        get_workload_classes(args), lambda cls: cls.__name__
+    )
 
     print(f"Targets: {args.target}")
     print(f"Checking regression against: {regression_against_target}")

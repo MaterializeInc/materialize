@@ -20,8 +20,8 @@ class Concurrency(Scenario):
 class ParallelIngestion(Concurrency):
     """Measure the time it takes to ingest multiple sources concurrently."""
 
+    SCALE = 5
     SOURCES = 10
-    FIXED_SCALE = True  # Disk slowness in CRDB leading to CRDB going down
 
     def version(self) -> ScenarioVersion:
         return ScenarioVersion.create(1, 1, 0)
@@ -116,7 +116,7 @@ $ kafka-ingest format=avro topic=kafka-parallel-ingestion key-format=avro key-sc
 class ParallelDataflows(Concurrency):
     """Measure the time it takes to compute multiple parallel dataflows."""
 
-    SCALE = 6
+    SCALE = 5
     VIEWS = 25
 
     def benchmark(self) -> MeasurementSource:

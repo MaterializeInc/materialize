@@ -343,11 +343,9 @@ steps:
         label: "Checks + restart Cockroach"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        # Sometimes runs into query timeouts or entire test timeouts with parallelism 1, too much state, same in all other platform-checks
-        parallelism: 3
+        parallelism: 2
         agents:
-          # A larger instance is needed due to frequent OOMs, same in all other platform-checks
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -356,8 +354,8 @@ steps:
       - id: checks-backup-restore-before-manipulate
         label: "Checks backup + restore between the two manipulate()"
         depends_on: build-x86_64
-        timeout_in_minutes: 30
-        parallelism: 3
+        timeout_in_minutes: 60
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-16cpu-32gb
         plugins:
@@ -369,8 +367,8 @@ steps:
       - id: checks-backup-restore-after-manipulate
         label: "Checks backup + restore after manipulate()"
         depends_on: build-x86_64
-        timeout_in_minutes: 30
-        parallelism: 3
+        timeout_in_minutes: 60
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-16cpu-32gb
         plugins:
@@ -382,8 +380,8 @@ steps:
       - id: checks-backup-multi
         label: "Checks + multiple backups/restores"
         depends_on: build-x86_64
-        timeout_in_minutes: 30
-        parallelism: 4
+        timeout_in_minutes: 60
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-16cpu-32gb
         plugins:
@@ -396,9 +394,9 @@ steps:
         label: "Checks preflight-check and continue upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -408,9 +406,9 @@ steps:
         label: "Platform checks upgrade, restarting compute clusterd first"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -420,9 +418,9 @@ steps:
         label: "Platform checks upgrade, restarting compute clusterd last"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -432,9 +430,9 @@ steps:
         label: "Checks + kill storage clusterd"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -444,6 +442,7 @@ steps:
         label: "Checks + restart source Postgres"
         depends_on: build-x86_64
         timeout_in_minutes: 180
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-8cpu-16gb
         plugins:
@@ -455,9 +454,9 @@ steps:
         label: "Checks + restart clusterd compute"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         agents:
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -467,10 +466,9 @@ steps:
         label: "Checks + DROP/CREATE replica"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 3
+        parallelism: 2
         agents:
-          # Seems to require more memory on aarch64
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -480,7 +478,7 @@ steps:
         label: "Checks 0dt restart of the entire Mz"
         depends_on: build-x86_64
         timeout_in_minutes: 120
-        parallelism: 3
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-16cpu-32gb
         plugins:

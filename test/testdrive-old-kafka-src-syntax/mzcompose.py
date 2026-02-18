@@ -15,7 +15,7 @@ retried until it produces the desired result.
 import glob
 import os
 
-from materialize import MZ_ROOT, ci_util
+from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
@@ -319,7 +319,9 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             "privilege_checks.td",
         )
     ]
-    matching_files: list[str] = sorted(matching_files)
+    matching_files: list[str] = buildkite.shard_list(
+        sorted(matching_files), lambda f: f
+    )
 
     dependencies = [
         "fivetran-destination",
