@@ -36,8 +36,8 @@ At each `COMMIT INTERVAL`:
 
 1. All pending writes are flushed to Parquet data files. See [Type
    mapping](#type-mapping).
-2. Delete files are written for any updates or deletes. See [Delete handling]
-   (#delete-handling).
+2. Delete files are written for any updates or deletes. See [Delete
+   handling](#delete-handling).
 3. A new Iceberg snapshot is committed atomically.
 
 When the snapshot is committed, the data is available to downstream query
@@ -58,11 +58,8 @@ See also: [Restrictions and limitations](#restrictions-and-limitations).
 
 ### Exactly-once delivery
 
-Iceberg sinks provide **exactly-once delivery**. After a restart, Materialize
-resumes from the last committed snapshot without duplicating data.
-
-Materialize stores progress information in Iceberg snapshot metadata properties
-(`mz-frontier` and `mz-sink-version`).
+{{< include-from-yaml data="examples/create_sink_iceberg"
+name="exactly-once-delivery" >}}
 
 ### Commit interval tradeoffs
 
@@ -159,7 +156,7 @@ that it is, you can bypass validation by including `NOT ENFORCED` option:
 CREATE SINK deduped_sink
   IN CLUSTER my_cluster
   FROM my_source
-  INTO ICEBERG CATALOG CONNECTION iceberg_catalog (
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
     NAMESPACE = 'raw',
     TABLE = 'events'
   )

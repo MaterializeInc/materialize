@@ -61,7 +61,7 @@
     CREATE SINK user_events_iceberg
       IN CLUSTER analytics_cluster
       FROM user_events
-      INTO ICEBERG CATALOG CONNECTION s3tables_catalog (
+      INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
         NAMESPACE = 'events',
         TABLE = 'user_events'
       )
@@ -87,4 +87,13 @@
 
 - name: "restrictions-limitations-schema-evolution"
   content: |
-    Schema evolution of an Iceberg table is not supported. If the sink from object's schema changes, you must drop and recreate the sink.
+    Schema evolution of an Iceberg table is not supported. If the `SINK FROM` object's schema changes, you must drop and recreate the sink.
+
+- name: "exactly-once-delivery"
+  content: |
+    Iceberg sinks provide **exactly-once delivery**. After a restart,
+    Materialize resumes from the last committed snapshot without duplicating
+    data.
+
+    Materialize stores progress information in Iceberg snapshot metadata
+    properties (`mz-frontier` and `mz-sink-version`).

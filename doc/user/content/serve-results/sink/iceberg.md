@@ -34,8 +34,7 @@ Tables](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables.html) is
 - An AWS S3 Table bucket in your AWS account. The S3 Table bucket must be in
   the same AWS region as your Materialize deployment.
 - A namespace in the AWS S3 Table bucket. For details on creating namespaces,
-  see
-  https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-namespace-create.html.
+  see [AWS S3 documentation: Creating a namespace](https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-tables-namespace-create.html).
 
 ## Step 1. Set up permissions in AWS
 
@@ -214,7 +213,7 @@ CREATE SINK <sink_name>
   USING AWS CONNECTION aws_connection
   KEY (<key>)
   MODE UPSERT
-  WITH (COMMIT INTERVAL = <commit_interval>);
+  WITH (COMMIT INTERVAL = '<commit_interval>');
 ```
 
 For the full list of syntax options, see the [`CREATE SINK` reference](/sql/create-sink/iceberg).
@@ -252,11 +251,8 @@ snapshots to your Iceberg table. This involves tradeoffs:
 
 ### Exactly-once delivery
 
-Iceberg sinks provide **exactly-once delivery**. After a restart, Materialize
-resumes from the last committed snapshot without duplicating data.
-
-Materialize stores progress information in Iceberg snapshot metadata properties
-(`mz-frontier` and `mz-sink-version`).
+{{< include-from-yaml data="examples/create_sink_iceberg"
+name="exactly-once-delivery" >}}
 
 ### Type mapping
 
