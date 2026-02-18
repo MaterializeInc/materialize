@@ -2302,6 +2302,46 @@ impl<'a, E> OutputDatumType<'a, E> for Array<'a> {
     }
 }
 
+/// A wrapper around [`Array`] that represents a PostgreSQL `int2vector` value.
+///
+/// This exists to allow distinguishing between `int2vector` and regular array
+/// values in the type system, which enables `#[sqlfunc]` conversions.
+#[derive(Debug)]
+pub struct Int2Vector<'a>(pub Array<'a>);
+
+impl AsColumnType for Int2Vector<'_> {
+    fn as_column_type() -> SqlColumnType {
+        SqlScalarType::Int2Vector.nullable(false)
+    }
+}
+
+impl<'a, E> InputDatumType<'a, E> for Int2Vector<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Array(array)) => Ok(Int2Vector(array)),
+            _ => Err(res),
+        }
+    }
+}
+
+impl<'a, E> OutputDatumType<'a, E> for Int2Vector<'a> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
+
+    fn into_result(self, _temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(Datum::Array(self.0))
+    }
+}
+
 impl<'a, E> InputDatumType<'a, E> for DatumMap<'a> {
     fn nullable() -> bool {
         false

@@ -66,9 +66,9 @@ pub use crate::row::{
     datum_list_size, datum_size, datums_size, read_datum, row_size,
 };
 pub use crate::scalar::{
-    ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, OutputDatumType,
-    PropArray, PropDatum, PropDict, PropList, ProtoScalarType, ReprScalarBaseType, ReprScalarType,
-    SqlScalarBaseType, SqlScalarType, arb_datum, arb_datum_for_column, arb_datum_for_scalar,
-    arb_range_type,
+    ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, Int2Vector,
+    OutputDatumType, PropArray, PropDatum, PropDict, PropList, ProtoScalarType, ReprScalarBaseType,
+    ReprScalarType, SqlScalarBaseType, SqlScalarType, arb_datum, arb_datum_for_column,
+    arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
