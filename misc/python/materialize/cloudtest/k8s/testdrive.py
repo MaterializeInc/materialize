@@ -160,14 +160,6 @@ class TestdrivePod(K8sPod, TestdriveBase):
         pod_spec = V1PodSpec(containers=[container], node_selector=node_selector)
         self.pod = V1Pod(metadata=metadata, spec=pod_spec)
 
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=self.aws_endpoint,
-            aws_access_key_id="minioadmin",
-            aws_secret_access_key="minioadmin",
-        )
-        generate_parquet_files(s3)
-
     def _run_internal(
         self,
         command: list[str],
@@ -175,6 +167,13 @@ class TestdrivePod(K8sPod, TestdriveBase):
         suppress_command_error_output: bool = False,
     ) -> None:
         self.wait(condition="condition=Ready", resource="pod/testdrive")
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=self.aws_endpoint,
+            aws_access_key_id="minio",
+            aws_secret_access_key="minio123",
+        )
+        generate_parquet_files(s3)
         try:
             self.kubectl(
                 "exec",

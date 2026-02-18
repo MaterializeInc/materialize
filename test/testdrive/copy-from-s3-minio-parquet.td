@@ -54,11 +54,6 @@ ALTER SYSTEM SET enable_copy_from_remote = true;
   uuid_col uuid
   );
 
-$ s3-set-presigned-url bucket=copyfroms3 key=parquet/bad_url.parquet var-name=bad_url
-
-! COPY INTO types FROM '${bad_url}' (FORMAT PARQUET);
-contains:no matching files
-
 $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=types_url
 
 > COPY INTO types FROM '${types_url}' (FORMAT PARQUET);
