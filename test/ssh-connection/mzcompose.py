@@ -119,36 +119,43 @@ def workflow_validate_connection(c: Composition) -> None:
     c.run_testdrive_files("--no-reset", "validate-success.td")
 
 
+def _test_ssh_bastion_failure_recovery(
+    c: Composition,
+    source_td: str,
+    failure_td: str,
+    restart_td: str,
+    *extra_testdrive_args: str,
+) -> None:
+    """Test SSH bastion host failure and recovery for a source."""
+    c.run_testdrive_files("--no-reset", *extra_testdrive_args, source_td)
+    c.kill("ssh-bastion-host")
+    c.run_testdrive_files("--no-reset", failure_td)
+    c.up("ssh-bastion-host")
+    c.run_testdrive_files("--no-reset", *extra_testdrive_args, restart_td)
+
+
 def workflow_pg(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "postgres")
     _setup_and_authorize_ssh(c)
 
-    c.run_testdrive_files("--no-reset", "pg-source.td")
-    c.kill("ssh-bastion-host")
-    c.run_testdrive_files("--no-reset", "pg-source-after-ssh-failure.td")
-    c.up("ssh-bastion-host")
-    c.run_testdrive_files("--no-reset", "pg-source-after-ssh-restart.td")
+    _test_ssh_bastion_failure_recovery(
+        c,
+        "pg-source.td",
+        "pg-source-after-ssh-failure.td",
+        "pg-source-after-ssh-restart.td",
+    )
 
 
 def workflow_mysql(c: Composition) -> None:
     c.up("materialized", "ssh-bastion-host", "mysql")
     _setup_and_authorize_ssh(c)
 
-    # Basic validation
-    c.run_testdrive_files(
-        "--no-reset",
-        *MySql.default_testdrive_args(),
+    _test_ssh_bastion_failure_recovery(
+        c,
         "mysql-source.td",
-    )
-
-    # Validate SSH bastion host failure & recovery scenario
-    c.kill("ssh-bastion-host")
-    c.run_testdrive_files("--no-reset", "mysql-source-after-ssh-failure.td")
-    c.up("ssh-bastion-host")
-    c.run_testdrive_files(
-        "--no-reset",
-        *MySql.default_testdrive_args(),
+        "mysql-source-after-ssh-failure.td",
         "mysql-source-after-ssh-restart.td",
+        *MySql.default_testdrive_args(),
     )
 
     # MySQL generates self-signed certificates for SSL connections on startup,
@@ -186,21 +193,12 @@ def workflow_sql_server(c: Composition) -> None:
     setup_sql_server_testing(c)
     _setup_and_authorize_ssh(c)
 
-    # Basic validation
-    c.run_testdrive_files(
-        "--no-reset",
-        *SqlServer.default_testdrive_args(),
+    _test_ssh_bastion_failure_recovery(
+        c,
         "sql-server-source.td",
-    )
-
-    # Validate SSH bastion host failure & recovery scenario
-    c.kill("ssh-bastion-host")
-    c.run_testdrive_files("--no-reset", "sql-server-source-after-ssh-failure.td")
-    c.up("ssh-bastion-host")
-    c.run_testdrive_files(
-        "--no-reset",
-        *SqlServer.default_testdrive_args(),
+        "sql-server-source-after-ssh-failure.td",
         "sql-server-source-after-ssh-restart.td",
+        *SqlServer.default_testdrive_args(),
     )
 
     ssl_ca = c.exec(
@@ -220,7 +218,14 @@ def workflow_sql_server(c: Composition) -> None:
     )
 
 
-def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
+def _run_kafka_ssh_test(
+    c: Composition,
+    td_file: str,
+    failure_td_file: str,
+    restart_td_file: str,
+    redpanda: bool = False,
+) -> None:
+    """Run a Kafka SSH tunnel test with bastion failure and recovery."""
     c.down()
     # Configure the SSH bastion host to allow only two connections to be
     # initiated simultaneously. This is enough to establish *one* Kafka SSH
@@ -229,7 +234,6 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
     # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
     # per Kafka broker per worker.
     with c.override(SshBastionHost(max_startups="2")):
-
         dependencies = ["materialized", "ssh-bastion-host"]
         if redpanda:
             dependencies += ["redpanda"]
@@ -239,69 +243,42 @@ def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
 
         _setup_and_authorize_ssh(c)
 
-        c.run_testdrive_files("--no-reset", "kafka-source.td")
+        c.run_testdrive_files("--no-reset", td_file)
         c.kill("ssh-bastion-host")
-        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-failure.td")
+        c.run_testdrive_files("--no-reset", failure_td_file)
 
         c.up("ssh-bastion-host")
-        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
+        c.run_testdrive_files("--no-reset", restart_td_file)
+
+
+def workflow_kafka(c: Composition, redpanda: bool = False) -> None:
+    _run_kafka_ssh_test(
+        c,
+        "kafka-source.td",
+        "kafka-source-after-ssh-failure.td",
+        "kafka-source-after-ssh-restart.td",
+        redpanda=redpanda,
+    )
 
 
 def workflow_kafka_restart_replica(c: Composition, redpanda: bool = False) -> None:
-    c.down()
-    # Configure the SSH bastion host to allow only two connections to be
-    # initiated simultaneously. This is enough to establish *one* Kafka SSH
-    # tunnel and *one* Confluent Schema Registry tunnel simultaneously.
-    # Combined with using a large cluster in kafka-source.td, this ensures that
-    # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
-    # per Kafka broker per worker.
-    with c.override(SshBastionHost(max_startups="2")):
-
-        dependencies = ["materialized", "ssh-bastion-host"]
-        if redpanda:
-            dependencies += ["redpanda"]
-        else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
-        c.up(*dependencies)
-
-        _setup_and_authorize_ssh(c)
-
-        c.run_testdrive_files("--no-reset", "kafka-source.td")
-        c.kill("ssh-bastion-host")
-        c.run_testdrive_files(
-            "--no-reset",
-            "kafka-source-after-ssh-failure-restart-replica.td",
-        )
-
-        c.up("ssh-bastion-host")
-        c.run_testdrive_files("--no-reset", "kafka-source-after-ssh-restart.td")
+    _run_kafka_ssh_test(
+        c,
+        "kafka-source.td",
+        "kafka-source-after-ssh-failure-restart-replica.td",
+        "kafka-source-after-ssh-restart.td",
+        redpanda=redpanda,
+    )
 
 
 def workflow_kafka_sink(c: Composition, redpanda: bool = False) -> None:
-    c.down()
-    # Configure the SSH bastion host to allow only two connections to be
-    # initiated simultaneously. This is enough to establish *one* Kafka SSH
-    # tunnel and *one* Confluent Schema Registry tunnel simultaneously.
-    # Combined with using a large cluster in kafka-source.td, this ensures that
-    # we only create one SSH tunnel per Kafka broker, rather than one SSH tunnel
-    # per Kafka broker per worker.
-    with c.override(SshBastionHost(max_startups="2")):
-
-        dependencies = ["materialized", "ssh-bastion-host"]
-        if redpanda:
-            dependencies += ["redpanda"]
-        else:
-            dependencies += ["zookeeper", "kafka", "schema-registry"]
-        c.up(*dependencies)
-
-        _setup_and_authorize_ssh(c)
-
-        c.run_testdrive_files("--no-reset", "kafka-sink.td")
-        c.kill("ssh-bastion-host")
-        c.run_testdrive_files("--no-reset", "kafka-sink-after-ssh-failure.td")
-
-        c.up("ssh-bastion-host")
-        c.run_testdrive_files("--no-reset", "kafka-sink-after-ssh-restart.td")
+    _run_kafka_ssh_test(
+        c,
+        "kafka-sink.td",
+        "kafka-sink-after-ssh-failure.td",
+        "kafka-sink-after-ssh-restart.td",
+        redpanda=redpanda,
+    )
 
 
 def workflow_hidden_hosts(c: Composition, redpanda: bool = False) -> None:
