@@ -130,51 +130,57 @@ def test_credentials(c: Composition, ctx: TestContext):
     access_key_id = access_key["AccessKey"]["AccessKeyId"]
     secret_access_key = access_key["AccessKey"]["SecretAccessKey"]
 
-    # Creating a connection with those credentials should work.
-    c.sql(
-        f"""
-        CREATE SECRET aws_secret_access_key AS '{secret_access_key}';
-        CREATE CONNECTION aws_credentials TO AWS (
-            ACCESS KEY ID = '{access_key_id}',
-            SECRET ACCESS KEY = SECRET aws_secret_access_key
-        );
-    """,
-        print_statement=False,
-    )
-    # Wait for IAM to propagate.
-    c.sleep(ctx.iam_propagation_seconds)
-    c.sql("VALIDATE CONNECTION aws_credentials")
-
-    # Corrupting the secret access key should cause authentication to fail with
-    # an invalid signature error.
-    bad_secret_access_key = codecs.encode(secret_access_key, "rot13")
-    c.sql(
-        f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'",
-        print_statement=False,
-    )
     try:
+        # Creating a connection with those credentials should work.
+        c.sql(
+            f"""
+            CREATE SECRET aws_secret_access_key AS '{secret_access_key}';
+            CREATE CONNECTION aws_credentials TO AWS (
+                ACCESS KEY ID = '{access_key_id}',
+                SECRET ACCESS KEY = SECRET aws_secret_access_key
+            );
+        """,
+            print_statement=False,
+        )
+        # Wait for IAM to propagate.
+        c.sleep(ctx.iam_propagation_seconds)
         c.sql("VALIDATE CONNECTION aws_credentials")
-    except SystemError as e:
-        assert (
-            e.diag.message_primary and "SignatureDoesNotMatch" in e.diag.message_primary
-        ), e
-    else:
-        raise RuntimeError("connection validation unexpectedly succeeded")
 
-    # Changing the access key to a nonexistent access key should fail with an
-    # invalid client ID error.
-    c.sql(
-        "ALTER CONNECTION aws_credentials SET (ACCESS KEY ID = 'AKIAV2KIV5LP3RAKAZUY')",
-        print_statement=False,
-    )
-    try:
-        c.sql("VALIDATE CONNECTION aws_credentials")
-    except SystemError as e:
-        assert (
-            e.diag.message_primary and "InvalidClientTokenId" in e.diag.message_primary
-        ), e
-    else:
-        raise RuntimeError("connection validation unexpectedly succeeded")
+        # Corrupting the secret access key should cause authentication to fail with
+        # an invalid signature error.
+        bad_secret_access_key = codecs.encode(secret_access_key, "rot13")
+        c.sql(
+            f"ALTER SECRET aws_secret_access_key AS '{bad_secret_access_key}'",
+            print_statement=False,
+        )
+        try:
+            c.sql("VALIDATE CONNECTION aws_credentials")
+        except SystemError as e:
+            assert (
+                e.diag.message_primary
+                and "SignatureDoesNotMatch" in e.diag.message_primary
+            ), e
+        else:
+            raise RuntimeError("connection validation unexpectedly succeeded")
+
+        # Changing the access key to a nonexistent access key should fail with an
+        # invalid client ID error.
+        c.sql(
+            "ALTER CONNECTION aws_credentials SET (ACCESS KEY ID = 'AKIAV2KIV5LP3RAKAZUY')",
+            print_statement=False,
+        )
+        try:
+            c.sql("VALIDATE CONNECTION aws_credentials")
+        except SystemError as e:
+            assert (
+                e.diag.message_primary
+                and "InvalidClientTokenId" in e.diag.message_primary
+            ), e
+        else:
+            raise RuntimeError("connection validation unexpectedly succeeded")
+    finally:
+        ctx.iam.delete_access_key(UserName=customer_user, AccessKeyId=access_key_id)
+        ctx.iam.delete_user(UserName=customer_user)
 
 
 def test_assume_role(c: Composition, ctx: TestContext):
