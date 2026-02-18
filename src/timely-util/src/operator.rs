@@ -17,6 +17,9 @@
 
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
+use std::rc::Rc;
+
+use crate::rc_vec::RcVec;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, TimelyStack};
@@ -34,6 +37,7 @@ use timely::dataflow::operators::generic::operator::{self, Operator};
 use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputBuilder, OutputBuilderSession,
 };
+use timely::dataflow::scopes::ScopeParent;
 use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, ContainerBuilder, Data, PartialOrder};
@@ -519,6 +523,277 @@ where
     }
 }
 
+/// Implementation of [`CollectionExt`] for collections with `RcVec<Vec<...>>` containers.
+///
+/// Each method uses `RcVec::make_mut` inside the operator body to get owned access to items,
+/// which is zero-cost when the `Rc` refcount is 1 (the common case in point-to-point dataflow
+/// channels). This avoids the need for a separate `unshared()` conversion operator before
+/// calling these methods.
+impl<G, D1, R> CollectionExt<G, D1, R>
+    for Collection<G, RcVec<Vec<(D1, <G as ScopeParent>::Timestamp, R)>>>
+where
+    G: Scope,
+    G::Timestamp: Data,
+    D1: Data,
+    R: Semigroup + 'static,
+{
+    fn empty(scope: &G) -> VecCollection<G, D1, R> {
+        operator::empty(scope).as_collection()
+    }
+
+    fn flat_map_fallible<DCB, ECB, D2, E, I, L>(
+        &self,
+        name: &str,
+        mut logic: L,
+    ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
+    where
+        DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
+        ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
+        D2: Data,
+        E: Data,
+        I: IntoIterator<Item = Result<D2, E>>,
+        L: FnMut(D1) -> I + 'static,
+    {
+        let (ok_stream, err_stream) =
+            self.inner
+                .unary_fallible::<DCB, ECB, _, _>(Pipeline, name, |_, _| {
+                    Box::new(move |input, ok_output, err_output| {
+                        input.for_each_time(|time, data| {
+                            let mut ok_session = ok_output.session_with_builder(&time);
+                            let mut err_session = err_output.session_with_builder(&time);
+                            for container in data {
+                                for (d1, t, r) in RcVec::make_mut(container).drain(..) {
+                                    for item in logic(d1) {
+                                        match item {
+                                            Ok(d2) => {
+                                                ok_session.give((d2, t.clone(), r.clone()))
+                                            }
+                                            Err(e) => {
+                                                err_session.give((e, t.clone(), r.clone()))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                    })
+                });
+        (ok_stream.as_collection(), err_stream.as_collection())
+    }
+
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+    ) -> VecCollection<G, D1, R> {
+        // Expire fuses unshare into the pass-through operator: the output is a VecCollection.
+        let name = format!("expire_collection_at({name})");
+        self.inner
+            .unary_frontier(Pipeline, &name.clone(), move |cap, _| {
+                let cap = Some(cap.delayed(&expiration));
+                let mut warned = false;
+                move |(input, frontier), output| {
+                    let _ = &cap;
+                    let frontier = frontier.frontier();
+                    if !frontier.less_than(&expiration) && !warned {
+                        tracing::warn!(
+                            name = name,
+                            frontier = ?frontier,
+                            expiration = ?expiration,
+                            "frontier not less than expiration"
+                        );
+                        warned = true;
+                    }
+                    input.for_each_time(|time, data| {
+                        let mut session = output.session(&time);
+                        for container in data {
+                            session.give_container(RcVec::make_mut(container));
+                        }
+                    });
+                }
+            })
+            .as_collection()
+    }
+
+    fn explode_one<D2, R2, L>(
+        &self,
+        mut logic: L,
+    ) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
+    where
+        D2: differential_dataflow::Data,
+        R2: Semigroup + Multiply<R>,
+        <R2 as Multiply<R>>::Output: Data + Semigroup,
+        L: FnMut(D1) -> (D2, R2) + 'static,
+        G::Timestamp: Lattice,
+    {
+        self.inner
+            .unary::<ConsolidatingContainerBuilder<_>, _, _, _>(
+                Pipeline,
+                "ExplodeOne",
+                move |_, _| {
+                    move |input, output| {
+                        input.for_each_time(|time, data| {
+                            let mut session = output.session_with_builder(&time);
+                            for container in data {
+                                for (x, t, d) in RcVec::make_mut(container).drain(..) {
+                                    let (x, d2) = logic(x);
+                                    session.give((x, t, d2.multiply(&d)));
+                                }
+                            }
+                        });
+                    }
+                },
+            )
+            .as_collection()
+    }
+
+    fn ensure_monotonic<E, IE>(
+        &self,
+        into_err: IE,
+    ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
+    where
+        E: Data,
+        IE: Fn(D1, R) -> (E, R) + 'static,
+        R: num_traits::sign::Signed,
+    {
+        let (oks, errs) = self
+            .inner
+            .unary_fallible(Pipeline, "EnsureMonotonic", move |_, _| {
+                Box::new(move |input, ok_output, err_output| {
+                    input.for_each_time(|time, data| {
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        for container in data {
+                            for (x, t, d) in RcVec::make_mut(container).drain(..) {
+                                if d.is_positive() {
+                                    ok_session.give((x, t, d))
+                                } else {
+                                    let (e, d2) = into_err(x, d);
+                                    err_session.give((e, t, d2))
+                                }
+                            }
+                        }
+                    })
+                })
+            });
+        (oks.as_collection(), errs.as_collection())
+    }
+
+    fn consolidate_named_if<Ba>(self, must_consolidate: bool, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hash + Columnation,
+        R: Semigroup + differential_dataflow::ExchangeData + Columnation,
+        G::Timestamp: Lattice + Ord + Columnation,
+        Ba: Batcher<
+                Input = Vec<((D1, ()), G::Timestamp, R)>,
+                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Time = G::Timestamp,
+            > + 'static,
+    {
+        if must_consolidate {
+            let vec_collection: VecCollection<G, D1, R> =
+                self.inner.unshared().as_collection();
+            vec_collection
+                .consolidate_named_if::<Ba>(true, name)
+                .inner
+                .shared_rcvec()
+                .as_collection()
+        } else {
+            self
+        }
+    }
+
+    fn consolidate_named<Ba>(self, name: &str) -> Self
+    where
+        D1: differential_dataflow::ExchangeData + Hash + Columnation,
+        R: Semigroup + differential_dataflow::ExchangeData + Columnation,
+        G::Timestamp: Lattice + Ord + Columnation,
+        Ba: Batcher<
+                Input = Vec<((D1, ()), G::Timestamp, R)>,
+                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Time = G::Timestamp,
+            > + 'static,
+    {
+        let vec_collection: VecCollection<G, D1, R> =
+            self.inner.unshared().as_collection();
+        vec_collection
+            .consolidate_named::<Ba>(name)
+            .inner
+            .shared_rcvec()
+            .as_collection()
+    }
+}
+
+/// Extension trait providing dynamic-scope operations for `Rc<Vec<...>>` collections.
+///
+/// These mirror differential_dataflow's `enter_dynamic`/`leave_dynamic` on `VecCollection`,
+/// adapted for `Rc<Vec<...>>` containers using `Rc::make_mut` for zero-copy when refcount=1.
+pub trait RcCollectionExt<G: Scope> {
+    /// Enters a dynamically created scope which has `level` timestamp coordinates.
+    fn enter_dynamic(&self, level: usize) -> Self;
+    /// Leaves a dynamically created scope which has `level` timestamp coordinates.
+    fn leave_dynamic(&self, level: usize) -> Self;
+}
+
+impl<G, D, R, T, TOuter> RcCollectionExt<G>
+    for Collection<G, RcVec<Vec<(D, timely::order::Product<TOuter, differential_dataflow::dynamic::pointstamp::PointStamp<T>>, R)>>>
+where
+    G: Scope<Timestamp = timely::order::Product<TOuter, differential_dataflow::dynamic::pointstamp::PointStamp<T>>>,
+    D: Data,
+    R: Semigroup + 'static,
+    T: Timestamp + Default,
+    TOuter: Timestamp,
+{
+    fn enter_dynamic(&self, _level: usize) -> Self {
+        (*self).clone()
+    }
+
+    fn leave_dynamic(&self, level: usize) -> Self {
+        use differential_dataflow::collection::AsCollection;
+        use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
+        use timely::order::Product;
+
+        let mut builder = OperatorBuilderRc::new("LeaveDynamic".to_string(), self.scope());
+        let (output, stream) = builder.new_output();
+        let mut output = OutputBuilder::from(output);
+        let mut input = builder.new_input_connection(
+            &self.inner,
+            Pipeline,
+            [(
+                0,
+                Antichain::from_elem(Product {
+                    outer: Default::default(),
+                    inner: PointStampSummary {
+                        retain: Some(level - 1),
+                        actions: Vec::new(),
+                    },
+                }),
+            )],
+        );
+
+        builder.build(move |_capability| {
+            move |_frontier| {
+                let mut output = output.activate();
+                input.for_each(|cap, data| {
+                    let mut new_time = cap.time().clone();
+                    let mut vec = std::mem::take(&mut new_time.inner).into_inner();
+                    vec.truncate(level - 1);
+                    new_time.inner = PointStamp::new(vec);
+                    let new_cap = cap.delayed(&new_time);
+                    for (_data, time, _diff) in RcVec::make_mut(data).iter_mut() {
+                        let mut vec = std::mem::take(&mut time.inner).into_inner();
+                        vec.truncate(level - 1);
+                        time.inner = PointStamp::new(vec);
+                    }
+                    output.session(&new_cap).give_container(data);
+                });
+            }
+        });
+
+        stream.as_collection()
+    }
+}
+
 /// Aggregates the weights of equal records into at most one record.
 ///
 /// Produces a stream of chains of records, partitioned according to `pact`. The
@@ -731,5 +1006,62 @@ where
         });
 
         result
+    }
+}
+
+/// Convert a stream of owned containers into a stream of `RcVec`-wrapped containers.
+pub trait SharedRcVecStream<S: Scope, C> {
+    /// Wrap each container in an `RcVec` for cheap cloning.
+    fn shared_rcvec(&self) -> StreamCore<S, RcVec<C>>;
+}
+
+impl<S: Scope, C: Container> SharedRcVecStream<S, C> for StreamCore<S, C> {
+    fn shared_rcvec(&self) -> StreamCore<S, RcVec<C>> {
+        self.unary(Pipeline, "SharedRcVec", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, data| {
+                    let mut session = output.session(&time);
+                    for data in data {
+                        session.give_container(&mut RcVec::from(std::mem::take(data)));
+                    }
+                });
+            }
+        })
+    }
+}
+
+/// Convert a stream of shared containers into a stream of owned containers.
+pub trait UnsharedStream<S: Scope, C> {
+    /// Convert a stream of shared containers into a stream of owned containers.
+    fn unshared(&self) -> StreamCore<S, C>;
+}
+
+impl<S: Scope, C: Container> UnsharedStream<S, C> for StreamCore<S, Rc<C>> {
+    fn unshared(&self) -> StreamCore<S, C> {
+        self.unary(Pipeline, "Unshared", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, containers| {
+                    let mut session = output.session(&time);
+                    for container in containers {
+                        session.give_container(Rc::make_mut(container));
+                    }
+                });
+            }
+        })
+    }
+}
+
+impl<S: Scope, C: Container + Clone> UnsharedStream<S, C> for StreamCore<S, RcVec<C>> {
+    fn unshared(&self) -> StreamCore<S, C> {
+        self.unary(Pipeline, "Unshared", move |_, _| {
+            move |input, output| {
+                input.for_each_time(|time, containers| {
+                    let mut session = output.session(&time);
+                    for container in containers {
+                        session.give_container(RcVec::make_mut(container));
+                    }
+                });
+            }
+        })
     }
 }

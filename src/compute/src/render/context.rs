@@ -30,7 +30,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::{CollectionExt, SharedRcVecStream, StreamExt, UnsharedStream};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
@@ -40,6 +40,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::RcCollection;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::ErrorLogger;
@@ -394,8 +395,8 @@ where
     S::Timestamp: MzTimestamp + Refines<T>,
 {
     pub collection: Option<(
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        RcCollection<S, Row, Diff>,
+        RcCollection<S, DataflowError, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
@@ -409,6 +410,23 @@ where
     pub fn from_collections(
         oks: VecCollection<S, Row, Diff>,
         errs: VecCollection<S, DataflowError, Diff>,
+    ) -> Self {
+        Self {
+            collection: Some((
+                oks.inner.shared_rcvec().as_collection(),
+                errs.inner.shared_rcvec().as_collection(),
+            )),
+            arranged: BTreeMap::default(),
+        }
+    }
+
+    /// Construct a new collection bundle directly from `RcCollection` streams.
+    ///
+    /// Unlike [`Self::from_collections`], this avoids the `shared()` conversion when the
+    /// collections are already `Rc`-wrapped.
+    pub fn from_rc_collections(
+        oks: RcCollection<S, Row, Diff>,
+        errs: RcCollection<S, DataflowError, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -525,10 +543,16 @@ where
         //
         // If it doesn't, we panic.
         match key {
-            None => self
-                .collection
-                .clone()
-                .expect("The unarranged collection doesn't exist."),
+            None => {
+                let (oks, errs) = self
+                    .collection
+                    .clone()
+                    .expect("The unarranged collection doesn't exist.");
+                (
+                    oks.inner.unshared().as_collection(),
+                    errs.inner.unshared().as_collection(),
+                )
+            }
             Some(key) => {
                 let arranged = self.arranged.get(key).unwrap_or_else(|| {
                     panic!("The collection arranged by {:?} doesn't exist.", key)
@@ -581,16 +605,16 @@ where
                 .expect("Should have ensured during planning that this arrangement exists.")
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
-            use timely::dataflow::operators::Map;
+            use timely::dataflow::operators::core::Map;
             let (oks, errs) = self
                 .collection
                 .clone()
                 .expect("Invariant violated: CollectionBundle contains no collection.");
             let mut datums = DatumVec::new();
             let oks = oks.inner.flat_map(move |(v, t, d)| {
-                logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
+                logic(&mut datums.borrow_with_limit(v, max_demand), t.clone(), *d)
             });
-            (oks, errs)
+            (oks, errs.inner.unshared().as_collection())
         }
     }
 
@@ -810,11 +834,11 @@ where
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
         if form_raw_collection && self.collection.is_none() {
-            self.collection = Some(self.as_collection_core(
-                input_mfp,
-                input_key.map(|k| (k, None)),
-                until,
-                config_set,
+            let (oks, errs) =
+                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
+            self.collection = Some((
+                oks.inner.shared_rcvec().as_collection(),
+                errs.inner.shared_rcvec().as_collection(),
             ));
         }
         for (key, _, thinning) in collections.arranged {
@@ -826,6 +850,7 @@ where
                     .collection
                     .clone()
                     .expect("Collection constructed above");
+                let errs = errs.inner.unshared().as_collection();
                 let (oks, errs_keyed) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
@@ -847,7 +872,7 @@ where
     /// columns in the key are not included in the value.
     fn arrange_collection(
         name: &String,
-        oks: VecCollection<S, Row, Diff>,
+        oks: RcCollection<S, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (

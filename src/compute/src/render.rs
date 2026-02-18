@@ -135,7 +135,7 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, SharedRow, SqlRelationType};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::{CollectionExt, RcCollectionExt, StreamExt, UnsharedStream};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
@@ -945,7 +945,10 @@ where
                 let bundle = self.render_recursive_plan(object_id, level + 1, value, binding);
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
-                let (oks, mut err) = bundle.collection.clone().unwrap();
+                let (oks, err) = bundle.collection.clone().unwrap();
+                let oks = oks.inner.unshared().as_collection();
+                let mut err = err.inner.unshared().as_collection();
+
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -997,7 +1000,7 @@ where
                 let (oks, err) = bundle.collection.unwrap();
                 self.insert_id(
                     Id::Local(id),
-                    CollectionBundle::from_collections(
+                    CollectionBundle::from_rc_collections(
                         oks.leave_dynamic(level + 1),
                         err.leave_dynamic(level + 1),
                     ),
@@ -1241,13 +1244,23 @@ where
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            None,
-                            self.until.clone(),
-                            &self.config_set,
-                        );
-                        CollectionBundle::from_collections(oks, errs)
+                        if mfp.is_identity() {
+                            // Identity MFP: return the raw RcCollection directly,
+                            // avoiding Unshared → SharedRcVec round-trip.
+                            let (oks, errs) = collection
+                                .collection
+                                .clone()
+                                .expect("GetPlan::Collection requires a collection.");
+                            CollectionBundle::from_rc_collections(oks, errs)
+                        } else {
+                            let (oks, errs) = collection.as_collection_core(
+                                mfp,
+                                None,
+                                self.until.clone(),
+                                &self.config_set,
+                            );
+                            CollectionBundle::from_collections(oks, errs)
+                        }
                     }
                 }
             }
@@ -1308,8 +1321,11 @@ where
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
-                CollectionBundle::from_collections(oks.negate(), errs)
+                let (oks, errs) = input
+                    .collection
+                    .clone()
+                    .expect("Negate requires a collection.");
+                CollectionBundle::from_rc_collections(oks.negate(), errs)
             }
             Threshold {
                 input,
@@ -1325,8 +1341,10 @@ where
                 let mut oks = Vec::new();
                 let mut errs = Vec::new();
                 for input in inputs.into_iter() {
-                    let (os, es) =
-                        expect_input(input).as_specific_collection(None, &self.config_set);
+                    let (os, es) = expect_input(input)
+                        .collection
+                        .clone()
+                        .expect("Union input must have a collection.");
                     oks.push(os);
                     errs.push(es);
                 }
@@ -1335,7 +1353,7 @@ where
                     oks = oks.consolidate_named::<KeyBatcher<_, _, _>>("UnionConsolidation")
                 }
                 let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
-                CollectionBundle::from_collections(oks, errs)
+                CollectionBundle::from_rc_collections(oks, errs)
             }
             ArrangeBy {
                 input_key,
@@ -1414,9 +1432,13 @@ where
         }
     }
 
-    fn log_operator_hydration_inner<D>(&self, stream: &Stream<G, D>, lir_id: LirId) -> Stream<G, D>
+    fn log_operator_hydration_inner<D>(
+        &self,
+        stream: &StreamCore<G, D>,
+        lir_id: LirId,
+    ) -> StreamCore<G, D>
     where
-        D: Clone + 'static,
+        D: timely::Container,
     {
         let Some(logger) = self.compute_logger.clone() else {
             return stream.clone(); // hydration logging disabled

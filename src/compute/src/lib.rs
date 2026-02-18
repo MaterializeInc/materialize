@@ -24,3 +24,7 @@ mod render;
 mod row_spine;
 mod sink;
 mod typedefs;
+
+type ScopeTimestamp<G> = <G as timely::dataflow::scopes::ScopeParent>::Timestamp;
+pub(crate) type RcCollection<G, D, R = isize> =
+    differential_dataflow::Collection<G, mz_timely_util::rc_vec::RcVec<Vec<(D, ScopeTimestamp<G>, R)>>>;
