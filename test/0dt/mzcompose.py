@@ -82,6 +82,46 @@ SERVICES = [
 ]
 
 
+def _testdrive_mz_new() -> Testdrive:
+    return Testdrive(
+        materialize_url="postgres://materialize@mz_new:6875",
+        materialize_url_internal="postgres://materialize@mz_new:6877",
+        mz_service="mz_new",
+        materialize_params={"cluster": "cluster"},
+        no_reset=True,
+        seed=1,
+        default_timeout=DEFAULT_TIMEOUT,
+    )
+
+
+def _mz_new_services() -> list:
+    return [
+        Materialized(
+            name="mz_new",
+            sanity_restart=False,
+            deploy_generation=1,
+            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+            restart="on-failure",
+            external_metadata_store=True,
+            default_replication_factor=2,
+        ),
+        _testdrive_mz_new(),
+    ]
+
+
+def _promote_mz_new(c: Composition) -> None:
+    c.up("mz_new")
+    start_time = time.time()
+    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    elapsed = time.time() - start_time
+    print(f"re-hydration took {elapsed} seconds")
+    c.promote_mz("mz_new")
+    start_time = time.time()
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+    elapsed = time.time() - start_time
+    print(f"promotion took {elapsed} seconds")
+
+
 def workflow_default(c: Composition) -> None:
     c.run_all_workflows(shard=True)
 
@@ -580,17 +620,7 @@ def workflow_basic(c: Composition) -> None:
     c.up("mz_new")
 
     # Verify against new Materialize that it is in read-only mode
-    with c.override(
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        )
-    ):
+    with c.override(_testdrive_mz_new()):
         c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
@@ -763,17 +793,7 @@ def workflow_basic(c: Composition) -> None:
         )
     )
 
-    with c.override(
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        )
-    ):
+    with c.override(_testdrive_mz_new()):
         c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
@@ -1030,38 +1050,8 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
 
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            default_replication_factor=2,
-        ),
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        ),
-    ):
-        c.up("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        elapsed = time.time() - start_time
-        print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
-        )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+    with c.override(*_mz_new_services()):
+        _promote_mz_new(c)
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1165,38 +1155,8 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
 
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            default_replication_factor=2,
-        ),
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        ),
-    ):
-        c.up("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        elapsed = time.time() - start_time
-        print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
-        )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+    with c.override(*_mz_new_services()):
+        _promote_mz_new(c)
 
         start_time = time.time()
         result = c.sql_query("SELECT * FROM kafka_source_cnt", service="mz_new")
@@ -1307,38 +1267,8 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
 
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            default_replication_factor=2,
-        ),
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        ),
-    ):
-        c.up("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        elapsed = time.time() - start_time
-        print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
-        )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+    with c.override(*_mz_new_services()):
+        _promote_mz_new(c)
         start_time = time.time()
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1444,38 +1374,8 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
 
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            default_replication_factor=2,
-        ),
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        ),
-    ):
-        c.up("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        elapsed = time.time() - start_time
-        print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
-        )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+    with c.override(*_mz_new_services()):
+        _promote_mz_new(c)
         start_time = time.time()
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1586,38 +1486,8 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
     elapsed = time.time() - start_time
     print(f"initial ingestion took {elapsed} seconds")
 
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            default_replication_factor=2,
-        ),
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        ),
-    ):
-        c.up("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
-        elapsed = time.time() - start_time
-        print(f"re-hydration took {elapsed} seconds")
-        c.promote_mz("mz_new")
-        start_time = time.time()
-        c.await_mz_deployment_status(
-            DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None
-        )
-        elapsed = time.time() - start_time
-        print(f"promotion took {elapsed} seconds")
+    with c.override(*_mz_new_services()):
+        _promote_mz_new(c)
         start_time = time.time()
         result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
@@ -1718,26 +1588,7 @@ def workflow_kafka_source_failpoint(c: Composition) -> None:
             )
         )
 
-    with c.override(
-        Materialized(
-            name="mz_new",
-            sanity_restart=False,
-            deploy_generation=1,
-            system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
-            restart="on-failure",
-            external_metadata_store=True,
-            default_replication_factor=2,
-        ),
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        ),
-    ):
+    with c.override(*_mz_new_services()):
         c.up("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
@@ -2323,17 +2174,7 @@ def workflow_ddl(c: Composition) -> None:
     c.up("mz_new")
 
     # Verify against new Materialize that it is in read-only mode
-    with c.override(
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        )
-    ):
+    with c.override(_testdrive_mz_new()):
         c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
@@ -2514,17 +2355,7 @@ def workflow_ddl(c: Composition) -> None:
         )
     )
 
-    with c.override(
-        Testdrive(
-            materialize_url="postgres://materialize@mz_new:6875",
-            materialize_url_internal="postgres://materialize@mz_new:6877",
-            mz_service="mz_new",
-            materialize_params={"cluster": "cluster"},
-            no_reset=True,
-            seed=1,
-            default_timeout=DEFAULT_TIMEOUT,
-        )
-    ):
+    with c.override(_testdrive_mz_new()):
         c.up(Service("testdrive", idle=True))
         c.testdrive(
             dedent(
