@@ -77,11 +77,14 @@ For more information, refer to:
 v26.9 includes significant performance improvements to QPS & query latency.
 
 ### Improvements
-- **Up to 2.5x increased QPS**: We've significantly optimized how `SELECT` statements are processed; they are now processed outside the main thread. In our tests, this change increased QPS by as much as 2.5x.
+- **Up to 2.5x increased QPS**: <a name="v26.9-qps"></a>We've significantly optimized how `SELECT` statements are processed; they are now processed outside the main thread. In our tests, this change increased QPS by as much as 2.5x.
 ![Chart of QPS before/after](/images/releases/v2609_qps.png)
-- **Significant reduction in query latency**: Moving `SELECT` statements off the main thread has significantly latency. p99 has reduced by up to 50% for some workloads.
-![Chart of latency before/after](/images/releases/v2609_latency.png)
-- **Dynamically configure system parameters using a ConfigMap** (<red>*Materialize Self-Managed only*</red>): You can now use a ConfigMap to dynamically update system parameters at runtime. In many cases, this means you don't need to restart Materialize for new system parameters to take effect. You can also specify system parameters which survive restarts and upgrades. Refer to our [documentation on configuring system parameters](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap).
+- **Significant reduction in query latency**: <a
+  name="v26.9-latency-reduction"></a>Moving `SELECT` statements off the main
+  thread has significantly reduced latency. p99 has reduced by up to 50% for
+some workloads. ![Chart of latency
+before/after](/images/releases/v2609_latency.png)
+- **Dynamically configure system parameters using a ConfigMap** (<red>*Materialize Self-Managed only*</red>): <a name="v26.9-sm-configmap"></a>You can now use a ConfigMap to dynamically update system parameters at runtime. In many cases, this means you don't need to restart Materialize for new system parameters to take effect. You can also specify system parameters which survive restarts and upgrades. Refer to our [documentation on configuring system parameters](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap).
 - Added `ABORT` as a PostgreSQL-compatible alias for the `ROLLBACK` transaction command, to improve compatibility with GraphQL engines like Hasura
 
 ### Bug Fixes

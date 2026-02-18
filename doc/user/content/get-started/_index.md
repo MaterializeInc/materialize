@@ -11,7 +11,11 @@ menu:
     weight: 5
 ---
 
-{{< include-md file="shared-content/materialize-intro.md" >}}
+{{% include-headless "/headless/materialize-intro/intro" %}}
+
+## Materialize offerings
+
+{{% include-headless "/headless/materialize-intro/offerings" %}}
 
 ## Key features
 
