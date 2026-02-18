@@ -413,7 +413,7 @@ async fn main() {
     let config = Config {
         // === Testdrive options. ===
         arg_vars,
-        seed: args.seed,
+        seed: args.seed.map(|s| s.to_string()),
         reset: !args.no_reset,
         temp_dir: args.temp_dir,
         source: args.source,

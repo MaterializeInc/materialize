@@ -89,7 +89,7 @@ pub struct Config {
     /// variable named `arg.KEY`.
     pub arg_vars: BTreeMap<String, String>,
     /// A random number to distinguish each run of a testdrive script.
-    pub seed: Option<u32>,
+    pub seed: Option<String>,
     /// Whether to reset Materialize state before executing each script and
     /// to clean up AWS state after each script.
     pub reset: bool,
@@ -216,7 +216,7 @@ pub struct State {
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
-    seed: u32,
+    seed: String,
     temp_path: PathBuf,
     _tempfile: Option<tempfile::TempDir>,
     default_timeout: Duration,
@@ -300,7 +300,7 @@ impl State {
             self.schema_registry_url.to_string(),
         );
         self.cmd_vars
-            .insert("testdrive.seed".into(), self.seed.to_string());
+            .insert("testdrive.seed".into(), self.seed.clone());
         self.cmd_vars.insert(
             "testdrive.temp-dir".into(),
             self.temp_path.display().to_string(),
@@ -1003,7 +1003,10 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(rand::random);
+    let seed = config
+        .seed
+        .clone()
+        .unwrap_or_else(|| format!("{:010}", rand::random::<u32>()));
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
