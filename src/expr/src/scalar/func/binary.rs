@@ -107,9 +107,11 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
         temp_storage: &'a RowArena,
         exprs: &[&'a MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
-        let mut datums = exprs
-            .into_iter()
-            .map(|expr| expr.eval(datums, temp_storage));
+        let evaluated = [
+            exprs[0].eval(datums, temp_storage)?,
+            exprs[1].eval(datums, temp_storage)?,
+        ];
+        let mut datums = evaluated.into_iter().map(Ok);
         let input = match T::Input::try_from_iter(&mut datums) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
