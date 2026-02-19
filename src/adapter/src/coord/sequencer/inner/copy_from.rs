@@ -174,8 +174,11 @@ impl Coordinator {
                         if let Some(expr) = source_mfp.expressions.get(expr_idx) {
                             // Check if the expression is a NULL literal.
                             // A NULL literal is represented as Literal(Ok(empty_row), _)
-                            if matches!(expr, mz_expr::MirScalarExpr::Literal(Ok(row), _) if row.iter().next().map(|d| d.is_null()).unwrap_or(false))
-                            {
+                            if matches!(
+                                expr,
+                                mz_expr::MirScalarExpr::Literal(Ok(row), _)
+                                    if row.iter().next().map(|d| d.is_null()).unwrap_or(false)
+                            ) {
                                 let col_name = target_desc.get_name(col_idx);
                                 return ctx.retire(Err(AdapterError::ConstraintViolation(
                                     NotNullViolation(col_name.clone()),
