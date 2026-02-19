@@ -930,6 +930,160 @@ pub fn values_from_row(row: &RowRef, typ: &SqlRelationType) -> Vec<Option<Value>
         .collect()
 }
 
+/// Encodes a single datum directly to BytesMut using text format, without
+/// creating an intermediate [`Value`]. This avoids heap allocations for
+/// string and bytes types that would otherwise be cloned in [`Value::from_datum`].
+///
+/// For complex types (arrays, lists, maps, records, ranges), this falls back
+/// to the [`Value`] path since those types require recursive encoding.
+fn encode_datum_text_direct(
+    datum: Datum<'_>,
+    scalar_type: &SqlScalarType,
+    buf: &mut BytesMut,
+) {
+    match (datum, scalar_type) {
+        // Simple scalar types: encode directly without allocation.
+        (Datum::True, _) => { strconv::format_bool(buf, true); }
+        (Datum::False, _) => { strconv::format_bool(buf, false); }
+        (Datum::Int16(i), _) => { strconv::format_int16(buf, i); }
+        (Datum::Int32(i), _) => { strconv::format_int32(buf, i); }
+        (Datum::Int64(i), _) => { strconv::format_int64(buf, i); }
+        (Datum::UInt8(c), _) => { buf.put_u8(c); }
+        (Datum::UInt16(u), _) => { strconv::format_uint16(buf, u); }
+        (Datum::UInt32(u), _) => { strconv::format_uint32(buf, u); }
+        (Datum::UInt64(u), _) => { strconv::format_uint64(buf, u); }
+        (Datum::Float32(f), _) => { strconv::format_float32(buf, *f); }
+        (Datum::Float64(f), _) => { strconv::format_float64(buf, *f); }
+        (Datum::Numeric(d), _) => { strconv::format_numeric(buf, &d); }
+        (Datum::MzTimestamp(t), _) => { strconv::format_mz_timestamp(buf, t); }
+        (Datum::MzAclItem(mai), _) => { strconv::format_mz_acl_item(buf, mai); }
+        (Datum::AclItem(ai), _) => { strconv::format_acl_item(buf, ai); }
+        (Datum::Date(d), _) => { strconv::format_date(buf, d); }
+        (Datum::Time(t), _) => { strconv::format_time(buf, t); }
+        (Datum::Timestamp(ts), _) => { strconv::format_timestamp(buf, &ts); }
+        (Datum::TimestampTz(ts), _) => { strconv::format_timestamptz(buf, &ts); }
+        (Datum::Interval(iv), _) => { strconv::format_interval(buf, iv); }
+        (Datum::Uuid(u), _) => { strconv::format_uuid(buf, u); }
+
+        // String types: write directly from the borrowed Datum without cloning.
+        (Datum::String(s), SqlScalarType::Char { length }) => {
+            // BpChar requires space-padding.
+            let padded = char::format_str_pad(s, *length);
+            strconv::format_string(buf, &padded);
+        }
+        (Datum::String(s), _) => {
+            // Text, VarChar, Name: write directly from borrowed slice.
+            strconv::format_string(buf, s);
+        }
+
+        // Bytes: write hex directly from borrowed slice without cloning.
+        (Datum::Bytes(b), _) => { strconv::format_bytes(buf, b); }
+
+        // JSONB: encode directly from datum.
+        (_, SqlScalarType::Jsonb) => {
+            strconv::format_jsonb(buf, JsonbRef::from_datum(datum));
+        }
+
+        // Complex types: fall back to Value path (requires recursive encoding).
+        _ => {
+            if let Some(value) = Value::from_datum(datum, scalar_type) {
+                value.encode_text(buf);
+            }
+        }
+    }
+}
+
+/// Encodes a complete pgwire DataRow message directly from a [`RowRef`],
+/// bypassing the intermediate [`Value`] representation.
+///
+/// This eliminates the per-row `Vec<Option<Value>>` allocation and avoids
+/// cloning string and bytes data into owned `Value` variants. For simple
+/// scalar types (integers, floats, booleans, timestamps, etc.), the encoding
+/// writes directly from the datum to the output buffer using the same `strconv`
+/// formatters as the `Value` path.
+///
+/// The `encode_state` must contain the pgwire type and format for each column,
+/// matching the order of columns in `row`. The `col_types` slice provides the
+/// Materialize scalar types needed for proper encoding (e.g., char padding).
+pub fn encode_data_row_direct(
+    row: &RowRef,
+    col_types: &[mz_repr::SqlColumnType],
+    encode_state: &[(Type, Format)],
+    dst: &mut BytesMut,
+) -> Result<(), io::Error> {
+    // Message type byte: 'D' for DataRow.
+    dst.put_u8(b'D');
+
+    // Message length placeholder (includes self but not type byte).
+    let msg_base = dst.len();
+    dst.put_u32(0);
+
+    // Field count.
+    let field_count = i16::try_from(encode_state.len()).map_err(|_| {
+        io::Error::new(io::ErrorKind::Other, "field count does not fit into an i16")
+    })?;
+    dst.put_i16(field_count);
+
+    // Encode each field.
+    for ((datum, col_type), (_ty, format)) in
+        row.iter().zip_eq(col_types).zip_eq(encode_state)
+    {
+        if datum.is_null() {
+            dst.put_i32(-1);
+        } else {
+            match format {
+                Format::Text => {
+                    // Field length placeholder.
+                    let field_base = dst.len();
+                    dst.put_u32(0);
+
+                    encode_datum_text_direct(datum, &col_type.scalar_type, dst);
+
+                    // Backpatch field length.
+                    let field_len = dst.len() - field_base - 4;
+                    let field_len = i32::try_from(field_len).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            "length of encoded data row field does not fit into an i32",
+                        )
+                    })?;
+                    dst[field_base..field_base + 4]
+                        .copy_from_slice(&field_len.to_be_bytes());
+                }
+                Format::Binary => {
+                    // For binary format, fall back to Value path.
+                    let value = Value::from_datum(datum, &col_type.scalar_type)
+                        .expect("non-null datum");
+                    let field_base = dst.len();
+                    dst.put_u32(0);
+                    value.encode_binary(_ty, dst)?;
+                    let field_len = dst.len() - field_base - 4;
+                    let field_len = i32::try_from(field_len).map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::Other,
+                            "length of encoded data row field does not fit into an i32",
+                        )
+                    })?;
+                    dst[field_base..field_base + 4]
+                        .copy_from_slice(&field_len.to_be_bytes());
+                }
+            }
+        }
+    }
+
+    // Backpatch message length (includes the 4 length bytes themselves).
+    let msg_len = dst.len() - msg_base;
+    let msg_len = i32::try_from(msg_len).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            "length of encoded message does not fit into an i32",
+        )
+    })?;
+    dst[msg_base..msg_base + 4].copy_from_slice(&msg_len.to_be_bytes());
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
