@@ -24,6 +24,7 @@ use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
+use mz_ore::soft_panic_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
@@ -683,7 +684,7 @@ where
             return res;
         }
 
-        tracing::error!("fell back to repr types keys on {key:?}");
+        soft_panic_or_log!("fell back to repr types keys on {key:?}");
         let repr_keys = key
             .iter()
             .map(|expr| {

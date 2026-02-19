@@ -23,6 +23,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::Overflowing;
 use mz_ore::cast::CastFrom;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
 use ordered_float::OrderedFloat;
@@ -3739,14 +3740,14 @@ impl SqlScalarType {
     /// other inessential, SQL-level difference) when that fails.
     ///
     /// This function should only be called in assertion-like contexts, where
-    /// we really expect `true` as the result---it calls `::tracing::error!`
+    /// we really expect `true` as the result---it calls `soft_panic_or_log!`
     /// when `base_eq` returns `false`.
     pub fn base_eq_or_repr_eq_for_assertion(&self, other: &SqlScalarType) -> bool {
         if self.base_eq(other) {
             return true;
         }
 
-        ::tracing::trace!("repr type error: base_eq failed for {self:?} and {other:?}");
+        soft_panic_or_log!("repr type error: base_eq failed for {self:?} and {other:?}");
         // SqlScalarType::base_eq does not consider nullability at all, but `ReprScalarType::eq` does
         // To reconcile these differences, we check "compatibility", i.e., if we can union the types wthout error.
         // Since ReprScalarType::union is a glorified nullability compositor, a successful union means the types

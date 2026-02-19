@@ -16,6 +16,7 @@ use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::StrExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::{assert_none, assert_ok};
 use mz_persist_types::schema::SchemaId;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
@@ -196,13 +197,21 @@ impl SqlColumnType {
     /// nullabilities.
     pub fn try_union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         self.sql_union(other).or_else(|e| {
-            ::tracing::trace!("repr type error: sql_union({self:?}, {other:?}): {e}");
-
             let repr_self = ReprColumnType::from(self);
             let repr_other = ReprColumnType::from(other);
-            repr_self
-                .union(&repr_other)
-                .map(|typ| SqlColumnType::from_repr(&typ))
+            match repr_self.union(&repr_other) {
+                Ok(typ) => {
+                    // sql_union failed but repr union succeeded — this indicates
+                    // a repr-type canonicalization gap that we want CI visibility for.
+                    soft_panic_or_log!("repr type error: sql_union({self:?}, {other:?}): {e}");
+                    Ok(SqlColumnType::from_repr(&typ))
+                }
+                Err(_) => {
+                    // Both sql_union and repr union failed — genuine type mismatch,
+                    // not a canonicalization issue. Just propagate the original error.
+                    Err(e)
+                }
+            }
         })
     }
 
