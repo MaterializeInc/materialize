@@ -1802,3 +1802,116 @@ already generates efficient code for the enum match with well-predicted branches
   pointers or vtable could reduce branch overhead.
 - `DatumSeq::cmp()` at 98B calls could potentially benefit from prefetching the next
   comparison pair's bytes during the current comparison.
+
+## Session 20: Selective datum decoding - skip unneeded columns in MFP evaluation
+
+**Date:** 2026-02-19
+
+**Problem:** When evaluating a MapFilterProject (MFP) on a row—during persist source
+decoding, peek execution, or oneshot source processing—the code first unpacks ALL datums
+from the row via `DatumVec::borrow_with()`, which calls `read_datum` for every column.
+`read_datum` performs expensive type-specific construction for each datum: chrono
+`DateTime` for timestamps (~6-11ns), `Decimal` for numerics, sign-extension for integers,
+etc. But many MFPs only reference a subset of the input columns:
+- `SELECT a, b FROM table WHERE c > 10` on a 20-column table only needs columns {0, 1, 2}
+- `SELECT count(*) FROM table` with one aggregation column needs only 1 column
+- Most predicates reference 1-3 columns out of potentially many
+
+For a 20-column timestamp table where only 3 columns are needed, the old approach decoded
+all 20 timestamps (~236ns) when only 3 needed decoding (~33ns for `read_datum`) plus
+17 needing only pointer advancement (~51ns for `skip_datum`).
+
+Coverage data confirmed `persist_source.rs` at 2.77×10²⁰ executions for the MFP
+evaluation path and `compute_state.rs` persist peek at high volume.
+
+**Fix:** Three components:
+
+1. **`MapFilterProject::needed_input_columns()`** in `src/expr/src/linear.rs`: Computes a
+   `Vec<bool>` bitmask of which input columns are referenced by any expression, predicate,
+   or projection. Uses `MirScalarExpr::visit_pre()` to walk all column references. Also
+   added to `SafeMfpPlan` and `MfpPlan` (which additionally includes temporal bound
+   references).
+
+2. **`RowRef::decode_selective()`** in `src/repr/src/row.rs`: Decodes datums selectively—
+   columns marked `true` in `needed` are fully decoded via `read_datum`, columns marked
+   `false` are skipped via `skip_datum` (fast pointer arithmetic, no value construction)
+   and filled with `Datum::Null`. The resulting Vec preserves the column index layout so
+   that expressions referencing column `i` still find the correct value at `datums[i]`.
+
+3. **`DatumVec::borrow_with_selective()`** in `src/repr/src/datum_vec.rs`: Thin wrapper
+   that calls `decode_selective` instead of the full `row.iter()` extension.
+
+**Integration:** Modified three hot call sites to pre-compute needed columns once
+(outside the per-row loop) and use selective decoding:
+- `src/storage-operators/src/persist_source.rs`: The main persist source decode+MFP path
+  (2.77×10²⁰ executions). `needed_columns` computed from the temporal `MfpPlan`.
+- `src/compute/src/compute_state.rs`: Persist peek execution path. `needed_columns`
+  computed from the `SafeMfpPlan`.
+- `src/storage-operators/src/oneshot_source.rs`: COPY FROM / oneshot source path.
+  `needed_columns` computed from the `SafeMfpPlan`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench row_decode_selective`):
+
+### Per-row decode performance (ns/iter)
+
+| Scenario                    | Full decode | Selective | Speedup |
+|-----------------------------|------------:|----------:|--------:|
+| int10 need 2/10             | 100         | 40        | 2.5x    |
+| int20 need 3/20             | 198         | 76        | 2.6x    |
+| ts10 need 2/10              | 124         | 52        | 2.4x    |
+| ts20 need 3/20              | 236         | 82        | **2.9x**|
+| mixed20 need 4/20           | 161         | 71        | 2.3x    |
+| numeric10 need 2/10         | 100         | 53        | 1.9x    |
+| int50 need 3/50             | 498         | 135       | **3.7x**|
+| int10 need ALL (overhead)   | 106         | 116       | 0.91x   |
+
+### Batch decode (10k rows)
+
+| Scenario                     | Full (ms) | Selective (ms) | Speedup   |
+|------------------------------|-----------|----------------|-----------|
+| 10k ts20 need 3/20          | 2.33      | 0.80           | **2.9x**  |
+| 10k mixed20 need 4/20       | 1.58      | 0.65           | **2.4x**  |
+| 10k int50 need 3/50         | 5.09      | 1.52           | **3.4x**  |
+
+**Summary:** **1.9-3.7x faster per row** depending on row width and column types, **2.4-3.4x
+faster in batch**. The speedup is proportional to the ratio of total columns to needed
+columns. Wider rows with fewer needed columns show the biggest improvement: 50-column int
+rows needing 3 columns are 3.7x faster. Timestamp columns show large gains (2.9x for 20-col)
+because `read_datum` for timestamps involves expensive chrono `DateTime` construction that
+`skip_datum` completely bypasses. When ALL columns are needed, the overhead is ~10% (the
+per-column `needed[col]` check), which is acceptable since this case is rare in practice
+(most queries project/filter a subset of columns).
+
+The optimization is pre-computed once per MFP (not per row), so there is zero per-row
+overhead for the needed columns calculation. The `Vec<bool>` bitmask adds negligible memory.
+
+**Files changed:**
+- `src/expr/src/linear.rs` - Added `MapFilterProject::needed_input_columns()`,
+  `SafeMfpPlan::needed_input_columns()`, and `MfpPlan::needed_input_columns()` methods.
+- `src/repr/src/row.rs` - Added `RowRef::decode_selective()` method using
+  `skip_datum`/`read_datum` dispatch.
+- `src/repr/src/datum_vec.rs` - Added `DatumVec::borrow_with_selective()` method and
+  `test_selective_decode` correctness test.
+- `src/storage-operators/src/persist_source.rs` - Pre-compute `mfp_needed_columns`,
+  pass to `do_work`, use `borrow_with_selective` in the per-row loop.
+- `src/compute/src/compute_state.rs` - Pre-compute `mfp_needed` for persist peek,
+  use `borrow_with_selective`.
+- `src/storage-operators/src/oneshot_source.rs` - Pre-compute `mfp_needed` for oneshot
+  source, use `borrow_with_selective`.
+- `src/repr/benches/row_decode_selective.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `project_onto` (Session 19) is still not integrated into any production code path.
+  For pure-projection MFPs (no expressions, no predicates), `project_onto` could bypass
+  both datum decoding AND re-encoding, giving 4-7x speedup. Would require a new method
+  on `SafeMfpPlan` and call site changes.
+- The `zero_diffs.clone()` pattern in `reduce.rs` clones `Vec<Accum>` per input row.
+  SmallVec<[Accum; 4]> would avoid heap allocation for 1-4 aggregations.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+  Arena allocation or reference-counted rows could reduce this.
+- `ArrayOrd::cmp()` at 92.7B calls does double enum dispatch for Arrow comparison.
+  A single-dispatch vtable approach could reduce branch overhead.
+- The selective decoding could be extended to the peek_result_iterator path if the
+  key+val datum construction supported selective decoding (currently assembles datums
+  from multiple sources).

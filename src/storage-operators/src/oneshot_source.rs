@@ -453,6 +453,7 @@ where
         let mut datum_vec = DatumVec::default();
         let row_arena = RowArena::default();
         let mut row_buf = Row::default();
+        let mfp_needed = mfp.needed_input_columns();
 
         while let Some(event) = record_chunk_handle.next().await {
             let (capability, maybe_chunks) = match event {
@@ -476,7 +477,8 @@ where
                     // For each row of source data, we pass it through an MFP to re-arrange column
                     // orders and/or fill in default values for missing columns.
                     for row in rows {
-                        let mut datums = datum_vec.borrow_with(&row);
+                        let mut datums =
+                            datum_vec.borrow_with_selective(&row, &mfp_needed);
                         let result = mfp
                             .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
                             .map(|row| row.cloned());

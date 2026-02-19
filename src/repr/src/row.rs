@@ -728,6 +728,39 @@ impl RowRef {
             col += 1;
         }
     }
+
+    /// Decode datums from this row selectively: only decode columns marked
+    /// `true` in `needed`, and use fast `skip_datum` for the rest.
+    ///
+    /// Appends `N` datums to `out` (one per column in the row), where
+    /// unneeded columns are filled with `Datum::Null`. This preserves the
+    /// column index layout so that expressions referencing column `i` still
+    /// find the correct value at `out[i]`.
+    ///
+    /// # Safety invariant
+    /// The caller must ensure that only columns marked `true` in `needed`
+    /// are subsequently read from `out`. Unneeded positions contain `Datum::Null`
+    /// which would be incorrect if read as the actual column value.
+    ///
+    /// For rows wider than `needed.len()`, extra columns beyond the `needed`
+    /// array are decoded normally (as if needed).
+    pub fn decode_selective<'a>(&'a self, needed: &[bool], out: &mut Vec<Datum<'a>>) {
+        let mut remaining: &'a [u8] = &self.0;
+        let mut col: usize = 0;
+        while !remaining.is_empty() {
+            if col < needed.len() && !needed[col] {
+                // Skip this column — just advance the pointer.
+                // SAFETY: remaining points to a valid datum encoding.
+                unsafe { skip_datum(&mut remaining) };
+                out.push(Datum::Null);
+            } else {
+                // Decode this column fully.
+                // SAFETY: remaining points to a valid datum encoding.
+                out.push(unsafe { read_datum(&mut remaining) });
+            }
+            col += 1;
+        }
+    }
 }
 
 impl ToOwned for RowRef {
