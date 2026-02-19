@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
+use std::fmt::{self, Write};
 
 use dec::{OrderedDecimal, Rounding};
 use mz_expr_derive::sqlfunc;
@@ -18,6 +18,44 @@ use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
+
+/// A stack-allocated buffer for formatting Numeric values without heap allocation.
+/// Numeric values have at most 39 significant digits plus sign, decimal point,
+/// and exponent notation, so 64 bytes is more than sufficient.
+struct NumericBuf {
+    buf: [u8; 64],
+    len: usize,
+}
+
+impl NumericBuf {
+    #[inline]
+    fn new() -> Self {
+        NumericBuf {
+            buf: [0; 64],
+            len: 0,
+        }
+    }
+
+    #[inline]
+    fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.buf[..self.len])
+            .expect("NumericBuf only writes valid UTF-8 via fmt::Write")
+    }
+}
+
+impl fmt::Write for NumericBuf {
+    #[inline]
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let bytes = s.as_bytes();
+        let new_len = self.len + bytes.len();
+        if new_len > self.buf.len() {
+            return Err(fmt::Error);
+        }
+        self.buf[self.len..new_len].copy_from_slice(bytes);
+        self.len = new_len;
+        Ok(())
+    }
+}
 
 #[sqlfunc(
     sqlname = "-",
@@ -199,9 +237,11 @@ pub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
     is_monotone = true
 )]
 pub fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
-    let i = a.to_string().parse::<f32>().unwrap();
+    let mut buf = NumericBuf::new();
+    write!(buf, "{}", a).unwrap();
+    let i = buf.as_str().parse::<f32>().unwrap();
     if i.is_infinite() {
-        Err(EvalError::Float32OutOfRange(i.to_string().into()))
+        Err(EvalError::Float32OutOfRange(buf.as_str().into()))
     } else {
         Ok(i)
     }
@@ -214,9 +254,11 @@ pub fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
     is_monotone = true
 )]
 pub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
-    let i = a.to_string().parse::<f64>().unwrap();
+    let mut buf = NumericBuf::new();
+    write!(buf, "{}", a).unwrap();
+    let i = buf.as_str().parse::<f64>().unwrap();
     if i.is_infinite() {
-        Err(EvalError::Float64OutOfRange(i.to_string().into()))
+        Err(EvalError::Float64OutOfRange(buf.as_str().into()))
     } else {
         Ok(i)
     }
