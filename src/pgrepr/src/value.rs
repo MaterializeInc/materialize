@@ -906,8 +906,17 @@ pub fn values_from_row(row: &RowRef, typ: &SqlRelationType) -> Vec<Option<Value>
 ///
 /// For complex types (arrays, lists, maps, records, ranges), this falls back
 /// to the [`Value`] path since those types require recursive encoding.
-fn encode_datum_text_direct(datum: Datum<'_>, scalar_type: &SqlScalarType, buf: &mut BytesMut) {
+pub fn encode_datum_text_direct(datum: Datum<'_>, scalar_type: &SqlScalarType, buf: &mut BytesMut) {
     match (datum, scalar_type) {
+        // JSONB: must be checked first because JSONB stores values as
+        // Datum::String, Datum::True/False, Datum::Numeric, Datum::List, etc.
+        // Without this early match, those datum types would be caught by the
+        // scalar-specific arms below and formatted incorrectly (e.g., a JSONB
+        // string "hello" would be formatted as `hello` instead of `"hello"`).
+        (_, SqlScalarType::Jsonb) => {
+            strconv::format_jsonb(buf, JsonbRef::from_datum(datum));
+        }
+
         // Simple scalar types: encode directly without allocation.
         (Datum::True, _) => {
             strconv::format_bool(buf, true);
@@ -985,11 +994,6 @@ fn encode_datum_text_direct(datum: Datum<'_>, scalar_type: &SqlScalarType, buf: 
         // Bytes: write hex directly from borrowed slice without cloning.
         (Datum::Bytes(b), _) => {
             strconv::format_bytes(buf, b);
-        }
-
-        // JSONB: encode directly from datum.
-        (_, SqlScalarType::Jsonb) => {
-            strconv::format_jsonb(buf, JsonbRef::from_datum(datum));
         }
 
         // Complex types: fall back to Value path (requires recursive encoding).

@@ -75,15 +75,18 @@ fn encode_copy_row_text(
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let mut buf = BytesMut::new();
-    for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+    for (idx, (datum, col_type)) in row.iter().zip(typ.column_types.iter()).enumerate() {
         if idx > 0 {
             out.push(*delimiter);
         }
-        match field {
-            None => out.extend(null),
-            Some(field) => {
-                buf.clear();
-                field.encode_text(&mut buf);
+        if datum.is_null() {
+            out.extend(null);
+        } else {
+            buf.clear();
+            mz_pgrepr::encode_datum_text_direct(datum, &col_type.scalar_type, &mut buf);
+            // Fast path: if the encoded value contains no special characters
+            // (common for numbers, dates, timestamps, etc.), copy directly.
+            if buf.iter().any(|b| matches!(b, b'\\' | b'\n' | b'\r' | b'\t')) {
                 for b in &buf {
                     match b {
                         b'\\' => out.extend(b"\\\\"),
@@ -93,6 +96,8 @@ fn encode_copy_row_text(
                         _ => out.push(*b),
                     }
                 }
+            } else {
+                out.extend_from_slice(&buf);
             }
         }
     }
@@ -115,40 +120,39 @@ fn encode_copy_row_csv(
     let null = null.as_bytes();
     let is_special = |c: &u8| *c == *delim || *c == *quote || *c == b'\r' || *c == b'\n';
     let mut buf = BytesMut::new();
-    for (idx, field) in mz_pgrepr::values_from_row(row, typ).into_iter().enumerate() {
+    for (idx, (datum, col_type)) in row.iter().zip(typ.column_types.iter()).enumerate() {
         if idx > 0 {
             out.push(*delim);
         }
-        match field {
-            None => out.extend(null),
-            Some(field) => {
-                buf.clear();
-                field.encode_text(&mut buf);
-                // A field needs quoting if:
-                //   * It is the only field and the value is exactly the end
-                //     of copy marker.
-                //   * The field contains a special character.
-                //   * The field is exactly the NULL sentinel.
-                if (typ.column_types.len() == 1 && buf == END_OF_COPY_MARKER)
-                    || buf.iter().any(is_special)
-                    || &*buf == null
-                {
-                    // Quote the value by wrapping it in the quote character and
-                    // emitting the escape character before any quote or escape
-                    // characters within.
-                    out.push(*quote);
-                    for b in &buf {
-                        if *b == *quote || *b == *escape {
-                            out.push(*escape);
-                        }
-                        out.push(*b);
+        if datum.is_null() {
+            out.extend(null);
+        } else {
+            buf.clear();
+            mz_pgrepr::encode_datum_text_direct(datum, &col_type.scalar_type, &mut buf);
+            // A field needs quoting if:
+            //   * It is the only field and the value is exactly the end
+            //     of copy marker.
+            //   * The field contains a special character.
+            //   * The field is exactly the NULL sentinel.
+            if (typ.column_types.len() == 1 && buf == END_OF_COPY_MARKER)
+                || buf.iter().any(is_special)
+                || &*buf == null
+            {
+                // Quote the value by wrapping it in the quote character and
+                // emitting the escape character before any quote or escape
+                // characters within.
+                out.push(*quote);
+                for b in &buf {
+                    if *b == *quote || *b == *escape {
+                        out.push(*escape);
                     }
-                    out.push(*quote);
-                } else {
-                    // The value does not need quoting and can be emitted
-                    // directly.
-                    out.extend(&buf);
+                    out.push(*b);
                 }
+                out.push(*quote);
+            } else {
+                // The value does not need quoting and can be emitted
+                // directly.
+                out.extend(&buf);
             }
         }
     }

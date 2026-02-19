@@ -1129,3 +1129,100 @@ Abandoned this approach as the wins were marginal and inconsistent.
 - The coverage data (62.8B executions of `unpack()`) suggests it's called very frequently,
   but most hot paths already use `DatumVec` for allocation reuse. The remaining `unpack()`
   calls are in less performance-critical paths (transforms, planning, top_k comparisons).
+
+## Session 13: Direct COPY text/CSV encoding - bypass per-row Vec<Option<Value>> allocation
+
+**Date:** 2026-02-19
+
+**Problem:** The COPY text and CSV encoding paths (`encode_copy_row_text` and
+`encode_copy_row_csv` in `src/pgcopy/src/copy.rs`) used `values_from_row()` on every
+row, which allocates a `Vec<Option<Value>>` per row. This is the same allocation-heavy
+pattern that was bypassed in Session 12 for the regular pgwire DataRow path. For COPY
+operations, which are designed for bulk data export:
+1. `values_from_row()` allocates a new `Vec` per row
+2. For `Datum::String(s)`, clones the string data via `s.to_owned()` into `Value::Text(String)`
+3. For `Datum::Bytes(b)`, clones the bytes via `b.to_vec()` into `Value::Bytea(Vec<u8>)`
+4. The `Value` is then immediately re-encoded via `encode_text()` into a BytesMut buffer
+5. The BytesMut output is then escape-processed into the final `Vec<u8>` output
+
+Coverage data showed `pgcopy/src/copy.rs` at 2.4 trillion total executions, confirming
+COPY is a heavily-used output path (used for `COPY TO`, `SUBSCRIBE`/`TAIL` output).
+
+**Fix:** Three changes:
+
+1. **Direct datum encoding in COPY text path**: Replaced `values_from_row(row, typ)` with
+   direct iteration over `row.iter().zip(typ.column_types.iter())`, using the existing
+   `encode_datum_text_direct()` function (from Session 12) to encode each datum directly
+   into a BytesMut buffer without creating an intermediate `Value`.
+
+2. **Same for COPY CSV path**: Applied the identical optimization to `encode_copy_row_csv`.
+
+3. **Escape fast-path for COPY text**: Added a check for special characters (`\`, `\n`,
+   `\r`, `\t`) before the byte-by-byte escape loop. For non-string types (integers,
+   timestamps, dates, etc.) whose encoded text never contains these characters, this allows
+   a single `out.extend_from_slice(&buf)` instead of per-byte `out.push(*b)`. The `any()`
+   scan is vectorizable by LLVM and returns false immediately for numeric types.
+
+**Also fixed:** A bug in `encode_datum_text_direct()` where the JSONB match arm was
+positioned after the `Datum::String`, `Datum::True/False`, and `Datum::Numeric` arms.
+Since JSONB stores values using these standard Datum variants, a JSONB string would be
+formatted as a plain string (no JSON quotes) instead of as a JSONB value. Moved the
+`(_, SqlScalarType::Jsonb)` arm to the top of the match to ensure JSONB values are always
+formatted correctly. This fix also corrects the Session 12 DataRow encoding for JSONB
+columns.
+
+**Benchmark results** (criterion, `cargo bench -p mz-pgcopy --bench copy_encode`):
+
+### Per-row COPY text encoding (ns/iter)
+
+| Scenario              | Old (values_from_row) | New (direct)  | Speedup |
+|-----------------------|----------------------:|--------------:|--------:|
+| integers_5col         | 237                   | 145           | 1.64x   |
+| strings_5col          | 320                   | 168           | 1.90x   |
+| mixed_5col            | 247                   | 128           | 1.93x   |
+
+### Batch COPY text encoding (10k rows)
+
+| Scenario                     | Old (ms)  | New (ms)  | Speedup   |
+|------------------------------|-----------|-----------|-----------|
+| mixed_5col (10k rows)        | 2.537     | 1.343     | **1.89x** |
+| strings_5col (10k rows)      | 2.900     | 1.334     | **2.17x** |
+
+**Summary:** 1.64-1.93x faster per row, **1.89-2.17x faster in batch**. The biggest
+win is for string-heavy rows (2.17x batch) because the old path cloned every string
+into an owned `Value::Text(String)`. Mixed-type rows (ints + strings + bools) see
+1.89x batch improvement. Integer-only rows see 1.64x improvement from eliminating the
+`Vec` allocation and gaining the escape fast-path (bulk `extend_from_slice` instead of
+per-byte `push`).
+
+The improvement is larger than Session 12's DataRow optimization (1.06-1.30x) because
+the COPY path additionally benefits from the escape fast-path optimization, and the
+COPY output format is simpler (no pgwire framing overhead).
+
+**Files changed:**
+- `src/pgrepr/src/value.rs` - Made `encode_datum_text_direct()` public, moved JSONB
+  match arm to top to fix JSONB encoding bug
+- `src/pgrepr/src/lib.rs` - Re-exported `encode_datum_text_direct`
+- `src/pgcopy/src/copy.rs` - Rewrote `encode_copy_row_text()` and `encode_copy_row_csv()`
+  to iterate datums directly instead of using `values_from_row()`. Added escape fast-path
+  for COPY text encoding.
+- `src/pgcopy/Cargo.toml` - Added criterion dev-dependency, registered benchmark
+- `src/pgcopy/benches/copy_encode.rs` - Added benchmark (new file)
+
+**Future optimization ideas identified during research:**
+- `Top1Monoid::cmp` in `src/compute/src/render/top_k.rs:908` allocates `Vec<Datum>` via
+  `Row::unpack()` on every comparison during consolidation. Using thread-local `DatumVec`
+  buffers would eliminate per-comparison heap allocation. The code itself acknowledges
+  this: "It might be nice to cache this row decoding."
+- JSONB serialization in `src/repr/src/adt/jsonb.rs:604` and JSON interchange in
+  `src/interchange/src/json.rs:131` still use `to_standard_notation_string()` for numeric
+  values (2 heap allocations per value). Using a stack-buffered approach with
+  `write_numeric_standard_notation()` would eliminate these allocations.
+- The `row_buf.split().freeze()` in the protocol loop (Session 12) creates a `Bytes`
+  (atomic refcount) per row. Writing directly to the codec's internal buffer would
+  eliminate this per-row allocation.
+- `row_spine.rs` at 23.7T total executions is the hottest file in the compute layer.
+  The `OffsetOptimized::index()` calls `strided.len()` twice when falling through to
+  the spilled path—caching the result could help at these volumes.
+- Coverage data shows the persist/arrow path (`persist-types/src/arrow.rs`) at 7.3T
+  executions—a potential target for columnar encoding optimizations.
