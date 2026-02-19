@@ -75,7 +75,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use im::OrdMap;
+use imbl::OrdMap;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigType, ConfigUpdates, ConfigVal};
 use mz_persist_client::cfg::{
