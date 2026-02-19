@@ -461,3 +461,99 @@ for non-integer values (the `f == f.trunc()` check), which is negligible.
 - `CheapTimestamp` decoding in `read_datum` does integer division + DateTime::from_timestamp
   construction on every timestamp datum read. Could potentially be made faster with direct
   NaiveDateTime construction.
+
+## Session 6: Direct DataRow encoding - bypass per-row Vec<Option<Value>> allocation
+
+**Date:** 2026-02-19
+
+**Problem:** Every row sent over pgwire went through a two-step encoding pipeline:
+1. `values_from_row()` converts a `RowRef` into `Vec<Option<Value>>`, which:
+   - Allocates a new `Vec` per row (N+1 allocations for N columns)
+   - For `Datum::String(s)`, clones the string data via `s.to_owned()` into `Value::Text(String)`
+   - For `Datum::Bytes(b)`, clones the bytes via `b.to_vec()` into `Value::Bytea(Vec<u8>)`
+   - For all other types, creates owned `Value` variants (e.g., `Value::Int4(i32)`)
+2. The `Codec::encode()` method then iterates over the `Vec<Option<Value>>`, calling
+   `Value::encode_text()` for each field, writing into `BytesMut`
+
+The intermediate `Value` representation was completely unnecessary for text-format encoding:
+the same `strconv` formatters that `Value::encode_text()` calls can be called directly with
+the borrowed Datum data. For a query returning 100k rows with 5 columns, this was
+100k Vec allocations + 100k×(string columns) string clones, all immediately discarded.
+
+**Fix:** Two changes:
+
+1. **`encode_data_row_direct()`** in `src/pgrepr/src/value.rs`: Encodes a complete pgwire
+   DataRow message directly from `RowRef` to `BytesMut`, including the 'D' type byte,
+   message length, field count, and per-field encoding. For text format, it calls
+   `encode_datum_text_direct()` which dispatches directly to `strconv` formatters for all
+   simple scalar types (bool, int, float, numeric, timestamp, date, time, uuid, interval,
+   string, bytes, jsonb). Complex types (arrays, lists, maps, records, ranges) fall back
+   to the `Value` path.
+
+2. **`BackendMessage::PreEncoded(Bytes)`** variant in `src/pgwire/src/message.rs`: Allows
+   the protocol layer to send pre-encoded wire bytes directly through the codec without
+   re-framing. The `Codec::encode()` method writes `PreEncoded` bytes directly to the
+   output buffer, bypassing all type-byte/length/field encoding logic.
+
+3. **Protocol integration** in `src/pgwire/src/protocol.rs`: The `send_rows` loop now
+   encodes each row directly into a reusable `BytesMut` buffer using
+   `encode_data_row_direct()`, then wraps it in `BackendMessage::PreEncoded` for sending.
+   The `row_buf` is allocated once and reused across rows via `clear()`/`split()`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-pgrepr --bench datarow_encode`):
+
+### Per-row DataRow encoding (ns/iter)
+
+| Scenario              | Old (values_from_row) | New (direct_encode) | Speedup |
+|-----------------------|----------------------:|--------------------:|--------:|
+| integers_5col         | 170                   | 154                 | 1.10x   |
+| mixed_5col            | 165                   | 131                 | 1.26x   |
+| strings_5col          | 198                   | 124                 | 1.60x   |
+| wide_15col            | 500                   | 431                 | 1.16x   |
+
+### Batch encoding (10k rows to shared buffer)
+
+| Scenario                     | Old (ms)  | New (ms)  | Speedup   |
+|------------------------------|-----------|-----------|-----------|
+| mixed_5col (10k rows)        | 1.684     | 1.370     | **1.23x** |
+| strings_5col (10k rows)      | 1.783     | 1.263     | **1.41x** |
+
+**Summary:** 1.1-1.6x faster per row, **1.2-1.4x faster in batch**. The biggest win is for
+string-heavy rows (1.6x per row, 1.4x batch) because the old path cloned every string into
+an owned `Value::Text(String)`. For integer-only rows the improvement is smaller (1.1x)
+since the `Vec` allocation overhead is amortized across column encoding time.
+
+The improvement compounds with previous formatting optimizations: the direct path writes
+integers, timestamps, floats, etc. using the optimized stack-buffer formatters from sessions
+2-5 without any intermediate `Value` construction.
+
+**End-to-end test** (against running Materialize, 100k rows, Python psycopg client):
+- `SELECT * FROM bench_ints` (5 int cols): median=494ms, ~202k rows/sec
+- `SELECT * FROM bench_mixed` (3 int + 2 text + 1 bool): median=594ms, ~168k rows/sec
+- `SELECT * FROM bench_strings` (5 text cols): median=674ms, ~148k rows/sec
+
+These timings include compute, storage, encoding, network, and client-side parsing.
+The encoding improvement from direct DataRow encoding is approximately 20-40% of the
+pgwire encoding phase (as measured by the micro-benchmark), but encoding is only one
+component of the total query time.
+
+**Files changed:**
+- `src/pgrepr/src/value.rs` - Added `encode_datum_text_direct()` and
+  `encode_data_row_direct()` functions
+- `src/pgrepr/src/lib.rs` - Re-exported `encode_data_row_direct`
+- `src/pgwire/src/message.rs` - Added `BackendMessage::PreEncoded(Bytes)` variant
+- `src/pgwire/src/codec.rs` - Handle `PreEncoded` in `Codec::encode()`
+- `src/pgwire/src/protocol.rs` - Rewrote `send_rows` loop to use direct encoding
+- `src/pgrepr/Cargo.toml` - Added criterion dev-dependency, registered benchmark
+- `src/pgrepr/benches/datarow_encode.rs` - Added benchmark (new file)
+
+**Future optimization ideas identified during research:**
+- `format_bytes` uses `hex::encode(bytes)` which heap-allocates a String for every bytea
+  value. Could write hex directly to the buffer with a lookup table.
+- `format_uuid` uses `write!(buf, "{}", uuid)` - could use `uuid.as_hyphenated().encode_lower()`
+  to a stack buffer + single write_str, avoiding fmt machinery.
+- `format_interval` uses multiple `write!` calls - could use direct formatting.
+- JSONB/JSON interchange still use `to_standard_notation_string()` for numeric formatting.
+- The `row_buf.split().freeze()` in the protocol loop creates a `Bytes` (atomic refcount)
+  per row. If the codec supported writing directly to its internal buffer instead of going
+  through the `BackendMessage` enum, this per-row `Bytes` allocation could be eliminated.
