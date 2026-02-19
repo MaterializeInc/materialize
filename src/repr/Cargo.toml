@@ -25,6 +25,10 @@ harness = false
 name = "data_types"
 harness = false
 
+[[bench]]
+name = "numeric_cast"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
