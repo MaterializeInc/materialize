@@ -5,11 +5,10 @@ import uuid
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from mypy_boto3_s3 import S3Client
 from materialize import MZ_ROOT
 
 
-def generate_parquet_files(s3: S3Client):
+def generate_parquet_files(dir = MZ_ROOT / "test" / "testdrive") -> None:
     record_col = pa.struct(
         [
             pa.field("name", pa.string()),
@@ -148,6 +147,3 @@ def generate_parquet_files(s3: S3Client):
         suffix = "" if compression == "none" else f".{compression}"
         local_file = MZ_ROOT / "test" / "testdrive" / f"types.parquet{suffix}"
         pq.write_table(table, local_file, compression=compression)  # type: ignore
-        key = f"parquet/{local_file.name}"
-        s3.upload_file(str(local_file), bucket, key)
-        print(f"File '{local_file}' successfully uploaded to '{bucket}/{key}'")

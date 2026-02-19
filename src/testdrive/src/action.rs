@@ -890,6 +890,7 @@ impl Run for PosCommand {
                     "s3-verify-data" => s3::run_verify_data(builtin, state).await,
                     "s3-verify-keys" => s3::run_verify_keys(builtin, state).await,
                     "s3-file-upload" => s3::run_upload(builtin, state).await,
+                    "s3-file-upload-path" => s3::run_upload_file(builtin, state).await,
                     "s3-set-presigned-url" => s3::run_set_presigned_url(builtin, state).await,
                     "schema-registry-publish" => schema_registry::run_publish(builtin, state).await,
                     "schema-registry-verify" => schema_registry::run_verify(builtin, state).await,
