@@ -110,8 +110,12 @@ def main() -> None:
                 line = line[1:]
             fields = [field.strip() for field in line.split("|")]
             if len(fields) >= 3:
-                field = FIELD_NAME_RE.search(fields[0]).group(1)
-                type_name = FIELD_TYPE_RE.search(fields[1]).group(1)
+                field_match = FIELD_NAME_RE.search(fields[0])
+                type_match = FIELD_TYPE_RE.search(fields[1])
+                if not field_match or not type_match:
+                    raise ValueError(f"unexpected field format: {line}")
+                field = field_match.group(1)
+                type_name = type_match.group(1)
                 documentation = DOC_LINK_TYPE1_RE.sub(r"\1", fields[2])
                 documentation = DOC_LINK_TYPE2_RE.sub(r"\1", documentation)
                 # We currently cannot determine the type of lists from the catalog.
