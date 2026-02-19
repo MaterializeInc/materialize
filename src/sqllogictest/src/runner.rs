@@ -443,7 +443,7 @@ pub struct RunnerInner<'a> {
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
-    verbosity: u8,
+    verbose: bool,
     stdout: &'a dyn WriteFmt,
     _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
@@ -1307,7 +1307,7 @@ impl<'a> RunnerInner<'a> {
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
-            verbosity: config.verbosity,
+            verbose: config.verbose,
             stdout: config.stdout,
         };
         inner.ensure_fixed_features().await?;
@@ -1692,7 +1692,7 @@ impl<'a> RunnerInner<'a> {
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
     ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
-        print_sql_if(self.stdout, sql, self.verbosity >= 2);
+        print_sql_if(self.stdout, sql, self.verbose);
         let sql_result = self.client.execute(sql, &[]).await;
 
         // Evaluate if we already reached an outcome or not.
@@ -1755,14 +1755,14 @@ impl<'a> RunnerInner<'a> {
         if let Some(outcome) = tentative_outcome {
             view_outcome = outcome;
         } else {
-            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbose);
             view_outcome = self
                 .execute_query(view_sql.as_str(), output, location.clone())
                 .await?;
         }
 
         // Remember to clean up after ourselves by dropping the view.
-        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbose);
         self.client.execute(drop_view.as_str(), &[]).await?;
 
         Ok(view_outcome)
@@ -1978,7 +1978,8 @@ pub trait WriteFmt {
 pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
-    pub verbosity: u8,
+    pub verbose: bool,
+    pub quiet: bool,
     pub postgres_url: String,
     pub prefix: String,
     pub no_fail: bool,
@@ -2112,10 +2113,10 @@ pub async fn run_string(
     writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
-        // In maximal-verbosity mode, print the query before attempting to run
+        // In maximal-verbose mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if runner.config.verbosity >= 2 {
+        if runner.config.verbose {
             print_record(runner.config, &record);
         }
 
@@ -2126,9 +2127,9 @@ pub async fn run_string(
             .unwrap();
 
         // Print warnings and failures in verbose mode.
-        if runner.config.verbosity >= 1 && !outcome.success() {
-            if runner.config.verbosity < 2 {
-                // If `verbosity >= 2`, we'll already have printed the record,
+        if !runner.config.quiet && !outcome.success() {
+            if !runner.config.verbose {
+                // If `verbose` is enabled, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
@@ -2143,7 +2144,7 @@ pub async fn run_string(
                 }
                 print_record(runner.config, &record);
             }
-            if runner.config.verbosity >= 2 || outcome.failure() {
+            if runner.config.verbose || outcome.failure() {
                 writeln!(
                     runner.config.stdout,
                     "{}",
