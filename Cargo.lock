@@ -7475,6 +7475,7 @@ dependencies = [
  "criterion 0.5.1",
  "csv",
  "itertools 0.14.0",
+ "memchr",
  "mz-ore",
  "mz-pgrepr",
  "mz-repr",
