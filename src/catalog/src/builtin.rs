@@ -2303,10 +2303,7 @@ pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the database."),
-        (
-            "oid",
-            "A PostgreSQL-compatible OID for the database.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the database."),
         ("name", "The name of the database."),
         (
             "owner_id",
@@ -2535,10 +2532,7 @@ pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The unique ID of the connection."),
-        (
-            "oid",
-            "A PostgreSQL-compatible OID for the connection.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the connection."),
         (
             "schema_id",
             "The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`.",
@@ -2616,10 +2610,7 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the source."),
-        (
-            "oid",
-            "A PostgreSQL-compatible OID for the source.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the source."),
         (
             "schema_id",
             "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.",
@@ -2981,10 +2972,7 @@ pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
             "privileges",
             "The privileges belonging to the network policy.",
         ),
-        (
-            "oid",
-            "A PostgreSQL-compatible OID for the network policy.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the network policy."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -3280,10 +3268,7 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "Materialize's unique ID for the function."),
-            (
-                "oid",
-                "A PostgreSQL-compatible OID for the function.",
-            ),
+            ("oid", "A PostgreSQL-compatible OID for the function."),
             (
                 "schema_id",
                 "The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`.",
