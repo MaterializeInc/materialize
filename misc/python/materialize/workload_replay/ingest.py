@@ -19,9 +19,9 @@ import random
 import re
 import time
 import urllib.parse
+from collections.abc import Iterator
 from functools import cache
 from textwrap import dedent
-from collections.abc import Iterator
 from typing import Any, Literal, overload
 
 import aiohttp
@@ -1022,6 +1022,172 @@ def ingest_captured_rows_kafka(
             except BufferError:
                 producer.poll(0.01)
     producer.flush()
+
+
+def _arrow_val_to_avro(val: Any, is_packed_ts: bool) -> Any:
+    """Convert persist-internal pyarrow encodings to Avro-compatible Python types.
+
+    Most pyarrow types (str, int, float, bool, bytes) already match their Avro
+    counterparts and never reach this function.  Only packed timestamps and
+    packed numerics from persist's internal Arrow encoding need conversion.
+    """
+    if val is None:
+        return None
+    if is_packed_ts and isinstance(val, bytes) and len(val) == 16:
+        # Packed NaiveDateTime → epoch milliseconds for Avro "long".
+        from datetime import datetime as _dt
+
+        ts_str = _decode_packed_timestamp(val)
+        parsed = _dt.fromisoformat(ts_str.replace(" ", "T"))
+        epoch = _dt(1970, 1, 1)
+        return int((parsed - epoch).total_seconds() * 1000)
+    if isinstance(val, dict) and "binary" in val:
+        # Packed numeric (struct<approx, binary>) → float for Avro "double".
+        binary = val.get("binary")
+        if binary is not None:
+            return float(_decode_packed_numeric(binary))
+        return val.get("approx")
+    return val
+
+
+def ingest_captured_parquet_kafka(
+    c: Composition,
+    meta: dict[str, Any],
+    source_obj: dict[str, Any],
+    child_obj: dict[str, Any],
+    parquet_path: str,
+    batch_size: int = 10000,
+) -> None:
+    """Stream Parquet data directly to Kafka, skipping string conversion.
+
+    ~3-5x faster than the generic path (iter_parquet_batches →
+    ingest_captured_rows_kafka) because pyarrow values (str, int, float,
+    bytes) go straight into Avro dicts without an Arrow→string→typed-value
+    round-trip.
+    """
+    import pyarrow.parquet as pq
+
+    topic = get_kafka_topic(source_obj)
+    debezium = "ENVELOPE DEBEZIUM" in child_obj.get("create_sql", "")
+
+    columns_meta = meta["columns"]
+    col_names = [col["name"] for col in columns_meta]
+
+    columns = [
+        Column(col["name"], col["type"], col.get("nullable", True), None, None)
+        for col in columns_meta
+    ]
+
+    producer, serializer, key_serializer, sctx, ksctx, _ = get_kafka_objects(
+        topic,
+        tuple(columns),
+        debezium,
+        c.default_port("schema-registry"),
+        c.default_port("kafka"),
+    )
+
+    now_ms = int(time.time() * 1000)
+    source_struct = None
+    if debezium:
+        source_struct = {
+            "version": "0",
+            "connector": "mysql",
+            "name": "materialize-generator",
+            "ts_ms": now_ms,
+            "snapshot": None,
+            "db": "db",
+            "sequence": None,
+            "table": topic.split(".")[-1],
+            "server_id": 0,
+            "gtid": None,
+            "file": "binlog.000001",
+            "pos": 0,
+            "row": 0,
+            "thread": None,
+            "query": None,
+        }
+
+    pf = pq.ParquetFile(parquet_path)
+    schema = pf.schema_arrow
+    num_cols = len(col_names)
+
+    # Pre-compute which columns need special conversion.
+    # Most columns (str, int, float, bytes) pass directly from pyarrow to Avro.
+    needs_conversion = [False] * num_cols
+    is_packed_ts = [False] * num_cols
+    for i in range(num_cols):
+        field_type = str(schema.field(i).type)
+        if field_type == "fixed_size_binary[16]":
+            needs_conversion[i] = True
+            is_packed_ts[i] = True
+        elif field_type.startswith("struct<"):
+            needs_conversion[i] = True
+    any_need_conversion = any(needs_conversion)
+
+    # Reuse envelope dict across rows (serializer reads it immediately).
+    envelope_value = None
+    if debezium:
+        envelope_value = {
+            "before": None,
+            "after": None,
+            "source": source_struct,
+            "op": "c",
+            "ts_ms": now_ms,
+            "transaction": None,
+        }
+
+    total_rows = pf.metadata.num_rows
+    rows_sent = 0
+
+    producer.poll(0)
+    for batch in pf.iter_batches(batch_size=batch_size):
+        py_columns = [batch.column(i).to_pylist() for i in range(batch.num_columns)]
+
+        for row_idx in range(batch.num_rows):
+            # Build value dict directly from pyarrow values — no string round-trip.
+            after_value: dict[str, Any] = {}
+            if any_need_conversion:
+                for col_idx in range(num_cols):
+                    val = py_columns[col_idx][row_idx]
+                    if needs_conversion[col_idx] and val is not None:
+                        val = _arrow_val_to_avro(val, is_packed_ts[col_idx])
+                    after_value[col_names[col_idx]] = val
+            else:
+                for col_idx in range(num_cols):
+                    after_value[col_names[col_idx]] = py_columns[col_idx][row_idx]
+
+            while True:
+                try:
+                    if debezium:
+                        envelope_value["after"] = after_value
+                        producer.produce(
+                            topic=topic,
+                            key=key_serializer(after_value, ksctx),
+                            value=serializer(envelope_value, sctx),
+                            on_delivery=delivery_report,
+                        )
+                    else:
+                        key_dict = {col_names[0]: after_value[col_names[0]]}
+                        producer.produce(
+                            topic=topic,
+                            key=key_serializer(key_dict, ksctx),
+                            value=serializer(after_value, sctx),
+                            on_delivery=delivery_report,
+                        )
+                    break
+                except BufferError:
+                    producer.poll(0.01)
+
+        rows_sent += batch.num_rows
+        print(
+            f"    {rows_sent}/{total_rows} ({rows_sent / total_rows:.1%})",
+            end="\r",
+            flush=True,
+        )
+        producer.poll(0)
+
+    producer.flush()
+    print()
 
 
 def ingest_captured_rows_sql_server(

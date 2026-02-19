@@ -31,6 +31,7 @@ from materialize.workload_replay.ingest import (
     get_parquet_row_count,
     ingest,
     ingest_captured_rows,
+    ingest_captured_parquet_kafka,
     ingest_webhook,
     iter_parquet_batches,
     parse_parquet_file,
@@ -529,14 +530,29 @@ def import_sql_captured_data_initial(
             continue
 
         source_obj = _lookup_source(workload, meta)
-        col_types = [col["type"] for col in meta.get("columns", [])]
         total_rows = get_parquet_row_count(data_path)
         if total_rows == 0:
             continue
 
         print(f"  Importing {fqn} ({total_rows} rows)")
-        for batch in iter_parquet_batches(data_path, column_types=col_types):
-            ingest_captured_rows(c, workload, meta, source_obj, batch)
+
+        # For Kafka sources, use the optimized path that streams pyarrow
+        # values directly to Avro without a string round-trip.
+        source_type = (
+            source_obj.get("type")
+            if source_obj and meta.get("object_type") != "table"
+            else None
+        )
+        if source_type == "kafka":
+            child_obj = source_obj
+            children = source_obj.get("children", {})
+            if children and meta["name"] in children:
+                child_obj = children[meta["name"]]
+            ingest_captured_parquet_kafka(c, meta, source_obj, child_obj, data_path)
+        else:
+            col_types = [col["type"] for col in meta.get("columns", [])]
+            for batch in iter_parquet_batches(data_path, column_types=col_types):
+                ingest_captured_rows(c, workload, meta, source_obj, batch)
         imported = True
 
     return imported
