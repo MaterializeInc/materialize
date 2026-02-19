@@ -49,6 +49,10 @@ harness = false
 name = "interval_format"
 harness = false
 
+[[bench]]
+name = "row_skip"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }

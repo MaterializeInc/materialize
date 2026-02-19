@@ -1539,6 +1539,227 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
     }
 }
 
+/// Datum skip payload table: maps each Tag discriminant to skip information.
+///
+/// Encoding:
+/// - Values 0..=126: fixed payload size in bytes (just advance pointer)
+/// - -1: variable-length with 1-byte length prefix (Tiny variants)
+/// - -2: variable-length with 2-byte length prefix (Short variants)
+/// - -3: variable-length with 4-byte length prefix (Long variants)
+/// - -4: variable-length with 8-byte length prefix (Huge variants, Dict)
+/// - -5: Numeric (variable-length, need to read digits byte)
+/// - -6: Array (ndims + dims + untagged elements)
+/// - i8::MIN (-128): complex type (Range with inline datums)
+const DATUM_SKIP_TABLE: [i8; 128] = {
+    let mut t = [i8::MIN; 128];
+
+    // Zero-size payloads (tag only, no data)
+    t[Tag::Null as u8 as usize] = 0;
+    t[Tag::False as u8 as usize] = 0;
+    t[Tag::True as u8 as usize] = 0;
+    t[Tag::JsonNull as u8 as usize] = 0;
+    t[Tag::Dummy as u8 as usize] = 0;
+
+    // Fixed-size payloads - legacy fixed-width encoding
+    t[Tag::Int16 as u8 as usize] = 2;
+    t[Tag::Int32 as u8 as usize] = 4;
+    t[Tag::Int64 as u8 as usize] = 8;
+    t[Tag::UInt8 as u8 as usize] = 1;
+    t[Tag::UInt16 as u8 as usize] = 2;
+    t[Tag::UInt32 as u8 as usize] = 4;
+    t[Tag::UInt64 as u8 as usize] = 8;
+    t[Tag::Float32 as u8 as usize] = 4;
+    t[Tag::Float64 as u8 as usize] = 8;
+    t[Tag::Date as u8 as usize] = 4; // i32 days
+    t[Tag::Time as u8 as usize] = 8; // u32 secs + u32 nanos
+    t[Tag::Timestamp as u8 as usize] = 16; // naive_date (i32+u32) + time (u32+u32)
+    t[Tag::TimestampTz as u8 as usize] = 16; // same as Timestamp
+    t[Tag::Interval as u8 as usize] = 16; // i32 months + i32 days + i64 micros
+    t[Tag::Uuid as u8 as usize] = 16; // 128-bit UUID
+    t[Tag::CheapTimestamp as u8 as usize] = 8; // i64 nanos
+    t[Tag::CheapTimestampTz as u8 as usize] = 8; // i64 nanos
+    t[Tag::MzTimestamp as u8 as usize] = 8; // u64
+    // MzAclItem: RoleId(1+8) + RoleId(1+8) + u64(8) = 26 bytes
+    t[Tag::MzAclItem as u8 as usize] = 26;
+    // AclItem: u32 + u32 + u64 = 16 bytes
+    t[Tag::AclItem as u8 as usize] = 16;
+
+    // Variable-length with length prefix
+    t[Tag::BytesTiny as u8 as usize] = -1;
+    t[Tag::BytesShort as u8 as usize] = -2;
+    t[Tag::BytesLong as u8 as usize] = -3;
+    t[Tag::BytesHuge as u8 as usize] = -4;
+    t[Tag::StringTiny as u8 as usize] = -1;
+    t[Tag::StringShort as u8 as usize] = -2;
+    t[Tag::StringLong as u8 as usize] = -3;
+    t[Tag::StringHuge as u8 as usize] = -4;
+    t[Tag::ListTiny as u8 as usize] = -1;
+    t[Tag::ListShort as u8 as usize] = -2;
+    t[Tag::ListLong as u8 as usize] = -3;
+    t[Tag::ListHuge as u8 as usize] = -4;
+    t[Tag::Dict as u8 as usize] = -4; // uses untagged_bytes = u64 length prefix
+
+    // Special variable-length types
+    t[Tag::Numeric as u8 as usize] = -5;
+    t[Tag::Array as u8 as usize] = -6;
+
+    // Variable-length integer encoding
+    t[Tag::NonNegativeInt16_0 as u8 as usize] = 0;
+    t[Tag::NonNegativeInt16_8 as u8 as usize] = 1;
+    t[Tag::NonNegativeInt16_16 as u8 as usize] = 2;
+
+    t[Tag::NonNegativeInt32_0 as u8 as usize] = 0;
+    t[Tag::NonNegativeInt32_8 as u8 as usize] = 1;
+    t[Tag::NonNegativeInt32_16 as u8 as usize] = 2;
+    t[Tag::NonNegativeInt32_24 as u8 as usize] = 3;
+    t[Tag::NonNegativeInt32_32 as u8 as usize] = 4;
+
+    t[Tag::NonNegativeInt64_0 as u8 as usize] = 0;
+    t[Tag::NonNegativeInt64_8 as u8 as usize] = 1;
+    t[Tag::NonNegativeInt64_16 as u8 as usize] = 2;
+    t[Tag::NonNegativeInt64_24 as u8 as usize] = 3;
+    t[Tag::NonNegativeInt64_32 as u8 as usize] = 4;
+    t[Tag::NonNegativeInt64_40 as u8 as usize] = 5;
+    t[Tag::NonNegativeInt64_48 as u8 as usize] = 6;
+    t[Tag::NonNegativeInt64_56 as u8 as usize] = 7;
+    t[Tag::NonNegativeInt64_64 as u8 as usize] = 8;
+
+    t[Tag::NegativeInt16_0 as u8 as usize] = 0;
+    t[Tag::NegativeInt16_8 as u8 as usize] = 1;
+    t[Tag::NegativeInt16_16 as u8 as usize] = 2;
+
+    t[Tag::NegativeInt32_0 as u8 as usize] = 0;
+    t[Tag::NegativeInt32_8 as u8 as usize] = 1;
+    t[Tag::NegativeInt32_16 as u8 as usize] = 2;
+    t[Tag::NegativeInt32_24 as u8 as usize] = 3;
+    t[Tag::NegativeInt32_32 as u8 as usize] = 4;
+
+    t[Tag::NegativeInt64_0 as u8 as usize] = 0;
+    t[Tag::NegativeInt64_8 as u8 as usize] = 1;
+    t[Tag::NegativeInt64_16 as u8 as usize] = 2;
+    t[Tag::NegativeInt64_24 as u8 as usize] = 3;
+    t[Tag::NegativeInt64_32 as u8 as usize] = 4;
+    t[Tag::NegativeInt64_40 as u8 as usize] = 5;
+    t[Tag::NegativeInt64_48 as u8 as usize] = 6;
+    t[Tag::NegativeInt64_56 as u8 as usize] = 7;
+    t[Tag::NegativeInt64_64 as u8 as usize] = 8;
+
+    t[Tag::UInt8_0 as u8 as usize] = 0;
+    t[Tag::UInt8_8 as u8 as usize] = 1;
+
+    t[Tag::UInt16_0 as u8 as usize] = 0;
+    t[Tag::UInt16_8 as u8 as usize] = 1;
+    t[Tag::UInt16_16 as u8 as usize] = 2;
+
+    t[Tag::UInt32_0 as u8 as usize] = 0;
+    t[Tag::UInt32_8 as u8 as usize] = 1;
+    t[Tag::UInt32_16 as u8 as usize] = 2;
+    t[Tag::UInt32_24 as u8 as usize] = 3;
+    t[Tag::UInt32_32 as u8 as usize] = 4;
+
+    t[Tag::UInt64_0 as u8 as usize] = 0;
+    t[Tag::UInt64_8 as u8 as usize] = 1;
+    t[Tag::UInt64_16 as u8 as usize] = 2;
+    t[Tag::UInt64_24 as u8 as usize] = 3;
+    t[Tag::UInt64_32 as u8 as usize] = 4;
+    t[Tag::UInt64_40 as u8 as usize] = 5;
+    t[Tag::UInt64_48 as u8 as usize] = 6;
+    t[Tag::UInt64_56 as u8 as usize] = 7;
+    t[Tag::UInt64_64 as u8 as usize] = 8;
+
+    t
+};
+
+/// DECDPUN from the decnumber library: digits per unit in the lsu array.
+const DECDPUN: usize = 3;
+
+/// Advance past one datum in the encoded byte stream without constructing a Datum.
+///
+/// This is significantly faster than `read_datum` for datums that are expensive to
+/// construct (timestamps, numerics) because it only advances the pointer without
+/// performing any value interpretation, chrono construction, or validation.
+///
+/// # Safety
+///
+/// Same as `read_datum`: the data must point to a validly encoded datum.
+unsafe fn skip_datum(data: &mut &[u8]) {
+    let tag_byte = data[0];
+    let skip_info = *DATUM_SKIP_TABLE.get_unchecked(usize::from(tag_byte));
+
+    if skip_info >= 0 {
+        // Fixed-size payload: advance past tag byte + payload
+        *data = &data[1 + skip_info as usize..];
+    } else {
+        // Consume the tag byte
+        *data = &data[1..];
+        match skip_info {
+            -1 => {
+                // 1-byte length prefix (Tiny)
+                let len = usize::from(data[0]);
+                *data = &data[1 + len..];
+            }
+            -2 => {
+                // 2-byte length prefix (Short)
+                let len = usize::from(u16::from_le_bytes([data[0], data[1]]));
+                *data = &data[2 + len..];
+            }
+            -3 => {
+                // 4-byte length prefix (Long)
+                let len =
+                    usize::cast_from(u32::from_le_bytes([data[0], data[1], data[2], data[3]]));
+                *data = &data[4 + len..];
+            }
+            -4 => {
+                // 8-byte length prefix (Huge/Dict)
+                let len = usize::cast_from(u64::from_le_bytes([
+                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                ]));
+                *data = &data[8 + len..];
+            }
+            -5 => {
+                // Numeric: 1 byte digits + 1 byte exponent + 1 byte bits + variable lsu
+                let digits = usize::from(data[0]);
+                let lsu_u16_len = (digits + DECDPUN - 1) / DECDPUN;
+                *data = &data[3 + lsu_u16_len * 2..];
+            }
+            -6 => {
+                // Array: 1 byte ndims + ndims*16 bytes dims + u64 len + data
+                let ndims = usize::from(data[0]);
+                *data = &data[1..];
+                let dims_size = ndims * size_of::<u64>() * 2;
+                *data = &data[dims_size..];
+                // Skip untagged bytes (u64 length prefix + data)
+                let len = usize::cast_from(u64::from_le_bytes([
+                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                ]));
+                *data = &data[8 + len..];
+            }
+            _ => {
+                // Range: 1 byte flags, then conditionally 0-2 inline datums
+                debug_assert_eq!(
+                    tag_byte,
+                    u8::from(Tag::Range),
+                    "unexpected complex tag in skip_datum"
+                );
+                let flags = data[0];
+                *data = &data[1..];
+                // EMPTY = 0x01 (range::InternalFlags::EMPTY)
+                if flags & 0x01 == 0 {
+                    // Not empty: has lower and upper bounds as inline datums
+                    // LB_INFINITE = 0x04 (range::InternalFlags::LB_INFINITE)
+                    if flags & 0x04 == 0 {
+                        skip_datum(data); // skip lower bound datum
+                    }
+                    // UB_INFINITE = 0x10 (range::InternalFlags::UB_INFINITE)
+                    if flags & 0x10 == 0 {
+                        skip_datum(data); // skip upper bound datum
+                    }
+                }
+            }
+        }
+    }
+}
+
 // --------------------------------------------------------------------------------
 // writing data
 
@@ -2729,6 +2950,31 @@ impl<'a> Iterator for DatumListIter<'a> {
             Some(unsafe { read_datum(&mut self.data) })
         }
     }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // Skip n datums using skip_datum (much faster than read_datum for
+        // expensive types like timestamps and numerics since it avoids
+        // constructing Datum values).
+        for _ in 0..n {
+            if self.data.is_empty() {
+                return None;
+            }
+            unsafe { skip_datum(&mut self.data) };
+        }
+        self.next()
+    }
+
+    fn count(self) -> usize {
+        // Count datums using skip_datum instead of read_datum to avoid
+        // constructing Datum values.
+        let mut data = self.data;
+        let mut count = 0;
+        while !data.is_empty() {
+            unsafe { skip_datum(&mut data) };
+            count += 1;
+        }
+        count
+    }
 }
 
 impl<'a> DatumMap<'a> {
@@ -3792,5 +4038,180 @@ mod tests {
 
         assert_eq!(map_1.cmp(&map_null), Ordering::Less);
         assert_eq!(map_null.cmp(&map_1), Ordering::Greater);
+    }
+
+    /// Test that skip_datum correctly advances past every datum type,
+    /// producing the same results as read_datum for nth() and count().
+    #[mz_ore::test]
+    fn test_skip_datum_correctness() {
+        let arena = RowArena::new();
+
+        // Build a row with many different datum types
+        let ts = CheckedTimestamp::from_timestamplike(
+            NaiveDate::from_ymd_opt(2024, 6, 15)
+                .unwrap()
+                .and_hms_micro_opt(14, 30, 45, 123456)
+                .unwrap(),
+        )
+        .unwrap();
+        let tstz = CheckedTimestamp::from_timestamplike(
+            DateTime::from_timestamp(1_700_000_000, 500_000_000).unwrap(),
+        )
+        .unwrap();
+
+        let datums: Vec<Datum> = vec![
+            Datum::Null,
+            Datum::False,
+            Datum::True,
+            Datum::Int16(0),
+            Datum::Int16(42),
+            Datum::Int16(-1),
+            Datum::Int32(0),
+            Datum::Int32(100_000),
+            Datum::Int32(-100_000),
+            Datum::Int64(0),
+            Datum::Int64(1_000_000_000),
+            Datum::Int64(-1_000_000_000),
+            Datum::UInt8(0),
+            Datum::UInt8(255),
+            Datum::UInt16(0),
+            Datum::UInt16(65535),
+            Datum::UInt32(0),
+            Datum::UInt32(u32::MAX),
+            Datum::UInt64(0),
+            Datum::UInt64(u64::MAX),
+            Datum::Float32(OrderedFloat(3.14)),
+            Datum::Float64(OrderedFloat(-2.718)),
+            Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
+            Datum::Timestamp(ts),
+            Datum::TimestampTz(tstz),
+            Datum::Interval(Interval::new(14, 3, 86_400_000_000)),
+            Datum::Bytes(&[]),
+            Datum::Bytes(&[1, 2, 3, 4, 5]),
+            Datum::String(""),
+            Datum::String("hello world"),
+            Datum::String("العَرَبِيَّة"),
+            Datum::Uuid(uuid::Uuid::from_bytes([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            ])),
+            Datum::JsonNull,
+            Datum::Dummy,
+            Datum::from(arena.make_datum(|packer| {
+                packer
+                    .try_push_array(
+                        &[ArrayDimension {
+                            lower_bound: 1,
+                            length: 3,
+                        }],
+                        vec![Datum::Int32(10), Datum::Int32(20), Datum::Int32(30)],
+                    )
+                    .unwrap();
+            })),
+        ];
+
+        let row = Row::pack_slice(&datums);
+
+        // Test 1: count() should return correct number of datums
+        assert_eq!(row.iter().count(), datums.len());
+
+        // Test 2: nth(i) should return the same datum as sequential iteration
+        let unpacked: Vec<Datum> = row.iter().collect();
+        for i in 0..datums.len() {
+            let nth_result = row.iter().nth(i).unwrap();
+            assert_eq!(
+                nth_result, unpacked[i],
+                "nth({}) returned {:?} but expected {:?}",
+                i, nth_result, unpacked[i]
+            );
+        }
+
+        // Test 3: nth past the end returns None
+        assert!(row.iter().nth(datums.len()).is_none());
+        assert!(row.iter().nth(datums.len() + 10).is_none());
+
+        // Test 4: nth(0) should be the same as next()
+        assert_eq!(row.iter().nth(0), row.iter().next());
+
+        // Test 5: Test with rows containing only one datum type (to exercise
+        // skip_datum for each specific type)
+        for datum in &unpacked {
+            let single_row = Row::pack_slice(&[*datum, *datum, *datum]);
+            assert_eq!(single_row.iter().count(), 3);
+            assert_eq!(single_row.iter().nth(0).unwrap(), *datum);
+            assert_eq!(single_row.iter().nth(1).unwrap(), *datum);
+            assert_eq!(single_row.iter().nth(2).unwrap(), *datum);
+            assert!(single_row.iter().nth(3).is_none());
+        }
+
+        // Test 6: Numeric datums (variable-length encoding)
+        let mut numeric_row = Row::default();
+        {
+            let mut packer = numeric_row.packer();
+            packer.push(Datum::Int32(42)); // prefix
+            packer.push(Datum::from(Numeric::from(0)));
+            packer.push(Datum::from(Numeric::from(123456789)));
+            packer.push(Datum::String("end"));
+        }
+        assert_eq!(numeric_row.iter().count(), 4);
+        assert_eq!(numeric_row.iter().nth(0).unwrap(), Datum::Int32(42));
+        assert_eq!(numeric_row.iter().nth(3).unwrap(), Datum::String("end"));
+
+        // Test 7: Row with List and Dict (variable-length nested structures)
+        let mut nested_row = Row::default();
+        {
+            let mut packer = nested_row.packer();
+            packer.push(Datum::Int64(1));
+            packer.push_list(&[Datum::String("a"), Datum::String("b")]);
+            packer.push(Datum::Int64(2));
+            packer.push_dict_with(|p| {
+                p.push(Datum::String("key1"));
+                p.push(Datum::Int32(100));
+                p.push(Datum::String("key2"));
+                p.push(Datum::Int32(200));
+            });
+            packer.push(Datum::Int64(3));
+        }
+        assert_eq!(nested_row.iter().count(), 5);
+        assert_eq!(nested_row.iter().nth(0).unwrap(), Datum::Int64(1));
+        assert_eq!(nested_row.iter().nth(2).unwrap(), Datum::Int64(2));
+        assert_eq!(nested_row.iter().nth(4).unwrap(), Datum::Int64(3));
+
+        // Test 8: Row with Range (non-empty, with bounds)
+        let mut range_row = Row::default();
+        {
+            let mut packer = range_row.packer();
+            packer.push(Datum::Int64(99));
+            packer
+                .push_range(Range {
+                    inner: Some(RangeInner {
+                        lower: RangeLowerBound {
+                            inclusive: true,
+                            bound: Some(Datum::Int32(10)),
+                        },
+                        upper: RangeUpperBound {
+                            inclusive: false,
+                            bound: Some(Datum::Int32(20)),
+                        },
+                    }),
+                })
+                .unwrap();
+            packer.push(Datum::Int64(100));
+        }
+        assert_eq!(range_row.iter().count(), 3);
+        assert_eq!(range_row.iter().nth(0).unwrap(), Datum::Int64(99));
+        assert_eq!(range_row.iter().nth(2).unwrap(), Datum::Int64(100));
+
+        // Test 9: Row with empty Range
+        let mut empty_range_row = Row::default();
+        {
+            let mut packer = empty_range_row.packer();
+            packer.push(Datum::Int64(1));
+            packer
+                .push_range(Range::<Datum> { inner: None })
+                .unwrap();
+            packer.push(Datum::Int64(2));
+        }
+        assert_eq!(empty_range_row.iter().count(), 3);
+        assert_eq!(empty_range_row.iter().nth(2).unwrap(), Datum::Int64(2));
     }
 }

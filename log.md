@@ -728,3 +728,111 @@ with many components still see ~5x because each component's `write!` overhead is
 - Most pgwire text formatting is now direct. Remaining `write!`-based formatters:
   `format_jsonb`, `format_array`, `format_list`, `format_map`, `format_record`,
   `format_range` - these are more complex (recursive) and harder to optimize.
+
+## Session 9: Fast datum skipping - DatumListIter::nth() and count() optimization
+
+**Date:** 2026-02-19
+
+**Problem:** When `DatumListIter::nth(n)` is called (used heavily in reduce.rs for
+aggregation), the default `Iterator::nth` implementation calls `next()` in a loop,
+which calls `read_datum` for each skipped element. `read_datum` fully decodes every
+datum—including expensive chrono `DateTime` construction for timestamps,
+`Decimal` construction for numerics, and `DatumList` parsing for lists—only to
+immediately discard the result. This is wasteful: the caller only needs the n-th datum,
+not the ones being skipped.
+
+Key call sites in the hot aggregation path:
+- `src/compute/src/render/reduce.rs:484`: `row.iter().nth(index).unwrap()` - extracts
+  one column from each input row during partial aggregation
+- `src/compute/src/render/reduce.rs:1340`: `row.iter().nth(datum_index).unwrap()` -
+  extracts one column for distinct aggregation
+
+Also affects `RowRef::unpack()` which calls `self.iter().count()` (iterating all datums
+just to count them, constructing and dropping each one).
+
+**Fix:** Added `skip_datum()` function with a static lookup table (`DATUM_SKIP_TABLE`)
+that maps each Tag discriminant (u8) to its payload size, enabling O(1) pointer advance
+for fixed-size datum types without any Datum construction. The table encodes:
+- Fixed-size payloads (0-126 bytes): direct pointer advance (ints, floats, dates,
+  timestamps, intervals, UUIDs, etc.)
+- Length-prefixed payloads (-1..-4): read 1/2/4/8-byte length prefix, then skip data
+  (strings, bytes, lists, dicts)
+- Numeric (-5): read digits byte, compute variable lsu size, skip
+- Array (-6): read ndims, skip dims + untagged elements
+- Range (i8::MIN): parse flags, recursively skip 0-2 inline bound datums
+
+Overrode `nth()` and `count()` on `DatumListIter` to use `skip_datum` for skipped
+elements instead of `read_datum`, eliminating all Datum construction overhead.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench row_skip`):
+
+### Per-call nth(index) performance (ns/iter)
+
+| Scenario                       | Old (read_datum) | New (skip_datum) | Speedup |
+|--------------------------------|-----------------:|-----------------:|--------:|
+| int64 5col nth(4)              | 33.0             | 12.6             | 2.6x    |
+| int64 10col nth(9)             | 60.9             | 21.6             | 2.8x    |
+| int64 20col nth(19)            | 117.8            | 40.0             | 2.9x    |
+| int64 20col nth(10)            | 66.7             | 23.0             | 2.9x    |
+| timestamp 5col nth(4)          | 55.5             | 20.2             | 2.7x    |
+| timestamp 10col nth(9)         | 106.8            | 29.1             | 3.7x    |
+| timestamp 20col nth(19)        | 212.1            | 50.3             | 4.2x    |
+| string 10col nth(9)            | 28.8             | 20.4             | 1.4x    |
+| string 20col nth(19)           | 55.6             | 38.4             | 1.4x    |
+| mixed 10col nth(9)             | 54.7             | 18.2             | 3.0x    |
+| mixed 20col nth(19)            | 104.2            | 37.4             | 2.8x    |
+| mixed 20col nth(10)            | 62.7             | 23.1             | 2.7x    |
+
+### count() performance (ns/iter)
+
+| Scenario                       | Old (read_datum) | New (skip_datum) | Speedup |
+|--------------------------------|-----------------:|-----------------:|--------:|
+| int64 5col                     | 29.6             | 10.3             | 2.9x    |
+| int64 10col                    | 57.9             | 22.5             | 2.6x    |
+| int64 20col                    | 113.9            | 45.3             | 2.5x    |
+| int64 50col                    | 284.8            | 103.2            | 2.8x    |
+| timestamp 5col                 | 53.3             | 10.0             | 5.3x    |
+| timestamp 10col                | 104.7            | 20.9             | 5.0x    |
+| timestamp 20col                | 210.6            | 42.8             | 4.9x    |
+| mixed 10col                    | 50.0             | 23.3             | 2.1x    |
+| mixed 20col                    | 99.2             | 45.7             | 2.2x    |
+
+### Batch nth (10k rows, simulating reduce.rs aggregation pattern)
+
+| Scenario                              | Old (µs) | New (µs) | Speedup   |
+|---------------------------------------|----------|----------|-----------|
+| 10k int64 20col nth(15)               | 910      | 323      | **2.8x**  |
+| 10k mixed 20col nth(15)               | 821      | 324      | **2.5x**  |
+| 10k timestamp 10col nth(8)            | 953      | 274      | **3.5x**  |
+
+**Summary:** 1.4-4.2x faster per call for nth(), **2.5-3.5x faster in batch aggregation
+scenarios**. The speedup is largest for timestamp columns (4.2x per call) because
+`read_datum` for timestamps involves expensive chrono `DateTime` construction +
+`CheckedTimestamp` validation that `skip_datum` completely bypasses. For count(), the
+improvement is even more dramatic for timestamps (5.3x) because ALL datums are skipped.
+String columns show the smallest improvement (1.4x) since their `read_datum` is already
+cheap (just a slice reference). The batch benchmark directly simulates the reduce.rs
+aggregation pattern of extracting a single column from wide rows.
+
+**Files changed:**
+- `src/repr/src/row.rs` - Added `DATUM_SKIP_TABLE` lookup table (128-entry const array),
+  `skip_datum()` function, and `nth()`/`count()` overrides on `DatumListIter`. Added
+  comprehensive correctness test covering all datum types (ints, floats, strings, bytes,
+  timestamps, dates, times, intervals, UUIDs, numerics, arrays, lists, dicts, ranges).
+- `src/repr/benches/row_skip.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `CheapTimestamp` decoding does integer division + `DateTime::from_timestamp` +
+  `CheckedTimestamp::from_timestamplike` (with LazyLock-based date range validation) on
+  every timestamp datum read. An unchecked constructor for `CheckedTimestamp` and direct
+  `NaiveDateTime` construction could save ~10-20ns per timestamp read.
+- `RowRef::unpack()` still iterates twice (once to count, once to collect). With the new
+  `count()` override, the first pass is faster, but a single-pass approach would be better.
+- The MFP evaluation path (`src/expr/src/linear.rs`) and persist source MFP evaluation
+  (`src/storage-operators/src/persist_source.rs:602`) use `DatumVec::borrow_with()` which
+  calls `extend(row.iter())`. This still uses `read_datum` for every datum since all values
+  are needed. Optimizing `read_datum` itself (especially for timestamps) would help here.
+- JSONB/JSON interchange still use `to_standard_notation_string()` for numeric formatting.
+- `Top1Monoid::cmp` in top_k.rs allocates Vec via `Row::unpack()` on every comparison.
+  Using `DatumVec` (like `Top1MonoidLocal` does) would eliminate these allocations.
