@@ -20,6 +20,13 @@ proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
+[dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
+
+[[bench]]
+name = "copy_encode"
+harness = false
+
 [features]
 default = ["workspace-hack"]
 
