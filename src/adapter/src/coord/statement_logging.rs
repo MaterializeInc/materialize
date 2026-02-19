@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mz_adapter_types::connection::ConnectionId;
-use mz_compute_client::controller::error::{CollectionFrontiersError, CollectionMissing};
+use mz_compute_client::controller::error::{CollectionLookupError, CollectionMissing};
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
@@ -818,11 +818,11 @@ pub enum WatchSetInstallError {
     CollectionMissing(GlobalId),
 }
 
-impl From<CollectionFrontiersError> for WatchSetInstallError {
-    fn from(error: CollectionFrontiersError) -> Self {
+impl From<CollectionLookupError> for WatchSetInstallError {
+    fn from(error: CollectionLookupError) -> Self {
         match error {
-            CollectionFrontiersError::InstanceMissing(id) => Self::InstanceMissing(id),
-            CollectionFrontiersError::CollectionMissing(id) => Self::CollectionMissing(id),
+            CollectionLookupError::InstanceMissing(id) => Self::InstanceMissing(id),
+            CollectionLookupError::CollectionMissing(id) => Self::CollectionMissing(id),
         }
     }
 }

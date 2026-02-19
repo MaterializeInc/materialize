@@ -46,7 +46,7 @@ pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
 
 /// Errors arising during compute collection frontiers lookup.
 #[derive(Error, Debug)]
-pub enum CollectionFrontiersError {
+pub enum CollectionLookupError {
     /// The specified compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
@@ -55,13 +55,13 @@ pub enum CollectionFrontiersError {
     CollectionMissing(GlobalId),
 }
 
-impl From<InstanceMissing> for CollectionFrontiersError {
+impl From<InstanceMissing> for CollectionLookupError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
     }
 }
 
-impl From<CollectionMissing> for CollectionFrontiersError {
+impl From<CollectionMissing> for CollectionLookupError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
     }
