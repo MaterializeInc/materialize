@@ -26,7 +26,7 @@ pub struct DatumVec {
 
 impl DatumVec {
     /// Allocate a new instance.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { outer: Vec::new() }
     }
     /// Borrow an instance with a specific lifetime.

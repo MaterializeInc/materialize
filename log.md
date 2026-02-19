@@ -1226,3 +1226,102 @@ COPY output format is simpler (no pgwire framing overhead).
   the spilled path—caching the result could help at these volumes.
 - Coverage data shows the persist/arrow path (`persist-types/src/arrow.rs`) at 7.3T
   executions—a potential target for columnar encoding optimizations.
+
+## Session 14: Top1Monoid selective comparison - skip full row unpacking
+
+**Date:** 2026-02-19
+
+**Problem:** `Top1Monoid::cmp()` in `src/compute/src/render/top_k.rs` is called during
+monotonic Top-K operations (e.g., `ORDER BY col LIMIT 1` on append-only sources). On every
+comparison, it:
+1. Calls `self.row.unpack()` → allocates `Vec<Datum>` (count pass via `skip_datum` + read
+   pass via `read_datum` for ALL columns)
+2. Calls `other.row.unpack()` → same thing for the second row
+3. Calls `compare_columns()` which only looks at 1-3 ORDER BY columns
+4. Falls back to full `left.cmp(&right)` tiebreaker if all ORDER BY columns are equal
+
+For a 20-column row with `ORDER BY col0 LIMIT 1`, this means unpacking all 40 datums (20 per
+row) just to compare 2 of them. The code had a TODO comment acknowledging this: "It might be
+nice to cache this row decoding like the non-monotonic codepath."
+
+**Fix:** Two optimizations:
+
+1. **Selective column comparison**: Instead of unpacking the entire row, use `nth()` (which
+   leverages `skip_datum` from Session 9) to extract only the ORDER BY columns. For each
+   order column, a fresh iterator is created and `nth(column_index)` skips directly to the
+   needed column using fast pointer arithmetic (no Datum construction for skipped columns).
+   The comparison logic (null handling, desc/asc) is inlined to match `compare_columns()`.
+
+2. **Thread-local DatumVec tiebreaker**: When all ORDER BY columns are equal (rare in
+   practice), falls back to full row comparison using thread-local `DatumVec` buffers instead
+   of per-comparison `Vec` allocation. The `DatumVec` reuses its internal allocation across
+   calls, and `const { }` initialization in `thread_local!` avoids lazy init overhead.
+
+Also made `DatumVec::new()` a `const fn` to enable compile-time initialization in
+`thread_local!` blocks.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench row_compare`):
+
+### Per-comparison performance (ns/iter)
+
+| Scenario                        | Old (unpack)  | New (selective) | Speedup |
+|---------------------------------|--------------:|----------------:|--------:|
+| int5 ORDER BY col0              | 117           | 24              | 4.9x    |
+| int10 ORDER BY col0             | 234           | 24              | 9.7x    |
+| int10 ORDER BY col8             | 236           | 48              | 4.9x    |
+| int20 ORDER BY col0             | 479           | 21              | **22.7x** |
+| int20 ORDER BY col15            | 475           | 77              | 6.2x    |
+| mixed5 ORDER BY col2 (float)    | 103           | 22              | 4.8x    |
+| ts5 ORDER BY col3               | 143           | 41              | 3.5x    |
+| ts10 ORDER BY col0              | 268           | 28              | **9.5x** |
+| int5 equal rows (tiebreaker)    | 134           | 171             | 0.78x   |
+
+### Batch semigroup simulation (10k comparisons, find minimum)
+
+| Scenario                          | Old (ms)   | New (µs)    | Speedup     |
+|-----------------------------------|------------|-------------|-------------|
+| int10_10k ORDER BY col0           | 2.10       | 230         | **9.1x**    |
+| int20_10k ORDER BY col0           | 4.72       | 253         | **18.7x**   |
+| ts10_10k ORDER BY col0            | 2.69       | 285         | **9.4x**    |
+| mixed5_10k ORDER BY col2 (float)  | 985 µs     | 219         | **4.5x**    |
+
+**Summary:** **3.5-22.7x faster per comparison, 4.5-18.7x faster in batch**. The speedup is
+proportional to row width and inversely proportional to the ORDER BY column index. For the
+common case of `ORDER BY first_column LIMIT 1` on wide rows (20 columns), the improvement is
+**22.7x per comparison and 18.7x in batch**. This is because the old approach read all 20
+datums from each row (40 total) while the new approach reads only 1 datum from each row
+(2 total), using `skip_datum` (O(1) pointer arithmetic) to skip the first column's tag byte.
+
+The tiebreaker case (all ORDER BY columns equal) is 1.28x slower due to the overhead of
+checking ORDER BY columns first, then falling back to full DatumVec comparison. But this
+path is rarely taken in practice—most rows in a Top-K stream differ on at least one ORDER BY
+column.
+
+**Files changed:**
+- `src/compute/src/render/top_k.rs` - Rewrote `Top1Monoid::cmp()` to use selective column
+  extraction via `nth()` (skip_datum) for ORDER BY columns, with thread-local DatumVec
+  fallback for tiebreaker. Added `Datum` import.
+- `src/repr/src/datum_vec.rs` - Made `DatumVec::new()` a `const fn` for compile-time
+  `thread_local!` initialization.
+- `src/repr/benches/row_compare.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- The same selective comparison pattern could benefit `Top1MonoidLocal::cmp()` (the
+  non-monotonic codepath), which currently uses `DatumVec::borrow_with()` for full row
+  unpacking. However, since `Top1MonoidLocal` already reuses allocations via
+  `Rc<RefCell<Top1MonoidShared>>`, the per-comparison cost is lower (no allocation, just
+  iteration). The selective approach would still save iteration time for wide rows.
+- The `compare_columns` function in `mz_expr::relation` could be augmented with a
+  `compare_columns_from_rows(left: &RowRef, right: &RowRef, order: &[ColumnOrder])` variant
+  that uses the selective pattern. This would benefit any caller that currently unpacks rows
+  just for column comparison.
+- Scalar `cast_*_to_string` functions (cast_uint16_to_string, cast_uint64_to_string, etc.)
+  allocate a `String` per call during MFP evaluation. A `RowArena`-based formatting approach
+  or stack-buffered string could eliminate these per-row allocations.
+- Delta join produces 3+ clones per output tuple (diff, row, time, initial). These are
+  inherent to the DD model but could potentially be reduced with move semantics.
+- The `zero_diffs.clone()` pattern in `reduce.rs` (accumulable aggregation) clones a
+  `Vec<Accum>` per input row. SmallVec<[Accum; 4]> could avoid heap allocation for the
+  common case of 1-3 aggregations.
+- JSONB serialization still uses `to_standard_notation_string()` for numeric values.
