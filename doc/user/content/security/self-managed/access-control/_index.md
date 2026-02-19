@@ -32,9 +32,9 @@ roles](/security/self-managed/access-control/manage-roles/).
 
 {{% include-headless "/headless/rbac-sm/db-roles" %}}
 
-- {{% include-headless "/headless/rbac-sm/create-users" %}}
+{{% include-headless "/headless/rbac-sm/create-users" %}}
 
-- {{% include-headless "/headless/rbac-sm/create-functional-roles" %}}
+{{% include-headless "/headless/rbac-sm/create-functional-roles" %}}
 
 ### Managing privileges
 
