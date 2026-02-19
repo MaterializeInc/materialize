@@ -39,7 +39,6 @@ use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 
 use crate::coord::NetworkPolicyError;
-use crate::coord::statement_logging::WatchSetInstallError;
 use crate::optimize::OptimizerError;
 use crate::peek_client::CollectionLookupError;
 
@@ -773,17 +772,21 @@ impl AdapterError {
     }
 
     pub fn concurrent_dependency_drop_from_watch_set_install_error(
-        e: WatchSetInstallError,
+        e: compute_error::CollectionLookupError,
     ) -> Self {
         match e {
-            WatchSetInstallError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "cluster",
-                dependency_id: id.to_string(),
-            },
-            WatchSetInstallError::CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
-                dependency_kind: "collection",
-                dependency_id: id.to_string(),
-            },
+            compute_error::CollectionLookupError::InstanceMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: id.to_string(),
+                }
+            }
+            compute_error::CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
         }
     }
 
