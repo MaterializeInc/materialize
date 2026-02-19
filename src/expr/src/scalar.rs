@@ -2004,7 +2004,7 @@ impl MirScalarExpr {
     }
 
     pub fn typ(&self, column_types: &[SqlColumnType]) -> SqlColumnType {
-        match self {
+        let mut typ = match self {
             MirScalarExpr::Column(i, _name) => column_types[*i].clone(),
             MirScalarExpr::Literal(_, typ) => typ.clone(),
             MirScalarExpr::CallUnmaterializable(func) => func.output_type(),
@@ -2020,7 +2020,9 @@ impl MirScalarExpr {
                 let else_type = els.typ(column_types);
                 then_type.union(&else_type)
             }
-        }
+        };
+        typ.repr_canonicalize();
+        typ
     }
 
     pub fn repr_typ(&self, column_types: &[ReprColumnType]) -> ReprColumnType {

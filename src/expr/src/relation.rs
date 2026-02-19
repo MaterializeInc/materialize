@@ -477,7 +477,11 @@ impl MirRelationExpr {
             }
             FlatMap { func, .. } => {
                 let mut result = input_types.next().unwrap().clone();
-                result.extend(func.output_type().column_types);
+                let mut output_col_types = func.output_type().column_types;
+                for ct in output_col_types.iter_mut() {
+                    ct.repr_canonicalize();
+                }
+                result.extend(output_col_types);
                 result
             }
             Filter { predicates, .. } => {
@@ -519,7 +523,11 @@ impl MirRelationExpr {
                 group_key
                     .iter()
                     .map(|e| e.typ(input))
-                    .chain(aggregates.iter().map(|agg| agg.typ(input)))
+                    .chain(aggregates.iter().map(|agg| {
+                        let mut t = agg.typ(input);
+                        t.repr_canonicalize();
+                        t
+                    }))
                     .collect()
             }
             TopK { .. } | Negate { .. } | Threshold { .. } | ArrangeBy { .. } => {

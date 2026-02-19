@@ -1728,8 +1728,8 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS VERBOSE TEXT FOR
 Explained Query:
   Union // { types: "(text?)" }
     ReadStorage materialize.public.t1 // { types: "(text?)" }
-    Project (#1) // { types: "(varchar?)" }
-      Map (text_to_varchar[len=unbounded](#0)) // { types: "(text?, varchar?)" }
+    Project (#1) // { types: "(text?)" }
+      Map (text_to_varchar[len=unbounded](#0)) // { types: "(text?, text?)" }
         ReadStorage materialize.public.t3 // { types: "(text?)" }
 
 Source materialize.public.t1
