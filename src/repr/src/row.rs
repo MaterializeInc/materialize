@@ -687,6 +687,47 @@ impl RowRef {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Project specific columns from this row into `dest`, using byte-level
+    /// copying instead of datum decoding and re-encoding.
+    ///
+    /// `projection` must be a sorted list of column indices. Each index must be
+    /// less than the number of datums in this row.
+    ///
+    /// This is significantly faster than the traditional approach of unpacking
+    /// all datums and repacking the projected ones, because it replaces per-datum
+    /// type matching + value encoding with simple `memcpy` of byte ranges.
+    pub fn project_onto(&self, projection: &[usize], dest: &mut Row) {
+        let data = &self.0;
+        let mut packer = dest.packer();
+
+        // Walk through the row's encoded datums using skip_datum.
+        // For each projected column, copy its byte range directly.
+        let mut remaining: &[u8] = data;
+        let mut col: usize = 0;
+        let mut proj_idx: usize = 0;
+
+        while proj_idx < projection.len() && !remaining.is_empty() {
+            let start = data.len() - remaining.len();
+            // SAFETY: remaining is a valid suffix of a Row encoding,
+            // so the tag byte at remaining[0] is valid.
+            unsafe { skip_datum(&mut remaining) };
+            let end = data.len() - remaining.len();
+
+            if col == projection[proj_idx] {
+                // This column is projected — copy its encoded bytes.
+                // SAFETY: data[start..end] is a valid encoded datum.
+                unsafe { packer.extend_by_slice_unchecked(&data[start..end]) };
+                proj_idx += 1;
+                // Handle duplicate column indices in the projection.
+                while proj_idx < projection.len() && projection[proj_idx] == col {
+                    unsafe { packer.extend_by_slice_unchecked(&data[start..end]) };
+                    proj_idx += 1;
+                }
+            }
+            col += 1;
+        }
+    }
 }
 
 impl ToOwned for RowRef {
