@@ -30,7 +30,6 @@ pub enum BackendMessage {
     EmptyQueryResponse,
     ReadyForQuery(TransactionCode),
     RowDescription(Vec<FieldDescription>),
-    DataRow(Vec<Option<mz_pgrepr::Value>>),
     ParameterStatus(&'static str, String),
     BackendKeyData {
         conn_id: u32,

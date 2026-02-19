@@ -24,18 +24,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["html_reports"] }
 
-[[bench]]
-name = "copy_encode"
-harness = false
-
-[[bench]]
-name = "copy_parse"
-harness = false
-
-[[bench]]
-name = "copy_decode"
-harness = false
-
 [features]
 default = ["workspace-hack"]
 

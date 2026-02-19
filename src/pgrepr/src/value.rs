@@ -9,11 +9,10 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
-use std::sync::LazyLock;
 use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
-use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
 use mz_pgwire_common::Format;
@@ -936,34 +935,77 @@ pub fn values_from_row(row: &RowRef, typ: &SqlRelationType) -> Vec<Option<Value>
 ///
 /// For complex types (arrays, lists, maps, records, ranges), this falls back
 /// to the [`Value`] path since those types require recursive encoding.
-fn encode_datum_text_direct(
-    datum: Datum<'_>,
-    scalar_type: &SqlScalarType,
-    buf: &mut BytesMut,
-) {
+pub fn encode_datum_text_direct(datum: Datum<'_>, scalar_type: &SqlScalarType, buf: &mut BytesMut) {
     match (datum, scalar_type) {
+        // JSONB must be encoded with JSON formatting regardless of its underlying datum variant.
+        (_, SqlScalarType::Jsonb) => {
+            strconv::format_jsonb(buf, JsonbRef::from_datum(datum));
+        }
+
         // Simple scalar types: encode directly without allocation.
-        (Datum::True, _) => { strconv::format_bool(buf, true); }
-        (Datum::False, _) => { strconv::format_bool(buf, false); }
-        (Datum::Int16(i), _) => { strconv::format_int16(buf, i); }
-        (Datum::Int32(i), _) => { strconv::format_int32(buf, i); }
-        (Datum::Int64(i), _) => { strconv::format_int64(buf, i); }
-        (Datum::UInt8(c), _) => { buf.put_u8(c); }
-        (Datum::UInt16(u), _) => { strconv::format_uint16(buf, u); }
-        (Datum::UInt32(u), _) => { strconv::format_uint32(buf, u); }
-        (Datum::UInt64(u), _) => { strconv::format_uint64(buf, u); }
-        (Datum::Float32(f), _) => { strconv::format_float32(buf, *f); }
-        (Datum::Float64(f), _) => { strconv::format_float64(buf, *f); }
-        (Datum::Numeric(d), _) => { strconv::format_numeric(buf, &d); }
-        (Datum::MzTimestamp(t), _) => { strconv::format_mz_timestamp(buf, t); }
-        (Datum::MzAclItem(mai), _) => { strconv::format_mz_acl_item(buf, mai); }
-        (Datum::AclItem(ai), _) => { strconv::format_acl_item(buf, ai); }
-        (Datum::Date(d), _) => { strconv::format_date(buf, d); }
-        (Datum::Time(t), _) => { strconv::format_time(buf, t); }
-        (Datum::Timestamp(ts), _) => { strconv::format_timestamp(buf, &ts); }
-        (Datum::TimestampTz(ts), _) => { strconv::format_timestamptz(buf, &ts); }
-        (Datum::Interval(iv), _) => { strconv::format_interval(buf, iv); }
-        (Datum::Uuid(u), _) => { strconv::format_uuid(buf, u); }
+        (Datum::True, _) => {
+            strconv::format_bool(buf, true);
+        }
+        (Datum::False, _) => {
+            strconv::format_bool(buf, false);
+        }
+        (Datum::Int16(i), _) => {
+            strconv::format_int16(buf, i);
+        }
+        (Datum::Int32(i), _) => {
+            strconv::format_int32(buf, i);
+        }
+        (Datum::Int64(i), _) => {
+            strconv::format_int64(buf, i);
+        }
+        (Datum::UInt8(c), _) => {
+            buf.put_u8(c);
+        }
+        (Datum::UInt16(u), _) => {
+            strconv::format_uint16(buf, u);
+        }
+        (Datum::UInt32(u), _) => {
+            strconv::format_uint32(buf, u);
+        }
+        (Datum::UInt64(u), _) => {
+            strconv::format_uint64(buf, u);
+        }
+        (Datum::Float32(f), _) => {
+            strconv::format_float32(buf, *f);
+        }
+        (Datum::Float64(f), _) => {
+            strconv::format_float64(buf, *f);
+        }
+        (Datum::Numeric(d), _) => {
+            strconv::format_numeric(buf, &d);
+        }
+        (Datum::MzTimestamp(t), _) => {
+            strconv::format_mz_timestamp(buf, t);
+        }
+        (Datum::MzAclItem(mai), _) => {
+            strconv::format_mz_acl_item(buf, mai);
+        }
+        (Datum::AclItem(ai), _) => {
+            strconv::format_acl_item(buf, ai);
+        }
+        (Datum::Date(d), _) => {
+            strconv::format_date(buf, d);
+        }
+        (Datum::Time(t), _) => {
+            strconv::format_time(buf, t);
+        }
+        (Datum::Timestamp(ts), _) => {
+            strconv::format_timestamp(buf, &ts);
+        }
+        (Datum::TimestampTz(ts), _) => {
+            strconv::format_timestamptz(buf, &ts);
+        }
+        (Datum::Interval(iv), _) => {
+            strconv::format_interval(buf, iv);
+        }
+        (Datum::Uuid(u), _) => {
+            strconv::format_uuid(buf, u);
+        }
 
         // String types: write directly from the borrowed Datum without cloning.
         (Datum::String(s), SqlScalarType::Char { length }) => {
@@ -977,11 +1019,8 @@ fn encode_datum_text_direct(
         }
 
         // Bytes: write hex directly from borrowed slice without cloning.
-        (Datum::Bytes(b), _) => { strconv::format_bytes(buf, b); }
-
-        // JSONB: encode directly from datum.
-        (_, SqlScalarType::Jsonb) => {
-            strconv::format_jsonb(buf, JsonbRef::from_datum(datum));
+        (Datum::Bytes(b), _) => {
+            strconv::format_bytes(buf, b);
         }
 
         // Complex types: fall back to Value path (requires recursive encoding).
@@ -1025,9 +1064,7 @@ pub fn encode_data_row_direct(
     dst.put_i16(field_count);
 
     // Encode each field.
-    for ((datum, col_type), (_ty, format)) in
-        row.iter().zip_eq(col_types).zip_eq(encode_state)
-    {
+    for ((datum, col_type), (_ty, format)) in row.iter().zip_eq(col_types).zip_eq(encode_state) {
         if datum.is_null() {
             dst.put_i32(-1);
         } else {
@@ -1047,13 +1084,12 @@ pub fn encode_data_row_direct(
                             "length of encoded data row field does not fit into an i32",
                         )
                     })?;
-                    dst[field_base..field_base + 4]
-                        .copy_from_slice(&field_len.to_be_bytes());
+                    dst[field_base..field_base + 4].copy_from_slice(&field_len.to_be_bytes());
                 }
                 Format::Binary => {
                     // For binary format, fall back to Value path.
-                    let value = Value::from_datum(datum, &col_type.scalar_type)
-                        .expect("non-null datum");
+                    let value =
+                        Value::from_datum(datum, &col_type.scalar_type).expect("non-null datum");
                     let field_base = dst.len();
                     dst.put_u32(0);
                     value.encode_binary(_ty, dst)?;
@@ -1064,8 +1100,7 @@ pub fn encode_data_row_direct(
                             "length of encoded data row field does not fit into an i32",
                         )
                     })?;
-                    dst[field_base..field_base + 4]
-                        .copy_from_slice(&field_len.to_be_bytes());
+                    dst[field_base..field_base + 4].copy_from_slice(&field_len.to_be_bytes());
                 }
             }
         }
@@ -1087,6 +1122,7 @@ pub fn encode_data_row_direct(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::{Row, SqlColumnType};
 
     /// Verifies that we correctly print the chain of parsing errors, all the way through the stack.
     #[mz_ore::test]
@@ -1110,5 +1146,51 @@ mod tests {
             decoded_int_array.map_err(|e| e.to_string()).unwrap_err(),
             "invalid input syntax for type array: Specifying array lower bounds is not supported: \"[0:0]={t}\"".to_string()
         );
+    }
+
+    /// Ensures direct text encoding for JSONB matches the long-standing Value path.
+    ///
+    /// This protects pgwire text output (e.g. pgtest-mz/datums.pt) where JSONB must
+    /// render as JSON text, not as the raw underlying Datum representation.
+    #[mz_ore::test]
+    fn encode_data_row_direct_jsonb_matches_value_text_path() {
+        fn extract_single_text_field_bytes(msg: &[u8]) -> &[u8] {
+            assert_eq!(msg[0], b'D');
+            let msg_len = i32::from_be_bytes(msg[1..5].try_into().expect("valid len"));
+            let msg_len = usize::try_from(msg_len).expect("message length must be non-negative");
+            assert_eq!(msg_len + 1, msg.len());
+            let ncols = i16::from_be_bytes(msg[5..7].try_into().expect("valid col count"));
+            assert_eq!(ncols, 1);
+            let field_len = i32::from_be_bytes(msg[7..11].try_into().expect("valid field len"));
+            let field_len = usize::try_from(field_len).expect("field length must be non-negative");
+            assert_eq!(11 + field_len, msg.len());
+            &msg[11..]
+        }
+
+        let col_type = SqlColumnType {
+            scalar_type: SqlScalarType::Jsonb,
+            nullable: false,
+        };
+        let encode_state = [(Type::Jsonb, Format::Text)];
+
+        for datum in SqlScalarType::Jsonb.interesting_datums() {
+            let row = Row::pack_slice(&[datum]);
+
+            let mut direct = BytesMut::new();
+            encode_data_row_direct(
+                &row,
+                std::slice::from_ref(&col_type),
+                &encode_state,
+                &mut direct,
+            )
+            .expect("direct encoding");
+
+            let mut expected = BytesMut::new();
+            Value::from_datum(datum, &SqlScalarType::Jsonb)
+                .expect("jsonb value")
+                .encode_text(&mut expected);
+
+            assert_eq!(extract_single_text_field_bytes(&direct), &expected[..]);
+        }
     }
 }

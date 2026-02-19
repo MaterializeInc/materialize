@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use std::{iter, mem};
 
 use base64::prelude::*;
-use bytes::BytesMut;
 use byteorder::{ByteOrder, NetworkEndian};
+use bytes::BytesMut;
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
@@ -2363,7 +2363,6 @@ where
             .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
             .zip_eq(result_formats)
             .collect();
-        self.conn.set_encode_state(encode_state.clone());
 
         let mut total_sent_rows = 0;
         let mut total_sent_bytes = 0;
@@ -2440,10 +2439,8 @@ where
                             &encode_state,
                             &mut row_buf,
                         )?;
-                        self.send(BackendMessage::PreEncoded(
-                            row_buf.split().freeze(),
-                        ))
-                        .await?;
+                        self.send(BackendMessage::PreEncoded(row_buf.split().freeze()))
+                            .await?;
                     }
 
                     total_sent_rows += sent_rows;

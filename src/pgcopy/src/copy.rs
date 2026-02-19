@@ -14,8 +14,7 @@ use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
 use mz_repr::{
-    Datum, RelationDesc, Row, RowRef, SharedRow, SqlColumnType, SqlRelationType,
-    SqlScalarType,
+    Datum, RelationDesc, Row, RowRef, SharedRow, SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use proptest::prelude::{Arbitrary, any};
 use proptest::strategy::{BoxedStrategy, Strategy};
@@ -75,7 +74,7 @@ fn encode_copy_row_text(
 ) -> Result<(), io::Error> {
     let null = null.as_bytes();
     let mut buf = BytesMut::new();
-    for (idx, (datum, col_type)) in row.iter().zip(typ.column_types.iter()).enumerate() {
+    for (idx, (datum, col_type)) in row.iter().zip_eq(typ.column_types.iter()).enumerate() {
         if idx > 0 {
             out.push(*delimiter);
         }
@@ -86,7 +85,10 @@ fn encode_copy_row_text(
             mz_pgrepr::encode_datum_text_direct(datum, &col_type.scalar_type, &mut buf);
             // Fast path: if the encoded value contains no special characters
             // (common for numbers, dates, timestamps, etc.), copy directly.
-            if buf.iter().any(|b| matches!(b, b'\\' | b'\n' | b'\r' | b'\t')) {
+            if buf
+                .iter()
+                .any(|b| matches!(b, b'\\' | b'\n' | b'\r' | b'\t'))
+            {
                 for b in &buf {
                     match b {
                         b'\\' => out.extend(b"\\\\"),
@@ -120,7 +122,7 @@ fn encode_copy_row_csv(
     let null = null.as_bytes();
     let is_special = |c: &u8| *c == *delim || *c == *quote || *c == b'\r' || *c == b'\n';
     let mut buf = BytesMut::new();
-    for (idx, (datum, col_type)) in row.iter().zip(typ.column_types.iter()).enumerate() {
+    for (idx, (datum, col_type)) in row.iter().zip_eq(typ.column_types.iter()).enumerate() {
         if idx > 0 {
             out.push(*delim);
         }
@@ -286,8 +288,7 @@ impl<'a> CopyTextFormatParser<'a> {
             // Find the next special character using SIMD-accelerated search.
             // This skips over normal bytes (letters, digits, etc.) at ~16-32
             // bytes per CPU cycle instead of checking each byte individually.
-            let offset = memchr::memchr3(delim, b'\n', b'\\', remaining)
-                .unwrap_or(remaining.len());
+            let offset = memchr::memchr3(delim, b'\n', b'\\', remaining).unwrap_or(remaining.len());
 
             // Advance past all normal bytes
             self.position += offset;
@@ -598,15 +599,12 @@ pub fn decode_copy_format_text(
                 }
                 let raw_value = parser.consume_raw_value()?;
                 if let Some(raw_value) = raw_value {
-                    let s = std::str::from_utf8(raw_value).map_err(|e| {
-                        io::Error::new(io::ErrorKind::InvalidData, e)
+                    let s = std::str::from_utf8(raw_value)
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                    mz_pgrepr::Value::decode_text_into_row(typ, s, &mut packer).map_err(|err| {
+                        let msg = format!("unable to decode column: {}", err);
+                        io::Error::new(io::ErrorKind::InvalidData, msg)
                     })?;
-                    mz_pgrepr::Value::decode_text_into_row(typ, s, &mut packer).map_err(
-                        |err| {
-                            let msg = format!("unable to decode column: {}", err);
-                            io::Error::new(io::ErrorKind::InvalidData, msg)
-                        },
-                    )?;
                 } else {
                     packer.push(Datum::Null);
                 }

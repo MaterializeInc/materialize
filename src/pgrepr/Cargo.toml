@@ -34,7 +34,3 @@ normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
-
-[[bench]]
-name = "datarow_encode"
-harness = false

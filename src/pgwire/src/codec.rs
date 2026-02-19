@@ -20,7 +20,6 @@ use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
 use bytesize::ByteSize;
 use futures::{SinkExt, TryStreamExt, sink};
-use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
@@ -130,21 +129,6 @@ where
         self.inner.flush().await
     }
 
-    /// Injects state that affects how certain backend messages are encoded.
-    ///
-    /// Specifically, the encoding of `BackendMessage::DataRow` depends upon the
-    /// types of the datums in the row. To avoid including the same type
-    /// information in each message, we use this side channel to install the
-    /// type information in the codec before sending any data row messages. This
-    /// violates the abstraction boundary a bit but results in much better
-    /// performance.
-    pub fn set_encode_state(
-        &mut self,
-        encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
-    ) {
-        self.inner.get_mut().codec_mut().encode_state = encode_state;
-    }
-
     /// Enables or disables copy mode on the codec.
     ///
     /// When copy mode is enabled, the aggregate buffer size check in the
@@ -216,7 +200,6 @@ where
 
 struct Codec {
     decode_state: DecodeState,
-    encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
     /// When true, skip the aggregate buffer size check in `decode()`.
     /// During COPY FROM STDIN, many small CopyData frames accumulate in the
     /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
@@ -230,7 +213,6 @@ impl Codec {
     pub fn new() -> Codec {
         Codec {
             decode_state: DecodeState::Head,
-            encode_state: vec![],
             in_copy_mode: false,
         }
     }
@@ -246,12 +228,15 @@ impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
-        // PreEncoded messages contain complete wire bytes (type byte, length,
-        // and content). Write them directly and return early.
-        if let BackendMessage::PreEncoded(bytes) = msg {
-            dst.extend_from_slice(&bytes);
-            return Ok(());
-        }
+        let msg = match msg {
+            // PreEncoded messages contain complete wire bytes (type byte,
+            // length, and content). Write them directly and return early.
+            BackendMessage::PreEncoded(bytes) => {
+                dst.extend_from_slice(&bytes);
+                return Ok(());
+            }
+            msg => msg,
+        };
 
         // Write type byte.
         let byte = match &msg {
@@ -261,7 +246,6 @@ impl Encoder<BackendMessage> for Codec {
             | BackendMessage::AuthenticationSASLContinue(_)
             | BackendMessage::AuthenticationSASLFinal(_) => b'R',
             BackendMessage::RowDescription(_) => b'T',
-            BackendMessage::DataRow(_) => b'D',
             BackendMessage::CommandComplete { .. } => b'C',
             BackendMessage::EmptyQueryResponse => b'I',
             BackendMessage::ReadyForQuery(_) => b'Z',
@@ -284,7 +268,7 @@ impl Encoder<BackendMessage> for Codec {
             BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
             BackendMessage::CopyDone => b'c',
-            BackendMessage::PreEncoded(_) => unreachable!(),
+            BackendMessage::PreEncoded(_) => unreachable!("handled above"),
         };
         dst.put_u8(byte);
 
@@ -358,26 +342,6 @@ impl Encoder<BackendMessage> for Codec {
                     dst.put_format_i16(f.format);
                 }
             }
-            BackendMessage::DataRow(fields) => {
-                dst.put_length_i16(fields.len())?;
-                for (f, (ty, format)) in fields.iter().zip_eq(&self.encode_state) {
-                    if let Some(f) = f {
-                        let base = dst.len();
-                        dst.put_u32(0);
-                        f.encode(ty, *format, dst)?;
-                        let len = dst.len() - base - 4;
-                        let len = i32::try_from(len).map_err(|_| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                "length of encoded data row field does not fit into an i32",
-                            )
-                        })?;
-                        dst[base..base + 4].copy_from_slice(&len.to_be_bytes());
-                    } else {
-                        dst.put_i32(-1);
-                    }
-                }
-            }
             BackendMessage::CommandComplete { tag } => {
                 dst.put_string(&tag);
             }
@@ -435,7 +399,6 @@ impl Encoder<BackendMessage> for Codec {
                 }
                 dst.put_u8(b'\0');
             }
-            BackendMessage::PreEncoded(_) => unreachable!("handled above"),
         }
 
         let len = dst.len() - base;
