@@ -181,14 +181,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         non_default_testdrive_vars = []
 
-        minio_addr = c.port("minio", "9000")
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=f"http://localhost:{minio_addr}",
-            aws_access_key_id="minioadmin",
-            aws_secret_access_key="minioadmin",
-        )
-        generate_parquet_files(s3)
+        generate_parquet_files()
 
         if args.replicas > 1:
             c.sql("DROP CLUSTER quickstart CASCADE", user="mz_system", port=6877)
