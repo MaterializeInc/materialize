@@ -136,6 +136,9 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
         typ: SqlRelationType,
         monotonic: bool,
     ) {
+        for key in desc.key.iter() {
+            key.assert_repr_canonicalized();
+        }
         self.index_imports.insert(
             id,
             IndexImport {

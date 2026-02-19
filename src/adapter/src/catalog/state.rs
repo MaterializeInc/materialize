@@ -1418,7 +1418,15 @@ impl CatalogState {
                 create_sql: index.create_sql,
                 global_id,
                 on: index.on,
-                keys: index.keys.into(),
+                keys: index
+                    .keys
+                    .into_iter()
+                    .map(|mut k| {
+                        k.repr_canonicalize();
+                        k
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
                 conn_id: None,
                 resolved_ids,
                 cluster_id: index.cluster_id,
