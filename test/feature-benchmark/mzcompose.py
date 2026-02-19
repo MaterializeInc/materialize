@@ -96,7 +96,6 @@ from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
-from materialize.mzcompose.services.cockroach import Cockroach
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
@@ -145,7 +144,6 @@ SERVICES = [
     KafkaService(),
     SchemaRegistry(),
     Redpanda(),
-    Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
     Azurite(),
     KgenService(),
@@ -249,9 +247,7 @@ def run_one_scenario(
                 clusterd_image, size, additional_system_parameter_defaults
             )
 
-        start_overridden_mz_clusterd_and_cockroach(
-            c, mz, clusterd, instance, balancerd, first_run
-        )
+        start_overridden_mz_clusterd(c, mz, clusterd, instance, balancerd, first_run)
         first_run = False
 
         testdrive_entrypoint_extra = []
@@ -268,8 +264,6 @@ def run_one_scenario(
                 materialize_url=f"postgres://materialize@{entrypoint_host}:6875",
                 default_timeout=default_timeout,
                 materialize_params={"statement_timeout": f"'{default_timeout}'"},
-                metadata_store="cockroach",
-                external_blob_store=True,
                 blob_store_is_azure=args.azurite,
                 entrypoint_extra=testdrive_entrypoint_extra,
             )
@@ -326,8 +320,8 @@ def run_one_scenario(
                         aggregation.name(),
                     )
 
-        c.kill("cockroach", "materialized", "clusterd", "testdrive")
-        c.rm("cockroach", "materialized", "clusterd", "testdrive")
+        c.kill("materialized", "clusterd", "testdrive")
+        c.rm("materialized", "clusterd", "testdrive")
         c.rm_volumes("mzdata")
 
         if early_abort:
@@ -368,9 +362,7 @@ def create_mz_service(
         environment_id=f"local-az1-{uuid.uuid4()}-0",
         soft_assertions=False,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
-        external_metadata_store=True,
-        metadata_store="cockroach",
-        external_blob_store=True,
+        external_blob_store=azurite,
         blob_store_is_azure=azurite,
         sanity_restart=False,
         support_external_clusterd=True,
@@ -385,7 +377,7 @@ def create_clusterd_service(
     return Clusterd(image=clusterd_image)
 
 
-def start_overridden_mz_clusterd_and_cockroach(
+def start_overridden_mz_clusterd(
     c: Composition,
     mz: Materialized,
     clusterd: Clusterd,
@@ -395,7 +387,6 @@ def start_overridden_mz_clusterd_and_cockroach(
 ) -> None:
     with c.override(mz, clusterd):
         c.up(
-            "cockroach",
             "materialized",
             "clusterd",
             *(["balancerd"] if balancerd else []),
