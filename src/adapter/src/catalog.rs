@@ -2123,7 +2123,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn system_vars_mut(&mut self) -> &mut SystemVars {
-        &mut self.state.to_mut().system_configuration
+        Arc::make_mut(&mut self.state.to_mut().system_configuration)
     }
 
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {

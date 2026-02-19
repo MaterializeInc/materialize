@@ -5554,6 +5554,7 @@ dependencies = [
  "hex",
  "http 1.4.0",
  "hyper-tls 0.5.0",
+ "imbl",
  "ipnet",
  "itertools 0.14.0",
  "launchdarkly-server-sdk",

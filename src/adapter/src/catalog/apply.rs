@@ -410,27 +410,37 @@ impl CatalogState {
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
     ) {
-        let (schemas_by_id, schemas_by_name) = match &schema.database_id {
+        match &schema.database_id {
             Some(database_id) => {
                 let db = self
                     .database_by_id
                     .get_mut(database_id)
                     .expect("catalog out of sync");
-                (&mut db.schemas_by_id, &mut db.schemas_by_name)
+                apply_inverted_lookup(&mut db.schemas_by_name, &schema.name, schema.id, diff);
+                apply_with_update(
+                    &mut db.schemas_by_id,
+                    schema,
+                    |schema| schema.id,
+                    diff,
+                    &mut retractions.schemas,
+                );
             }
-            None => (
-                &mut self.ambient_schemas_by_id,
-                &mut self.ambient_schemas_by_name,
-            ),
-        };
-        apply_inverted_lookup(schemas_by_name, &schema.name, schema.id, diff);
-        apply_with_update(
-            schemas_by_id,
-            schema,
-            |schema| schema.id,
-            diff,
-            &mut retractions.schemas,
-        );
+            None => {
+                apply_inverted_lookup(
+                    &mut self.ambient_schemas_by_name,
+                    &schema.name,
+                    schema.id,
+                    diff,
+                );
+                apply_with_update(
+                    &mut self.ambient_schemas_by_id,
+                    schema,
+                    |schema| schema.id,
+                    diff,
+                    &mut retractions.schemas,
+                );
+            }
+        }
     }
 
     #[instrument(level = "debug")]
@@ -441,11 +451,9 @@ impl CatalogState {
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
-            StateDiff::Addition => self
-                .default_privileges
+            StateDiff::Addition => Arc::make_mut(&mut self.default_privileges)
                 .grant(default_privilege.object, default_privilege.acl_item),
-            StateDiff::Retraction => self
-                .default_privileges
+            StateDiff::Retraction => Arc::make_mut(&mut self.default_privileges)
                 .revoke(&default_privilege.object, &default_privilege.acl_item),
         }
     }
@@ -458,8 +466,12 @@ impl CatalogState {
         _retractions: &mut InProgressRetractions,
     ) {
         match diff {
-            StateDiff::Addition => self.system_privileges.grant(system_privilege),
-            StateDiff::Retraction => self.system_privileges.revoke(&system_privilege),
+            StateDiff::Addition => {
+                Arc::make_mut(&mut self.system_privileges).grant(system_privilege)
+            }
+            StateDiff::Retraction => {
+                Arc::make_mut(&mut self.system_privileges).revoke(&system_privilege)
+            }
         }
     }
 
@@ -1209,7 +1221,7 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let prev = self.comments.update_comment(
+                let prev = Arc::make_mut(&mut self.comments).update_comment(
                     comment.object_id,
                     comment.sub_component,
                     Some(comment.comment),
@@ -1220,9 +1232,11 @@ impl CatalogState {
                 );
             }
             StateDiff::Retraction => {
-                let prev =
-                    self.comments
-                        .update_comment(comment.object_id, comment.sub_component, None);
+                let prev = Arc::make_mut(&mut self.comments).update_comment(
+                    comment.object_id,
+                    comment.sub_component,
+                    None,
+                );
                 assert_eq!(
                     prev,
                     Some(comment.comment),
@@ -1269,7 +1283,7 @@ impl CatalogState {
         _retractions: &mut InProgressRetractions,
     ) {
         apply_inverted_lookup(
-            &mut self.storage_metadata.collection_metadata,
+            &mut Arc::make_mut(&mut self.storage_metadata).collection_metadata,
             &storage_collection_metadata.id,
             storage_collection_metadata.shard,
             diff,
@@ -1285,8 +1299,7 @@ impl CatalogState {
     ) {
         match diff {
             StateDiff::Addition => {
-                let newly_inserted = self
-                    .storage_metadata
+                let newly_inserted = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .insert(unfinalized_shard.shard);
                 assert!(
@@ -1295,8 +1308,7 @@ impl CatalogState {
                 );
             }
             StateDiff::Retraction => {
-                let removed = self
-                    .storage_metadata
+                let removed = Arc::make_mut(&mut self.storage_metadata)
                     .unfinalized_shards
                     .remove(&unfinalized_shard.shard);
                 assert!(
@@ -1910,7 +1922,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn insert_system_configuration(&mut self, name: &str, value: VarInput) -> Result<bool, Error> {
-        Ok(self.system_configuration.set(name, value)?)
+        Ok(Arc::make_mut(&mut self.system_configuration).set(name, value)?)
     }
 
     /// Reset system configuration `name`.
@@ -1918,7 +1930,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
-        Ok(self.system_configuration.reset(name)?)
+        Ok(Arc::make_mut(&mut self.system_configuration).reset(name)?)
     }
 }
 
@@ -2424,8 +2436,8 @@ impl ApplyState {
     ) {
         match self {
             Self::BuiltinViewAdditions(builtin_view_additions) => {
-                let restore = state.system_configuration.clone();
-                state.system_configuration.enable_for_item_parsing();
+                let restore = Arc::clone(&state.system_configuration);
+                Arc::make_mut(&mut state.system_configuration).enable_for_item_parsing();
                 let builtin_table_updates = CatalogState::parse_builtin_views(
                     state,
                     builtin_view_additions,
@@ -2493,11 +2505,36 @@ impl ApplyState {
     }
 }
 
+/// Trait abstracting over map operations needed by [`apply_inverted_lookup`] and
+/// [`apply_with_update`]. Both [`BTreeMap`] and [`imbl::OrdMap`] implement this.
+trait MutableMap<K, V> {
+    fn insert(&mut self, key: K, value: V) -> Option<V>;
+    fn remove(&mut self, key: &K) -> Option<V>;
+}
+
+impl<K: Ord, V> MutableMap<K, V> for BTreeMap<K, V> {
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        BTreeMap::insert(self, key, value)
+    }
+    fn remove(&mut self, key: &K) -> Option<V> {
+        BTreeMap::remove(self, key)
+    }
+}
+
+impl<K: Ord + Clone, V: Clone> MutableMap<K, V> for imbl::OrdMap<K, V> {
+    fn insert(&mut self, key: K, value: V) -> Option<V> {
+        imbl::OrdMap::insert(self, key, value)
+    }
+    fn remove(&mut self, key: &K) -> Option<V> {
+        imbl::OrdMap::remove(self, key)
+    }
+}
+
 /// Helper method to updated inverted lookup maps. The keys are generally names and the values are
 /// generally IDs.
 ///
 /// Importantly, when retracting it's expected that the existing value will match `value` exactly.
-fn apply_inverted_lookup<K, V>(map: &mut BTreeMap<K, V>, key: &K, value: V, diff: StateDiff)
+fn apply_inverted_lookup<K, V>(map: &mut impl MutableMap<K, V>, key: &K, value: V, diff: StateDiff)
 where
     K: Ord + Clone + Debug,
     V: PartialEq + Debug,
@@ -2524,7 +2561,7 @@ where
 /// Helper method to update catalog state, that may need to be updated from a previously retracted
 /// object.
 fn apply_with_update<K, V, D>(
-    map: &mut BTreeMap<K, V>,
+    map: &mut impl MutableMap<K, V>,
     durable: D,
     key_fn: impl FnOnce(&D) -> K,
     diff: StateDiff,
