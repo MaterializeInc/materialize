@@ -1463,7 +1463,7 @@ CREATE MATERIALIZED VIEW json_mv AS (
 
 # Regression test for issue MaterializeInc/database-issues#9757
 
-query error db error: ERROR: number of array elements \(1\) does not match declared cardinality \(0\)
+query error number of array elements \(1\) does not match declared cardinality \(0\)
 SELECT ARRAY[NULL::BIGINT[], ARRAY[1::BIGINT, 2::BIGINT]];
 
 query T
@@ -1471,5 +1471,5 @@ SELECT ARRAY[NULL::BIGINT[], ARRAY[]::BIGINT[], NULL::BIGINT[]];
 ----
 {}
 
-query error db error: ERROR: number of array elements \(3\) does not match declared cardinality \(2\)
+query error number of array elements \(3\) does not match declared cardinality \(2\)
 SELECT ARRAY[ARRAY[1, 2], ARRAY[3, 4, 5], ARRAY[6]];
