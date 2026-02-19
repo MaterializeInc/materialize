@@ -141,9 +141,7 @@ def generate_parquet_files(dir = MZ_ROOT / "test" / "testdrive") -> None:
     ]
     table = pa.Table.from_arrays(arrays, names=field_names)
 
-    bucket = "copyfroms3"
-
     for compression in ["none", "snappy", "gzip", "brotli", "zstd", "lz4"]:
         suffix = "" if compression == "none" else f".{compression}"
-        local_file = MZ_ROOT / "test" / "testdrive" / f"types.parquet{suffix}"
+        local_file = dir / f"types.parquet{suffix}"
         pq.write_table(table, local_file, compression=compression)  # type: ignore
