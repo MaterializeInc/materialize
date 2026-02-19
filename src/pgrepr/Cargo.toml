@@ -26,15 +26,8 @@ postgres-types = { version = "0.2.11", features = [
 uuid = "1.19.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
-[dev-dependencies]
-criterion = { version = "0.5.1", features = ["html_reports"] }
-
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
 [features]
 default = ["workspace-hack"]
-
-[[bench]]
-name = "datarow_encode"
-harness = false

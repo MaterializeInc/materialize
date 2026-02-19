@@ -32,4 +32,4 @@ pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;
 pub use value::record::Record;
 pub use value::unsigned::{UInt2, UInt4, UInt8};
-pub use value::{Value, encode_data_row_direct, values_from_row};
+pub use value::{Value, values_from_row};

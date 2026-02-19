@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use std::{iter, mem};
 
 use base64::prelude::*;
-use bytes::BytesMut;
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
@@ -2312,14 +2311,15 @@ where
             }
         }
 
-        let encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)> = row_desc
-            .typ()
-            .column_types
-            .iter()
-            .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
-            .zip_eq(result_formats)
-            .collect();
-        self.conn.set_encode_state(encode_state.clone());
+        self.conn.set_encode_state(
+            row_desc
+                .typ()
+                .column_types
+                .iter()
+                .map(|ty| mz_pgrepr::Type::from(&ty.scalar_type))
+                .zip_eq(result_formats)
+                .collect(),
+        );
 
         let mut total_sent_rows = 0;
         let mut total_sent_bytes = 0;
@@ -2375,32 +2375,26 @@ where
                         wait_once = false;
                     }
 
-                    // Send a portion of the rows, encoding DataRow messages
-                    // directly from datums to wire bytes. This avoids the
-                    // per-row Vec<Option<Value>> allocation and string/bytes
-                    // cloning of the values_from_row() path.
+                    // Send a portion of the rows.
                     let mut sent_rows = 0;
                     let mut sent_bytes = 0;
-                    let col_types = &row_desc.typ().column_types;
-                    let mut row_buf = BytesMut::with_capacity(256);
-                    while sent_rows < want_rows {
-                        let Some(row) = batch_rows.next() else {
-                            break;
-                        };
-                        sent_bytes += row.byte_len();
-                        sent_rows += 1;
-                        row_buf.clear();
-                        mz_pgrepr::encode_data_row_direct(
-                            row,
-                            col_types,
-                            &encode_state,
-                            &mut row_buf,
-                        )?;
-                        self.send(BackendMessage::PreEncoded(
-                            row_buf.split().freeze(),
-                        ))
-                        .await?;
-                    }
+                    let messages = (&mut batch_rows)
+                        // TODO(parkmycar): This is a fair bit of juggling between iterator types
+                        // to count the total number of bytes. Alternatively we could track the
+                        // total sent bytes in this .map(...) call, but having side effects in map
+                        // is a code smell.
+                        .map(|row| {
+                            let row_len = row.byte_len();
+                            let values = mz_pgrepr::values_from_row(row, row_desc.typ());
+                            (row_len, BackendMessage::DataRow(values))
+                        })
+                        .inspect(|(row_len, _)| {
+                            sent_bytes += row_len;
+                            sent_rows += 1
+                        })
+                        .map(|(_row_len, row)| row)
+                        .take(want_rows);
+                    self.send_all(messages).await?;
 
                     total_sent_rows += sent_rows;
                     total_sent_bytes += sent_bytes;
