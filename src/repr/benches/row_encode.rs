@@ -35,12 +35,12 @@ fn bench_encode_int64(c: &mut Criterion) {
     let datums_per_row: Vec<Vec<Datum>> = (0..NUM_ROWS)
         .map(|i| {
             vec![
-                Datum::Int64(i as i64),              // small positive
-                Datum::Int64(-(i as i64) - 1),       // small negative
-                Datum::Int64(i as i64 * 100_000),    // medium
+                Datum::Int64(i as i64),                 // small positive
+                Datum::Int64(-(i as i64) - 1),          // small negative
+                Datum::Int64(i as i64 * 100_000),       // medium
                 Datum::Int64(i as i64 * 1_000_000_000), // large
-                Datum::Int64(127 - (i as i64 % 255)), // around 1-byte boundary
-                Datum::Int64(32000 + i as i64),       // around 2-byte boundary
+                Datum::Int64(127 - (i as i64 % 255)),   // around 1-byte boundary
+                Datum::Int64(32000 + i as i64),         // around 2-byte boundary
             ]
         })
         .collect();
@@ -123,9 +123,7 @@ fn bench_encode_string(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_string");
 
     // Short strings (< TINY = 256 bytes) — most common case
-    let short_strings: Vec<String> = (0..NUM_ROWS)
-        .map(|i| format!("row_{}_value", i))
-        .collect();
+    let short_strings: Vec<String> = (0..NUM_ROWS).map(|i| format!("row_{}_value", i)).collect();
     let datums_per_row: Vec<Vec<Datum>> = short_strings
         .iter()
         .map(|s| {
@@ -259,9 +257,7 @@ fn bench_encode_mixed(c: &mut Criterion) {
         .unwrap();
     let ts = CheckedTimestamp::from_timestamplike(base_ts).unwrap();
 
-    let strings: Vec<String> = (0..NUM_ROWS)
-        .map(|i| format!("user_{}", i))
-        .collect();
+    let strings: Vec<String> = (0..NUM_ROWS).map(|i| format!("user_{}", i)).collect();
 
     let datums_per_row: Vec<Vec<Datum>> = (0..NUM_ROWS)
         .map(|i| {

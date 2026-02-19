@@ -460,18 +460,16 @@ where
         } else {
             None
         };
-        let eval_then_project_unordered =
-            if pure_project.is_none() && eval_then_project.is_none() {
-                mfp.has_input_projection()
-            } else {
-                None
-            };
-        let mfp_needed =
-            if eval_then_project.is_some() || eval_then_project_unordered.is_some() {
-                mfp.eval_needed_columns()
-            } else {
-                mfp.needed_input_columns()
-            };
+        let eval_then_project_unordered = if pure_project.is_none() && eval_then_project.is_none() {
+            mfp.has_input_projection()
+        } else {
+            None
+        };
+        let mfp_needed = if eval_then_project.is_some() || eval_then_project_unordered.is_some() {
+            mfp.eval_needed_columns()
+        } else {
+            mfp.needed_input_columns()
+        };
 
         while let Some(event) = record_chunk_handle.next().await {
             let (capability, maybe_chunks) = match event {
@@ -502,35 +500,29 @@ where
                             Ok(Some(row_buf.clone()))
                         } else if let Some(projection) = eval_then_project {
                             // Evaluate predicates with minimal decode, then byte-project (sorted).
-                            let mut datums =
-                                datum_vec.borrow_with_selective(&row, &mfp_needed);
-                            mfp
-                                .evaluate_into_project(
-                                    &mut *datums,
-                                    &row_arena,
-                                    row.as_ref(),
-                                    projection,
-                                    &mut row_buf,
-                                )
-                                .map(|row| row.cloned())
+                            let mut datums = datum_vec.borrow_with_selective(&row, &mfp_needed);
+                            mfp.evaluate_into_project(
+                                &mut *datums,
+                                &row_arena,
+                                row.as_ref(),
+                                projection,
+                                &mut row_buf,
+                            )
+                            .map(|row| row.cloned())
                         } else if let Some(projection) = eval_then_project_unordered {
                             // Evaluate predicates with minimal decode, then byte-project (unsorted).
-                            let mut datums =
-                                datum_vec.borrow_with_selective(&row, &mfp_needed);
-                            mfp
-                                .evaluate_into_project_unordered(
-                                    &mut *datums,
-                                    &row_arena,
-                                    row.as_ref(),
-                                    projection,
-                                    &mut row_buf,
-                                )
-                                .map(|row| row.cloned())
+                            let mut datums = datum_vec.borrow_with_selective(&row, &mfp_needed);
+                            mfp.evaluate_into_project_unordered(
+                                &mut *datums,
+                                &row_arena,
+                                row.as_ref(),
+                                projection,
+                                &mut row_buf,
+                            )
+                            .map(|row| row.cloned())
                         } else {
-                            let mut datums =
-                                datum_vec.borrow_with_selective(&row, &mfp_needed);
-                            mfp
-                                .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
+                            let mut datums = datum_vec.borrow_with_selective(&row, &mfp_needed);
+                            mfp.evaluate_into(&mut *datums, &row_arena, &mut row_buf)
                                 .map(|row| row.cloned())
                         };
 

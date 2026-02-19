@@ -665,9 +665,7 @@ impl PendingWork {
                             let eval_result = {
                                 let arena = mz_repr::RowArena::new();
                                 let mut datums_local = match mfp_needed_columns {
-                                    Some(needed) => {
-                                        datum_vec.borrow_with_selective(&row, needed)
-                                    }
+                                    Some(needed) => datum_vec.borrow_with_selective(&row, needed),
                                     None => datum_vec.borrow_with(&row),
                                 };
                                 mfp.evaluate_into_project(
@@ -693,11 +691,7 @@ impl PendingWork {
                                 Ok(true) => {
                                     let mut emit_time = *self.capability.time();
                                     emit_time.0 = time;
-                                    session.give((
-                                        Ok(row_builder.clone()),
-                                        emit_time,
-                                        diff.into(),
-                                    ));
+                                    session.give((Ok(row_builder.clone()), emit_time, diff.into()));
                                     *work += 1;
                                 }
                                 Ok(false) => {} // predicate filtered out
@@ -716,9 +710,7 @@ impl PendingWork {
                             let eval_result = {
                                 let arena = mz_repr::RowArena::new();
                                 let mut datums_local = match mfp_needed_columns {
-                                    Some(needed) => {
-                                        datum_vec.borrow_with_selective(&row, needed)
-                                    }
+                                    Some(needed) => datum_vec.borrow_with_selective(&row, needed),
                                     None => datum_vec.borrow_with(&row),
                                 };
                                 mfp.evaluate_into_project_unordered(
@@ -744,11 +736,7 @@ impl PendingWork {
                                 Ok(true) => {
                                     let mut emit_time = *self.capability.time();
                                     emit_time.0 = time;
-                                    session.give((
-                                        Ok(row_builder.clone()),
-                                        emit_time,
-                                        diff.into(),
-                                    ));
+                                    session.give((Ok(row_builder.clone()), emit_time, diff.into()));
                                     *work += 1;
                                 }
                                 Ok(false) => {} // predicate filtered out
@@ -761,9 +749,7 @@ impl PendingWork {
                         }
                         let arena = mz_repr::RowArena::new();
                         let mut datums_local = match mfp_needed_columns {
-                            Some(needed) => {
-                                datum_vec.borrow_with_selective(&row, needed)
-                            }
+                            Some(needed) => datum_vec.borrow_with_selective(&row, needed),
                             None => datum_vec.borrow_with(&row),
                         };
                         for result in mfp.evaluate(

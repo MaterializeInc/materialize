@@ -26,51 +26,11 @@ name = "data_types"
 harness = false
 
 [[bench]]
-name = "numeric_cast"
-harness = false
-
-[[bench]]
-name = "timestamp_format"
-harness = false
-
-[[bench]]
-name = "int_format"
-harness = false
-
-[[bench]]
-name = "float_format"
-harness = false
-
-[[bench]]
-name = "bytes_format"
-harness = false
-
-[[bench]]
-name = "interval_format"
-harness = false
-
-[[bench]]
-name = "row_skip"
-harness = false
-
-[[bench]]
-name = "timestamp_read"
-harness = false
-
-[[bench]]
-name = "numeric_format"
-harness = false
-
-[[bench]]
 name = "row_compare"
 harness = false
 
 [[bench]]
 name = "row_aggregate"
-harness = false
-
-[[bench]]
-name = "jsonb_numeric"
 harness = false
 
 [[bench]]

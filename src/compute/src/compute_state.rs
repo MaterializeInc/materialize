@@ -1318,21 +1318,19 @@ impl PersistPeek {
             None
         };
         // Check for unsorted input-only projection (arbitrary column orderings).
-        let eval_then_project_unordered =
-            if pure_project.is_none() && eval_then_project.is_none() {
-                mfp_plan.has_input_projection()
-            } else {
-                None
-            };
+        let eval_then_project_unordered = if pure_project.is_none() && eval_then_project.is_none() {
+            mfp_plan.has_input_projection()
+        } else {
+            None
+        };
         // Pre-compute which input columns the MFP needs for selective decoding.
         // When using eval_then_project, only decode columns needed for
         // expressions/predicates (not the projection columns).
-        let mfp_needed =
-            if eval_then_project.is_some() || eval_then_project_unordered.is_some() {
-                mfp_plan.eval_needed_columns()
-            } else {
-                mfp_plan.needed_input_columns()
-            };
+        let mfp_needed = if eval_then_project.is_some() || eval_then_project_unordered.is_some() {
+            mfp_plan.eval_needed_columns()
+        } else {
+            mfp_plan.needed_input_columns()
+        };
 
         let literal_len = match &literal_constraint {
             None => 0,
@@ -1375,8 +1373,7 @@ impl PersistPeek {
                     Some(row_builder.clone())
                 } else if let Some(projection) = eval_then_project {
                     // Evaluate predicates/expressions, then byte-project (sorted).
-                    let mut datum_local =
-                        datum_vec.borrow_with_selective(&row, &mfp_needed);
+                    let mut datum_local = datum_vec.borrow_with_selective(&row, &mfp_needed);
                     mfp_plan
                         .evaluate_into_project(
                             &mut datum_local,
@@ -1389,8 +1386,7 @@ impl PersistPeek {
                         .map_err(|e| e.to_string())?
                 } else if let Some(projection) = eval_then_project_unordered {
                     // Evaluate predicates/expressions, then byte-project (unsorted).
-                    let mut datum_local =
-                        datum_vec.borrow_with_selective(&row, &mfp_needed);
+                    let mut datum_local = datum_vec.borrow_with_selective(&row, &mfp_needed);
                     mfp_plan
                         .evaluate_into_project_unordered(
                             &mut datum_local,
@@ -1402,8 +1398,7 @@ impl PersistPeek {
                         .map(|row| row.cloned())
                         .map_err(|e| e.to_string())?
                 } else {
-                    let mut datum_local =
-                        datum_vec.borrow_with_selective(&row, &mfp_needed);
+                    let mut datum_local = datum_vec.borrow_with_selective(&row, &mfp_needed);
                     mfp_plan
                         .evaluate_into(&mut datum_local, &arena, &mut row_builder)
                         .map(|row| row.cloned())

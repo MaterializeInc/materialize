@@ -259,9 +259,7 @@ fn bench_hash_key(c: &mut Criterion) {
     });
 
     // Batch: initial creation, 10k rows, 10-col int key
-    let keys_10k: Vec<Row> = (0..10000)
-        .map(|_| Row::pack(&key10_datums))
-        .collect();
+    let keys_10k: Vec<Row> = (0..10000).map(|_| Row::pack(&key10_datums)).collect();
     group.bench_function("batch_10k_create_old_int10", |b| {
         b.iter(|| {
             for (i, key) in keys_10k.iter().enumerate() {

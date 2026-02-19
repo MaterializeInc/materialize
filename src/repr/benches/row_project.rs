@@ -8,7 +8,7 @@
 //! The `project_onto` method copies encoded column bytes directly from the
 //! source row, avoiding per-datum type matching and re-encoding.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{Datum, DatumVec, Row, RowArena};
 
@@ -218,9 +218,16 @@ fn bench_project_wide_row(c: &mut Criterion) {
 
 /// Simulates the production MFP evaluation path: selective decode + pack projected
 /// datums. This is what `SafeMfpPlan::evaluate_into` does for a pure projection.
-fn mfp_selective_project(row: &Row, needed: &[bool], projection: &[usize], dest: &mut Row, datum_vec: &mut DatumVec) {
+fn mfp_selective_project(
+    row: &Row,
+    needed: &[bool],
+    projection: &[usize],
+    dest: &mut Row,
+    datum_vec: &mut DatumVec,
+) {
     let datums_local = datum_vec.borrow_with_selective(row, needed);
-    dest.packer().extend(projection.iter().map(|&c| datums_local[c]));
+    dest.packer()
+        .extend(projection.iter().map(|&c| datums_local[c]));
 }
 
 /// Build a `needed` bitmask from a projection (marks projected columns as true).
@@ -245,7 +252,13 @@ fn bench_mfp_vs_project_int20(c: &mut Criterion) {
     group.bench_function("mfp_selective_decode", |b| {
         b.iter(|| {
             for row in &rows {
-                mfp_selective_project(black_box(row), &needed, &projection, &mut dest, &mut datum_vec);
+                mfp_selective_project(
+                    black_box(row),
+                    &needed,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
+                );
                 black_box(&dest);
             }
         })
@@ -276,7 +289,13 @@ fn bench_mfp_vs_project_mixed10(c: &mut Criterion) {
     group.bench_function("mfp_selective_decode", |b| {
         b.iter(|| {
             for row in &rows {
-                mfp_selective_project(black_box(row), &needed, &projection, &mut dest, &mut datum_vec);
+                mfp_selective_project(
+                    black_box(row),
+                    &needed,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
+                );
                 black_box(&dest);
             }
         })
@@ -307,7 +326,13 @@ fn bench_mfp_vs_project_numeric5(c: &mut Criterion) {
     group.bench_function("mfp_selective_decode", |b| {
         b.iter(|| {
             for row in &rows {
-                mfp_selective_project(black_box(row), &needed, &projection, &mut dest, &mut datum_vec);
+                mfp_selective_project(
+                    black_box(row),
+                    &needed,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
+                );
                 black_box(&dest);
             }
         })
@@ -338,7 +363,13 @@ fn bench_mfp_vs_project_int50(c: &mut Criterion) {
     group.bench_function("mfp_selective_decode", |b| {
         b.iter(|| {
             for row in &rows {
-                mfp_selective_project(black_box(row), &needed, &projection, &mut dest, &mut datum_vec);
+                mfp_selective_project(
+                    black_box(row),
+                    &needed,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
+                );
                 black_box(&dest);
             }
         })
@@ -434,8 +465,12 @@ fn bench_eval_project_int20(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_old_path(
-                    black_box(row), &needed_old, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_old,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -446,8 +481,12 @@ fn bench_eval_project_int20(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_new_path(
-                    black_box(row), &needed_new, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_new,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -475,8 +514,12 @@ fn bench_eval_project_mixed10(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_old_path(
-                    black_box(row), &needed_old, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_old,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -487,8 +530,12 @@ fn bench_eval_project_mixed10(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_new_path(
-                    black_box(row), &needed_new, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_new,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -516,8 +563,12 @@ fn bench_eval_project_int50(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_old_path(
-                    black_box(row), &needed_old, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_old,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -528,8 +579,12 @@ fn bench_eval_project_int50(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_new_path(
-                    black_box(row), &needed_new, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_new,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -557,8 +612,12 @@ fn bench_eval_project_numeric5(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_old_path(
-                    black_box(row), &needed_old, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_old,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -569,8 +628,12 @@ fn bench_eval_project_numeric5(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_new_path(
-                    black_box(row), &needed_new, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_new,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -716,7 +779,13 @@ fn bench_mfp_vs_unordered_int20(c: &mut Criterion) {
     group.bench_function("mfp_selective_decode", |b| {
         b.iter(|| {
             for row in &rows {
-                mfp_selective_project(black_box(row), &needed, &projection, &mut dest, &mut datum_vec);
+                mfp_selective_project(
+                    black_box(row),
+                    &needed,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
+                );
                 black_box(&dest);
             }
         })
@@ -747,7 +816,13 @@ fn bench_mfp_vs_unordered_mixed10(c: &mut Criterion) {
     group.bench_function("mfp_selective_decode", |b| {
         b.iter(|| {
             for row in &rows {
-                mfp_selective_project(black_box(row), &needed, &projection, &mut dest, &mut datum_vec);
+                mfp_selective_project(
+                    black_box(row),
+                    &needed,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
+                );
                 black_box(&dest);
             }
         })
@@ -800,8 +875,12 @@ fn bench_eval_unordered_int20(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_old_path(
-                    black_box(row), &needed_old, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_old,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -812,8 +891,12 @@ fn bench_eval_unordered_int20(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_new_path_unordered(
-                    black_box(row), &needed_new, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_new,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -840,8 +923,12 @@ fn bench_eval_unordered_mixed10(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_old_path(
-                    black_box(row), &needed_old, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_old,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }
@@ -852,8 +939,12 @@ fn bench_eval_unordered_mixed10(c: &mut Criterion) {
         b.iter(|| {
             for row in &rows {
                 mfp_eval_new_path_unordered(
-                    black_box(row), &needed_new, predicate_col,
-                    &projection, &mut dest, &mut datum_vec,
+                    black_box(row),
+                    &needed_new,
+                    predicate_col,
+                    &projection,
+                    &mut dest,
+                    &mut datum_vec,
                 );
                 black_box(&dest);
             }

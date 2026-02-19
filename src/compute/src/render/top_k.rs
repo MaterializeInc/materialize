@@ -860,7 +860,7 @@ pub mod monoids {
     use differential_dataflow::containers::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::ColumnOrder;
-    use mz_repr::{DatumVec, Diff, Row};
+    use mz_repr::{Datum, DatumVec, Diff, Row};
     use serde::{Deserialize, Serialize};
 
     /// A monoid containing a row and an ordering.
@@ -903,11 +903,60 @@ pub mod monoids {
         fn cmp(&self, other: &Self) -> Ordering {
             debug_assert_eq!(self.order_key, other.order_key);
 
-            // It might be nice to cache this row decoding like the non-monotonic codepath, but we'd
-            // have to store the decoded Datums in the same struct as the Row, which gets tricky.
-            let left: Vec<_> = self.row.unpack();
-            let right: Vec<_> = other.row.unpack();
-            mz_expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
+            // Fast path: compare only the ORDER BY columns using nth() (which uses
+            // skip_datum to skip past unneeded columns without constructing Datum values).
+            // This avoids unpacking the entire row for the common case where rows differ
+            // on the first ORDER BY column. Only fall back to full row comparison for
+            // tiebreaking when all ORDER BY columns are equal.
+            for order in &self.order_key {
+                let left_datum = self.row.iter().nth(order.column).unwrap();
+                let right_datum = other.row.iter().nth(order.column).unwrap();
+                let cmp = match (left_datum, right_datum) {
+                    (Datum::Null, Datum::Null) => Ordering::Equal,
+                    (Datum::Null, _) => {
+                        if order.nulls_last {
+                            Ordering::Greater
+                        } else {
+                            Ordering::Less
+                        }
+                    }
+                    (_, Datum::Null) => {
+                        if order.nulls_last {
+                            Ordering::Less
+                        } else {
+                            Ordering::Greater
+                        }
+                    }
+                    (lval, rval) => {
+                        if order.desc {
+                            rval.cmp(&lval)
+                        } else {
+                            lval.cmp(&rval)
+                        }
+                    }
+                };
+                if cmp != Ordering::Equal {
+                    return cmp;
+                }
+            }
+
+            // Tiebreaker: all ORDER BY columns are equal, fall back to full row
+            // comparison using thread-local DatumVec buffers to avoid per-comparison
+            // Vec allocation.
+            thread_local! {
+                static CMP_LEFT: RefCell<DatumVec> = const { RefCell::new(DatumVec::new()) };
+                static CMP_RIGHT: RefCell<DatumVec> = const { RefCell::new(DatumVec::new()) };
+            }
+
+            CMP_LEFT.with(|left_cell| {
+                CMP_RIGHT.with(|right_cell| {
+                    let mut left_vec = left_cell.borrow_mut();
+                    let mut right_vec = right_cell.borrow_mut();
+                    let left = left_vec.borrow_with(&self.row);
+                    let right = right_vec.borrow_with(&other.row);
+                    left.cmp(&right)
+                })
+            })
         }
     }
     impl PartialOrd for Top1Monoid {

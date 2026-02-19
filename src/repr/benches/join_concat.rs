@@ -223,7 +223,9 @@ fn concat_then_project_via_datums(
     datums.extend(val1.iter());
     datums.extend(val2.iter());
     // Project and re-encode only the projected datums
-    result.packer().extend(projection.iter().map(|&i| datums[i]));
+    result
+        .packer()
+        .extend(projection.iter().map(|&i| datums[i]));
 }
 
 /// New approach for projection: byte-level concat then byte-level project.

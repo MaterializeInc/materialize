@@ -578,7 +578,8 @@ where
                                                     row_builder.clone()
                                                 };
                                                 ok_session.give((row, time, Tr::owned_diff(diff)));
-                                            } else if let Some(ref projection) = initial_projection {
+                                            } else if let Some(ref projection) = initial_projection
+                                            {
                                                 // Fast path: pure projection closure —
                                                 // byte-level concat + byte-level project.
                                                 {

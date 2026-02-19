@@ -26,7 +26,7 @@ pub struct DatumVec {
 
 impl DatumVec {
     /// Allocate a new instance.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { outer: Vec::new() }
     }
     /// Borrow an instance with a specific lifetime.
@@ -142,8 +142,8 @@ mod test {
 
     #[mz_ore::test]
     fn test_selective_decode() {
-        use chrono::NaiveDate;
         use crate::adt::timestamp::CheckedTimestamp;
+        use chrono::NaiveDate;
 
         let ts = NaiveDate::from_ymd_opt(2024, 6, 15)
             .unwrap()

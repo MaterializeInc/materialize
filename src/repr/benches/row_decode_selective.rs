@@ -29,11 +29,7 @@ fn make_timestamp_row(ncols: usize) -> Row {
         .and_hms_micro_opt(14, 30, 0, 123456)
         .unwrap();
     let datums: Vec<Datum> = (0..ncols)
-        .map(|_| {
-            Datum::Timestamp(
-                CheckedTimestamp::from_timestamplike(base).unwrap(),
-            )
-        })
+        .map(|_| Datum::Timestamp(CheckedTimestamp::from_timestamplike(base).unwrap()))
         .collect();
     Row::pack_slice(&datums)
 }
@@ -50,9 +46,7 @@ fn make_mixed_row(ncols: usize) -> Row {
             0 => Datum::Int64(i as i64 * 1000),
             1 => Datum::String("hello world"),
             2 => Datum::Float64(3.14159.into()),
-            3 => Datum::Timestamp(
-                CheckedTimestamp::from_timestamplike(ts).unwrap(),
-            ),
+            3 => Datum::Timestamp(CheckedTimestamp::from_timestamplike(ts).unwrap()),
             _ => Datum::True,
         })
         .collect();

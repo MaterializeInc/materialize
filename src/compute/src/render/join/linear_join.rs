@@ -22,8 +22,8 @@ use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
-use mz_repr::fixed_length::ToDatumIter;
 use mz_expr::MirScalarExpr;
+use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -363,28 +363,28 @@ where
                     name,
                     |_, _| {
                         // Pre-compute which columns key expressions need for selective decoding.
-                    // Only these columns will be fully decoded; value columns are byte-projected.
-                    let key_needed_columns: Vec<bool> = {
-                        let mut cols = Vec::new();
-                        for expr in &stream_key {
-                            expr.visit_pre(|e| {
-                                if let MirScalarExpr::Column(c, _) = e {
-                                    cols.push(*c);
-                                }
-                            });
-                        }
-                        if let Some(&max_col) = cols.iter().max() {
-                            let mut needed = vec![false; max_col + 1];
-                            for c in cols {
-                                needed[c] = true;
+                        // Only these columns will be fully decoded; value columns are byte-projected.
+                        let key_needed_columns: Vec<bool> = {
+                            let mut cols = Vec::new();
+                            for expr in &stream_key {
+                                expr.visit_pre(|e| {
+                                    if let MirScalarExpr::Column(c, _) = e {
+                                        cols.push(*c);
+                                    }
+                                });
                             }
-                            needed
-                        } else {
-                            Vec::new()
-                        }
-                    };
+                            if let Some(&max_col) = cols.iter().max() {
+                                let mut needed = vec![false; max_col + 1];
+                                for c in cols {
+                                    needed[c] = true;
+                                }
+                                needed
+                            } else {
+                                Vec::new()
+                            }
+                        };
 
-                    Box::new(move |input, ok, errs| {
+                        Box::new(move |input, ok, errs| {
                             let mut temp_storage = RowArena::new();
                             let mut key_buf = Row::default();
                             let mut val_buf = Row::default();
@@ -397,8 +397,11 @@ where
                                     // Phase 1: selectively decode only key-needed columns,
                                     // evaluate key expressions.
                                     let key_result = {
-                                        let datums_local = datums.borrow_with_selective(row, &key_needed_columns);
-                                        let key_iter = stream_key.iter().map(|k| k.eval(&datums_local, &temp_storage));
+                                        let datums_local =
+                                            datums.borrow_with_selective(row, &key_needed_columns);
+                                        let key_iter = stream_key
+                                            .iter()
+                                            .map(|k| k.eval(&datums_local, &temp_storage));
                                         key_buf.packer().try_extend(key_iter)
                                     }; // DatumVecBorrow dropped here, releasing borrow on row
                                     match key_result {

@@ -12,7 +12,7 @@
 //! Compares the old enumerate+while pattern (read_datum for every column)
 //! against the new nth() pattern (skip_datum for skipped columns).
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use mz_repr::{Datum, Row};
 
 /// Build a row with N int64 columns
@@ -34,8 +34,7 @@ fn make_ts_row(ncols: usize) -> Row {
             .unwrap()
             .and_hms_micro_opt(12, 30, i as u32 % 60, 0)
             .unwrap();
-        let checked =
-            mz_repr::adt::timestamp::CheckedTimestamp::from_timestamplike(ts).unwrap();
+        let checked = mz_repr::adt::timestamp::CheckedTimestamp::from_timestamplike(ts).unwrap();
         packer.push(Datum::Timestamp(checked));
     }
     row
@@ -150,9 +149,7 @@ fn bench_aggregate_access(c: &mut Criterion) {
     // mixed, 20 cols, aggregate on cols 0, 6, 12, 18
     let mixed_row = make_mixed_row(20);
     c.bench_function("agg_mixed20_cols_0_6_12_18_old", |b| {
-        b.iter(|| {
-            extract_enumerate_while(black_box(&mixed_row), black_box(&[0, 6, 12, 18]))
-        })
+        b.iter(|| extract_enumerate_while(black_box(&mixed_row), black_box(&[0, 6, 12, 18])))
     });
     c.bench_function("agg_mixed20_cols_0_6_12_18_new", |b| {
         b.iter(|| extract_nth(black_box(&mixed_row), black_box(&[0, 6, 12, 18])))
@@ -219,8 +216,7 @@ fn bench_aggregate_access(c: &mut Criterion) {
         b.iter(|| {
             let mut count = 0u64;
             for row in &mixed_rows {
-                let datums =
-                    extract_enumerate_while(black_box(row), &[0, 6, 12, 18]);
+                let datums = extract_enumerate_while(black_box(row), &[0, 6, 12, 18]);
                 black_box(&datums);
                 count += 1;
             }

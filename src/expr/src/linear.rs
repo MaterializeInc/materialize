@@ -1776,16 +1776,16 @@ pub mod plan {
             self.mfp.is_identity()
         }
 
-    /// Returns a bitmask of which input columns are needed for evaluation.
-    /// See [`MapFilterProject::needed_input_columns`] for details.
-    pub fn needed_input_columns(&self) -> Vec<bool> {
-        self.mfp.needed_input_columns()
-    }
+        /// Returns a bitmask of which input columns are needed for evaluation.
+        /// See [`MapFilterProject::needed_input_columns`] for details.
+        pub fn needed_input_columns(&self) -> Vec<bool> {
+            self.mfp.needed_input_columns()
+        }
 
-    /// Returns the projection slice if this MFP is a "pure sorted projection":
-    /// no expressions, no predicates, and the projection indices are strictly
-    /// monotonically increasing. This enables byte-level row projection via
-    /// `RowRef::project_onto()` which avoids datum decoding and re-encoding.
+        /// Returns the projection slice if this MFP is a "pure sorted projection":
+        /// no expressions, no predicates, and the projection indices are strictly
+        /// monotonically increasing. This enables byte-level row projection via
+        /// `RowRef::project_onto()` which avoids datum decoding and re-encoding.
         pub fn is_pure_sorted_project(&self) -> Option<&[usize]> {
             if !self.mfp.expressions.is_empty() || !self.mfp.predicates.is_empty() {
                 return None;
@@ -2192,7 +2192,8 @@ pub mod plan {
             projection: &[usize],
             row_buf: &'row mut Row,
         ) -> Result<Option<&'row Row>, EvalError> {
-            self.mfp.evaluate_into_project(datums, arena, source_row, projection, row_buf)
+            self.mfp
+                .evaluate_into_project(datums, arena, source_row, projection, row_buf)
         }
 
         /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.

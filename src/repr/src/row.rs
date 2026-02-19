@@ -1867,12 +1867,8 @@ fn push_signed_int<D, const N: usize>(
 /// Writes an unsigned integer datum with combined tag + value in a single write.
 #[inline(always)]
 #[allow(clippy::as_conversions)]
-fn push_unsigned_int<D, const N: usize>(
-    data: &mut D,
-    i: u64,
-    le_bytes: [u8; N],
-    base_tag: Tag,
-) where
+fn push_unsigned_int<D, const N: usize>(data: &mut D, i: u64, le_bytes: [u8; N], base_tag: Tag)
+where
     D: Vector<u8>,
 {
     let n_leading = i.leading_zeros() as u8;
@@ -1915,22 +1911,50 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            push_signed_int(data, i64::from(i), i64::from(i).to_le_bytes(), Tag::NegativeInt16_0, Tag::NonNegativeInt16_0);
+            push_signed_int(
+                data,
+                i64::from(i),
+                i64::from(i).to_le_bytes(),
+                Tag::NegativeInt16_0,
+                Tag::NonNegativeInt16_0,
+            );
         }
         Datum::Int32(i) => {
-            push_signed_int(data, i64::from(i), i64::from(i).to_le_bytes(), Tag::NegativeInt32_0, Tag::NonNegativeInt32_0);
+            push_signed_int(
+                data,
+                i64::from(i),
+                i64::from(i).to_le_bytes(),
+                Tag::NegativeInt32_0,
+                Tag::NonNegativeInt32_0,
+            );
         }
         Datum::Int64(i) => {
-            push_signed_int(data, i, i.to_le_bytes(), Tag::NegativeInt64_0, Tag::NonNegativeInt64_0);
+            push_signed_int(
+                data,
+                i,
+                i.to_le_bytes(),
+                Tag::NegativeInt64_0,
+                Tag::NonNegativeInt64_0,
+            );
         }
         Datum::UInt8(i) => {
             push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt8_0);
         }
         Datum::UInt16(i) => {
-            push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt16_0);
+            push_unsigned_int(
+                data,
+                u64::from(i),
+                u64::from(i).to_le_bytes(),
+                Tag::UInt16_0,
+            );
         }
         Datum::UInt32(i) => {
-            push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt32_0);
+            push_unsigned_int(
+                data,
+                u64::from(i),
+                u64::from(i).to_le_bytes(),
+                Tag::UInt32_0,
+            );
         }
         Datum::UInt64(i) => {
             push_unsigned_int(data, i, i.to_le_bytes(), Tag::UInt64_0);
@@ -4153,9 +4177,7 @@ mod tests {
         {
             let mut packer = empty_range_row.packer();
             packer.push(Datum::Int64(1));
-            packer
-                .push_range(Range::<Datum> { inner: None })
-                .unwrap();
+            packer.push_range(Range::<Datum> { inner: None }).unwrap();
             packer.push(Datum::Int64(2));
         }
         assert_eq!(empty_range_row.iter().count(), 3);

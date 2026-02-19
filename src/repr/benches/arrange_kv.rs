@@ -139,7 +139,9 @@ fn bench_arrange_kv(c: &mut Criterion) {
         let rows = build_int_rows(10_000, 10);
         let key_cols = vec![0usize];
         let thinning: Vec<usize> = (1..10).collect();
-        let key_needed = vec![true, false, false, false, false, false, false, false, false, false];
+        let key_needed = vec![
+            true, false, false, false, false, false, false, false, false, false,
+        ];
         let mut key_buf = Row::default();
         let mut val_buf = Row::default();
         let mut datums = DatumVec::new();
@@ -148,16 +150,27 @@ fn bench_arrange_kv(c: &mut Criterion) {
         group.bench_function("int10_key1_old", |b| {
             b.iter(|| {
                 old_arrange_kv(
-                    &rows, &key_cols, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
         group.bench_function("int10_key1_new", |b| {
             b.iter(|| {
                 new_arrange_kv(
-                    &rows, &key_cols, &key_needed, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &key_needed,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
@@ -179,16 +192,27 @@ fn bench_arrange_kv(c: &mut Criterion) {
         group.bench_function("int20_key2_old", |b| {
             b.iter(|| {
                 old_arrange_kv(
-                    &rows, &key_cols, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
         group.bench_function("int20_key2_new", |b| {
             b.iter(|| {
                 new_arrange_kv(
-                    &rows, &key_cols, &key_needed, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &key_needed,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
@@ -199,7 +223,9 @@ fn bench_arrange_kv(c: &mut Criterion) {
         let rows = build_mixed_rows(10_000);
         let key_cols = vec![0usize];
         let thinning: Vec<usize> = (1..10).collect();
-        let key_needed = vec![true, false, false, false, false, false, false, false, false, false];
+        let key_needed = vec![
+            true, false, false, false, false, false, false, false, false, false,
+        ];
         let mut key_buf = Row::default();
         let mut val_buf = Row::default();
         let mut datums = DatumVec::new();
@@ -208,16 +234,27 @@ fn bench_arrange_kv(c: &mut Criterion) {
         group.bench_function("mixed10_key1_old", |b| {
             b.iter(|| {
                 old_arrange_kv(
-                    &rows, &key_cols, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
         group.bench_function("mixed10_key1_new", |b| {
             b.iter(|| {
                 new_arrange_kv(
-                    &rows, &key_cols, &key_needed, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &key_needed,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
@@ -238,16 +275,27 @@ fn bench_arrange_kv(c: &mut Criterion) {
         group.bench_function("int50_key1_old", |b| {
             b.iter(|| {
                 old_arrange_kv(
-                    &rows, &key_cols, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
         group.bench_function("int50_key1_new", |b| {
             b.iter(|| {
                 new_arrange_kv(
-                    &rows, &key_cols, &key_needed, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &key_needed,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
@@ -258,7 +306,9 @@ fn bench_arrange_kv(c: &mut Criterion) {
         let rows = build_numeric_rows(10_000, 10);
         let key_cols = vec![0usize];
         let thinning: Vec<usize> = (1..10).collect();
-        let key_needed = vec![true, false, false, false, false, false, false, false, false, false];
+        let key_needed = vec![
+            true, false, false, false, false, false, false, false, false, false,
+        ];
         let mut key_buf = Row::default();
         let mut val_buf = Row::default();
         let mut datums = DatumVec::new();
@@ -267,16 +317,27 @@ fn bench_arrange_kv(c: &mut Criterion) {
         group.bench_function("numeric10_key1_old", |b| {
             b.iter(|| {
                 old_arrange_kv(
-                    &rows, &key_cols, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
         group.bench_function("numeric10_key1_new", |b| {
             b.iter(|| {
                 new_arrange_kv(
-                    &rows, &key_cols, &key_needed, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &key_needed,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
@@ -297,16 +358,27 @@ fn bench_arrange_kv(c: &mut Criterion) {
         group.bench_function("int5_key3_old", |b| {
             b.iter(|| {
                 old_arrange_kv(
-                    &rows, &key_cols, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
         group.bench_function("int5_key3_new", |b| {
             b.iter(|| {
                 new_arrange_kv(
-                    &rows, &key_cols, &key_needed, &thinning,
-                    &mut key_buf, &mut val_buf, &mut datums, &mut temp_storage,
+                    &rows,
+                    &key_cols,
+                    &key_needed,
+                    &thinning,
+                    &mut key_buf,
+                    &mut val_buf,
+                    &mut datums,
+                    &mut temp_storage,
                 )
             })
         });
