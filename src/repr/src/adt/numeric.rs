@@ -432,6 +432,119 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
     Ok(d)
 }
 
+/// Writes a `Decimal` in standard notation directly to a `fmt::Write`
+/// implementation with **zero heap allocations**.
+///
+/// This replaces `Decimal::to_standard_notation_string()` which performs two
+/// heap allocations per call: one for `coefficient_digits()` (Vec<u8>) and
+/// one for the result String. Instead, this function extracts digits from
+/// `coefficient_units()` (a zero-copy &[u16] slice) into a stack-allocated
+/// buffer and writes the entire result with a single `write_str()` call.
+pub fn write_numeric_standard_notation<const N: usize>(
+    f: &mut impl fmt::Write,
+    d: &Decimal<N>,
+) -> fmt::Result {
+    // Non-finite values (NaN, Infinity) delegate to Display
+    if !d.is_finite() {
+        return write!(f, "{}", d);
+    }
+
+    let units = d.coefficient_units();
+    let ndigits = d.digits() as usize;
+    let exponent = d.exponent();
+    let nunit = units.len();
+
+    // Convert coefficient units (base-1000, little-endian) to decimal digits.
+    // Each unit holds 3 decimal digits (DECDPUN = 3).
+    // Max 39 digits for Numeric (Decimal<13>), 81 for NumericAgg (Decimal<27>).
+    let mut digit_buf = [0u8; 82]; // 82 > 81 = max for Decimal<27>
+    let mut pos = 0;
+
+    // Most-significant unit may have 1, 2, or 3 digits
+    let msu = units[nunit - 1];
+    let msu_ndigits = if ndigits % 3 == 0 { 3 } else { ndigits % 3 };
+    if msu_ndigits >= 3 {
+        digit_buf[pos] = (msu / 100) as u8;
+        pos += 1;
+    }
+    if msu_ndigits >= 2 {
+        digit_buf[pos] = ((msu / 10) % 10) as u8;
+        pos += 1;
+    }
+    digit_buf[pos] = (msu % 10) as u8;
+    pos += 1;
+
+    // Remaining units (full 3-digit groups), most-significant first
+    for i in (0..nunit.saturating_sub(1)).rev() {
+        let u = units[i];
+        digit_buf[pos] = (u / 100) as u8;
+        digit_buf[pos + 1] = ((u / 10) % 10) as u8;
+        digit_buf[pos + 2] = (u % 10) as u8;
+        pos += 3;
+    }
+
+    // Strip leading zeros (matching to_standard_notation_string behavior)
+    let raw_digits = &digit_buf[..ndigits];
+    let first_nonzero = raw_digits.iter().position(|&d| d != 0).unwrap_or(ndigits - 1);
+    let digits = &raw_digits[first_nonzero..];
+    let sig_digits = digits.len() as i32;
+
+    // Build output in a stack buffer. Max size:
+    // 1 (sign) + 3*N (digits) + (3*N - 1) (trailing zeros) + 1 (point) = 6*N + 1
+    // For N=27: 163. Use 200 for safety.
+    let mut out = [0u8; 200];
+    let mut opos = 0;
+
+    if d.is_negative() {
+        out[opos] = b'-';
+        opos += 1;
+    }
+
+    if exponent >= 0 {
+        // All digits before the decimal point, plus trailing zeros
+        for &digit in digits {
+            out[opos] = b'0' + digit;
+            opos += 1;
+        }
+        if !d.is_zero() {
+            for _ in 0..exponent {
+                out[opos] = b'0';
+                opos += 1;
+            }
+        }
+    } else if sig_digits > -exponent {
+        // Digits span the decimal point
+        let before_point = (sig_digits + exponent) as usize;
+        for &digit in &digits[..before_point] {
+            out[opos] = b'0' + digit;
+            opos += 1;
+        }
+        out[opos] = b'.';
+        opos += 1;
+        for &digit in &digits[before_point..] {
+            out[opos] = b'0' + digit;
+            opos += 1;
+        }
+    } else {
+        // All digits after the decimal point
+        out[opos] = b'0';
+        out[opos + 1] = b'.';
+        opos += 2;
+        for _ in 0..(-exponent - sig_digits) {
+            out[opos] = b'0';
+            opos += 1;
+        }
+        for &digit in digits {
+            out[opos] = b'0' + digit;
+            opos += 1;
+        }
+    }
+
+    // Safety: we only wrote ASCII bytes (0-9, '-', '.')
+    let s = unsafe { std::str::from_utf8_unchecked(&out[..opos]) };
+    f.write_str(s)
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_roundtrip() {
@@ -466,6 +579,67 @@ fn test_twos_complement_roundtrip() {
     inner("-999999999999999999999999999999999999999");
     inner("-7.2e35");
     inner("-7.2e-35");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_write_numeric_standard_notation() {
+    fn check(input: &str) {
+        let mut cx = cx_datum();
+        let d: Numeric = cx.parse(input).unwrap();
+        let expected = d.to_standard_notation_string();
+        let mut got = String::new();
+        write_numeric_standard_notation(&mut got, &d).unwrap();
+        assert_eq!(got, expected, "mismatch for input {input:?}");
+    }
+
+    // Zero and signed zero
+    check("0");
+    check("-0");
+    check("0.00");
+    check("0E+10");
+
+    // Small integers
+    check("1");
+    check("42");
+    check("-1");
+    check("-42");
+
+    // Large integers
+    check("999999999999999999999999999999999999999");
+    check("-999999999999999999999999999999999999999");
+    check("170141183460469231731687303715884105727");
+
+    // Decimals
+    check("123.456789");
+    check("-3.14159265358979323846264338327950288");
+    check("0.000001");
+    check("0.000000000000000000000000000000000012345");
+    check("0.123456789012345678901234567890123456789");
+    check("1.00000000000000000000000000000000000000");
+
+    // Trailing zeros after decimal point
+    check("12345678901234567890.1234567890123456789");
+
+    // Large exponents (trailing zeros)
+    check("7E+35");
+    check("1E+38");
+    check("-7.2E+35");
+
+    // Small exponents (leading zeros after decimal)
+    check("7E-35");
+    check("1E-38");
+    check("-7.2E-35");
+
+    // Edge cases
+    check("1E-39"); // minimum exponent for Numeric
+    check("9.99999999999999999999999999999999999999E+38"); // near max
+
+    // Single digit values
+    check("5");
+    check("0.5");
+    check("5E+10");
+    check("5E-10");
 }
 
 #[mz_ore::test]

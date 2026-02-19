@@ -883,8 +883,19 @@ pub fn format_numeric<F>(buf: &mut F, n: &OrderedDecimal<Numeric>) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", n.0.to_standard_notation_string());
+    crate::adt::numeric::write_numeric_standard_notation(&mut FmtWriteFormatBuffer(buf), &n.0)
+        .expect("write to FormatBuffer cannot fail");
     Nestable::Yes
+}
+
+/// Adapter that bridges [`FormatBuffer`] to [`fmt::Write`].
+struct FmtWriteFormatBuffer<'a, F: FormatBuffer>(&'a mut F);
+
+impl<F: FormatBuffer> fmt::Write for FmtWriteFormatBuffer<'_, F> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.0.write_str(s);
+        Ok(())
+    }
 }
 
 pub fn format_string<F>(buf: &mut F, s: &str) -> Nestable

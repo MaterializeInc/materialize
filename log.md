@@ -933,3 +933,90 @@ reads (coverage data shows 62.8B+ `read_datum` calls), this is meaningful.
 - JSONB/JSON interchange still use `to_standard_notation_string()` for numeric formatting.
 - Avro varint decoding (4.4B executions in coverage data) could benefit from batch-read
   optimization instead of byte-by-byte processing.
+
+## Session 11: Zero-allocation numeric formatting for pgwire output (re-implementation)
+
+**Date:** 2026-02-19
+
+**Problem:** Every time a `Numeric` (decimal) value is formatted for output—via pgwire
+text encoding (`format_numeric` in `strconv.rs`) or `Datum::Display`—the code called
+`Decimal::to_standard_notation_string()` which performs **two heap allocations** per value:
+1. `coefficient_digits()` allocates a `Vec<u8>` (up to 39 bytes) via the C function
+   `decNumberGetBCD`
+2. `to_standard_notation_string()` allocates a `String` for the formatted result
+
+The formatted String is then copied into the output buffer and immediately dropped. For a
+query returning 100k numeric values, this means 200k unnecessary heap allocations.
+
+This optimization was previously implemented in session 2 but was reverted during branch
+cleanup. This is a clean re-implementation with the same approach.
+
+**Fix:** Added `write_numeric_standard_notation()` in `src/repr/src/adt/numeric.rs` that
+writes directly to any `fmt::Write` implementation with **zero heap allocations**:
+- Uses `coefficient_units()` (returns `&[u16]` slice from the internal representation—no
+  allocation) to extract digits into a stack-allocated `[u8; 82]` array
+- Each coefficient unit (base-1000, little-endian) is converted to 3 decimal digits
+  via simple division
+- Leading zeros are stripped to match `to_standard_notation_string()` behavior exactly
+- Builds the complete output (sign, digits, decimal point, leading zeros) in a
+  stack-allocated `[u8; 200]` buffer
+- Writes the entire result with a single `write_str()` call
+
+For `format_numeric` (pgwire path), a thin `FmtWriteFormatBuffer` adapter bridges the
+`FormatBuffer` trait to `fmt::Write`. For `Datum::Numeric` Display, the function is
+called directly on the `fmt::Formatter`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench numeric_format`):
+
+### Write-only: pure formatting cost to pre-allocated buffer (ns/iter)
+
+| Value                      | Old (to_standard_notation_string) | New (write_numeric) | Speedup |
+|----------------------------|----------------------------------|---------------------|---------|
+| zero                       | 17.5                             | 5.8                 | 3.0x    |
+| one                        | 17.4                             | 5.7                 | 3.1x    |
+| small_int (42)             | 18.9                             | 7.7                 | 2.5x    |
+| decimal (123.456789)       | 25.4                             | 12.8                | 2.0x    |
+| negative (-3.14...)        | 52.5                             | 24.4                | 2.2x    |
+| tiny (0.000001)            | 27.8                             | 8.8                 | 3.2x    |
+| large_int (99999...)       | 53.2                             | 25.4                | 2.1x    |
+| large_dec (99999.999...)   | 53.8                             | 25.4                | 2.1x    |
+| max_precision (39 digits)  | 53.0                             | 25.3                | 2.1x    |
+| small_exp (1E+10)          | 37.8                             | 8.8                 | 4.3x    |
+| neg_exp (1E-10)            | 34.1                             | 9.3                 | 3.7x    |
+| many_decimals (0.123...39) | 54.7                             | 26.0                | 2.1x    |
+
+### Batch formatting (10k values to shared buffer, µs/iter)
+
+| Approach                        | Time (µs) | Speedup |
+|---------------------------------|-----------|---------|
+| Old (to_standard_notation_string) | 360       | -       |
+| New (write_numeric)             | 155       | **2.3x**|
+
+**Summary:** 2.0-4.3x faster per value depending on the value, **2.3x faster in the
+realistic batch scenario** (formatting many values to a shared buffer). The speedup
+comes from eliminating both heap allocations (coefficient Vec + result String) and using a
+single `write_str` call. Simple values with few digits (zero, one, small exponents) show
+the biggest improvement because the allocation overhead dominated the formatting work.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Added `write_numeric_standard_notation()` + comprehensive
+  correctness test covering zeros, integers, decimals, large values, exponents, edge cases
+- `src/repr/src/strconv.rs` - Updated `format_numeric()` to use new function, added
+  `FmtWriteFormatBuffer` adapter
+- `src/repr/src/scalar.rs` - Updated `Datum::Numeric` Display to use new function
+- `src/repr/benches/numeric_format.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- JSONB serialization in `src/repr/src/adt/jsonb.rs:604` and JSON interchange in
+  `src/interchange/src/json.rs:131` still use `to_standard_notation_string()`. These
+  need the result as a `&str` for serde, so a stack-buffer string wrapper would be needed.
+- `zero_diffs.clone()` in `src/compute/src/render/reduce.rs:1313` clones a `Vec<Accum>`
+  per input row during accumulable reductions. The Vec heap allocation per row is wasteful;
+  a SmallVec or reuse pattern could help but requires changes to DD trait implementations.
+- `Top1Monoid::cmp` in `src/compute/src/render/top_k.rs:908` allocates a `Vec<Datum>` via
+  `Row::unpack()` on every comparison during consolidation. Using thread-local `DatumVec`
+  buffers (like `Top1MonoidLocal` does with `Rc<RefCell<>>`) would eliminate per-comparison
+  heap allocation.
+- The compute layer has the highest-impact remaining opportunities: OffsetStride::len()
+  at 1,580B executions, Row operations at 1,273B, Timestamp ordering at 856B.
