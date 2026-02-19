@@ -2023,7 +2023,10 @@ pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the sink."),
-        ("namespace", "The namespace of the Iceberg table into which the sink is writing."),
+        (
+            "namespace",
+            "The namespace of the Iceberg table into which the sink is writing.",
+        ),
         ("table", "The Iceberg table into which the sink is writing."),
     ]),
     is_retained_metrics_object: false,
@@ -2333,10 +2336,7 @@ pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the schema."),
-        (
-            "oid",
-            "A PostgreSQL-compatible oid for the schema.",
-        ),
+        ("oid", "A PostgreSQL-compatible oid for the schema."),
         (
             "database_id",
             "The ID of the database containing the schema. Corresponds to `mz_databases.id`.",
@@ -3141,10 +3141,7 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "inherit",
             "Indicates whether the role has inheritance of privileges.",
         ),
-        (
-            "rolcanlogin",
-            "Indicates whether the role can log in.",
-        ),
+        ("rolcanlogin", "Indicates whether the role can log in."),
         ("rolsuper", "Indicates whether the role is a superuser."),
     ]),
     is_retained_metrics_object: false,
@@ -3220,11 +3217,11 @@ pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
             "role_id",
             "The ID of the role. Corresponds to `mz_roles.id`.",
         ),
+        ("role_oid", "A PostgreSQL-compatible OID for the role."),
         (
-            "role_oid",
-            "A PostgreSQL-compatible OID for the role.",
+            "password_hash",
+            "The hashed password for the role, if any. Uses the `SCRAM-SHA-256` algorithm.",
         ),
-        ("password_hash", "The hashed password for the role, if any. Uses the `SCRAM-SHA-256` algorithm."),
         (
             "updated_at",
             "The time at which the password was last updated.",
@@ -3472,10 +3469,7 @@ pub static MZ_SECRETS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The unique ID of the secret."),
-        (
-            "oid",
-            "A PostgreSQL-compatible oid for the secret.",
-        ),
+        ("oid", "A PostgreSQL-compatible oid for the secret."),
         (
             "schema_id",
             "The ID of the schema to which the secret belongs. Corresponds to `mz_schemas.id`.",
@@ -3804,8 +3798,8 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: LazyLock<BuiltinSource>
     },
 );
 
-pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
         name: "mz_aws_privatelink_connection_statuses",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_AWS_PRIVATELINK_CONNECTION_STATUSES_OID,
@@ -3829,7 +3823,10 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
                 "last_status_change_at",
                 "Wall-clock timestamp of the connection status change.",
             ),
-            ("status", "The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`."),
+            (
+                "status",
+                "The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.",
+            ),
         ]),
         sql: "
     WITH statuses_w_last_status AS (
@@ -3857,7 +3854,8 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
     JOIN mz_catalog.mz_connections AS conns
     ON conns.id = latest_events.connection_id",
         access: vec![PUBLIC_SELECT],
-    });
+    }
+});
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -4009,10 +4007,22 @@ pub static MZ_SESSION_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Builti
     data_source: IntrospectionType::SessionHistory,
     desc: MZ_SESSION_HISTORY_DESC.clone(),
     column_comments: BTreeMap::from_iter([
-        ("session_id", "The globally unique ID of the session. Corresponds to `mz_sessions.id`."),
-        ("connected_at", "The time at which the session was established."),
-        ("initial_application_name", "The `application_name` session metadata field."),
-        ("authenticated_user", "The name of the user for which the session was established."),
+        (
+            "session_id",
+            "The globally unique ID of the session. Corresponds to `mz_sessions.id`.",
+        ),
+        (
+            "connected_at",
+            "The time at which the session was established.",
+        ),
+        (
+            "initial_application_name",
+            "The `application_name` session metadata field.",
+        ),
+        (
+            "authenticated_user",
+            "The name of the user for which the session was established.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -5879,7 +5889,10 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         .with_column("global_id", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the object. Corresponds to `mz_objects.id`."),
+        (
+            "id",
+            "The ID of the object. Corresponds to `mz_objects.id`.",
+        ),
         ("global_id", "The global ID of the object."),
     ]),
     is_retained_metrics_object: false,
