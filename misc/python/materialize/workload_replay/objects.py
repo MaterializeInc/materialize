@@ -610,7 +610,7 @@ def run_create_objects_part_2(
                     print_statement=verbose,
                 )
 
-    print("Creating view, materialized views, sinks")
+    print("Creating views, materialized views, sinks")
     pending = set()
     for schemas in workload["databases"].values():
         for items in schemas.values():
@@ -647,3 +647,13 @@ def run_create_objects_part_2(
                 f"(likely depend on skipped connections): {pending}"
             )
             break
+
+    print("Creating indexes")
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for index in items["indexes"].values():
+                c.sql(
+                    index["create_sql"],
+                    user="mz_system",
+                    port=6877,
+                    print_statement=verbose,

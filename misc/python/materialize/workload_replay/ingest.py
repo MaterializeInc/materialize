@@ -1050,28 +1050,28 @@ def _arrow_val_to_avro(val: Any, is_packed_ts: bool) -> Any:
     return val
 
 
-def ingest_captured_parquet_kafka(
-    c: Composition,
-    meta: dict[str, Any],
-    source_obj: dict[str, Any],
-    child_obj: dict[str, Any],
+def _kafka_ingest_worker(
     parquet_path: str,
-    batch_size: int = 10000,
+    row_group_indices: list[int],
+    topic: str,
+    debezium: bool,
+    columns_meta: list[dict[str, Any]],
+    schema_registry_port: int,
+    kafka_port: int,
+    progress_value: Any,
+    total_rows: int,
+    batch_size: int,
 ) -> None:
-    """Stream Parquet data directly to Kafka, skipping string conversion.
+    """Worker that ingests assigned parquet row groups to Kafka.
 
-    ~3-5x faster than the generic path (iter_parquet_batches →
-    ingest_captured_rows_kafka) because pyarrow values (str, int, float,
-    bytes) go straight into Avro dicts without an Arrow→string→typed-value
-    round-trip.
+    Designed to be called both directly (single-process) and as a
+    multiprocessing target (parallel).  All arguments are picklable so
+    that ``spawn`` context works.
     """
     import pyarrow.parquet as pq
 
-    topic = get_kafka_topic(source_obj)
-    debezium = "ENVELOPE DEBEZIUM" in child_obj.get("create_sql", "")
-
-    columns_meta = meta["columns"]
     col_names = [col["name"] for col in columns_meta]
+    num_cols = len(col_names)
 
     columns = [
         Column(col["name"], col["type"], col.get("nullable", True), None, None)
@@ -1082,12 +1082,12 @@ def ingest_captured_parquet_kafka(
         topic,
         tuple(columns),
         debezium,
-        c.default_port("schema-registry"),
-        c.default_port("kafka"),
+        schema_registry_port,
+        kafka_port,
     )
 
     now_ms = int(time.time() * 1000)
-    source_struct = None
+    envelope_value = None
     if debezium:
         source_struct = {
             "version": "0",
@@ -1106,13 +1106,19 @@ def ingest_captured_parquet_kafka(
             "thread": None,
             "query": None,
         }
+        envelope_value = {
+            "before": None,
+            "after": None,
+            "source": source_struct,
+            "op": "c",
+            "ts_ms": now_ms,
+            "transaction": None,
+        }
 
     pf = pq.ParquetFile(parquet_path)
     schema = pf.schema_arrow
-    num_cols = len(col_names)
 
     # Pre-compute which columns need special conversion.
-    # Most columns (str, int, float, bytes) pass directly from pyarrow to Avro.
     needs_conversion = [False] * num_cols
     is_packed_ts = [False] * num_cols
     for i in range(num_cols):
@@ -1124,69 +1130,166 @@ def ingest_captured_parquet_kafka(
             needs_conversion[i] = True
     any_need_conversion = any(needs_conversion)
 
-    # Reuse envelope dict across rows (serializer reads it immediately).
-    envelope_value = None
-    if debezium:
-        envelope_value = {
-            "before": None,
-            "after": None,
-            "source": source_struct,
-            "op": "c",
-            "ts_ms": now_ms,
-            "transaction": None,
-        }
-
-    total_rows = pf.metadata.num_rows
-    rows_sent = 0
-
+    rows_done = 0
     producer.poll(0)
-    for batch in pf.iter_batches(batch_size=batch_size):
-        py_columns = [batch.column(i).to_pylist() for i in range(batch.num_columns)]
+    for rg_idx in row_group_indices:
+        table = pf.read_row_group(rg_idx)
+        for batch in table.to_batches(max_chunksize=batch_size):
+            py_columns = [
+                batch.column(i).to_pylist() for i in range(batch.num_columns)
+            ]
 
-        for row_idx in range(batch.num_rows):
-            # Build value dict directly from pyarrow values — no string round-trip.
-            after_value: dict[str, Any] = {}
-            if any_need_conversion:
-                for col_idx in range(num_cols):
-                    val = py_columns[col_idx][row_idx]
-                    if needs_conversion[col_idx] and val is not None:
-                        val = _arrow_val_to_avro(val, is_packed_ts[col_idx])
-                    after_value[col_names[col_idx]] = val
+            for row_idx in range(batch.num_rows):
+                after_value: dict[str, Any] = {}
+                if any_need_conversion:
+                    for col_idx in range(num_cols):
+                        val = py_columns[col_idx][row_idx]
+                        if needs_conversion[col_idx] and val is not None:
+                            val = _arrow_val_to_avro(val, is_packed_ts[col_idx])
+                        after_value[col_names[col_idx]] = val
+                else:
+                    for col_idx in range(num_cols):
+                        after_value[col_names[col_idx]] = py_columns[col_idx][row_idx]
+
+                while True:
+                    try:
+                        if debezium:
+                            envelope_value["after"] = after_value
+                            producer.produce(
+                                topic=topic,
+                                key=key_serializer(after_value, ksctx),
+                                value=serializer(envelope_value, sctx),
+                                on_delivery=delivery_report,
+                            )
+                        else:
+                            key_dict = {col_names[0]: after_value[col_names[0]]}
+                            producer.produce(
+                                topic=topic,
+                                key=key_serializer(key_dict, ksctx),
+                                value=serializer(after_value, sctx),
+                                on_delivery=delivery_report,
+                            )
+                        break
+                    except BufferError:
+                        producer.poll(0.01)
+
+            rows_done += batch.num_rows
+            if progress_value is not None:
+                with progress_value.get_lock():
+                    progress_value.value += batch.num_rows
             else:
-                for col_idx in range(num_cols):
-                    after_value[col_names[col_idx]] = py_columns[col_idx][row_idx]
+                print(
+                    f"    {rows_done}/{total_rows} ({rows_done / total_rows:.1%})",
+                    end="\r",
+                    flush=True,
+                )
+            producer.poll(0)
 
-            while True:
-                try:
-                    if debezium:
-                        envelope_value["after"] = after_value
-                        producer.produce(
-                            topic=topic,
-                            key=key_serializer(after_value, ksctx),
-                            value=serializer(envelope_value, sctx),
-                            on_delivery=delivery_report,
-                        )
-                    else:
-                        key_dict = {col_names[0]: after_value[col_names[0]]}
-                        producer.produce(
-                            topic=topic,
-                            key=key_serializer(key_dict, ksctx),
-                            value=serializer(after_value, sctx),
-                            on_delivery=delivery_report,
-                        )
-                    break
-                except BufferError:
-                    producer.poll(0.01)
+        del table
 
-        rows_sent += batch.num_rows
+    producer.flush()
+
+
+def ingest_captured_parquet_kafka(
+    c: Composition,
+    meta: dict[str, Any],
+    source_obj: dict[str, Any],
+    child_obj: dict[str, Any],
+    parquet_path: str,
+    batch_size: int = 10000,
+) -> None:
+    """Stream Parquet data directly to Kafka, skipping string conversion.
+
+    Pyarrow values (str, int, float, bytes) go straight into Avro dicts
+    without an Arrow->string->typed-value round-trip.  Uses multiprocessing
+    to saturate multiple CPU cores when the parquet file has enough row
+    groups.
+    """
+    import multiprocessing
+    import os
+
+    import pyarrow.parquet as pq
+
+    topic = get_kafka_topic(source_obj)
+    debezium = "ENVELOPE DEBEZIUM" in child_obj.get("create_sql", "")
+    columns_meta = meta["columns"]
+
+    pf = pq.ParquetFile(parquet_path)
+    total_rows = pf.metadata.num_rows
+    num_row_groups = pf.metadata.num_row_groups
+
+    sr_port = c.default_port("schema-registry")
+    kafka_port = c.default_port("kafka")
+
+    num_workers = min(os.cpu_count() or 1, num_row_groups)
+
+    if num_workers <= 1:
+        # Single-process fast path.
+        _kafka_ingest_worker(
+            parquet_path,
+            list(range(num_row_groups)),
+            topic,
+            debezium,
+            columns_meta,
+            sr_port,
+            kafka_port,
+            None,
+            total_rows,
+            batch_size,
+        )
+        print()
+        return
+
+    # Distribute row groups round-robin across workers.
+    worker_row_groups: list[list[int]] = [[] for _ in range(num_workers)]
+    for i in range(num_row_groups):
+        worker_row_groups[i % num_workers].append(i)
+
+    # Use 'spawn' to avoid inheriting the parent's @cache'd Kafka
+    # producers whose background threads don't survive fork.
+    ctx = multiprocessing.get_context("spawn")
+    progress = ctx.Value("l", 0)
+
+    processes: list[multiprocessing.process.BaseProcess] = []
+    for worker_rgs in worker_row_groups:
+        if not worker_rgs:
+            continue
+        p = ctx.Process(
+            target=_kafka_ingest_worker,
+            args=(
+                parquet_path,
+                worker_rgs,
+                topic,
+                debezium,
+                columns_meta,
+                sr_port,
+                kafka_port,
+                progress,
+                total_rows,
+                batch_size,
+            ),
+        )
+        p.start()
+        processes.append(p)
+
+    # Monitor progress until all workers finish.
+    while any(p.is_alive() for p in processes):
+        done = progress.value
         print(
-            f"    {rows_sent}/{total_rows} ({rows_sent / total_rows:.1%})",
+            f"    {done}/{total_rows} ({done / total_rows:.1%})",
             end="\r",
             flush=True,
         )
-        producer.poll(0)
+        time.sleep(0.5)
 
-    producer.flush()
+    for p in processes:
+        p.join()
+        if p.exitcode != 0:
+            raise RuntimeError(
+                f"Kafka ingestion worker failed with exit code {p.exitcode}"
+            )
+
+    print(f"    {total_rows}/{total_rows} (100.0%)")
     print()
 
 

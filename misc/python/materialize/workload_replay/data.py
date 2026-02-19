@@ -30,8 +30,8 @@ from materialize.workload_replay.config import SEED_RANGE
 from materialize.workload_replay.ingest import (
     get_parquet_row_count,
     ingest,
-    ingest_captured_rows,
     ingest_captured_parquet_kafka,
+    ingest_captured_rows,
     ingest_webhook,
     iter_parquet_batches,
     parse_parquet_file,
