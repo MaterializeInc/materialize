@@ -1741,3 +1741,64 @@ the allocation overhead is proportional to the formatted string length.
 - The coverage data shows thin wrapper functions (PartialOrder::less_equal at 856B,
   AsRef/Deref at 815B, Region::len at 613B) with extremely high execution counts, but
   these are almost certainly fully inlined by the compiler and represent no real overhead.
+
+## Session 19: Byte-level row projection - skip datum decode/re-encode
+
+**Date:** 2026-02-19
+
+**Problem:** When projecting columns from a row (e.g., `SELECT a, c FROM table`), the
+traditional approach is: (1) unpack ALL datums from the source row via `read_datum` (which
+involves type matching, value parsing, Datum construction), then (2) repack the projected
+datums via `push_datum` (which involves type matching, computing encoding sizes like
+`min_bytes_signed`, separate tag + payload writes). This is wasteful because the source
+bytes are already a valid encoding — decoding and re-encoding produces identical bytes.
+
+**Solution:** Added `RowRef::project_onto(&self, projection: &[usize], dest: &mut Row)`
+which uses `skip_datum` to find byte boundaries of each column (just reading the tag byte
+and advancing the pointer — no value construction), then copies the projected columns'
+byte ranges directly via `extend_by_slice_unchecked`. This replaces N `read_datum` +
+M `push_datum` calls with N `skip_datum` + M `memcpy` calls.
+
+**Benchmark results** (10,000 rows, `cargo bench --bench row_project`):
+
+| Scenario | unpack_repack | byte_project | Speedup |
+|----------|-------------|-------------|---------|
+| 10 Int64 cols, identity projection | 1.92 ms | 0.47 ms | **4.1x** |
+| 20 Int64 cols, select 5 | 3.39 ms | 0.60 ms | **5.7x** |
+| Mixed 10 cols (Int64/String/Float64/Bool), select 4 | 1.29 ms | 0.24 ms | **5.3x** |
+| 5 Numeric cols, select 3 | 1.66 ms | 0.23 ms | **7.1x** |
+| 50 Int64 cols, select 3 | 7.12 ms | 1.12 ms | **6.3x** |
+
+**Why it works:** `skip_datum` is dramatically cheaper than `read_datum` because it just
+reads the tag byte, looks up the skip table, and advances the pointer — no value parsing,
+no Datum enum construction, no allocation. The byte copying via `memcpy` is cheaper than
+`push_datum` because it avoids per-datum type matching, encoding size computation (e.g.,
+`min_bytes_signed` for integers, length prefix encoding for strings), and separate tag +
+payload writes.
+
+**Impact:** The Numeric type benefits most (7.1x) because numeric values have expensive
+decoding (arbitrary-precision decimal parsing) and encoding. Wide rows benefit most in
+absolute terms because more columns are skipped. This optimization is most useful for
+column projection in MFP evaluation, arrangement merges that restructure rows, and any
+path that selects a subset of columns from existing rows.
+
+**NOTE:** Also attempted OffsetStride flat struct optimization (replacing enum with flat
+struct for branchless index/len), but benchmarks showed 3-5% regression — the compiler
+already generates efficient code for the enum match with well-predicted branches.
+
+**Files changed:**
+- `src/repr/src/row.rs` - Added `RowRef::project_onto()` method
+- `src/repr/benches/row_project.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- Integrate `project_onto` into `SafeMfpPlan::evaluate_into()` for the case where all
+  projected columns are input columns (no computed expressions). Would need to pass the
+  source row's byte reference to the evaluation function.
+- `RowColumnarDecoder::decode()` at 61B calls is the columnar-to-row conversion in the
+  persist layer. Batch decoding or SIMD vectorization could help.
+- `ArrayOrd::cmp()` at 92.7B calls does double enum dispatch for Arrow array comparison.
+  Since both arrays are always the same type, a single-dispatch approach via function
+  pointers or vtable could reduce branch overhead.
+- `DatumSeq::cmp()` at 98B calls could potentially benefit from prefetching the next
+  comparison pair's bytes during the current comparison.
