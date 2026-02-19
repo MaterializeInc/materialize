@@ -487,13 +487,13 @@ where
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
+                    // Buffer to accumulate contributing (time, diff) pairs for each (key, val).
+                    let mut times_diffs = Vec::default();
                     input.for_each(|time, data| {
                         let mut row_builder = SharedRow::get();
                         let mut ok_session = ok_output.session(&time);
                         let mut err_session = err_output.session(&time);
 
-                        // Buffer to accumulate contributing (time, diff) pairs for each (key, val).
-                        let mut times_diffs = Vec::default();
                         for wrapper in data.iter() {
                             let batch = &wrapper;
                             let mut cursor = batch.cursor();
@@ -552,6 +552,7 @@ where
                                             }
                                         }
                                     }
+                                    times_diffs.clear();
 
                                     cursor.step_val(batch);
                                 }
