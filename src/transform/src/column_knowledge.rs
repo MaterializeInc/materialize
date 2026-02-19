@@ -15,7 +15,8 @@ use itertools::{Itertools, zip_eq};
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::visit::Visit;
 use mz_expr::{
-    EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, UnaryFunc, func,
+    EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, ReduceContext,
+    UnaryFunc, func,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -807,7 +808,7 @@ fn optimize(
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
-                        e.reduce(column_types);
+                        e.reduce(column_types, ReduceContext::Optimizer);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
                         *e = MirScalarExpr::literal_false();
                     };
@@ -824,7 +825,7 @@ fn optimize(
                         matches!(knowledge1, DatumKnowledge::Lit { .. }),
                         matches!(knowledge2, DatumKnowledge::Lit { .. }),
                     ] {
-                        e.reduce(column_types);
+                        e.reduce(column_types, ReduceContext::Optimizer);
                     }
                     DatumKnowledge::from(&*e)
                 }
@@ -835,7 +836,7 @@ fn optimize(
                         .drain(knowledge_stack.len() - exprs.len()..)
                         .any(|k| matches!(k, DatumKnowledge::Lit { .. }))
                     {
-                        e.reduce(column_types);
+                        e.reduce(column_types, ReduceContext::Optimizer);
                     }
                     DatumKnowledge::from(&*e)
                 }

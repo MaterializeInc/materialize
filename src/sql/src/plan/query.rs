@@ -52,8 +52,8 @@ use mz_expr::func::variadic::{
 };
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, TableFunc,
-    func as expr_func,
+    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, ReduceContext, RowSetFinishing,
+    TableFunc, func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -1405,7 +1405,7 @@ pub fn plan_index_exprs<'a>(
         transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         let mut expr = expr.lower_uncorrelated(scx.catalog.system_vars())?;
-        expr.reduce(&on_desc.typ().column_types);
+        expr.reduce(&on_desc.typ().column_types, ReduceContext::Sql);
         out.push(expr);
     }
     Ok(out)

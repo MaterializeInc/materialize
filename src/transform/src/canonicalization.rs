@@ -23,7 +23,7 @@ use itertools::Itertools;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 
-use mz_expr::MirRelationExpr;
+use mz_expr::{MirRelationExpr, ReduceContext};
 
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, ReprRelationType};
@@ -80,7 +80,7 @@ impl crate::Transform for ReduceScalars {
                         .map(SqlColumnType::from_repr)
                         .collect();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_type);
+                        predicate.reduce(&input_type, ReduceContext::Optimizer);
                     }
                     predicates.retain(|p| !p.is_literal_true());
                 }
@@ -95,7 +95,7 @@ impl crate::Transform for ReduceScalars {
                         .map(SqlColumnType::from_repr)
                         .collect();
                     for expr in exprs.iter_mut() {
-                        expr.reduce(&input_type);
+                        expr.reduce(&input_type, ReduceContext::Optimizer);
                     }
                 }
                 MirRelationExpr::Map { scalars, .. } => {
@@ -110,7 +110,7 @@ impl crate::Transform for ReduceScalars {
                         .collect();
                     let input_arity = output_type.len() - scalars.len();
                     for (index, scalar) in scalars.iter_mut().enumerate() {
-                        scalar.reduce(&output_type[..input_arity + index]);
+                        scalar.reduce(&output_type[..input_arity + index], ReduceContext::Optimizer);
                     }
                 }
                 MirRelationExpr::Join { equivalences, .. } => {
@@ -130,7 +130,7 @@ impl crate::Transform for ReduceScalars {
 
                     for class in equivalences.iter_mut() {
                         for expr in class.iter_mut() {
-                            expr.reduce(&input_types[..]);
+                            expr.reduce(&input_types[..], ReduceContext::Optimizer);
                         }
                         class.sort();
                         class.dedup();
@@ -154,10 +154,10 @@ impl crate::Transform for ReduceScalars {
                         .map(SqlColumnType::from_repr)
                         .collect();
                     for key in group_key.iter_mut() {
-                        key.reduce(&input_type);
+                        key.reduce(&input_type, ReduceContext::Optimizer);
                     }
                     for aggregate in aggregates.iter_mut() {
-                        aggregate.expr.reduce(&input_type);
+                        aggregate.expr.reduce(&input_type, ReduceContext::Optimizer);
                     }
                 }
                 MirRelationExpr::TopK { limit, .. } => {
@@ -171,7 +171,7 @@ impl crate::Transform for ReduceScalars {
                         .map(SqlColumnType::from_repr)
                         .collect();
                     if let Some(limit) = limit {
-                        limit.reduce(&input_type);
+                        limit.reduce(&input_type, ReduceContext::Optimizer);
                     }
                 }
             }

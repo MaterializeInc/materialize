@@ -21,7 +21,7 @@ use std::fmt::Formatter;
 use itertools::Itertools;
 use mz_expr::canonicalize::{UnionFind, canonicalize_equivalence_classes};
 use mz_expr::explain::{HumanizedExplain, HumanizerMode};
-use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
+use mz_expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr, ReduceContext};
 use mz_ore::str::{bracketed, separated};
 use mz_repr::{Datum, SqlColumnType};
 
@@ -852,7 +852,7 @@ impl EquivalenceClasses {
                 self.remap.reduce_child(expr);
                 if let Some(columns) = columns {
                     let orig_expr = expr.clone();
-                    expr.reduce(columns);
+                    expr.reduce(columns, ReduceContext::Optimizer);
                     if expr.contains_err() {
                         // Rollback to the original expression if it contains an error.
                         *expr = orig_expr;

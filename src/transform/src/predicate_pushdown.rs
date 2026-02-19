@@ -90,7 +90,7 @@ use mz_expr::func::variadic::And;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
     AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
-    VariadicFunc, func,
+    ReduceContext, VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
@@ -165,7 +165,7 @@ impl PredicatePushdown {
                     // whether they are literal errors before working with them.
                     let input_type = input.typ();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_type.column_types);
+                        predicate.reduce(&input_type.column_types, ReduceContext::Optimizer);
                     }
 
                     // It can be helpful to know if there are any non-literal errors,
@@ -1200,7 +1200,7 @@ impl PredicatePushdown {
         mut s: MirScalarExpr,
         column_types: &[SqlColumnType],
     ) -> Vec<MirScalarExpr> {
-        s.reduce(column_types);
+        s.reduce(column_types, ReduceContext::Optimizer);
 
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::And(_),

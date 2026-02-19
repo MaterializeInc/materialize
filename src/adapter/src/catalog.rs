@@ -2281,7 +2281,7 @@ mod tests {
     use mz_catalog::builtin::{BUILTINS, Builtin, BuiltinType};
     use mz_catalog::durable::{CatalogError, DurableCatalogError, FenceError, test_bootstrap_args};
     use mz_controller_types::{ClusterId, ReplicaId};
-    use mz_expr::MirScalarExpr;
+    use mz_expr::{MirScalarExpr, ReduceContext};
     use mz_ore::now::to_datetime;
     use mz_ore::{assert_err, assert_ok, soft_assert_eq_or_log, task};
     use mz_persist_client::PersistClient;
@@ -3420,7 +3420,7 @@ mod tests {
                         // Check that `MirScalarExpr::reduce` yields the same result
                         // as the real evaluation.
                         let mut reduced = mir.clone();
-                        reduced.reduce(&[]);
+                        reduced.reduce(&[], ReduceContext::Sql);
                         match reduced {
                             MirScalarExpr::Literal(reduce_result, ctyp) => {
                                 match reduce_result {

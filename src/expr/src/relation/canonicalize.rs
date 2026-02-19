@@ -19,7 +19,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::{SqlColumnType, SqlScalarType};
 
 use crate::visit::Visit;
-use crate::{MirScalarExpr, UnaryFunc, VariadicFunc, func};
+use crate::{MirScalarExpr, ReduceContext, UnaryFunc, VariadicFunc, func};
 
 /// Canonicalize equivalence classes of a join and expressions contained in them.
 ///
@@ -85,7 +85,10 @@ pub fn canonicalize_equivalences<'a, I>(
                         expressions_rewritten = true;
                     }
                 });
-                popped_expr.reduce(&column_types);
+                // Using Optimizer context is fine here: this is called from optimizer
+                // transforms and from rendering, both of which operate on MIR with
+                // repr-canonicalized types.
+                popped_expr.reduce(&column_types, ReduceContext::Optimizer);
                 new_equivalence.push((rank_complexity(&popped_expr), popped_expr));
             }
             new_equivalence.sort();
@@ -226,7 +229,9 @@ pub fn canonicalize_predicates(
     );
 
     // 1) Reduce each individual predicate.
-    predicates.iter_mut().for_each(|p| p.reduce(column_types));
+    // Using Optimizer context is fine here: this is called from optimizer
+    // transforms and from lowering (which creates MIR), so repr types are appropriate.
+    predicates.iter_mut().for_each(|p| p.reduce(column_types, ReduceContext::Optimizer));
 
     // 2) Split "A and B" into two predicates: "A" and "B"
     // Relies on the `reduce` above having flattened nested ANDs.
@@ -434,7 +439,7 @@ fn replace_subexpr_and_reduce(
         },
     );
     if changed {
-        predicate.reduce(column_types);
+        predicate.reduce(column_types, ReduceContext::Optimizer);
     }
     changed
 }
