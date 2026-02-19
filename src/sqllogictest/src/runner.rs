@@ -305,8 +305,8 @@ impl fmt::Display for Outcome<'_> {
                 location,
             } => write!(
                 f,
-                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
-                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+                "InconsistentViewOutcome:{}{}expected from query: {}{}actually from indexed view: {}",
+                location, INDENT, query_outcome, INDENT, view_outcome
             ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
@@ -1577,7 +1577,11 @@ impl<'a> RunnerInner<'a> {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
-                                error: anyhow!(error),
+                                error: anyhow!(
+                                    "error does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                                    expected_error,
+                                    error_string
+                                ),
                                 location,
                             })
                         }
@@ -1702,7 +1706,11 @@ impl<'a> RunnerInner<'a> {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
-                        error: view_error.into(),
+                        error: anyhow!(
+                            "error does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                            expected_error,
+                            view_error.to_string_with_causes()
+                        ),
                         location: location.clone(),
                     })
                 }
