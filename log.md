@@ -356,3 +356,108 @@ numbers. Zero heap allocations in the new path.
   A pooled/reusable arena would reduce allocation pressure.
 - `format_uuid`, `format_jsonb`, `format_interval` in strconv.rs still use `write!` macro.
 - JSONB/JSON interchange still use `to_standard_notation_string()` for numeric formatting.
+
+## Session 5: Fast-path float formatting - bypass ryu for integer-valued floats
+
+**Date:** 2026-02-19
+
+**Problem:** Every time a float value (f32, f64) is formatted for pgwire output, the code
+used `ryu::Buffer::format_finite(f)` followed by a per-character `Peekable<Chars>` iteration
+to fix up the ryu output (strip ".0" suffix, insert '+' before positive exponents). This has
+two sources of overhead:
+1. **ryu formatting** (~30-44ns per value): Even for simple integer-valued floats like 0.0,
+   1.0, 42.0, ryu runs its full Ryū algorithm (Grisu/Schubfach) to compute the shortest
+   representation, which is massive overkill for integers.
+2. **Per-character iteration** (~5-15ns per value): The `Peekable<Chars>` loop calls
+   `write_char()` for each character individually instead of writing bulk string slices.
+
+For many real-world workloads, float columns often contain integer-like values (counts,
+measurements, IDs stored as doubles, etc.), making optimization (1) particularly impactful.
+
+**Fix:** Two optimizations in `format_float`:
+
+1. **Integer fast path**: For integer-valued floats where `f == f.trunc()` and the value fits
+   in i64 with `|value| < 1e15`, bypass ryu entirely and use our direct integer formatter
+   (from session 4). This works because ryu uses decimal notation for these values, producing
+   output identical to our integer formatter after ".0" stripping. The threshold of 1e15
+   ensures we stay within ryu's decimal notation range (ryu switches to scientific notation
+   at ~1e16 for round powers of 10).
+
+2. **Bulk string writes**: For the ryu path (non-integer floats), replaced the per-character
+   `Peekable<Chars>` iteration with byte-level `position()` search for 'e' and 1-3
+   `write_str()` calls. For the common case (no exponent), this is a single `write_str`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench float_format`):
+
+### Per-value f64 formatting (ns/iter)
+
+| Value                | Old (ryu+per-char) | New (fast path) | Speedup |
+|----------------------|-------------------:|----------------:|--------:|
+| zero (0.0)           | 6.9                | 4.6             | 1.5x    |
+| one (1.0)            | 41.0               | 5.0             | **8.2x**|
+| small_int (42.0)     | 39.0               | 5.0             | **7.8x**|
+| hundred (100.0)      | 43.7               | 5.4             | **8.0x**|
+| thousand (9999.0)    | 38.7               | 6.0             | **6.5x**|
+| sci_pos_exp (1.5e10) | 48.6               | 10.0            | **4.9x**|
+| pi (3.14159...)      | 32.6               | 27.1            | 1.2x    |
+| typical (3.14)       | 33.3               | 31.6            | 1.05x   |
+| neg_pi (-3.14159...) | 33.3               | 27.5            | 1.21x   |
+| negative (-42.5)     | 41.8               | 40.7            | 1.03x   |
+| small_frac (0.001)   | 37.4               | 35.3            | 1.06x   |
+| large (1e15)         | 53.4               | 48.8            | 1.09x   |
+| large_frac (1.23e15) | 43.3               | 39.1            | 1.11x   |
+| max_sig (1.8e308)    | 37.3               | 29.4            | 1.27x   |
+| min_pos (5e-324)     | 21.8               | 19.6            | 1.11x   |
+
+### Per-value f32 formatting (ns/iter)
+
+| Value                | Old (ryu+per-char) | New (fast path) | Speedup |
+|----------------------|-------------------:|----------------:|--------:|
+| zero (0.0)           | 6.9                | 4.4             | 1.6x    |
+| one (1.0)            | 24.5               | 5.0             | **4.9x**|
+| hundred (100.0)      | 27.1               | 5.5             | **4.9x**|
+| sci_pos_exp (1.5e10) | 43.7               | 9.3             | **4.7x**|
+| pi (3.14159...)      | 21.9               | 18.0            | 1.22x   |
+| typical (3.14)       | 22.2               | 21.2            | 1.05x   |
+| negative (-42.5)     | 27.0               | 26.8            | 1.01x   |
+
+### Batch formatting (10k values to shared buffer)
+
+| Approach                           | Time      | Speedup   |
+|------------------------------------|-----------|-----------|
+| Old ryu 10k mixed f64              | 424 µs    | -         |
+| New optimized 10k mixed f64        | 199 µs    | **2.1x**  |
+| Old ryu 10k integer-valued f64     | 337 µs    | -         |
+| New fast-path 10k integer f64      | 61 µs     | **5.5x**  |
+
+**Summary:** For integer-valued floats (the fast path), **5-8x faster** by bypassing ryu
+entirely and using the direct integer formatter. For non-integer floats, 1.05-1.27x faster
+from the bulk write_str optimization. In realistic batch scenarios: **2.1x faster for mixed
+workloads, 5.5x faster for integer-heavy workloads**. The fast path adds only ~1-2ns overhead
+for non-integer values (the `f == f.trunc()` check), which is negligible.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Added integer fast path to `format_float`, replaced per-char
+  `Peekable<Chars>` iteration with byte-level `position()` + `write_str` slicing. Added
+  correctness test `test_format_float64`.
+- `src/repr/benches/float_format.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `values_from_row()` in `src/pgrepr/src/value.rs:896` allocates a `Vec<Option<Value>>`
+  per row during pgwire encoding. For string columns, `s.to_owned()` clones every string
+  into the Value enum; for bytes, `b.to_vec()` clones. Encoding directly from Datum to
+  BytesMut would eliminate all these per-row allocations. Could pre-encode DataRow bytes
+  eagerly (before sending through the async channel) to avoid the intermediate Value
+  representation entirely.
+- `format_uuid` uses `write!(buf, "{}", uuid)` - could use `uuid.as_hyphenated().encode_lower()`
+  to a stack buffer + single write_str, avoiding fmt machinery for 36 chars.
+- `format_bytes` uses `hex::encode(bytes)` which heap-allocates a String for every bytea
+  value. Could write hex directly to the buffer with a lookup table.
+- `format_interval` uses multiple `write!` calls in its Display impl - could use direct
+  formatting similar to timestamp optimization.
+- DatumVec already solves the Row::unpack() hot path (single-pass with allocation reuse).
+  Row::unpack() two-pass is only used in cold paths and is not worth optimizing.
+- `CheapTimestamp` decoding in `read_datum` does integer division + DateTime::from_timestamp
+  construction on every timestamp datum read. Could potentially be made faster with direct
+  NaiveDateTime construction.
