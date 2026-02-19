@@ -56,7 +56,6 @@ pub struct Metrics {
     pub catalog_transact_phase_seconds: HistogramVec,
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
-    pub group_commit_table_advancement_seconds: Histogram,
 }
 
 impl Metrics {
@@ -262,11 +261,6 @@ impl Metrics {
                 help: "The time it takes to advance the catalog shard upper during group commit.",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
             )),
-            group_commit_table_advancement_seconds: registry.register(metric!(
-                name: "mz_group_commit_table_advancement_seconds",
-                help: "The time it takes to iterate over all catalog entries to find tables during group commit.",
-                buckets: histogram_seconds_buckets(0.001, 32.0),
-            ))
         }
     }
 
