@@ -26,7 +26,7 @@ use mz_ore::str::{bracketed, separated};
 use mz_repr::{Datum, SqlColumnType};
 
 use crate::analysis::{Analysis, Lattice};
-use crate::analysis::{Arity, SqlRelationType};
+use crate::analysis::{Arity, ReprRelationType};
 use crate::analysis::{Derived, DerivedBuilder};
 
 /// Pulls up and pushes down predicate information represented as equivalences
@@ -42,7 +42,7 @@ impl Analysis for Equivalences {
 
     fn announce_dependencies(builder: &mut DerivedBuilder) {
         builder.require(Arity);
-        builder.require(SqlRelationType); // needed for expression reduction.
+        builder.require(ReprRelationType); // needed for expression reduction.
     }
 
     fn derive(
@@ -271,10 +271,13 @@ impl Analysis for Equivalences {
             MirRelationExpr::ArrangeBy { .. } => results.get(index - 1).unwrap().clone(),
         };
 
-        let expr_type = depends.results::<SqlRelationType>()[index].as_ref();
+        let repr_expr_type = depends.results::<ReprRelationType>()[index].as_ref();
+        let expr_type: Option<Vec<SqlColumnType>> = repr_expr_type
+            .as_ref()
+            .map(|cols| cols.iter().map(SqlColumnType::from_repr).collect());
         equivalences
             .as_mut()
-            .map(|e| e.minimize(expr_type.map(|x| &x[..])));
+            .map(|e| e.minimize(expr_type.as_ref().map(|x| &x[..])));
         equivalences
     }
 

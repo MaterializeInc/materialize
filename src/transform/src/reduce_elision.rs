@@ -16,9 +16,11 @@
 use itertools::Itertools;
 use mz_expr::MirRelationExpr;
 
+use mz_repr::SqlColumnType;
+
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, DerivedView};
-use crate::analysis::{SqlRelationType, UniqueKeys};
+use crate::analysis::{ReprRelationType, UniqueKeys};
 
 /// Removes `Reduce` when the input has as unique keys the keys of the reduce.
 #[derive(Debug)]
@@ -41,7 +43,7 @@ impl crate::Transform for ReduceElision {
     ) -> Result<(), crate::TransformError> {
         // Assemble type information once for the whole expression.
         let mut builder = DerivedBuilder::new(ctx.features);
-        builder.require(SqlRelationType);
+        builder.require(ReprRelationType);
         builder.require(UniqueKeys);
         let derived = builder.visit(relation);
         let derived_view = derived.as_view();
@@ -67,12 +69,15 @@ impl ReduceElision {
                 expected_group_size: _,
             } = expr
             {
-                let input_type = view
+                let input_type: Vec<SqlColumnType> = view
                     .last_child()
-                    .value::<SqlRelationType>()
-                    .expect("SqlRelationType required")
+                    .value::<ReprRelationType>()
+                    .expect("ReprRelationType required")
                     .as_ref()
-                    .expect("Expression not well-typed");
+                    .expect("Expression not well-typed")
+                    .iter()
+                    .map(SqlColumnType::from_repr)
+                    .collect();
                 let input_keys = view
                     .last_child()
                     .value::<UniqueKeys>()
@@ -84,7 +89,7 @@ impl ReduceElision {
                 }) {
                     let map_scalars = aggregates
                         .iter()
-                        .map(|a| a.on_unique(input_type))
+                        .map(|a| a.on_unique(&input_type))
                         .collect_vec();
 
                     let mut result = input.take_dangerous();
