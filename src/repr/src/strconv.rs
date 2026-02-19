@@ -600,8 +600,27 @@ pub fn format_numeric<F>(buf: &mut F, n: &OrderedDecimal<Numeric>) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", n.0.to_standard_notation_string());
+    numeric::write_numeric_standard_notation(&mut FmtWriteFormatBuffer(buf), &n.0)
+        .expect("FormatBuffer is infallible");
     Nestable::Yes
+}
+
+/// Adapter that implements [`fmt::Write`] for any [`FormatBuffer`].
+///
+/// This allows zero-allocation formatting functions that accept `&mut impl
+/// fmt::Write` to write directly into a `FormatBuffer`.
+struct FmtWriteFormatBuffer<'a, F: FormatBuffer>(&'a mut F);
+
+impl<F: FormatBuffer> fmt::Write for FmtWriteFormatBuffer<'_, F> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.0.write_str(s);
+        Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> fmt::Result {
+        self.0.write_char(c);
+        Ok(())
+    }
 }
 
 pub fn format_string<F>(buf: &mut F, s: &str) -> Nestable

@@ -1577,7 +1577,7 @@ impl fmt::Display for Datum<'_> {
                 write_delimited(f, ", ", dict, |f, (k, v)| write!(f, "{}: {}", k, v))?;
                 f.write_str("}")
             }
-            Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::Numeric(n) => crate::adt::numeric::write_numeric_standard_notation(f, &n.0),
             Datum::MzTimestamp(t) => write!(f, "{}", t),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
