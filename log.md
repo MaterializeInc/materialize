@@ -836,3 +836,100 @@ aggregation pattern of extracting a single column from wide rows.
 - JSONB/JSON interchange still use `to_standard_notation_string()` for numeric formatting.
 - `Top1Monoid::cmp` in top_k.rs allocates Vec via `Row::unpack()` on every comparison.
   Using `DatumVec` (like `Top1MonoidLocal` does) would eliminate these allocations.
+
+## Session 10: Fast timestamp datum reading - skip redundant validation on read
+
+**Date:** 2026-02-19
+
+**Problem:** Every time a timestamp or timestamptz datum is read from Row storage via
+`read_datum`, the code performed two unnecessary operations:
+
+1. **Redundant range validation:** `CheckedTimestamp::from_timestamplike(ndt)` validates the
+   timestamp's date against `LOW_DATE` and `HIGH_DATE` bounds (using `LazyLock` statics).
+   This validation was provably redundant because:
+   - Timestamps in Row storage were already validated when initially constructed via
+     `CheckedTimestamp::from_timestamplike()` on the write path
+   - The proto deserialization path (`RustType<ProtoNaiveDateTime>` impl) already skips
+     this validation, establishing precedent that round-tripped data doesn't need re-checking
+   - The validation extracts `.date()`, then does two `NaiveDate` comparisons, each requiring
+     an atomic load from `LazyLock` statics
+
+2. **Redundant integer division:** `rem_euclid(1_000_000_000)` performs a second integer
+   division to compute the nanosecond remainder, when it could be computed from the quotient
+   via `(ts - secs * 1_000_000_000)` (one multiply + one subtract, ~3-4 cycles, vs integer
+   division at ~20-40 cycles on x86-64)
+
+These operations execute on every timestamp datum read throughout the system: during MFP
+evaluation, row iteration, aggregation, sorting, and pgwire encoding.
+
+**Fix:**
+
+1. **Added `CheckedTimestamp::from_timestamplike_unchecked()`** in `timestamp.rs`: A new
+   constructor that wraps without validation, for use with data already known to be in range.
+   Used in `read_datum` for all 4 timestamp variants (CheapTimestamp, CheapTimestampTz,
+   Timestamp, TimestampTz) and in the columnar decode path (`row/encode.rs`) and stats
+   decode path (`stats.rs`).
+
+2. **Replaced `rem_euclid` with quotient-based remainder** in CheapTimestamp/CheapTimestampTz
+   decoding: `let nsecs = (ts - secs * 1_000_000_000) as u32` avoids the second division.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench timestamp_read`):
+
+### Per-value isolated decode comparison (ns/iter)
+
+| Value                    | Old (validated) | New (unchecked) | Speedup |
+|--------------------------|----------------:|----------------:|--------:|
+| timestamp_typical        | 7.01            | 6.54            | 1.07x   |
+| timestamp_epoch          | 7.08            | 6.51            | 1.09x   |
+| timestamp_pre_epoch      | 7.10            | 6.55            | 1.08x   |
+| timestamp_y2k            | 6.99            | 6.46            | 1.08x   |
+| timestamptz_typical      | 7.07            | 6.44            | 1.10x   |
+| timestamptz_epoch        | 7.03            | 6.45            | 1.09x   |
+| timestamptz_pre_epoch    | 7.08            | 6.43            | 1.10x   |
+
+### Row iteration performance (ns/iter, optimized path)
+
+| Scenario                 | Time (ns) | Per-datum |
+|--------------------------|----------:|----------:|
+| single_timestamp         | 11.0      | 11.0      |
+| single_timestamptz       | 11.0      | 11.0      |
+| iter_5col_timestamp      | 55.3      | 11.1      |
+| iter_10col_timestamp     | 110.9     | 11.1      |
+| iter_10col_timestamptz   | 110.6     | 11.1      |
+| unpack_10col_timestamp   | 130.5     | 13.1      |
+
+### Batch decode (10k values)
+
+| Approach                        | Time (µs) | Speedup   |
+|---------------------------------|-----------|-----------|
+| Old validated 10k timestamp     | 70.7      | -         |
+| New unchecked 10k timestamp     | 65.5      | **1.08x** |
+| Old validated 10k timestamptz   | 70.2      | -         |
+| New unchecked 10k timestamptz   | 65.5      | **1.07x** |
+
+**Summary:** ~7-10% faster per timestamp decode. The chrono `DateTime` construction
+(~6ns) remains the dominant cost; our optimization saves ~0.5-0.6ns per decode by
+eliminating the range validation and second integer division. At billions of timestamp
+reads (coverage data shows 62.8B+ `read_datum` calls), this is meaningful.
+
+**Files changed:**
+- `src/repr/src/adt/timestamp.rs` - Added `from_timestamplike_unchecked()` constructor
+- `src/repr/src/row.rs` - Updated all 4 timestamp variants in `read_datum` to use
+  unchecked constructor and quotient-based remainder
+- `src/repr/src/row/encode.rs` - Updated columnar decode to use unchecked constructor
+- `src/repr/src/stats.rs` - Updated stats decode to use unchecked constructor
+- `src/repr/benches/timestamp_read.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- The chrono `DateTime::from_timestamp()` construction itself is ~6ns and involves
+  internal integer divisions (secs → days + day_secs) plus NaiveDate/NaiveTime
+  construction. A custom `NaiveDateTime` constructor that bypasses chrono's validation
+  could potentially be 2-3x faster, but would depend on chrono's internal representation.
+- `RowRef::unpack()` iterates twice (count + collect). A single-pass approach with a
+  heuristic initial capacity (e.g., 8) would eliminate the count pass entirely.
+- `Top1Monoid::cmp` in top_k.rs allocates Vec via `Row::unpack()` on every comparison.
+  Using `DatumVec` (like `Top1MonoidLocal` does) would eliminate these allocations.
+- JSONB/JSON interchange still use `to_standard_notation_string()` for numeric formatting.
+- Avro varint decoding (4.4B executions in coverage data) could benefit from batch-read
+  optimization instead of byte-by-byte processing.

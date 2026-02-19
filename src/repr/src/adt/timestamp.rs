@@ -591,6 +591,16 @@ impl<T: TimestampLike> CheckedTimestamp<T> {
         Ok(Self { t })
     }
 
+    /// Constructs a `CheckedTimestamp` without validating the date range.
+    ///
+    /// This should only be used for data that is already known to be in range,
+    /// such as timestamps read back from Row storage (which were validated on write)
+    /// or deserialized from protobuf (where the proto path already skips validation).
+    #[inline]
+    pub fn from_timestamplike_unchecked(t: T) -> Self {
+        Self { t }
+    }
+
     pub fn checked_add_signed(self, rhs: Duration) -> Option<T> {
         self.t.checked_add_signed(rhs)
     }

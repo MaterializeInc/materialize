@@ -1379,42 +1379,35 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         Tag::CheapTimestamp => {
             let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
-            let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
+            // Compute remainder from quotient to avoid a second integer division.
+            let nsecs = (ts - secs * 1_000_000_000) as u32;
             let ndt = DateTime::from_timestamp(secs, nsecs)
                 .expect("We only write round-trippable timestamps")
                 .naive_utc();
-            Datum::Timestamp(
-                CheckedTimestamp::from_timestamplike(ndt).expect("unexpected timestamp"),
-            )
+            // SAFETY: timestamps in Row storage were already validated when written.
+            Datum::Timestamp(CheckedTimestamp::from_timestamplike_unchecked(ndt))
         }
         Tag::CheapTimestampTz => {
             let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
-            let nsecs: u32 = ts.rem_euclid(1_000_000_000).try_into().unwrap();
+            let nsecs = (ts - secs * 1_000_000_000) as u32;
             let dt = DateTime::from_timestamp(secs, nsecs)
                 .expect("We only write round-trippable timestamps");
-            Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(dt).expect("unexpected timestamp"),
-            )
+            Datum::TimestampTz(CheckedTimestamp::from_timestamplike_unchecked(dt))
         }
         Tag::Timestamp => {
             let date = read_naive_date(data);
             let time = read_time(data);
-            Datum::Timestamp(
-                CheckedTimestamp::from_timestamplike(date.and_time(time))
-                    .expect("unexpected timestamp"),
-            )
+            Datum::Timestamp(CheckedTimestamp::from_timestamplike_unchecked(
+                date.and_time(time),
+            ))
         }
         Tag::TimestampTz => {
             let date = read_naive_date(data);
             let time = read_time(data);
-            Datum::TimestampTz(
-                CheckedTimestamp::from_timestamplike(DateTime::from_naive_utc_and_offset(
-                    date.and_time(time),
-                    Utc,
-                ))
-                .expect("unexpected timestamptz"),
-            )
+            Datum::TimestampTz(CheckedTimestamp::from_timestamplike_unchecked(
+                DateTime::from_naive_utc_and_offset(date.and_time(time), Utc),
+            ))
         }
         Tag::Interval => {
             let months = i32::from_le_bytes(read_byte_array(data));

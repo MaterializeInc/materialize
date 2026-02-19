@@ -53,6 +53,10 @@ harness = false
 name = "row_skip"
 harness = false
 
+[[bench]]
+name = "timestamp_read"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
