@@ -19,10 +19,10 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-20* <br>
 
-This release introduces our Roles and Users Management page, performance improvements, and bugfixes.
+This release introduces our Roles and Users page, performance improvements, and bugfixes.
 
 ### Role Management
-The new Roles and Users page on the Materialize Console allows organization administrators to create roles, grant privileges to roles, and assign roles to users. You can also track the hierarchy of roles using the graph view.
+The new Roles and Users page on the Materialize Console allows organization administrators to create roles, grant privileges, and assign roles to users. You can also track the hierarchy of roles using the graph view.
 
 ![Create Role experience](/images/releases/v2612_create_role.png)
 
