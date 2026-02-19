@@ -2282,6 +2282,32 @@ dependencies = [
 
 [[package]]
 name = "criterion"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
+dependencies = [
+ "anes",
+ "cast",
+ "ciborium",
+ "clap",
+ "criterion-plot 0.5.0",
+ "is-terminal",
+ "itertools 0.10.5",
+ "num-traits",
+ "once_cell",
+ "oorandom",
+ "plotters",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tinytemplate",
+ "walkdir",
+]
+
+[[package]]
+name = "criterion"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "950046b2aa2492f9a536f5f4f9a3de7b9e2476e575e05bd6c333371add4d98f3"
@@ -2291,7 +2317,7 @@ dependencies = [
  "cast",
  "ciborium",
  "clap",
- "criterion-plot",
+ "criterion-plot 0.8.2",
  "itertools 0.13.0",
  "num-traits",
  "oorandom",
@@ -2304,6 +2330,16 @@ dependencies = [
  "tinytemplate",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
+dependencies = [
+ "cast",
+ "itertools 0.10.5",
 ]
 
 [[package]]
@@ -4578,6 +4614,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "is-terminal"
+version = "0.4.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
+dependencies = [
+ "hermit-abi",
+ "libc",
+ "windows-sys 0.61.1",
+]
+
+[[package]]
 name = "is-wsl"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5529,7 +5576,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "chrono",
- "criterion",
+ "criterion 0.8.2",
  "datadriven",
  "dec",
  "derivative",
@@ -6528,7 +6575,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crc32fast",
- "criterion",
+ "criterion 0.8.2",
  "csv",
  "datadriven",
  "dec",
@@ -6788,7 +6835,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "criterion",
+ "criterion 0.8.2",
  "differential-dataflow",
  "itertools 0.14.0",
  "maplit",
@@ -7185,7 +7232,7 @@ dependencies = [
  "columnation",
  "compact_bytes",
  "console-subscriber",
- "criterion",
+ "criterion 0.8.2",
  "ctor",
  "derivative",
  "differential-dataflow",
@@ -7327,7 +7374,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "clap",
- "criterion",
+ "criterion 0.8.2",
  "datadriven",
  "differential-dataflow",
  "futures",
@@ -7426,6 +7473,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
+ "criterion 0.5.1",
  "dec",
  "itertools 0.14.0",
  "mz-ore",
@@ -7675,7 +7723,7 @@ dependencies = [
  "columnar",
  "columnation",
  "compact_bytes",
- "criterion",
+ "criterion 0.8.2",
  "dec",
  "differential-dataflow",
  "enum-kinds",
@@ -8354,7 +8402,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "columnation",
- "criterion",
+ "criterion 0.8.2",
  "dec",
  "derivative",
  "differential-dataflow",
@@ -8521,7 +8569,7 @@ dependencies = [
  "bytemuck",
  "columnar",
  "columnation",
- "criterion",
+ "criterion 0.8.2",
  "custom-labels",
  "differential-dataflow",
  "either",
@@ -13716,7 +13764,7 @@ dependencies = [
  "clap",
  "clap_builder",
  "concurrent-queue",
- "criterion",
+ "criterion 0.8.2",
  "crossbeam-deque",
  "crossbeam-epoch",
  "crossbeam-queue",
