@@ -1303,6 +1303,8 @@ impl PersistPeek {
         let mut row_builder = Row::default();
         let arena = RowArena::new();
         let mut total_size = 0usize;
+        // Pre-compute which input columns the MFP needs for selective decoding.
+        let mfp_needed = mfp_plan.needed_input_columns();
 
         let literal_len = match &literal_constraint {
             None => 0,
@@ -1338,7 +1340,8 @@ impl PersistPeek {
                 let Some(count) = NonZeroUsize::new(count) else {
                     continue;
                 };
-                let mut datum_local = datum_vec.borrow_with(&row);
+                let mut datum_local =
+                    datum_vec.borrow_with_selective(&row, &mfp_needed);
                 let eval_result = mfp_plan
                     .evaluate_into(&mut datum_local, &arena, &mut row_builder)
                     .map(|row| row.cloned())

@@ -457,6 +457,12 @@ where
 
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    // Pre-compute which input columns are actually needed by the MFP.
+    // Columns not in this set can be skipped during row decoding (skip_datum
+    // instead of read_datum), avoiding expensive type-specific construction.
+    let mfp_needed_columns = map_filter_project
+        .as_ref()
+        .map(|mfp| mfp.needed_input_columns());
 
     builder.build(move |_caps| {
         let name = name.to_owned();
@@ -495,6 +501,7 @@ where
                     yield_fn,
                     &until,
                     map_filter_project.as_ref(),
+                    mfp_needed_columns.as_deref(),
                     &mut datum_vec,
                     &mut row_builder,
                     &mut output,
@@ -559,6 +566,7 @@ impl PendingWork {
         yield_fn: YFn,
         until: &Antichain<Timestamp>,
         map_filter_project: Option<&MfpPlan>,
+        mfp_needed_columns: Option<&[bool]>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut OutputBuilderSession<
@@ -597,7 +605,12 @@ impl PendingWork {
                         // evaluation against our fuel.
                         *work += 1;
                         let arena = mz_repr::RowArena::new();
-                        let mut datums_local = datum_vec.borrow_with(&row);
+                        let mut datums_local = match mfp_needed_columns {
+                            Some(needed) => {
+                                datum_vec.borrow_with_selective(&row, needed)
+                            }
+                            None => datum_vec.borrow_with(&row),
+                        };
                         for result in mfp.evaluate(
                             &mut datums_local,
                             &arena,

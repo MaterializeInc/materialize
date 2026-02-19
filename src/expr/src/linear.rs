@@ -112,6 +112,47 @@ impl MapFilterProject {
             && self.projection.iter().enumerate().all(|(i, p)| i == *p)
     }
 
+    /// Returns a bitmask of which input columns are needed for evaluation.
+    ///
+    /// A column is "needed" if it is referenced by any expression, predicate,
+    /// or appears directly in the projection. Columns not in this set can be
+    /// skipped during row decoding (using `skip_datum` instead of `read_datum`),
+    /// which avoids expensive type-specific construction (e.g., chrono DateTime
+    /// for timestamps, Decimal for numerics) for columns that are never used.
+    ///
+    /// Returns a `Vec<bool>` of length `input_arity` where `true` means the
+    /// column is needed.
+    pub fn needed_input_columns(&self) -> Vec<bool> {
+        let mut needed = vec![false; self.input_arity];
+        // Columns referenced by expressions
+        for expr in &self.expressions {
+            expr.visit_pre(|e| {
+                if let MirScalarExpr::Column(i, _) = e {
+                    if *i < self.input_arity {
+                        needed[*i] = true;
+                    }
+                }
+            });
+        }
+        // Columns referenced by predicates
+        for (_, pred) in &self.predicates {
+            pred.visit_pre(|e| {
+                if let MirScalarExpr::Column(i, _) = e {
+                    if *i < self.input_arity {
+                        needed[*i] = true;
+                    }
+                }
+            });
+        }
+        // Columns directly referenced by the projection
+        for &col in &self.projection {
+            if col < self.input_arity {
+                needed[col] = true;
+            }
+        }
+        needed
+    }
+
     /// Retain only the indicated columns in the presented order.
     pub fn project<I>(mut self, columns: I) -> Self
     where
@@ -1702,6 +1743,12 @@ pub mod plan {
         pub fn is_identity(&self) -> bool {
             self.mfp.is_identity()
         }
+
+        /// Returns a bitmask of which input columns are needed for evaluation.
+        /// See [`MapFilterProject::needed_input_columns`] for details.
+        pub fn needed_input_columns(&self) -> Vec<bool> {
+            self.mfp.needed_input_columns()
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {
@@ -1808,6 +1855,25 @@ pub mod plan {
             self.mfp.mfp.is_identity()
                 && self.lower_bounds.is_empty()
                 && self.upper_bounds.is_empty()
+        }
+
+        /// Returns a bitmask of which input columns are needed for evaluation,
+        /// including columns referenced by temporal bounds.
+        /// See [`MapFilterProject::needed_input_columns`] for details.
+        pub fn needed_input_columns(&self) -> Vec<bool> {
+            let mut needed = self.mfp.mfp.needed_input_columns();
+            let input_arity = self.mfp.mfp.input_arity;
+            // Also include columns referenced by temporal bounds.
+            for bound in self.lower_bounds.iter().chain(self.upper_bounds.iter()) {
+                bound.visit_pre(|e| {
+                    if let MirScalarExpr::Column(i, _) = e {
+                        if *i < input_arity {
+                            needed[*i] = true;
+                        }
+                    }
+                });
+            }
+            needed
         }
 
         /// Returns `self`, and leaves behind an identity operator that acts on its output.

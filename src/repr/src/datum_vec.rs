@@ -47,6 +47,26 @@ impl DatumVec {
         borrow
     }
 
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`, but
+    /// only fully decode columns marked `true` in `needed`. Unneeded columns are skipped
+    /// using fast pointer arithmetic (`skip_datum`) and filled with `Datum::Null`.
+    ///
+    /// This is faster than `borrow_with` when only a subset of columns are needed,
+    /// because `skip_datum` avoids expensive type-specific construction (chrono DateTime
+    /// for timestamps, Decimal for numerics, etc.).
+    ///
+    /// The caller must ensure that only columns marked `true` in `needed` are subsequently
+    /// read from the returned borrow.
+    pub fn borrow_with_selective<'a>(
+        &'a mut self,
+        row: &'a RowRef,
+        needed: &[bool],
+    ) -> DatumVecBorrow<'a> {
+        let mut borrow = self.borrow();
+        row.decode_selective(needed, &mut borrow);
+        borrow
+    }
+
     /// Borrow an instance with a specific lifetime, and pre-populate with a `Row` with up to
     /// `limit` elements. If `limit` is greater than the number of elements in `row`, the borrow
     /// will contain all elements of `row`.
@@ -118,5 +138,76 @@ mod test {
             assert_eq!(borrow.len(), 3);
             assert_eq!(borrow[2], Datum::String("second"));
         }
+    }
+
+    #[mz_ore::test]
+    fn test_selective_decode() {
+        use chrono::NaiveDate;
+        use crate::adt::timestamp::CheckedTimestamp;
+
+        let ts = NaiveDate::from_ymd_opt(2024, 6, 15)
+            .unwrap()
+            .and_hms_micro_opt(14, 30, 0, 123456)
+            .unwrap();
+        let ts = CheckedTimestamp::from_timestamplike(ts).unwrap();
+
+        let row = Row::pack_slice(&[
+            Datum::Int64(42),
+            Datum::String("hello"),
+            Datum::Float64(3.14.into()),
+            Datum::Timestamp(ts),
+            Datum::True,
+        ]);
+
+        let mut dv = DatumVec::new();
+
+        // Full decode for reference
+        let full = dv.borrow_with(&row);
+        assert_eq!(full.len(), 5);
+        assert_eq!(full[0], Datum::Int64(42));
+        assert_eq!(full[1], Datum::String("hello"));
+        assert_eq!(full[4], Datum::True);
+        drop(full);
+
+        // Selective: need only columns 0, 2, 4
+        let needed = vec![true, false, true, false, true];
+        let selective = dv.borrow_with_selective(&row, &needed);
+        assert_eq!(selective.len(), 5);
+        // Needed columns should match full decode
+        assert_eq!(selective[0], Datum::Int64(42));
+        assert_eq!(selective[2], Datum::Float64(3.14.into()));
+        assert_eq!(selective[4], Datum::True);
+        // Unneeded columns should be Null
+        assert_eq!(selective[1], Datum::Null);
+        assert_eq!(selective[3], Datum::Null);
+        drop(selective);
+
+        // Selective: need only column 3 (timestamp)
+        let needed = vec![false, false, false, true, false];
+        let selective = dv.borrow_with_selective(&row, &needed);
+        assert_eq!(selective.len(), 5);
+        assert_eq!(selective[3], Datum::Timestamp(ts));
+        assert_eq!(selective[0], Datum::Null);
+        assert_eq!(selective[1], Datum::Null);
+        assert_eq!(selective[2], Datum::Null);
+        assert_eq!(selective[4], Datum::Null);
+        drop(selective);
+
+        // All columns needed should match full decode
+        let needed = vec![true; 5];
+        let selective = dv.borrow_with_selective(&row, &needed);
+        assert_eq!(selective.len(), 5);
+        assert_eq!(selective[0], Datum::Int64(42));
+        assert_eq!(selective[1], Datum::String("hello"));
+        assert_eq!(selective[3], Datum::Timestamp(ts));
+        drop(selective);
+
+        // Empty needed mask (shorter than row) - extra columns decoded normally
+        let needed = vec![];
+        let selective = dv.borrow_with_selective(&row, &needed);
+        assert_eq!(selective.len(), 5);
+        // All columns should be decoded since needed is shorter than row
+        assert_eq!(selective[0], Datum::Int64(42));
+        assert_eq!(selective[4], Datum::True);
     }
 }
