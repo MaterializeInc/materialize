@@ -568,9 +568,15 @@ where
 
             // Pull Rows off our stream and stage them into a Batch.
             for maybe_row in row_batch {
+                let maybe_row = maybe_row.and_then(|row| {
+                    Row::validate(&row, &*collection_desc).map_err(|e| {
+                        StorageErrorXKind::invalid_record_batch(e).with_context("stage_batches")
+                    })?;
+                    Ok(row)
+                });
                 match maybe_row {
-                    // Happy path, add the Row to our batch !
-                    Ok(row) if Row::validate(&row, &*collection_desc).is_ok() => {
+                    // Happy path, add the Row to our batch!
+                    Ok(row) => {
                         let data = SourceData(Ok(row));
                         batch_builder
                             .add(&data, &(), &lower, &1)
@@ -587,19 +593,6 @@ where
                         batch.delete().await;
 
                         // Pass on the error.
-                        proto_batch_handle
-                            .give(&proto_batch_cap, Err(err).context("stage batches"));
-                        return;
-                    }
-                    _ => {
-                        let err =
-                            StorageErrorXKind::invalid_record_batch("invalid row for collection");
-                        // Clean up our in-progress batch so we don't leak data.
-                        let batch = batch_builder
-                            .finish(upper)
-                            .await
-                            .expect("failed to cleanup batch");
-                        batch.delete().await;
                         proto_batch_handle
                             .give(&proto_batch_cap, Err(err).context("stage batches"));
                         return;

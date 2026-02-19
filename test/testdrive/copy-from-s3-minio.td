@@ -83,7 +83,7 @@ $ s3-set-presigned-url bucket=copytos3 key=csv2/nulls.csv var-name=nulls_csv_url
 
 # The final row with the null value in "column c" should cause an error as c is NOT NULL
 ! COPY INTO t1_not_null (a, b, c) FROM '${nulls_csv_url}' (FORMAT CSV);
-contains:invalid row for collection
+contains:did not match desc
 
 # Make sure that the entire transaction is rejected
 > SELECT COUNT(*) FROM t1_not_null;
