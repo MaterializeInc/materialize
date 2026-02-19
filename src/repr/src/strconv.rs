@@ -419,9 +419,17 @@ where
 {
     let d: NaiveDate = d.into();
     let (year_ad, year) = d.year_ce();
-    write!(buf, "{:04}-{}", year, d.format("%m-%d"));
+    write_year(buf, year);
+    // Build "-MM-DD" in a stack buffer (6 bytes).
+    let mut tmp = [0u8; 6];
+    tmp[0] = b'-';
+    write_u2(&mut tmp, 1, d.month());
+    tmp[3] = b'-';
+    write_u2(&mut tmp, 4, d.day());
+    // SAFETY: all bytes are ASCII digits or '-'.
+    buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
     if !year_ad {
-        write!(buf, " BC");
+        buf.write_str(" BC");
     }
     Nestable::Yes
 }
@@ -439,12 +447,20 @@ pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
 
-/// Writes a [`NaiveDateTime`] timestamp to `buf`.
+/// Writes a [`NaiveTime`] to `buf`.
 pub fn format_time<F>(buf: &mut F, t: NaiveTime) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", t.format("%H:%M:%S"));
+    // Build "HH:MM:SS" directly in a stack buffer (8 bytes).
+    let mut tmp = [0u8; 8];
+    write_u2(&mut tmp, 0, t.hour());
+    tmp[2] = b':';
+    write_u2(&mut tmp, 3, t.minute());
+    tmp[5] = b':';
+    write_u2(&mut tmp, 6, t.second());
+    // SAFETY: all bytes are ASCII digits or ':'.
+    buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
     format_nanos_to_micros(buf, t.nanosecond());
     Nestable::Yes
 }
@@ -464,10 +480,24 @@ where
     F: FormatBuffer,
 {
     let (year_ad, year) = ts.year_ce();
-    write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
+    write_year(buf, year);
+    // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
+    let mut tmp = [0u8; 15];
+    tmp[0] = b'-';
+    write_u2(&mut tmp, 1, ts.month());
+    tmp[3] = b'-';
+    write_u2(&mut tmp, 4, ts.day());
+    tmp[6] = b' ';
+    write_u2(&mut tmp, 7, ts.hour());
+    tmp[9] = b':';
+    write_u2(&mut tmp, 10, ts.minute());
+    tmp[12] = b':';
+    write_u2(&mut tmp, 13, ts.second());
+    // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
+    buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
     format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
     if !year_ad {
-        write!(buf, " BC");
+        buf.write_str(" BC");
     }
     // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
@@ -509,11 +539,25 @@ where
     F: FormatBuffer,
 {
     let (year_ad, year) = ts.year_ce();
-    write!(buf, "{:04}-{}", year, ts.format("%m-%d %H:%M:%S"));
+    write_year(buf, year);
+    // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
+    let mut tmp = [0u8; 15];
+    tmp[0] = b'-';
+    write_u2(&mut tmp, 1, ts.month());
+    tmp[3] = b'-';
+    write_u2(&mut tmp, 4, ts.day());
+    tmp[6] = b' ';
+    write_u2(&mut tmp, 7, ts.hour());
+    tmp[9] = b':';
+    write_u2(&mut tmp, 10, ts.minute());
+    tmp[12] = b':';
+    write_u2(&mut tmp, 13, ts.second());
+    // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
+    buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
     format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
-    write!(buf, "+00");
+    buf.write_str("+00");
     if !year_ad {
-        write!(buf, " BC");
+        buf.write_str(" BC");
     }
     // This always needs escaping because of the whitespace
     Nestable::MayNeedEscaping
@@ -762,6 +806,32 @@ where
     Nestable::Yes
 }
 
+/// Writes a 2-digit zero-padded value (0-99) into `buf` at `offset`.
+#[inline(always)]
+fn write_u2(buf: &mut [u8], offset: usize, val: u32) {
+    buf[offset] = b'0' + (val / 10) as u8;
+    buf[offset + 1] = b'0' + (val % 10) as u8;
+}
+
+/// Writes a year with at least 4-digit zero-padding directly to a FormatBuffer.
+#[inline]
+fn write_year<F: FormatBuffer>(buf: &mut F, year: u32) {
+    // Common case: 4-digit year (covers 1000-9999).
+    if year <= 9999 {
+        let tmp = [
+            b'0' + (year / 1000) as u8,
+            b'0' + ((year / 100) % 10) as u8,
+            b'0' + ((year / 10) % 10) as u8,
+            b'0' + (year % 10) as u8,
+        ];
+        // SAFETY: all bytes are ASCII digits.
+        buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
+    } else {
+        // Rare: years > 9999 (e.g. year 20000).
+        write!(buf, "{}", year);
+    }
+}
+
 fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
 where
     F: FormatBuffer,
@@ -772,13 +842,24 @@ where
         if rem >= 500 {
             micros += 1;
         }
-        // strip trailing zeros
-        let mut width = 6;
-        while micros % 10 == 0 {
-            width -= 1;
-            micros /= 10;
+        // Build ".NNNNNN" (or ".NNNNNNN" for leap-second overflow) in a stack buffer,
+        // then trim trailing zeros. Micros can reach 2_000_000 for leap seconds.
+        let digits: usize = if micros >= 1_000_000 { 7 } else { 6 };
+        let buf_len = 1 + digits;
+        let mut tmp = [b'0'; 8]; // max ".0000000"
+        tmp[0] = b'.';
+        let mut m = micros;
+        for i in (1..=digits).rev() {
+            tmp[i] = b'0' + (m % 10) as u8;
+            m /= 10;
         }
-        write!(buf, ".{:0width$}", micros, width = width);
+        // Strip trailing zeros (but keep at least one fractional digit).
+        let mut end = buf_len;
+        while end > 2 && tmp[end - 1] == b'0' {
+            end -= 1;
+        }
+        // SAFETY: all bytes are ASCII digits or '.'.
+        buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp[..end]) });
     }
 }
 
