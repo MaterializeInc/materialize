@@ -9,10 +9,11 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::sync::LazyLock;
 use std::{io, str};
 
 use bytes::{BufMut, BytesMut};
-use chrono::{DateTime, NaiveDateTime, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDateTime, NaiveTime, Timelike, Utc};
 use itertools::Itertools;
 use mz_ore::cast::ReinterpretCast;
 use mz_pgwire_common::Format;
@@ -1030,6 +1031,168 @@ fn encode_datum_text_direct(datum: Datum<'_>, scalar_type: &SqlScalarType, buf: 
     }
 }
 
+/// The PostgreSQL epoch (2000-01-01 00:00:00) as a `NaiveDateTime`.
+/// Used for converting timestamps to PostgreSQL's binary wire format
+/// (microseconds since this epoch).
+static PG_EPOCH: LazyLock<NaiveDateTime> = LazyLock::new(|| {
+    chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+});
+
+/// Converts a `NaiveDateTime` to PostgreSQL binary timestamp format:
+/// microseconds since 2000-01-01 00:00:00.
+#[inline]
+fn pg_timestamp_to_microseconds(ts: &NaiveDateTime) -> i64 {
+    ts.signed_duration_since(*PG_EPOCH)
+        .num_microseconds()
+        .expect("timestamp must be representable as microseconds")
+}
+
+/// Encodes a datum directly in PostgreSQL binary format, bypassing [`Value`]
+/// construction and `ToSql` trait dispatch.
+///
+/// Returns `true` if the encoding was handled directly, `false` if the caller
+/// should fall back to the [`Value`] path (for complex types like arrays,
+/// lists, maps, records, ranges, numeric, and jsonb).
+///
+/// This eliminates the intermediate `Value` enum construction, avoids string
+/// and bytes cloning, and bypasses the `ToSql` trait dispatch overhead.
+fn encode_datum_binary_direct(
+    datum: Datum<'_>,
+    scalar_type: &SqlScalarType,
+    dst: &mut BytesMut,
+) -> bool {
+    match (datum, scalar_type) {
+        // JSONB: complex binary format with version prefix, fall back to Value.
+        (_, SqlScalarType::Jsonb) => false,
+
+        // Numeric: complex binary format (ndigits/weight/sign/dscale/digits), fall back.
+        (Datum::Numeric(_), _) => false,
+
+        // Bool: 1 byte (0=false, 1=true).
+        (Datum::True, _) => {
+            dst.put_u8(1);
+            true
+        }
+        (Datum::False, _) => {
+            dst.put_u8(0);
+            true
+        }
+
+        // Integers: big-endian.
+        (Datum::Int16(i), _) => {
+            dst.put_i16(i);
+            true
+        }
+        (Datum::Int32(i), _) => {
+            dst.put_i32(i);
+            true
+        }
+        (Datum::Int64(i), _) => {
+            dst.put_i64(i);
+            true
+        }
+
+        // PgLegacyChar: 1 byte (reinterpreted as i8 on the wire).
+        (Datum::UInt8(c), _) => {
+            dst.put_u8(c);
+            true
+        }
+
+        // Unsigned integers: big-endian.
+        (Datum::UInt16(u), _) => {
+            dst.put_u16(u);
+            true
+        }
+        (Datum::UInt32(u), _) => {
+            // Handles Oid, RegClass, RegProc, RegType, UInt32.
+            dst.put_u32(u);
+            true
+        }
+        (Datum::UInt64(u), _) => {
+            dst.put_u64(u);
+            true
+        }
+
+        // Floats: IEEE 754 big-endian.
+        (Datum::Float32(f), _) => {
+            dst.put_f32(*f);
+            true
+        }
+        (Datum::Float64(f), _) => {
+            dst.put_f64(*f);
+            true
+        }
+
+        // Date: i32 days since 2000-01-01, big-endian.
+        (Datum::Date(d), _) => {
+            dst.put_i32(d.pg_epoch_days());
+            true
+        }
+
+        // Time: i64 microseconds since midnight, big-endian.
+        (Datum::Time(t), _) => {
+            let secs = t.num_seconds_from_midnight() as i64;
+            let nanos = (t.nanosecond() % 1_000_000_000) as i64;
+            dst.put_i64(secs * 1_000_000 + nanos / 1_000);
+            true
+        }
+
+        // Timestamp: i64 microseconds since 2000-01-01, big-endian.
+        (Datum::Timestamp(ts), _) => {
+            dst.put_i64(pg_timestamp_to_microseconds(&ts));
+            true
+        }
+        // TimestampTz: same format, uses UTC.
+        (Datum::TimestampTz(ts), _) => {
+            dst.put_i64(pg_timestamp_to_microseconds(&ts.naive_utc()));
+            true
+        }
+
+        // Interval: i64 microseconds + i32 days + i32 months, all big-endian.
+        (Datum::Interval(iv), _) => {
+            dst.put_i64(iv.micros);
+            dst.put_i32(iv.days);
+            dst.put_i32(iv.months);
+            true
+        }
+
+        // UUID: 16 raw bytes.
+        (Datum::Uuid(u), _) => {
+            dst.put_slice(u.as_bytes());
+            true
+        }
+
+        // String types: write raw bytes directly (no cloning).
+        (Datum::String(s), SqlScalarType::Char { length }) => {
+            let padded = char::format_str_pad(s, *length);
+            dst.put_slice(padded.as_bytes());
+            true
+        }
+        (Datum::String(s), _) => {
+            dst.put_slice(s.as_bytes());
+            true
+        }
+
+        // Bytes: write raw bytes directly (no cloning).
+        (Datum::Bytes(b), _) => {
+            dst.put_slice(b);
+            true
+        }
+
+        // MzTimestamp: rare, fall back.
+        (Datum::MzTimestamp(_), _) => false,
+
+        // AclItem types: rare, fall back.
+        (Datum::MzAclItem(_), _) | (Datum::AclItem(_), _) => false,
+
+        // Complex types (arrays, lists, maps, records, ranges): fall back.
+        _ => false,
+    }
+}
+
 /// Encodes a complete pgwire DataRow message directly from a [`RowRef`],
 /// bypassing the intermediate [`Value`] representation.
 ///
@@ -1080,12 +1243,14 @@ pub fn encode_data_row_direct(
                     dst[field_base..field_base + 4].copy_from_slice(&field_len.to_be_bytes());
                 }
                 Format::Binary => {
-                    // For binary format, fall back to Value path.
-                    let value =
-                        Value::from_datum(datum, &col_type.scalar_type).expect("non-null datum");
                     let field_base = dst.len();
                     dst.put_u32(0);
-                    value.encode_binary(ty, dst)?;
+                    if !encode_datum_binary_direct(datum, &col_type.scalar_type, dst) {
+                        // Fall back to Value path for complex types.
+                        let value = Value::from_datum(datum, &col_type.scalar_type)
+                            .expect("non-null datum");
+                        value.encode_binary(ty, dst)?;
+                    }
                     let field_len = dst.len() - field_base - 4;
                     let field_len = i32::try_from(field_len).map_err(|_| {
                         io::Error::new(
