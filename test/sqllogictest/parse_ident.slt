@@ -264,10 +264,10 @@ SELECT mz_internal.mz_normalize_object_name('"SchemaX"."TableY"')::text;
 ----
 {NULL,SchemaX,TableY}
 
-query error db error: ERROR: improper relation name \(too many dotted names\): Dbz\.Schemax\.Tabley\.Cola
+query error improper relation name \(too many dotted names\): Dbz\.Schemax\.Tabley\.Cola
 SELECT mz_internal.mz_normalize_object_name('Dbz.Schemax.Tabley.Cola')::text;
 
-query error db error: ERROR: improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
+query error improper relation name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"\.Cola
 SELECT mz_internal.mz_normalize_object_name('"Dbz"."SchemaX"."TableY".Cola')::text;
 
 query error string is not a valid identifier: ""
@@ -309,7 +309,7 @@ SELECT mz_internal.mz_normalize_object_name('🌍.🌍.🌍');
 ----
 {🌍,🌍,🌍}
 
-query error db error: ERROR: improper relation name \(too many dotted names\): 🌍\.🌍\.🌍\.🌍
+query error improper relation name \(too many dotted names\): 🌍\.🌍\.🌍\.🌍
 SELECT mz_internal.mz_normalize_object_name('🌍.🌍.🌍.🌍');
 
 # normalizing schema names; this is largely built on top of parse_ident
@@ -334,10 +334,10 @@ SELECT mz_internal.mz_normalize_schema_name('"SchemaX"')::text;
 ----
 {NULL,SchemaX}
 
-query error db error: ERROR: improper schema name \(too many dotted names\): Dbz\.Schemax\.Tabley
+query error improper schema name \(too many dotted names\): Dbz\.Schemax\.Tabley
 SELECT mz_internal.mz_normalize_schema_name('Dbz.Schemax.Tabley')::text;
 
-query error db error: ERROR: improper schema name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"
+query error improper schema name \(too many dotted names\): "Dbz"\."SchemaX"\."TableY"
 SELECT mz_internal.mz_normalize_schema_name('"Dbz"."SchemaX"."TableY"')::text;
 
 query error string is not a valid identifier: ""
@@ -374,7 +374,7 @@ SELECT mz_internal.mz_normalize_schema_name('🌍.🌍');
 ----
 {🌍,🌍}
 
-query error db error: ERROR: improper schema name \(too many dotted names\): 🌍\.🌍\.🌍
+query error improper schema name \(too many dotted names\): 🌍\.🌍\.🌍
 SELECT mz_internal.mz_normalize_schema_name('🌍.🌍.🌍');
 
 statement ok

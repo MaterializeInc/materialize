@@ -113,10 +113,10 @@ SELECT 'm'::regclass = 's.m'::regclass
 ----
 false
 
-query error db error: ERROR: relation "abs" does not exist
+query error relation "abs" does not exist
 SELECT 'abs'::regclass
 
-query error db error: ERROR: relation "dne" does not exist
+query error relation "dne" does not exist
 SELECT 'dne'::regclass
 
 statement ok
@@ -133,7 +133,7 @@ SELECT '2'::regclass
 2
 
 # PG supports this
-query error db error: ERROR: string is not a valid identifier: "2"
+query error string is not a valid identifier: "2"
 SELECT '2'::text::regclass
 
 query B
@@ -154,7 +154,7 @@ SELECT '"2x"'::regclass::text
 ----
 2x
 
-query error db error: ERROR: relation "dne" does not exist
+query error relation "dne" does not exist
 SELECT 'dne'::regclass;
 
 # Check that we handle functions and classes w/ same name
@@ -298,5 +298,5 @@ SELECT 'materialize.public.t'::regclass::oid::int
 ----
 20190
 
-query error db error: ERROR: relation "t" does not exist
+query error relation "t" does not exist
 SELECT 't'::regclass::oid::int

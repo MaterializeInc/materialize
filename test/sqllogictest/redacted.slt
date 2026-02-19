@@ -211,13 +211,13 @@ CREATE MATERIALIZED VIEW materialize.public.mv1
     AS SELECT i + i + '<REDACTED>' FROM materialize.public.t;
 EOF
 
-query error db error: ERROR: unknown catalog item 'aaaaaaa'
+query error unknown catalog item 'aaaaaaa'
 SHOW REDACTED CREATE MATERIALIZED VIEW aaaaaaa;
 
-query error db error: ERROR: materialize\.public\.v is not a materialized view
+query error materialize\.public\.v is not a materialized view
 SHOW REDACTED CREATE MATERIALIZED VIEW v;
 
-query error db error: ERROR: materialize\.public\.mv1 is not a view
+query error materialize\.public\.mv1 is not a view
 SHOW REDACTED CREATE VIEW mv1;
 
 query TT

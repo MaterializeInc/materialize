@@ -19,13 +19,13 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
+statement error Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
 CREATE CLUSTER foo
 
 statement ok
 CREATE CLUSTER foo REPLICAS ()
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
+statement error Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar RENAME TO bar
 
 statement ok
@@ -39,7 +39,7 @@ ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: must be owner of CLUSTER mz_catalog_server
+statement error must be owner of CLUSTER mz_catalog_server
 ALTER CLUSTER mz_catalog_server RENAME TO foo
 
 simple conn=mz_system,user=mz_system
@@ -494,7 +494,7 @@ quickstart  r1  scale=1,workers=2
 statement ok
 CREATE CLUSTER REPLICA quickstart.foo_bar SIZE 'scale=1,workers=1'
 
-statement error db error: ERROR: Expected dot, found RENAME
+statement error Expected dot, found RENAME
 ALTER CLUSTER REPLICA quickstart RENAME TO bar_foo
 
 statement ok
@@ -702,10 +702,10 @@ CREATE CLUSTER REPLICA t1.free SIZE 'scale=1,workers=2', INTERNAL, BILLED AS 'fr
 ----
 COMPLETE 0
 
-statement error db error: ERROR: cannot modify managed cluster t1
+statement error cannot modify managed cluster t1
 CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', BILLED AS 'free'
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', INTERNAL
 
 
@@ -737,7 +737,7 @@ SELECT regexp_replace(id::text, 'u.*', 'u%') FROM mz_internal.mz_internal_cluste
 u%
 u%
 
-statement error db error: ERROR: cannot modify managed cluster t1
+statement error cannot modify managed cluster t1
 CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', BILLED AS 'free'
 
 statement ok
@@ -749,7 +749,7 @@ ALTER CLUSTER t1 SET (MANAGED);
 statement ok
 DROP CLUSTER REPLICA t1.free;
 
-statement error db error: ERROR: cannot drop replica of managed cluster
+statement error cannot drop replica of managed cluster
 DROP CLUSTER REPLICA t1.r1;
 
 statement ok
@@ -806,10 +806,10 @@ CREATE CLUSTER REPLICA t1.r3 SIZE 'scale=1,workers=2', BILLED AS 'free'
 ----
 db error: ERROR: must specify INTERNAL when specifying BILLED AS
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', BILLED AS 'free'
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER REPLICA t1.free2 SIZE 'scale=1,workers=2', INTERNAL
 
 statement ok
@@ -829,16 +829,16 @@ DROP CLUSTER t1
 
 # Test unmanaged clusters with internal/billed as.
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER t1 (REPLICAS (r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'free')));
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', INTERNAL, BILLED AS 'free')));
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', BILLED AS 'free')));
 
-statement error db error: ERROR: cannot specify INTERNAL or BILLED AS as non\-internal user
+statement error cannot specify INTERNAL or BILLED AS as non\-internal user
 CREATE CLUSTER t1 (REPLICAS (internal_r1 (SIZE 'scale=1,workers=1', INTERNAL)));
 
 simple conn=mz_system,user=mz_system

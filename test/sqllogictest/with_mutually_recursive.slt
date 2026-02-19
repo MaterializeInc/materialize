@@ -158,21 +158,21 @@ SELECT (SELECT COUNT(*) FROM foo) FROM bar;
 ## Test error cases
 
 ## Test a recursive query with mismatched types.
-statement error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types \(integer\), but query returns types \(text\)
+statement error WITH MUTUALLY RECURSIVE query "bar" declared types \(integer\), but query returns types \(text\)
 WITH MUTUALLY RECURSIVE
     foo (a text, b int) AS (SELECT 1, 2 UNION SELECT a, 7 FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT * FROM bar;
 
 ## Test with fewer columns than declared
-statement error db error: ERROR: WITH MUTUALLY RECURSIVE query "foo" declared types \(integer, integer\), but query returns types \(integer\)
+statement error WITH MUTUALLY RECURSIVE query "foo" declared types \(integer, integer\), but query returns types \(integer\)
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1 UNION SELECT a FROM bar),
     bar (a int) as (SELECT a FROM foo)
 SELECT a FROM foo, bar;
 
 ## Test with more columns than declared
-statement error db error: ERROR: WITH MUTUALLY RECURSIVE query "foo" declared types \(integer, integer\), but query returns types \(integer, integer, integer\)
+statement error WITH MUTUALLY RECURSIVE query "foo" declared types \(integer, integer\), but query returns types \(integer, integer, integer\)
 WITH MUTUALLY RECURSIVE
     foo (a int, b int) AS (SELECT 1, 2, 3 UNION SELECT a, 5, 6 FROM bar),
     bar (a int) as (SELECT a FROM foo)
@@ -426,7 +426,7 @@ SELECT * FROM cnt;
 2
 3
 
-query error db error: ERROR: Evaluation error: Recursive query exceeded the recursion limit 3\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
+query error Evaluation error: Recursive query exceeded the recursion limit 3\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
 WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3)
   cnt (i int) AS (
     SELECT 1 AS i
@@ -508,7 +508,7 @@ ORDER BY i;
 502
 503
 
-query error db error: ERROR: Evaluation error: Recursive query exceeded the recursion limit 100\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
+query error Evaluation error: Recursive query exceeded the recursion limit 100\. \(Use RETURN AT RECURSION LIMIT to not error, but return the current state as the final result when reaching the limit\.\)
 (WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10)
     t (n int) AS (
         VALUES (1)
@@ -554,48 +554,48 @@ SELECT * FROM v1;
 2
 3
 
-statement error db error: ERROR: invalid RECURSION LIMIT: must provide an unsigned integer value
+statement error invalid RECURSION LIMIT: must provide an unsigned integer value
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: Expected one of RECURSION or RETURN or ERROR, found right parenthesis
+statement error Expected one of RECURSION or RETURN or ERROR, found right parenthesis
 WITH MUTUALLY RECURSIVE ()
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: invalid RECURSION LIMIT: cannot use value as number
+statement error invalid RECURSION LIMIT: cannot use value as number
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT aaaaaaa)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: invalid RECURSION LIMIT: invalid unsigned numeric value: invalid digit found in string
+statement error invalid RECURSION LIMIT: invalid unsigned numeric value: invalid digit found in string
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT -3)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: RECURSION LIMIT specified more than once
+statement error RECURSION LIMIT specified more than once
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, RECURSION LIMIT 5)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+statement error Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, ERROR AT RECURSION LIMIT 5)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+statement error Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT 3, RETURN AT RECURSION LIMIT 5)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
-statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
+statement error Invalid WITH MUTUALLY RECURSIVE recursion limit\. More than one recursion limit given\. Please give at most one of RECURSION LIMIT, ERROR AT RECURSION LIMIT, RETURN AT RECURSION LIMIT\.
 WITH MUTUALLY RECURSIVE (ERROR AT RECURSION LIMIT 3, RETURN AT RECURSION LIMIT 5)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
 
 # It's important that we error out for RECURSION LIMIT 0, because we are NOT handling this case in some optimizer transforms.
-statement error db error: ERROR: Invalid WITH MUTUALLY RECURSIVE recursion limit\. Recursion limit has to be greater than 0\.
+statement error Invalid WITH MUTUALLY RECURSIVE recursion limit\. Recursion limit has to be greater than 0\.
 WITH MUTUALLY RECURSIVE (RECURSION LIMIT 0)
   cnt (i int) AS (SELECT 1 AS i UNION SELECT i+1 FROM cnt)
 SELECT * FROM cnt;
@@ -650,7 +650,7 @@ WITH MUTUALLY RECURSIVE
 SELECT x FROM bar
 
 # TODO: '1' should be coercible to an integer.
-query error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types \(bigint\), but query returns types \(text\)
+query error WITH MUTUALLY RECURSIVE query "bar" declared types \(bigint\), but query returns types \(text\)
 WITH MUTUALLY RECURSIVE
     bar(x INT8) as (SELECT '1')
 SELECT x FROM bar
@@ -665,7 +665,7 @@ SELECT x::TEXT FROM bar
 ----
 {2.23}
 
-query error db error: ERROR: WITH MUTUALLY RECURSIVE query "bar" declared types \(list_numeric_scale_2\), but query returns types \(text list\)
+query error WITH MUTUALLY RECURSIVE query "bar" declared types \(list_numeric_scale_2\), but query returns types \(text list\)
 WITH MUTUALLY RECURSIVE
     bar(x list_numeric_scale_2) as (SELECT LIST['1'::TEXT])
 SELECT x FROM bar

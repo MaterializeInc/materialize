@@ -282,7 +282,7 @@ SELECT avg(a) FROM t2
 
 # avg of an explicit NULL should return an error.
 
-query error db error: ERROR: function sum\(unknown\) is not unique
+query error function sum\(unknown\) is not unique
 SELECT avg(NULL)
 
 statement error
@@ -342,7 +342,7 @@ SELECT abs(1) FILTER (WHERE false)
 query error Expected end of statement, found left parenthesis
 SELECT column1 FILTER (WHERE column1 = 1) FROM (VALUES (1))
 
-query error db error: ERROR: aggregate functions are not allowed in FILTER \(function pg_catalog\.count\)
+query error aggregate functions are not allowed in FILTER \(function pg_catalog\.count\)
 SELECT v, count(*) FILTER (WHERE count(1) > 5) FROM filter_test GROUP BY v
 
 # These filter tests are Materialize-specific.
@@ -383,7 +383,7 @@ select sum(distinct column1) from (values (1), (2), (1), (4)) _;
 query error count\(\*\) must be used to call a parameterless aggregate function
 SELECT count()
 
-query error db error: ERROR: function sum\(\) does not exist
+query error function sum\(\) does not exist
 SELECT sum(*)
 
 # Ensure int2 has its own max implementation

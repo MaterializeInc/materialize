@@ -532,7 +532,7 @@ CREATE TABLE bar ( key text, val bigint );
 statement ok
 SET CLUSTER TO mz_catalog_server;
 
-statement error db error: ERROR: querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
+statement error querying the following items "materialize\.public\.bar" is not allowed from the "mz_catalog_server" cluster
 SELECT key FROM bar;
 
 # But inspecting those objects, e.g. checking what indexes exist, should be allowed.

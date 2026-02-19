@@ -60,7 +60,7 @@ COMPLETE 0
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+statement error SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 CREATE ROLE foo LOGIN
 
 simple

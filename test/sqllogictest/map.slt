@@ -524,7 +524,7 @@ SELECT '{a=>1, b=>2}'::map[text=>int] <@ '{a=>1, b=>2, c=>3}'::map[text=>int]
 ----
 true
 
-query error db error: ERROR: CAST does not support casting from map\[text=>map\[text=>char\]\] to map\[text=>map\[text=>char\(1\)\]\]
+query error CAST does not support casting from map\[text=>map\[text=>char\]\] to map\[text=>map\[text=>char\(1\)\]\]
 SELECT '{hello=>{world=>a}}'::map[text=>map[text=>char]] <@ '{hello=>c}'::map[text=>char]
 ----
 false
@@ -843,19 +843,19 @@ SELECT map_build(LIST[ROW('a', LIST[2]), ROW('a', LIST[1])]::l list)::TEXT;
 statement ok
 CREATE TYPE int_key AS (f1 INT, f2 INT);
 
-query error db error: ERROR: function map_build\(int_key list\) does not exist
+query error function map_build\(int_key list\) does not exist
 SELECT map_build(LIST[ROW(1, 1), ROW(1, 2)]::int_key list)::TEXT;
 
 statement ok
 CREATE TYPE missing_value AS (f1 TEXT);
 
-query error db error: ERROR: function map_build\(missing_value list\) does not exist
+query error function map_build\(missing_value list\) does not exist
 SELECT map_build(LIST[ROW('a'), ROW('a')]::missing_value list)::TEXT;
 
-query error db error: ERROR: function map_build\(integer\) does not exist
+query error function map_build\(integer\) does not exist
 SELECT map_build(1)::TEXT;
 
-query error db error: ERROR: function map_build\(integer list\) does not exist
+query error function map_build\(integer list\) does not exist
 SELECT map_build(LIST[1])::TEXT;
 
 # map_agg
@@ -866,7 +866,7 @@ CREATE TABLE t1 (a int)
 statement ok
 INSERT INTO t1 VALUES (1), (2), (3), (NULL)
 
-query error db error: ERROR: function map_agg\(integer, integer\) does not exist
+query error function map_agg\(integer, integer\) does not exist
 SELECT map_agg(k, v)::TEXT FROM (SELECT 1 AS k, 2 AS V WHERE false)
 
 query T
@@ -879,7 +879,7 @@ SELECT map_agg('one', 2)::TEXT
 ----
 {one=>2}
 
-query error db error: ERROR: function map_agg\(integer, integer\) does not exist
+query error function map_agg\(integer, integer\) does not exist
 SELECT map_agg(1, 2)
 
 query T

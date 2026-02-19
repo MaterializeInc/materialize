@@ -38,10 +38,10 @@ FROM t
 6.7  2.7  9.4  2.35  0.7000000000000002  false  false  true  true  false  true
 
 # Do not allow int4 text comparisons
-query error db error: ERROR: operator does not exist: text < integer
+query error operator does not exist: text < integer
 SELECT 'foo'::text < 5::int;
 
-query error db error: ERROR: operator does not exist: integer < text
+query error operator does not exist: integer < text
 SELECT 1 < ALL(VALUES(NULL))
 
 # But string *literals* can coerce to anything.
@@ -215,11 +215,11 @@ Target cluster: quickstart
 EOF
 
 # Cannot implicitly cast int4 to string
-query error db error: ERROR: function char_length\(integer\) does not exist
+query error function char_length\(integer\) does not exist
 SELECT char_length(321);
 
 # Cannot implicitly cast double precision to numeric
-query error db error: ERROR: function round\(double precision, integer\) does not exist
+query error function round\(double precision, integer\) does not exist
 SELECT round(1.23::float, 1);
 
 # Check that float8 is the most common type
@@ -1669,7 +1669,7 @@ CREATE TABLE t1(a varchar(3));
 statement ok
 CREATE TABLE t2(b varchar(4));
 
-statement error db error: ERROR: value too long for type character varying\(3\)
+statement error value too long for type character varying\(3\)
 INSERT INTO t1 VALUES ('123456');
 
 # From the Postgres docs: https://www.postgresql.org/docs/current/datatype-character.html

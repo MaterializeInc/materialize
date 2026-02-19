@@ -52,7 +52,7 @@ SELECT array_agg(1) FROM kv
 ----
 NULL
 
-statement error db error: ERROR: function "json_agg" does not exist
+statement error function "json_agg" does not exist
 SELECT json_agg(1) FROM kv
 ----
 NULL
@@ -82,7 +82,7 @@ SELECT array_agg(v) FROM kv
 ----
 NULL
 
-statement error db error: ERROR: function "json_agg" does not exist
+statement error function "json_agg" does not exist
 SELECT json_agg(v) FROM kv
 ----
 NULL
@@ -104,7 +104,7 @@ SELECT array_agg(1)
 ----
 {1}
 
-statement error db error: ERROR: function "json_agg" does not exist
+statement error function "json_agg" does not exist
 SELECT json_agg(1)
 
 query T
@@ -119,7 +119,7 @@ SELECT count(NULL)
 ----
 0
 
-statement error db error: ERROR: function "json_agg" does not exist
+statement error function "json_agg" does not exist
 SELECT json_agg(NULL)
 
 query T
@@ -127,7 +127,7 @@ SELECT jsonb_agg(NULL)
 ----
 [null]
 
-query error db error: ERROR: function array_agg\(unknown\) is not unique
+query error function array_agg\(unknown\) is not unique
 SELECT array_agg(NULL)
 
 # With an explicit cast, this works as expected.
@@ -191,7 +191,7 @@ SELECT array_agg(1) FROM kv
 ----
 {1,1,1,1,1,1}
 
-statement error db error: ERROR: function "json_agg" does not exist
+statement error function "json_agg" does not exist
 SELECT json_agg(1) FROM kv
 
 query T
@@ -253,7 +253,7 @@ INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
 query error aggregate functions are not allowed in LIMIT \(function pg_catalog.sum\)
 SELECT sum(v) FROM kv GROUP BY k LIMIT sum(v)
 
-query error db error: ERROR: aggregate functions are not allowed in OFFSET \(function pg_catalog\.sum\)
+query error aggregate functions are not allowed in OFFSET \(function pg_catalog\.sum\)
 SELECT sum(v) FROM kv GROUP BY k LIMIT 1 OFFSET sum(v)
 
 query error aggregate functions are not allowed in VALUES
@@ -466,7 +466,7 @@ SELECT count(1) from kv
 ----
 6
 
-query error db error: ERROR: function count\(integer, integer\) does not exist
+query error function count\(integer, integer\) does not exist
 SELECT count(k, v) FROM kv
 
 # Note: Result differs from Cockroach but matches Postgres.
@@ -593,7 +593,7 @@ SELECT array_agg(k), array_agg(s) FROM (SELECT k, s FROM kv ORDER BY k)
 ----
 {1,3,5,6,7,8}  {A,a,a,b,b,NULL}
 
-query error db error: ERROR: operator does not exist: integer\[\] \|\| integer
+query error operator does not exist: integer\[\] \|\| integer
 SELECT array_agg(k) || 1 FROM (SELECT k FROM kv ORDER BY k)
 
 query T
@@ -601,7 +601,7 @@ SELECT array_agg(s) FROM kv WHERE s IS NULL
 ----
 {NULL}
 
-query error db error: ERROR: function "json_agg" does not exist
+query error function "json_agg" does not exist
 SELECT json_agg(s) FROM kv WHERE s IS NULL
 
 query T
@@ -698,22 +698,22 @@ SELECT avg(b), sum(b) FROM abc
 # ----
 # 3 years 5 mons 7 days 00:00:19
 
-query error db error: ERROR: function sum\(varchar\) does not exist
+query error function sum\(varchar\) does not exist
 SELECT avg(a) FROM abc
 
-query error db error: ERROR: function sum\(boolean\) does not exist
+query error function sum\(boolean\) does not exist
 SELECT avg(c) FROM abc
 
-query error db error: ERROR: function sum\(record\(f1: varchar,f2: boolean\?\)\) does not exist
+query error function sum\(record\(f1: varchar,f2: boolean\?\)\) does not exist
 SELECT avg((a,c)) FROM abc
 
-query error db error: ERROR: function sum\(varchar\) does not exist
+query error function sum\(varchar\) does not exist
 SELECT sum(a) FROM abc
 
-query error db error: ERROR: function sum\(boolean\) does not exist
+query error function sum\(boolean\) does not exist
 SELECT sum(c) FROM abc
 
-query error db error: ERROR: function sum\(record\(f1: varchar,f2: boolean\?\)\) does not exist
+query error function sum\(record\(f1: varchar,f2: boolean\?\)\) does not exist
 SELECT sum((a,c)) FROM abc
 
 statement ok
@@ -908,7 +908,7 @@ false false
 query error concat_agg not yet supported
 SELECT concat_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
-query error db error: ERROR: function "json_agg" does not exist
+query error function "json_agg" does not exist
 SELECT json_agg(s) FROM (SELECT s FROM kv ORDER BY k)
 
 # This ORDER BY doesn't have to be respected, because the relation returned by a subquery is an inherently unordered
@@ -1099,7 +1099,7 @@ SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 1
 
 # Regression test for distsql aggregator crash when using hash aggregation.
-query error db error: ERROR: function array_agg\(unknown\) is not unique
+query error function array_agg\(unknown\) is not unique
 SELECT v, array_agg('a') FROM kv GROUP BY v
 
 query I
@@ -1451,13 +1451,13 @@ ORDER BY company_id, id;
 4  dDdDdDd
 4  dDdDdDd
 
-query error db error: ERROR: function string_agg\(text, text, text\) does not exist
+query error function string_agg\(text, text, text\) does not exist
 SELECT company_id, string_agg(employee, employee, employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error db error: ERROR: function string_agg\(text\) does not exist
+query error function string_agg\(text\) does not exist
 SELECT company_id, string_agg(employee)
 OVER (PARTITION BY company_id)
 FROM string_agg_test

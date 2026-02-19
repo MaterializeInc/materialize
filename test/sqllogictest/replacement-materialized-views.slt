@@ -176,19 +176,19 @@ mv   other   (empty)
 
 # Test: usage errors
 
-statement error db error: ERROR: cannot replace table t with materialized view rp
+statement error cannot replace table t with materialized view rp
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR t AS SELECT a, b FROM t
 
-statement error db error: ERROR: t is a table not a materialized view
+statement error t is a table not a materialized view
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT t
 
-statement error db error: ERROR: replacement would cause mv to depend on itself
+statement error replacement would cause mv to depend on itself
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM mv
 
 statement ok
 CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv
 
-statement error db error: ERROR: replacement would cause mv to depend on itself
+statement error replacement would cause mv to depend on itself
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM mv2
 
 statement ok
@@ -209,19 +209,19 @@ DROP MATERIALIZED VIEW mv2 CASCADE
 statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a, b FROM t
 
-statement error db error: ERROR: cannot drop materialized view "mv": still depended upon by materialized view "rp"
+statement error cannot drop materialized view "mv": still depended upon by materialized view "rp"
 DROP MATERIALIZED VIEW mv;
 
 
 # Test: cannot create an object depending on a replacement
 
-statement error db error: ERROR: replacement materialized view rp cannot be depended upon
+statement error replacement materialized view rp cannot be depended upon
 CREATE VIEW v AS SELECT * FROM rp
 
-statement error db error: ERROR: replacement materialized view rp cannot be depended upon
+statement error replacement materialized view rp cannot be depended upon
 CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM rp
 
-statement error db error: ERROR: index cannot be created on materialize.public.rp because it is a replacement materialized view
+statement error index cannot be created on materialize.public.rp because it is a replacement materialized view
 CREATE DEFAULT INDEX ON rp
 
 

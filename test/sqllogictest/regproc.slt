@@ -85,7 +85,7 @@ SELECT NULL::regproc::text
 ----
 NULL
 
-query error db error: ERROR: more than one function named "max"
+query error more than one function named "max"
 SELECT 'max'::regproc
 
 query T
@@ -93,7 +93,7 @@ SELECT min(oid::int)::regproc::text FROM mz_objects WHERE name = 'max';
 ----
 pg_catalog.max
 
-query error db error: ERROR: function "dne" does not exist
+query error function "dne" does not exist
 SELECT 'dne'::regproc
 
 query T
@@ -135,7 +135,7 @@ SELECT '1082'::regtype::text;
 ----
 date
 
-query error db error: ERROR: more than one function named "date"
+query error more than one function named "date"
 SELECT 'date'::regproc::text;
 
 query T

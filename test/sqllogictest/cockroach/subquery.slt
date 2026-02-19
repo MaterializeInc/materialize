@@ -51,7 +51,7 @@ SELECT 1 + (SELECT 1)
 ----
 2
 
-query error db error: ERROR: Expected subselect to return 1 column, got 2 columns
+query error Expected subselect to return 1 column, got 2 columns
 SELECT 1 + (SELECT 1 AS a, 2 AS b)
 
 query B
@@ -172,10 +172,10 @@ true
 query error pgcode 42601 db error: ERROR: Expected subselect to return 1 column, got 2 columns
 SELECT (SELECT 1, 2)
 
-query error db error: ERROR: subquery1 has 2 columns available but 1 columns specified
+query error subquery1 has 2 columns available but 1 columns specified
 SELECT 1 IN (SELECT 1 AS a, 2 AS b)
 
-query error db error: ERROR: subquery2 has 1 columns available but 2 columns specified
+query error subquery2 has 1 columns available but 2 columns specified
 SELECT (1, 2) IN (SELECT 1 AS a)
 
 statement ok
@@ -187,7 +187,7 @@ INSERT INTO abc VALUES (1, 2, 3), (4, 5, 6)
 # statement ok
 # ALTER TABLE abc SPLIT AT VALUES ((SELECT 1))
 
-query error db error: ERROR: subquery2 has 3 columns available but 2 columns specified
+query error subquery2 has 3 columns available but 2 columns specified
 SELECT (1, 2) IN (SELECT * FROM abc)
 
 query B
@@ -200,10 +200,10 @@ SELECT (1, 2) IN (SELECT a, b FROM abc WHERE false)
 ----
 false
 
-query error db error: ERROR: Expected subselect to return 1 column, got 3 columns
+query error Expected subselect to return 1 column, got 3 columns
 SELECT (SELECT * FROM abc)
 
-query error db error: ERROR: Evaluation error: more than one record produced in subquery
+query error Evaluation error: more than one record produced in subquery
 SELECT (SELECT a FROM abc)
 
 query I
@@ -224,10 +224,10 @@ SELECT * FROM abc WHERE a = 7
 ----
 7 8 9
 
-statement error db error: ERROR: column "a" is of type integer but expression is of type record\(f1: integer,f2: integer,f3: integer\)
+statement error column "a" is of type integer but expression is of type record\(f1: integer,f2: integer,f3: integer\)
 INSERT INTO abc VALUES ((SELECT (10, 11, 12)))
 
-statement error db error: ERROR: Expected subselect to return 1 column, got 3 columns
+statement error Expected subselect to return 1 column, got 3 columns
 INSERT INTO abc VALUES ((SELECT 10, 11, 12))
 
 statement ok
@@ -505,7 +505,7 @@ SELECT (SELECT 123 IN (VALUES (1), (2)))
 ----
 false
 
-statement error db error: ERROR: unknown schema 'crdb_internal'
+statement error unknown schema 'crdb_internal'
 SELECT * FROM xyz WHERE x IN (SELECT crdb_internal.force_error('', 'subqueryfail'))
 
 statement ok

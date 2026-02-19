@@ -17,13 +17,13 @@ reset-server
 statement ok
 CREATE CLUSTER foo SIZE 'scale=1,workers=1'
 
-statement error db error: ERROR: Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
+statement error Expected one of OWNER or RENAME or RESET or SET or SWAP, found dot
 ALTER CLUSTER foo.bar SET (SIZE 'scale=1,workers=2')
 
 statement ok
 ALTER CLUSTER foo RESET (REPLICATION FACTOR)
 
-statement error db error: ERROR: SIZE has no default value
+statement error SIZE has no default value
 ALTER CLUSTER foo RESET (SIZE)
 
 statement ok
@@ -38,13 +38,13 @@ ALTER CLUSTER foo RESET (INTROSPECTION INTERVAL)
 statement ok
 DROP CLUSTER foo
 
-statement error db error: ERROR: Expected left parenthesis, found REPLICATION
+statement error Expected left parenthesis, found REPLICATION
 ALTER CLUSTER foo SET REPLICATION FACTOR 2
 
-statement error db error: ERROR: Expected left parenthesis, found REPLICATION
+statement error Expected left parenthesis, found REPLICATION
 ALTER CLUSTER foo RESET REPLICATION FACTOR
 
-statement error db error: ERROR: unknown cluster 'foo'
+statement error unknown cluster 'foo'
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
 
 query TTTTT rowsort
@@ -69,37 +69,37 @@ quickstart
 
 # Test invalid option combinations.
 
-statement error db error: ERROR: REPLICAS not supported for managed clusters
+statement error REPLICAS not supported for managed clusters
 CREATE CLUSTER baz REPLICAS (), MANAGED
 
 statement ok
 CREATE CLUSTER baz REPLICAS (), MANAGED = false
 
-statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+statement error REPLICATION FACTOR not supported for unmanaged clusters
 ALTER CLUSTER baz SET (REPLICATION FACTOR 2)
 
-statement error db error: ERROR: SIZE not supported for unmanaged clusters
+statement error SIZE not supported for unmanaged clusters
 ALTER CLUSTER baz SET (SIZE 'scale=1,workers=2')
 
 statement ok
 ALTER CLUSTER baz RESET (REPLICAS)
 
-statement error db error: ERROR: Cannot change REPLICATION FACTOR of unmanaged clusters
+statement error Cannot change REPLICATION FACTOR of unmanaged clusters
 ALTER CLUSTER baz RESET (REPLICATION FACTOR)
 
-statement error db error: ERROR: Cannot change SIZE of unmanaged clusters
+statement error Cannot change SIZE of unmanaged clusters
 ALTER CLUSTER baz RESET (SIZE)
 
-statement error db error: ERROR: Cannot change AVAILABILITY ZONES of unmanaged clusters
+statement error Cannot change AVAILABILITY ZONES of unmanaged clusters
 ALTER CLUSTER baz RESET (AVAILABILITY ZONES)
 
-statement error db error: ERROR: Cannot change INTROSPECTION DEGUBBING of unmanaged clusters
+statement error Cannot change INTROSPECTION DEGUBBING of unmanaged clusters
 ALTER CLUSTER baz RESET (INTROSPECTION DEBUGGING)
 
-statement error db error: ERROR: Cannot change INTROSPECTION INTERVAL of unmanaged clusters
+statement error Cannot change INTROSPECTION INTERVAL of unmanaged clusters
 ALTER CLUSTER baz RESET (INTROSPECTION INTERVAL)
 
-statement error db error: ERROR: Missing SIZE for empty cluster
+statement error Missing SIZE for empty cluster
 ALTER CLUSTER baz SET (MANAGED)
 
 statement ok
@@ -108,16 +108,16 @@ ALTER CLUSTER baz SET (MANAGED, SIZE 'scale=1,workers=1')
 statement ok
 DROP CLUSTER baz
 
-statement error db error: ERROR: SIZE not supported for unmanaged clusters
+statement error SIZE not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), SIZE 'scale=1,workers=1'
 
-statement error db error: ERROR: REPLICATION FACTOR not supported for unmanaged clusters
+statement error REPLICATION FACTOR not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), REPLICATION FACTOR 0
 
-statement error db error: ERROR: INTROSPECTION DEBUGGING not supported for unmanaged clusters
+statement error INTROSPECTION DEBUGGING not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION DEBUGGING = true
 
-statement error db error: ERROR: INTROSPECTION INTERVAL not supported for unmanaged clusters
+statement error INTROSPECTION INTERVAL not supported for unmanaged clusters
 CREATE CLUSTER baz REPLICAS (), INTROSPECTION INTERVAL 1
 
 query TTT
@@ -127,7 +127,7 @@ mz_catalog_server  r1  scale=1,workers=2
 mz_probe  r1  scale=1,workers=2
 mz_system  r1  scale=1,workers=2
 
-statement error db error: ERROR: unknown cluster replica size abc
+statement error unknown cluster replica size abc
 CREATE CLUSTER foo SIZE 'abc', REPLICATION FACTOR 3
 
 statement ok
@@ -166,13 +166,13 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name L
 ----
 u5  foo  false  NULL  NULL
 
-statement error db error: ERROR: REPLICATION FACTOR 4 does not match number of replicas \(3\)
+statement error REPLICATION FACTOR 4 does not match number of replicas \(3\)
 ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 4)
 
-statement error db error: ERROR: Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
+statement error Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
 ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1,workers=2')
 
-statement error db error: ERROR: Cluster replicas of size scale=1,workers=1 do not match expected SIZE abc
+statement error Cluster replicas of size scale=1,workers=1 do not match expected SIZE abc
 ALTER CLUSTER foo SET (MANAGED, SIZE abc)
 
 statement ok
@@ -203,10 +203,10 @@ mz_catalog_server  r1
 mz_probe  r1
 mz_system  r1
 
-statement error db error: ERROR: cannot drop replica of managed cluster
+statement error cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1
 
-statement error db error: ERROR: cannot modify managed cluster foo
+statement error cannot modify managed cluster foo
 ALTER CLUSTER REPLICA foo.r2 RENAME TO bar
 
 statement ok
@@ -290,13 +290,13 @@ SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name L
 ----
 u5  foo  true  1  scale=1,workers=1
 
-statement error db error: ERROR: cannot drop replica of managed cluster
+statement error cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1
 
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
 
-statement error db error: ERROR: unknown cluster replica size invalid_size
+statement error unknown cluster replica size invalid_size
 ALTER CLUSTER foo SET (SIZE invalid_size)
 
 statement ok
@@ -308,7 +308,7 @@ DROP CLUSTER REPLICA IF EXISTS bar.foo
 statement ok
 DROP CLUSTER REPLICA IF EXISTS quickstart.foo
 
-statement error db error: ERROR: CLUSTER foo has no CLUSTER REPLICA named "r1"
+statement error CLUSTER foo has no CLUSTER REPLICA named "r1"
 DROP CLUSTER REPLICA foo.r1
 
 
@@ -332,7 +332,7 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
 
-statement error db error: ERROR: Cannot convert unmanaged cluster to managed, non\-unique replica sizes: scale=1,workers=1, scale=1,workers=2
+statement error Cannot convert unmanaged cluster to managed, non\-unique replica sizes: scale=1,workers=1, scale=1,workers=2
 ALTER CLUSTER foo SET (MANAGED)
 
 statement ok
@@ -341,7 +341,7 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (c1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
 
-statement error db error: ERROR: Cannot convert unmanaged cluster to managed, invalid replica names: c1
+statement error Cannot convert unmanaged cluster to managed, invalid replica names: c1
 ALTER CLUSTER foo SET (MANAGED)
 
 statement ok
@@ -359,10 +359,10 @@ DROP CLUSTER foo CASCADE
 statement ok
 CREATE CLUSTER foo REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'))
 
-statement error db error: ERROR: Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
+statement error Cluster replicas of size scale=1,workers=1 do not match expected SIZE scale=1,workers=2
 ALTER CLUSTER foo SET (MANAGED, SIZE 'scale=1,workers=2')
 
-statement error db error: ERROR: REPLICATION FACTOR 1 does not match number of replicas \(2\)
+statement error REPLICATION FACTOR 1 does not match number of replicas \(2\)
 ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 1)
 
 statement ok
@@ -371,13 +371,13 @@ ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 2)
 statement ok
 DROP CLUSTER foo CASCADE
 
-statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 99, limit: 5, current: 0\)
+statement error creating cluster replica would violate max_replicas_per_cluster limit \(desired: 99, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 99
 
 statement ok
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 1
 
-statement error db error: ERROR: cluster 'foo' already exists
+statement error cluster 'foo' already exists
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 1
 
 statement ok
@@ -392,11 +392,11 @@ ALTER CLUSTER foo SET (REPLICATION FACTOR 0)
 statement ok
 DROP CLUSTER foo CASCADE
 
-statement error db error: ERROR: unknown cluster replica size invalid_size
+statement error unknown cluster replica size invalid_size
 CREATE CLUSTER foo SIZE invalid_size, REPLICATION FACTOR 0
 
 # Test for database-issues#6046 . Without the fix, this query will hang indefinitely
-statement error db error: ERROR: creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
+statement error creating cluster replica would violate max_replicas_per_cluster limit \(desired: 9999999, limit: 5, current: 0\)
 CREATE CLUSTER foo SIZE 'scale=1,workers=1', replication factor 9999999;
 
 simple conn=mz_system,user=mz_system

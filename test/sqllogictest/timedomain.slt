@@ -63,7 +63,7 @@ COMPLETE 1
 2
 COMPLETE 1
 
-query error db error: ERROR: querying the following items "materialize\.public\.t" is not allowed from the "mz_catalog_server" cluster
+query error querying the following items "materialize\.public\.t" is not allowed from the "mz_catalog_server" cluster
 SELECT * FROM t;
 
 statement ok

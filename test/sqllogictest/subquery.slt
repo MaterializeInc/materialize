@@ -180,7 +180,7 @@ query BBBBBBBBBBBBBBB
 ----
 true  false  false  true  false  false  NULL  true  NULL  NULL  NULL  NULL  NULL  NULL  NULL
 
-query error db error: ERROR: subquery1 has 0 columns available but 1 columns specified
+query error subquery1 has 0 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT * FROM nullary)
 
 query error Expected subselect to return 1 column, got 0 columns
@@ -192,7 +192,7 @@ SELECT * FROM (SELECT);
 ----
 
 
-query error db error: ERROR: subquery1 has 2 columns available but 1 columns specified
+query error subquery1 has 2 columns available but 1 columns specified
 SELECT 1 < ALL(SELECT 1, 2)
 
 statement ok

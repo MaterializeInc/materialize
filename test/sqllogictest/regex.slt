@@ -279,7 +279,7 @@ ABC
 abc
 {abc}
 
-query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
+query error Evaluation error: invalid regular expression: regex parse error:
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~ '\';
 
 # Dynamic regexes (binary (or variadic) versions)
@@ -431,7 +431,7 @@ INSERT INTO T VALUES ('this is gonna be an invalid regex', '', '\');
 
 # Note: The actual error msg shows the regex itself (as it should), but it seems sqllogictest can't handle multiline
 # error msgs.
-query error db error: ERROR: Evaluation error: invalid regular expression: regex parse error:
+query error Evaluation error: invalid regular expression: regex parse error:
 SELECT replace(s, E'\n', '<newline>') FROM t WHERE s ~* regex_pat;
 
 query T multiline
@@ -818,7 +818,7 @@ SELECT regexp_matches(bar, '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig') FROM foo2;
 db error: ERROR: function regexp_matches(smallint, unknown, unknown) does not exist
 HINT: No function matches the given name and argument types.  You might need to add explicit type casts.
 
-statement error db error: ERROR: invalid regular expression: regex pattern too large \(62400000 bytes, max 1048576 bytes\)
+statement error invalid regular expression: regex pattern too large \(62400000 bytes, max 1048576 bytes\)
 SELECT 'aaaaaaaaaaa' ~ repeat('vxx.0.0-rc.4 (5b079d80c)', '2600000');
 
 statement ok

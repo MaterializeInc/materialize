@@ -419,7 +419,7 @@ SHOW SCHEMA
 ----
 public
 
-query error db error: ERROR: SHOW variable in subqueries not yet supported
+query error SHOW variable in subqueries not yet supported
 SELECT * FROM (show client_encoding)
 
 # Need to disable the result stash, so that we actually exceed max result size
@@ -437,7 +437,7 @@ SELECT generate_series(1, 2)
 1
 2
 
-query error db error: ERROR: result exceeds max size of 100 B
+query error result exceeds max size of 100 B
 SELECT generate_series(1, 51)
 
 # Regression for database-issues#6866

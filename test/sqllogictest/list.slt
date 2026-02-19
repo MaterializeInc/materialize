@@ -679,10 +679,10 @@ SELECT list_append(NULL, NULL)::text
 query error invalid input syntax for type integer
 SELECT list_append(LIST[1], 'a')::text
 
-query error db error: ERROR: function list_append\(integer list, integer list\) does not exist
+query error function list_append\(integer list, integer list\) does not exist
 SELECT list_append(LIST[1], LIST[2])
 
-query error db error: ERROR: function list_append\(integer, integer list\) does not exist
+query error function list_append\(integer, integer list\) does not exist
 SELECT list_append(1, LIST[1])
 
 # 🔬🔬 list_cat
@@ -1152,7 +1152,7 @@ query T
 SELECT unnest::text FROM unnest(NULL::int list)
 ----
 
-query error db error: ERROR: function unnest\(unknown\) is not unique
+query error function unnest\(unknown\) is not unique
 SELECT * FROM unnest(NULL)
 
 # 🔬 List casts
@@ -1276,7 +1276,7 @@ SELECT length(LIST['1','2']::text)
 ----
 5
 
-query error db error: ERROR: function length\(text list\) does not exist
+query error function length\(text list\) does not exist
 SELECT length(LIST['1','2'])
 
 # 🔬🔬 text to list
@@ -1961,24 +1961,24 @@ false
 
 # 🔬🔬🔬 errors
 
-query error db error: ERROR: operator does not exist: integer list = text list
+query error operator does not exist: integer list = text list
 SELECT LIST[1] = LIST['a']
 
-query error db error: ERROR: operator does not exist: text list = integer list
+query error operator does not exist: text list = integer list
 SELECT LIST[NULL] = LIST[1]
 
-query error db error: ERROR: operator does not exist: text list list = integer list
+query error operator does not exist: text list list = integer list
 SELECT LIST[[NULL]] = LIST[1]
 
-query error db error: ERROR: operator does not exist: integer list list list = integer list
+query error operator does not exist: integer list list list = integer list
 SELECT LIST[[[1]]] = LIST[2]
 
 # Literal text cannot be implicitly cast to list
-query error db error: ERROR: operator does not exist: integer list = text
+query error operator does not exist: integer list = text
 SELECT LIST[1] = '{2}'::text
 
 # Two lists containing implicitly castable element types are not implicitly castable to one another
-query error db error: ERROR: operator does not exist: real list = double precision list
+query error operator does not exist: real list = double precision list
 SELECT '{1}'::float4 list = '{2}'::float8 list
 
 # 🔬 CREATE TYPE .. AS LIST
@@ -2023,7 +2023,7 @@ SELECT '{{1,2}}'::int4_list_list_c::text;
 query error type "bool list" does not exist
 CREATE TYPE nested_list AS LIST (ELEMENT TYPE = "bool list")
 
-query error db error: ERROR: cannot reference pseudo type mz_catalog\.list
+query error cannot reference pseudo type mz_catalog\.list
 CREATE TYPE nested_list AS LIST (ELEMENT TYPE = list)
 
 # 🔬🔬 Check each valid non-array element type
@@ -2353,7 +2353,7 @@ SELECT (list_agg(a) FILTER (WHERE a IS NULL))::text FROM t1
 ----
 {NULL,NULL}
 
-query error db error: ERROR: function list_agg\(integer, integer\) does not exist
+query error function list_agg\(integer, integer\) does not exist
 SELECT list_agg(1, 2)
 
 statement ok

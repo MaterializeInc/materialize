@@ -70,7 +70,7 @@ CREATE TYPE materialize.public.y1 AS (id pg_catalog.int4, name pg_catalog.text, 
 
 # For non existent types
 
-query error db error: ERROR: type "tx" does not exist
+query error type "tx" does not exist
 SHOW CREATE TYPE tx;
 
 # For unnamed types
@@ -82,5 +82,5 @@ db error: ERROR: map[[s46 AS pg_catalog.text]=>[s20 AS pg_catalog.int4]] is not 
 
 # For builtin types
 
-query error db error: ERROR: cannot show create for system type pg_catalog.int4
+query error cannot show create for system type pg_catalog.int4
 SHOW CREATE TYPE int4;

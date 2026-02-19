@@ -2756,7 +2756,7 @@ SELECT has_cluster_privilege('joe', 'c', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_connection_privilege('fake_role', 'conn', 'USAGE')
 
-query error db error: ERROR: connection "fake_connection" does not exist
+query error connection "fake_connection" does not exist
 SELECT has_connection_privilege('joe', 'fake_connection', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2789,7 +2789,7 @@ SELECT has_schema_privilege('joe', 'sch', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_secret_privilege('fake_role', 'se', 'USAGE')
 
-query error db error: ERROR: secret "fake_secret" does not exist
+query error secret "fake_secret" does not exist
 SELECT has_secret_privilege('joe', 'fake_secret', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2800,7 +2800,7 @@ SELECT has_secret_privilege('joe', 'se', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_table_privilege('fake_role', 't', 'SELECT')
 
-query error db error: ERROR: relation "fake_table" does not exist
+query error relation "fake_table" does not exist
 SELECT has_table_privilege('joe', 'fake_table', 'SELECT')
 
 query error unrecognized privilege type: "fake privilege"
@@ -2811,7 +2811,7 @@ SELECT has_table_privilege('joe', 't', 'fake privilege')
 query error role "fake_role" does not exist
 SELECT has_type_privilege('fake_role', 'ty', 'USAGE')
 
-query error db error: ERROR: type "fake_type" does not exist
+query error type "fake_type" does not exist
 SELECT has_type_privilege('joe', 'fake_type', 'USAGE')
 
 query error unrecognized privilege type: "fake privilege"
@@ -3557,7 +3557,7 @@ COMPLETE 0
 
 ## Tables
 
-query error db error: ERROR: relation "t3" does not exist
+query error relation "t3" does not exist
 SELECT has_table_privilege('t3', 'SELECT')
 
 query B
@@ -3637,7 +3637,7 @@ REVOKE USAGE ON ALL TYPES FROM PUBLIC
 ----
 COMPLETE 0
 
-query error db error: ERROR: type "ty1" does not exist
+query error type "ty1" does not exist
 SELECT has_type_privilege('ty1', 'USAGE')
 
 query B
