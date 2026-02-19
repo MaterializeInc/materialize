@@ -32,7 +32,15 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: `### Pre-merge checklist
+              body: `Thanks for opening this PR! Here are a few tips to help make the review process smooth for everyone.
+
+            ### PR title guidelines
+
+            - Use imperative mood: "Fix X" not "Fixed X" or "Fixes X"
+            - Be specific: "Fix panic in catalog sync when controller restarts" not "Fix bug" or "Update catalog code"
+            - Prefix with area if helpful: \`compute: \`, \`storage: \`, \`adapter: \`, \`sql: \`
+
+            ### Pre-merge checklist
 
             - [ ] The PR title is descriptive and will make sense in the git log.
             - [ ] This PR has adequate test coverage / QA involvement has been duly considered. ([trigger-ci for additional test/nightly runs](https://trigger-ci.dev.materialize.com/?pr=${context.payload.pull_request.number}))
