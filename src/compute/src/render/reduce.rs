@@ -1311,18 +1311,19 @@ where
                 let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
                     let mut diffs = zero_diffs.clone();
-                    // Try to unpack only the datums we need. Unfortunately, since we
-                    // can't random access into a Row, we have to iterate through one by one.
-                    // TODO: Even though we don't have random access, we could still avoid unpacking
-                    // everything that we don't care about, and it might be worth it to extend the
-                    // Row API to do that.
-                    let mut row_iter = row.iter().enumerate();
-                    for (datum_index, aggr) in simple_aggrs.iter() {
-                        let mut datum = row_iter.next().unwrap();
-                        while datum_index != &datum.0 {
-                            datum = row_iter.next().unwrap();
-                        }
-                        let datum = datum.1;
+                    // Use nth() to skip directly to each needed column. This leverages
+                    // skip_datum for fast pointer arithmetic over skipped columns,
+                    // avoiding full datum decoding (read_datum) for unneeded columns.
+                    let mut row_iter = row.iter();
+                    let mut prev_index: usize = 0;
+                    for (i, (datum_index, aggr)) in simple_aggrs.iter().enumerate() {
+                        let skip = if i == 0 {
+                            *datum_index
+                        } else {
+                            *datum_index - prev_index - 1
+                        };
+                        let datum = row_iter.nth(skip).unwrap();
+                        prev_index = *datum_index;
                         diffs.0[*datum_index] = datum_to_accumulator(&aggr.func, datum);
                         diffs.1 = Diff::ONE;
                     }

@@ -65,6 +65,10 @@ harness = false
 name = "row_compare"
 harness = false
 
+[[bench]]
+name = "row_aggregate"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
