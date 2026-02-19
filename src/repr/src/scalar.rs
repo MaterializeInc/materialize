@@ -2100,7 +2100,26 @@ macro_rules! impl_tuple_input_datum_type {
                 iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
             ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
                 $(
-                    let $T = <$T>::try_from_iter(iter)?;
+                    let $T = <$T>::try_from_iter(iter);
+                )+
+                // Handle internal errors
+                $(
+                    let $T = match $T {
+                        Err(Ok(None)) => return Err(Ok(None)),
+                        Err(Ok(Some(datum))) if !datum.is_null() => return Err(Ok(Some(datum))),
+                        els => els,
+                    };
+                )+
+                // Handle eval errors
+                $(
+                    let $T = match $T {
+                        Err(Err(err)) => return Err(Err(err)),
+                        els => els,
+                    };
+                )+
+                // Handle null propagation
+                $(
+                    let $T = $T?;
                 )+
                 Ok(($($T,)+))
             }
