@@ -230,6 +230,13 @@ impl Encoder<BackendMessage> for Codec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: BackendMessage, dst: &mut BytesMut) -> Result<(), io::Error> {
+        // PreEncoded messages contain complete wire bytes (type byte, length,
+        // and content). Write them directly and return early.
+        if let BackendMessage::PreEncoded(bytes) = msg {
+            dst.extend_from_slice(&bytes);
+            return Ok(());
+        }
+
         // Write type byte.
         let byte = match &msg {
             BackendMessage::AuthenticationOk => b'R',
@@ -261,6 +268,7 @@ impl Encoder<BackendMessage> for Codec {
             BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
             BackendMessage::CopyDone => b'c',
+            BackendMessage::PreEncoded(_) => unreachable!(),
         };
         dst.put_u8(byte);
 
@@ -288,6 +296,7 @@ impl Encoder<BackendMessage> for Codec {
                 dst.put_slice(&data);
             }
             BackendMessage::CopyDone => (),
+            BackendMessage::PreEncoded(_) => unreachable!("handled above"),
             BackendMessage::AuthenticationOk => {
                 dst.put_u32(0);
             }

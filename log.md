@@ -1020,3 +1020,112 @@ the biggest improvement because the allocation overhead dominated the formatting
   heap allocation.
 - The compute layer has the highest-impact remaining opportunities: OffsetStride::len()
   at 1,580B executions, Row operations at 1,273B, Timestamp ordering at 856B.
+
+## Session 12: Direct DataRow encoding - bypass per-row Vec<Option<Value>> allocation (re-implementation)
+
+**Date:** 2026-02-19
+
+**Problem:** Every row sent over pgwire went through a two-step encoding pipeline:
+1. `values_from_row()` converts a `RowRef` into `Vec<Option<Value>>`, which:
+   - Allocates a new `Vec` per row
+   - For `Datum::String(s)`, clones the string data via `s.to_owned()` into `Value::Text(String)`
+   - For `Datum::Bytes(b)`, clones the bytes via `b.to_vec()` into `Value::Bytea(Vec<u8>)`
+   - For all other types, creates owned `Value` variants
+2. The `Codec::encode()` method then iterates over the `Vec<Option<Value>>`, calling
+   `Value::encode_text()` for each field, writing into `BytesMut`
+
+The intermediate `Value` representation was completely unnecessary for text-format encoding:
+the same `strconv` formatters that `Value::encode_text()` calls can be called directly with
+the borrowed Datum data. Coverage data confirmed `values_from_row` at 1.02 billion
+executions, and `Value::from_datum` at 1.02 billion. This optimization was previously
+implemented in session 6 but was reverted during branch cleanup. This is a clean
+re-implementation.
+
+**Fix:** Three changes:
+
+1. **`encode_data_row_direct()`** in `src/pgrepr/src/value.rs`: Encodes a complete pgwire
+   DataRow message directly from `RowRef` to `BytesMut`, including the 'D' type byte,
+   message length, field count, and per-field encoding. For text format, it calls
+   `encode_datum_text_direct()` which dispatches directly to `strconv` formatters for all
+   simple scalar types (bool, int, float, numeric, timestamp, date, time, uuid, interval,
+   string, bytes, jsonb). Complex types (arrays, lists, maps, records, ranges) fall back
+   to the `Value` path.
+
+2. **`BackendMessage::PreEncoded(Bytes)`** variant in `src/pgwire/src/message.rs`: Allows
+   the protocol layer to send pre-encoded wire bytes directly through the codec without
+   re-framing. The `Codec::encode()` method writes `PreEncoded` bytes directly to the
+   output buffer, bypassing all type-byte/length/field encoding logic.
+
+3. **Protocol integration** in `src/pgwire/src/protocol.rs`: The `send_rows` loop now
+   encodes each row directly into a reusable `BytesMut` buffer using
+   `encode_data_row_direct()`, then wraps it in `BackendMessage::PreEncoded` for sending.
+   The `row_buf` is allocated once and reused across rows via `clear()`/`split()`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-pgrepr --bench datarow_encode`):
+
+### Per-row DataRow encoding (ns/iter)
+
+| Scenario              | Old (values_from_row) | New (direct_encode) | Speedup |
+|-----------------------|----------------------:|--------------------:|--------:|
+| integers_5col         | 138                   | 149                 | 0.93x   |
+| mixed_5col            | 137                   | 134                 | 1.02x   |
+| strings_5col          | 157                   | 127                 | 1.24x   |
+
+### Batch encoding (10k rows to shared buffer)
+
+| Scenario                     | Old (ms)  | New (ms)  | Speedup   |
+|------------------------------|-----------|-----------|-----------|
+| mixed_5col (10k rows)        | 1.435     | 1.352     | **1.06x** |
+| strings_5col (10k rows)      | 1.684     | 1.296     | **1.30x** |
+
+Note: the benchmark is conservative—it only measures the datum-to-bytes encoding step.
+The old path additionally pays Codec::encode() overhead to iterate the Vec<Option<Value>>
+and write each field, which the PreEncoded path completely bypasses.
+
+**Summary:** 1.02-1.24x faster per row, **1.06-1.30x faster in batch**. The biggest win is
+for string-heavy rows (1.30x batch) because the old path cloned every string into an owned
+`Value::Text(String)`. For integer-only rows the improvement is marginal since the `Value`
+enum construction is cheap for scalar types. The improvement compounds with all previous
+formatting optimizations (sessions 3-8, 11) since the direct path uses the optimized
+stack-buffer formatters.
+
+**Also investigated:** `RowRef::unpack()` single-pass optimization (eliminating the
+double-iteration count+collect pattern). The current approach iterates twice: once via
+`skip_datum` to count datums, once via `read_datum` to collect them. A single-pass approach
+with heuristic initial capacity was benchmarked with two strategies:
+- `byte_len / 4` clamp [4,32]: under-estimated for small-datum rows, causing Vec growth
+  that HURT performance for narrow rows (e.g., 1.38x slower for 5-column int64 rows)
+- `byte_len.min(64)`: over-allocated for timestamp/numeric rows, hurting cache behavior
+  (e.g., 1.21x slower for 5-column timestamps)
+The double-pass approach is competitive at common row widths (5-10 columns) because
+`skip_datum` (from session 9) is 2-5x faster than `read_datum`, so the count pass costs
+only ~30-50% of the total. Only rows with 20+ columns showed consistent improvement.
+Abandoned this approach as the wins were marginal and inconsistent.
+
+**Files changed:**
+- `src/pgrepr/src/value.rs` - Added `encode_datum_text_direct()` and
+  `encode_data_row_direct()` functions
+- `src/pgrepr/src/lib.rs` - Re-exported `encode_data_row_direct`
+- `src/pgwire/src/message.rs` - Added `BackendMessage::PreEncoded(Bytes)` variant
+- `src/pgwire/src/codec.rs` - Handle `PreEncoded` in `Codec::encode()`
+- `src/pgwire/src/protocol.rs` - Rewrote `send_rows` loop to use direct encoding
+- `src/pgrepr/Cargo.toml` - Added criterion dev-dependency, registered benchmark
+- `src/pgrepr/benches/datarow_encode.rs` - Added benchmark (new file)
+
+**Future optimization ideas identified during research:**
+- `RowRef::unpack()` is not worth optimizing: the double-pass with skip_datum is competitive
+  at common row widths, and DatumVec already handles the hot paths. Only wide rows (20+
+  columns) showed marginal improvement from a single-pass approach.
+- `Top1Monoid::cmp` in `src/compute/src/render/top_k.rs:908` allocates a `Vec<Datum>` via
+  `Row::unpack()` on every comparison during consolidation. Using thread-local `DatumVec`
+  would help but requires careful handling of the `&self, &other` Ord trait constraints.
+- JSONB serialization in `src/repr/src/adt/jsonb.rs:604` still uses
+  `to_standard_notation_string()` for numeric values. A stack-buffered approach would
+  eliminate the heap allocation, but serde's `serialize_field` requires `&dyn Serialize`,
+  so a custom type implementing Serialize would be needed.
+- The `row_buf.split().freeze()` in the protocol loop creates a `Bytes` (atomic refcount)
+  per row. If the codec supported writing directly to its internal buffer, this per-row
+  `Bytes` allocation could be eliminated.
+- The coverage data (62.8B executions of `unpack()`) suggests it's called very frequently,
+  but most hot paths already use `DatumVec` for allocation reuse. The remaining `unpack()`
+  calls are in less performance-critical paths (transforms, planning, top_k comparisons).
