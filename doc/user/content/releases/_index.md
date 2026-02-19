@@ -22,11 +22,13 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 This release introduces our Roles and Users Management page, performance improvements, and bugfixes.
 
 ### Role Management
-The Roles and Users page on the Materialize Console allows organization administrators to create roles, grant privileges to roles, and assign roles to users. You can also track the hierarchy of roles using the graph view.
+The new Roles and Users page on the Materialize Console allows organization administrators to create roles, grant privileges to roles, and assign roles to users. You can also track the hierarchy of roles using the graph view.
 
 ![Create Role experience](/images/releases/v2612_create_role.png)
 
 ![Graph View experience](/images/releases/v2612_graph_view.png)
+
+You can navigate to the Roles and Users page directly from the Materialize console. If you're on Materialize Self-Managed, upgrade to v26.12 first. If you're on Materialize Cloud, you can go directly to https://console.materialize.com/roles to reach the page.
 
 ### Improvements
 - **Updated default resource requirements** (<red>*Materialize Self-Managed only*</red>): We've updated the Materialize Self-Managed Helm charts to ensure correct operation on Kind clusters
