@@ -798,7 +798,9 @@ fn optimize(
                     let index = *index;
                     if let DatumKnowledge::Lit { value, typ } = &column_knowledge[index] {
                         let nullable = column_knowledge[index].nullable();
-                        *e = MirScalarExpr::Literal(value.clone(), typ.clone().nullable(nullable));
+                        let mut canonical_typ = typ.clone().nullable(nullable);
+                        canonical_typ.repr_canonicalize();
+                        *e = MirScalarExpr::Literal(value.clone(), canonical_typ);
                     }
                     column_knowledge[index].clone()
                 }
