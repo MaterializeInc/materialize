@@ -71,7 +71,7 @@ impl From<InstanceShutDown> for PeekError {
     }
 }
 
-/// Errors arising from `InstanceClient::acquire_read_holds_and_collection_write_frontiers`.
+/// Errors arising from [`InstanceClient::acquire_read_holds_and_collection_write_frontiers`].
 #[derive(Error, Debug)]
 pub enum AcquireReadHoldsError {
     /// The compute collection does not exist.

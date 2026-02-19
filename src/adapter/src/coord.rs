@@ -3846,6 +3846,7 @@ impl Coordinator {
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
         Ok(())
     }
+
     /// Install a _watch set_ in the controller that is automatically associated with the given
     /// connection id. The watchset will be automatically cleared if the connection terminates
     /// before the watchset completes.
