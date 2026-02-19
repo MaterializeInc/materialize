@@ -377,9 +377,7 @@ def _capture_initial_data_persist(
                     timeout=600,
                 )
             stderr_text = (
-                result.stderr.decode("utf-8", errors="replace")
-                if result.stderr
-                else ""
+                result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
             )
             if stderr_text:
                 print(stderr_text, file=sys.stderr, end="")
@@ -475,9 +473,7 @@ def _capture_continuous_data_persist(
                     timeout=600,
                 )
             stderr_text = (
-                result.stderr.decode("utf-8", errors="replace")
-                if result.stderr
-                else ""
+                result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
             )
             if stderr_text:
                 print(stderr_text, file=sys.stderr, end="")
@@ -553,12 +549,6 @@ def main() -> int:
         "--docker-container",
         type=str,
         help="Share volumes/network from this container when running persistcli (for file:// blobs or Unix-socket consensus)",
-    )
-    parser.add_argument(
-        "--max-subscribe-connections",
-        type=int,
-        default=32,
-        help="Maximum concurrent SUBSCRIBE connections for continuous data capture",
     )
     # Currently too slow to always enable, not used yet.
     parser.add_argument("--avg-column-size", action=argparse.BooleanOptionalAction)
@@ -838,7 +828,6 @@ def main() -> int:
             workload["databases"][db][schema]["views"][view] = obj
 
     with timed("Fetching materialized views"):
-        time.time()
         for mv_id, mv, schema, db in query(
             conn,
             "SELECT mz_materialized_views.id, mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
@@ -1120,7 +1109,6 @@ def main() -> int:
         output_path = args.output
         if not output_path.endswith(".yml"):
             output_path += ".yml"
-        time.time()
         with timed(f"Writing workload to {output_path}"):
             with open(output_path, "w") as f:
                 yaml.dump(workload, f, Dumper=yaml.CSafeDumper)

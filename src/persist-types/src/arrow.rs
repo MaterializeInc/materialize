@@ -359,12 +359,8 @@ pub enum ArrayOrd {
     Float64(Float64Array),
     /// Wraps a `String` array.
     String(StringArray),
-    /// Wraps a `LargeString` array.
-    LargeString(LargeStringArray),
     /// Wraps a `Binary` array.
     Binary(BinaryArray),
-    /// Wraps a `LargeBinary` array.
-    LargeBinary(LargeBinaryArray),
     /// Wraps a `FixedSizeBinary` array.
     FixedSizeBinary(FixedSizeBinaryArray),
     /// Wraps a `List` array.
@@ -390,9 +386,7 @@ impl ArrayOrd {
             DataType::Float32 => ArrayOrd::Float32(array.as_primitive().clone()),
             DataType::Float64 => ArrayOrd::Float64(array.as_primitive().clone()),
             DataType::Binary => ArrayOrd::Binary(array.as_binary().clone()),
-            DataType::LargeBinary => ArrayOrd::LargeBinary(array.as_binary().clone()),
             DataType::Utf8 => ArrayOrd::String(array.as_string().clone()),
-            DataType::LargeUtf8 => ArrayOrd::LargeString(array.as_string().clone()),
             DataType::FixedSizeBinary(_) => {
                 ArrayOrd::FixedSizeBinary(array.as_fixed_size_binary().clone())
             }
@@ -437,9 +431,7 @@ impl ArrayOrd {
             ArrayOrd::Float32(a) => a.values().inner().len(),
             ArrayOrd::Float64(a) => a.values().inner().len(),
             ArrayOrd::String(a) => a.values().len(),
-            ArrayOrd::LargeString(a) => a.values().len(),
             ArrayOrd::Binary(a) => a.values().len(),
-            ArrayOrd::LargeBinary(a) => a.values().len(),
             ArrayOrd::FixedSizeBinary(a) => a.values().len(),
             ArrayOrd::List(_, _, nested) => nested.goodbytes(),
             ArrayOrd::Struct(_, nested) => nested.iter().map(|a| a.goodbytes()).sum(),
@@ -472,9 +464,7 @@ impl Debug for ArrayOrd {
                     ArrayOrd::Float32(_) => write!(f, "Float32"),
                     ArrayOrd::Float64(_) => write!(f, "Float64"),
                     ArrayOrd::String(_) => write!(f, "String"),
-                    ArrayOrd::LargeString(_) => write!(f, "LargeString"),
                     ArrayOrd::Binary(_) => write!(f, "Binary"),
-                    ArrayOrd::LargeBinary(_) => write!(f, "LargeBinary"),
                     ArrayOrd::FixedSizeBinary(a) => f
                         .debug_tuple("FixedSizeBinary")
                         .field(&a.value_length())
@@ -529,14 +519,7 @@ impl Display for ArrayIdx<'_> {
             ArrayOrd::Float32(a) => write!(f, "{}", a.value(self.idx)),
             ArrayOrd::Float64(a) => write!(f, "{}", a.value(self.idx)),
             ArrayOrd::String(a) => write!(f, "{}", a.value(self.idx)),
-            ArrayOrd::LargeString(a) => write!(f, "{}", a.value(self.idx)),
             ArrayOrd::Binary(a) => {
-                for byte in a.value(self.idx) {
-                    write!(f, "{:02x}", byte)?;
-                }
-                Ok(())
-            }
-            ArrayOrd::LargeBinary(a) => {
                 for byte in a.value(self.idx) {
                     write!(f, "{:02x}", byte)?;
                 }
@@ -594,9 +577,7 @@ impl<'a> ArrayIdx<'a> {
             ArrayOrd::Float32(_) => size_of::<f32>(),
             ArrayOrd::Float64(_) => size_of::<f64>(),
             ArrayOrd::String(a) => a.value(self.idx).len(),
-            ArrayOrd::LargeString(a) => a.value(self.idx).len(),
             ArrayOrd::Binary(a) => a.value(self.idx).len(),
-            ArrayOrd::LargeBinary(a) => a.value(self.idx).len(),
             ArrayOrd::FixedSizeBinary(a) => a.value_length().as_usize(),
             ArrayOrd::List(_, offsets, nested) => {
                 // Range over the list, summing up the bytes for each entry.
@@ -656,13 +637,7 @@ impl<'a> Ord for ArrayIdx<'a> {
                 cmp(s, self.idx, o, other.idx, f64::total_cmp)
             }
             (ArrayOrd::String(s), ArrayOrd::String(o)) => cmp(s, self.idx, o, other.idx, Ord::cmp),
-            (ArrayOrd::LargeString(s), ArrayOrd::LargeString(o)) => {
-                cmp(s, self.idx, o, other.idx, Ord::cmp)
-            }
             (ArrayOrd::Binary(s), ArrayOrd::Binary(o)) => cmp(s, self.idx, o, other.idx, Ord::cmp),
-            (ArrayOrd::LargeBinary(s), ArrayOrd::LargeBinary(o)) => {
-                cmp(s, self.idx, o, other.idx, Ord::cmp)
-            }
             (ArrayOrd::FixedSizeBinary(s), ArrayOrd::FixedSizeBinary(o)) => {
                 cmp(s, self.idx, o, other.idx, Ord::cmp)
             }

@@ -21,7 +21,8 @@ import time
 import urllib.parse
 from functools import cache
 from textwrap import dedent
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, Literal, overload
 
 import aiohttp
 import confluent_kafka  # type: ignore
@@ -176,6 +177,10 @@ def get_kafka_objects(
     col_names = [c.name for c in columns]
 
     if debezium:
+        # Avro namespaces allow dots (they're dot-separated component names),
+        # so use the original topic name for namespace and connect.name to match
+        # the schema names in the captured SEED KEY/VALUE SCHEMA definitions.
+        # Only record "name" fields require the sanitized avro_name.
         value_record_schema = {
             "type": "record",
             "name": "Value",
@@ -187,13 +192,13 @@ def get_kafka_objects(
                 }
                 for c in columns
             ],
-            "connect.name": f"{avro_name}.Value",
+            "connect.name": f"{topic}.Value",
         }
 
         envelope_schema = {
             "type": "record",
             "name": "Envelope",
-            "namespace": avro_name,
+            "namespace": topic,
             "fields": [
                 {
                     "name": "before",
@@ -255,13 +260,13 @@ def get_kafka_objects(
                 {"name": "ts_ms", "type": ["null", "long"], "default": None},
                 {"name": "transaction", "type": ["null", "string"], "default": None},
             ],
-            "connect.name": f"{avro_name}.Envelope",
+            "connect.name": f"{topic}.Envelope",
         }
 
         key_schema = {
             "type": "record",
             "name": "Key",
-            "namespace": avro_name,
+            "namespace": topic,
             "fields": [
                 {
                     "name": c.name,
@@ -270,7 +275,7 @@ def get_kafka_objects(
                 }
                 for c in columns
             ],
-            "connect.name": f"{avro_name}.Key",
+            "connect.name": f"{topic}.Key",
         }
 
         value_serializer = AvroSerializer(
@@ -507,30 +512,6 @@ def ingest(
 # --- Captured data ingestion functions ---
 
 
-def unescape_copy_field(field: str) -> str:
-    """Unescape a PostgreSQL COPY text format field value."""
-    result = []
-    i = 0
-    while i < len(field):
-        if field[i] == "\\" and i + 1 < len(field):
-            c = field[i + 1]
-            if c == "\\":
-                result.append("\\")
-            elif c == "n":
-                result.append("\n")
-            elif c == "r":
-                result.append("\r")
-            elif c == "t":
-                result.append("\t")
-            else:
-                result.append(c)
-            i += 2
-        else:
-            result.append(field[i])
-            i += 1
-    return "".join(result)
-
-
 def _decode_packed_numeric(binary_data: bytes) -> str:
     """Decode MZ's PackedNumeric (40 bytes) to decimal string."""
     import struct
@@ -691,10 +672,28 @@ def _jdn_to_date_string(jdn: int) -> str:
     return f"{year:04d}-{month:02d}-{day:02d}"
 
 
+@overload
 def parse_parquet_file(
     parquet_path: str,
     column_types: list[str] | None = None,
-) -> list[list[str | None]]:
+    group_by_timestamp: Literal[False] = False,
+) -> list[list[str | None]]: ...
+
+
+@overload
+def parse_parquet_file(
+    parquet_path: str,
+    column_types: list[str] | None = None,
+    *,
+    group_by_timestamp: Literal[True],
+) -> dict[int, list[list[str | None]]]: ...
+
+
+def parse_parquet_file(
+    parquet_path: str,
+    column_types: list[str] | None = None,
+    group_by_timestamp: bool = False,
+) -> list[list[str | None]] | dict[int, list[list[str | None]]]:
     """Read a Parquet file and return rows as list of str|None values.
 
     Converts all values to string representation compatible with
@@ -718,15 +717,19 @@ def parse_parquet_file(
         if str(dt) == "fixed_size_binary[16]":
             ts_cols.add(i)
 
-    rows: list[list[str | None]] = []
+    # When group_by_timestamp, first two columns are mz_timestamp and mz_diff.
+    # column_types refers to the data columns only (starting at index 2).
+    data_col_start = 2 if group_by_timestamp else 0
     columns = [table.column(i).to_pylist() for i in range(table.num_columns)]
-    for row_idx in range(table.num_rows):
+
+    def _convert_row(row_idx: int) -> list[str | None]:
         row: list[str | None] = []
-        for col_idx, col in enumerate(columns):
-            val = col[row_idx]
+        for col_idx in range(data_col_start, table.num_columns):
+            val = columns[col_idx][row_idx]
+            type_idx = col_idx - data_col_start
             col_type = (
-                column_types[col_idx]
-                if column_types and col_idx < len(column_types)
+                column_types[type_idx]
+                if column_types and type_idx < len(column_types)
                 else None
             )
             if val is None:
@@ -735,29 +738,78 @@ def parse_parquet_file(
                 row.append(_decode_packed_timestamp(val))
             else:
                 row.append(_arrow_val_to_text(val, col_type=col_type))
-        rows.append(row)
-    return rows
+        return row
 
+    if group_by_timestamp:
+        from collections import defaultdict
 
-def parse_tsv_file(tsv_path: str) -> list[list[str | None]]:
-    """Read a TSV file in PostgreSQL COPY text format, return list of rows.
-
-    Each row is a list of str|None values. \\N is decoded as None.
-    """
-    rows: list[list[str | None]] = []
-    with open(tsv_path) as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line:
+        ts_col = columns[0]  # mz_timestamp
+        diff_col = columns[1]  # mz_diff
+        grouped: dict[int, list[list[str | None]]] = defaultdict(list)
+        for row_idx in range(table.num_rows):
+            if diff_col[row_idx] != 1:
                 continue
-            fields: list[str | None] = []
-            for field in line.split("\t"):
-                if field == "\\N":
-                    fields.append(None)
+            ts = ts_col[row_idx]
+            assert ts is not None, "mz_timestamp must not be NULL"
+            grouped[int(ts)].append(_convert_row(row_idx))
+        return dict(grouped)
+    else:
+        return [_convert_row(row_idx) for row_idx in range(table.num_rows)]
+
+
+def get_parquet_row_count(parquet_path: str) -> int:
+    """Get the total number of rows in a Parquet file from metadata (no data read)."""
+    import pyarrow.parquet as pq
+
+    return pq.ParquetFile(parquet_path).metadata.num_rows
+
+
+def iter_parquet_batches(
+    parquet_path: str,
+    column_types: list[str] | None = None,
+    batch_size: int = 10000,
+) -> Iterator[list[list[str | None]]]:
+    """Yield batches of rows from a Parquet file with bounded memory usage.
+
+    Unlike parse_parquet_file which loads the entire file into memory,
+    this reads one RecordBatch at a time so only ~batch_size rows worth
+    of Python objects are alive at any point.
+    """
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(parquet_path)
+    schema = pf.schema_arrow
+
+    # Detect columns that need special fixed_size_binary[16] timestamp decoding.
+    ts_cols: set[int] = set()
+    for i in range(len(schema)):
+        if str(schema.field(i).type) == "fixed_size_binary[16]":
+            ts_cols.add(i)
+
+    for batch in pf.iter_batches(batch_size=batch_size):
+        num_cols = batch.num_columns
+        columns = [batch.column(i).to_pylist() for i in range(num_cols)]
+
+        rows: list[list[str | None]] = []
+        for row_idx in range(batch.num_rows):
+            row: list[str | None] = []
+            for col_idx in range(num_cols):
+                val = columns[col_idx][row_idx]
+                col_type = (
+                    column_types[col_idx]
+                    if column_types and col_idx < len(column_types)
+                    else None
+                )
+                if val is None:
+                    row.append(None)
+                elif col_idx in ts_cols and isinstance(val, bytes) and len(val) == 16:
+                    row.append(_decode_packed_timestamp(val))
                 else:
-                    fields.append(unescape_copy_field(field))
-            rows.append(fields)
-    return rows
+                    row.append(_arrow_val_to_text(val, col_type=col_type))
+            rows.append(row)
+
+        if rows:
+            yield rows
 
 
 def _tsv_to_typed_value(value: str | None, sql_type: str) -> Any:
@@ -1049,3 +1101,45 @@ def ingest_captured_rows_webhook(
                                 )
 
     asyncio.run(_post_all())
+
+
+def ingest_captured_rows(
+    c: Composition,
+    workload: dict[str, Any],
+    meta: dict[str, Any],
+    source_obj: dict[str, Any] | None,
+    rows: list[list[str | None]],
+) -> None:
+    """Dispatch captured rows to the appropriate upstream system."""
+    if not rows:
+        return
+
+    # MZ table (no parent source, or explicitly a table).
+    if source_obj is None or meta.get("object_type") == "table":
+        ingest_captured_rows_mz_table(c, meta, rows)
+        return
+
+    source_type = source_obj.get("type", "")
+
+    # Find the child object (for subsources) or use source itself.
+    child_obj = source_obj
+    children = source_obj.get("children", {})
+    if children and meta["name"] in children:
+        child_obj = children[meta["name"]]
+
+    if source_type == "postgres":
+        ingest_captured_rows_postgres(c, meta, child_obj, rows)
+    elif source_type == "mysql":
+        ingest_captured_rows_mysql(c, meta, child_obj, rows)
+    elif source_type == "kafka":
+        ingest_captured_rows_kafka(c, meta, source_obj, child_obj, rows)
+    elif source_type == "sql-server":
+        ingest_captured_rows_sql_server(c, meta, child_obj, rows)
+    elif source_type == "webhook":
+        ingest_captured_rows_webhook(c, meta, rows)
+    elif source_type == "load-generator":
+        pass  # nothing to replay
+    else:
+        print(
+            f"  Warning: unknown source type '{source_type}' for {meta.get('name', '?')}, skipping"
+        )
