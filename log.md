@@ -557,3 +557,82 @@ component of the total query time.
 - The `row_buf.split().freeze()` in the protocol loop creates a `Bytes` (atomic refcount)
   per row. If the codec supported writing directly to its internal buffer instead of going
   through the `BackendMessage` enum, this per-row `Bytes` allocation could be eliminated.
+
+## Session 7: Direct hex encoding for bytea - eliminate hex::encode heap allocation
+
+**Date:** 2026-02-19
+
+**Problem:** Every time a `bytea` value is formatted for pgwire output, `format_bytes` in
+`strconv.rs` called `hex::encode(bytes)` which:
+1. Allocates a `String` with capacity `2 * bytes.len()`
+2. Iterates over input bytes, writing hex chars into the String
+3. `write!(buf, "\\x{}", hex_string)` copies the String through `fmt` machinery into the
+   output buffer
+4. The String is immediately dropped
+
+For a 32-byte SHA-256 hash, this means a 64-byte String allocation + copy + free per value.
+For a 1024-byte binary blob, it's a 2048-byte allocation. Bytea columns appear in many
+workloads: hash values, encrypted data, serialized objects, binary protocols.
+
+**Fix:** Replaced `hex::encode` with direct hex encoding using a lookup table and
+stack-allocated chunk buffer:
+- `HEX_CHARS` static array maps nibble values (0-15) to ASCII hex digits
+- Processes input bytes in 64-byte chunks, producing 128 hex chars per chunk into a
+  stack-allocated `[u8; 128]` buffer
+- Each chunk is written with a single `write_str()` call
+- Zero heap allocations; the "\\x" prefix is written first with `write_str`
+
+The chunk-based approach ensures the stack buffer stays small (128 bytes) while handling
+arbitrarily large bytea values efficiently through bulk writes.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench bytes_format`):
+
+### Per-value bytea formatting (ns/iter)
+
+| Size              | Old (hex::encode) | New (direct hex) | Speedup |
+|-------------------|------------------:|-----------------:|--------:|
+| empty             | 13.2              | 3.5              | 3.8x    |
+| 1 byte            | 20.4              | 7.6              | 2.7x    |
+| 4 bytes           | 25.2              | 8.7              | 2.9x    |
+| 16 bytes (SHA-128)| 55.9              | 22.1             | 2.5x    |
+| 32 bytes (SHA-256)| 77.8              | 21.0             | 3.7x    |
+| 64 bytes          | 155               | 34.1             | 4.6x    |
+| 100 bytes         | 177               | 50.1             | 3.5x    |
+| 256 bytes         | 400               | 127              | 3.2x    |
+| 1024 bytes        | 1,571             | 500              | 3.1x    |
+
+### Batch formatting (10k values, 16-79 bytes each, to shared buffer)
+
+| Approach          | Time (µs) | Speedup   |
+|-------------------|-----------|-----------|
+| Old hex::encode   | 992       | -         |
+| New direct hex    | 277       | **3.6x**  |
+
+**Summary:** 2.5-4.6x faster per value, **3.6x faster in batch**. The speedup comes from
+eliminating the heap-allocated String that `hex::encode` produces and replacing the `write!`
+fmt machinery with direct `write_str` calls. Larger values show more consistent ~3x speedup
+(allocation cost is proportional to size); smaller values show higher ratios due to fixed
+overhead elimination.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Rewrote `format_bytes()` to use direct hex encoding with
+  `HEX_CHARS` lookup table and stack-allocated chunk buffer. Added `test_format_bytes` test.
+- `src/repr/benches/bytes_format.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `format_uuid` uses `write!(buf, "{}", uuid)` - could use `uuid.as_hyphenated().encode_lower()`
+  to a stack buffer + single write_str, avoiding fmt machinery for the fixed 36-char output.
+- `format_interval` uses multiple `write!` calls in its Display impl - could use direct
+  formatting similar to timestamp optimization.
+- JSONB serialization in `src/repr/src/adt/jsonb.rs:604` uses `to_standard_notation_string()`
+  for numeric values inside JSONB. Could be replaced with a stack-buffered approach using
+  `write_numeric_standard_notation()`.
+- JSON interchange in `src/interchange/src/json.rs:131` has the same
+  `to_standard_notation_string()` issue.
+- RowArena in `peek_result_iterator.rs:210` is created per-row but is almost free (no alloc
+  until first push). Only worth optimizing if MFP expressions frequently allocate.
+- Row comparison (`RowRef::cmp`) is already optimal (length-then-memcmp). No opportunity there.
+- The biggest remaining non-formatting optimization opportunities are in the compute layer:
+  `row.iter().nth(index)` pattern in reduce.rs iterates sequentially instead of random access,
+  and `Row::unpack()` in top_k allocates a full Vec just to compare a few columns.

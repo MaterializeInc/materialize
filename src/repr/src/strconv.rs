@@ -866,11 +866,41 @@ pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
     Ok(out)
 }
 
+/// Hex lookup table: maps each byte 0x00..0xFF to its 2-char lowercase hex
+/// representation as a pair of ASCII bytes.
+static HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
+
 pub fn format_bytes<F>(buf: &mut F, bytes: &[u8]) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "\\x{}", hex::encode(bytes));
+    // Write "\\x" prefix, then hex-encode each byte directly into the buffer
+    // using a stack-allocated chunk buffer. This avoids the heap-allocated
+    // String that hex::encode() would produce.
+    buf.write_str("\\x");
+
+    // Process bytes in chunks of 64, producing 128 hex chars per chunk.
+    // The chunk buffer is stack-allocated and reused.
+    const CHUNK_SIZE: usize = 64;
+    let mut hex_buf = [0u8; CHUNK_SIZE * 2];
+
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let end = std::cmp::min(offset + CHUNK_SIZE, bytes.len());
+        let chunk = &bytes[offset..end];
+        let hex_len = chunk.len() * 2;
+
+        for (i, &b) in chunk.iter().enumerate() {
+            hex_buf[i * 2] = HEX_CHARS[(b >> 4) as usize];
+            hex_buf[i * 2 + 1] = HEX_CHARS[(b & 0x0f) as usize];
+        }
+
+        // SAFETY: hex_buf contains only ASCII hex digits which are valid UTF-8.
+        let hex_str = unsafe { std::str::from_utf8_unchecked(&hex_buf[..hex_len]) };
+        buf.write_str(hex_str);
+        offset = end;
+    }
+
     Nestable::MayNeedEscaping
 }
 
@@ -2441,5 +2471,28 @@ mod tests {
 
         let s = format!("{}{}", "x".repeat(62), "א");
         assert_eq!("x".repeat(62), parse_pg_legacy_name(&s));
+    }
+
+    #[mz_ore::test]
+    fn test_format_bytes() {
+        let cases: Vec<(&[u8], &str)> = vec![
+            (b"", "\\x"),
+            (b"\x00", "\\x00"),
+            (b"\xff", "\\xff"),
+            (b"\xde\xad\xbe\xef", "\\xdeadbeef"),
+            (b"hello", "\\x68656c6c6f"),
+            (b"\x01\x23\x45\x67\x89\xab\xcd\xef", "\\x0123456789abcdef"),
+        ];
+        for (bytes, expected) in cases {
+            let mut buf = String::new();
+            format_bytes(&mut buf, bytes);
+            assert_eq!(&buf, expected, "format_bytes mismatch for {:?}", bytes);
+        }
+        // Test a value larger than the 64-byte chunk size
+        let large = [0xaa_u8; 100];
+        let expected_large = format!("\\x{}", "aa".repeat(100));
+        let mut buf = String::new();
+        format_bytes(&mut buf, &large);
+        assert_eq!(&buf, &expected_large);
     }
 }

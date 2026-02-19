@@ -45,6 +45,10 @@ harness = false
 name = "float_format"
 harness = false
 
+[[bench]]
+name = "bytes_format"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
