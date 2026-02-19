@@ -37,7 +37,7 @@ if it exits with code zero or if `<message>` is not printed to stdout.
 For details on Testdrive, consult doc/developer/testdrive.md.
 
 For details on the Fivetran Destination Tester, which is a tool provided by
-Fivetran, consult misc/fivetran-sdk/tools/README.md.
+Fivetran, consult https://github.com/fivetran/fivetran_sdk.
 
 To invoke the test harness locally:
 

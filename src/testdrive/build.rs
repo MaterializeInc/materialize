@@ -21,9 +21,8 @@ fn main() {
         // that get mistreated as doc tests.
         .disable_comments(["."]);
 
-    // Bazel places the `fivetran-sdk` submodule in a slightly different place.
     let includes_directories = &[
-        PathBuf::from("../../misc/fivetran-sdk"),
+        PathBuf::from("../../src/fivetran-destination/proto"),
         mz_build_tools::protoc_include(),
     ];
 

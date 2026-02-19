@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# bump-fivetran-sdk — Update Fivetran SDK proto files from upstream.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+UPSTREAM_REPO="https://github.com/fivetran/fivetran_sdk.git"
+PROTO_DIR="src/fivetran-destination/proto"
+PROTO_FILES=("common.proto" "destination_sdk.proto")
+
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+git clone --depth 1 "$UPSTREAM_REPO" "$TMPDIR/fivetran_sdk" 2>&1 | tail -1
+for proto in "${PROTO_FILES[@]}"; do
+    cp "$TMPDIR/fivetran_sdk/$proto" "$PROTO_DIR/$proto"
+done
+sed -i "s/commit: \`[0-9a-f]\+\`/commit: \`$(git -C "$TMPDIR/fivetran_sdk" rev-parse HEAD)\`/" "$PROTO_DIR/README.md"

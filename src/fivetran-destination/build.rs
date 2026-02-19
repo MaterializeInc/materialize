@@ -25,11 +25,7 @@ fn main() {
             .protoc_executable(mz_build_tools::protoc())
             .btree_map(["."]);
 
-        // Bazel places the `fivetran-sdk` submodule in a slightly different place.
-        let includes_directories = &[
-            PathBuf::from("../../misc/fivetran-sdk"),
-            mz_build_tools::protoc_include(),
-        ];
+        let includes_directories = &[PathBuf::from("proto"), mz_build_tools::protoc_include()];
 
         tonic_prost_build::configure()
             // Enabling `emit_rerun_if_changed` will rerun the build script when

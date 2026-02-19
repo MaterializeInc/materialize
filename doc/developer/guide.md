@@ -276,12 +276,6 @@ Because the MaterializeInc organization requires two-factor authentication
 (2FA), you'll need to clone via SSH as indicated above, or [configure a personal
 access token for use with HTTPS][github-https].
 
-You also have to clone the associated submodules, at least `misc/fivetran-sdk` is required to build Materialize, while `test/sqllogictest/sqlite` is only required to run SQL Logic Tests:
-
-```shell
-git submodule update --init --recursive
-```
-
 Then you can build Materialize. Because Materialize is a collection of several
 Rust services that need to be built together, each service can be built
 individually via Cargo, but we recommend using the `bin/environmentd` script to

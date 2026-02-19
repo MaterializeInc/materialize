@@ -44,8 +44,6 @@ def check_default_members(workspace: Workspace) -> bool:
         # by default, and only pulled in by feature flags for other crates. This
         # ensures that `--no-default-features` properly disables jemalloc.
         "src/alloc-default",
-        # This crate depends on the `fivetran-sdk` submodule. We don't want
-        # users building the main binaries to need to set up this submodule.
         "src/fivetran-destination",
     }
 
