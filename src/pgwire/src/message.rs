@@ -53,11 +53,6 @@ pub enum BackendMessage {
     },
     CopyData(Vec<u8>),
     CopyDone,
-    /// Pre-encoded message bytes. The codec writes these directly to the output
-    /// buffer without any framing—the type byte, length, and content are all
-    /// already included in the bytes. Used by the direct DataRow encoding path
-    /// to avoid intermediate allocations.
-    PreEncoded(bytes::Bytes),
 }
 
 impl From<ErrorResponse> for BackendMessage {
