@@ -8,8 +8,16 @@
 # by the Apache License, Version 2.0.
 
 # Tests for replacement materialized views.
+#
+# This is a testdrive, rather than an SLT, because applying a replacement
+# happens asynchronously in the dataflow layer. After the ALTER MV command
+# returns, queries against the MV might still return the old data for a while,
+# even with strict serializable isolation. So we need retries.
 
 $ set-arg-default single-replica-cluster=quickstart
+
+
+# Setup
 
 > CREATE CONNECTION kafka_conn
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
@@ -19,6 +27,11 @@ $ set-arg-default single-replica-cluster=quickstart
 
 > CREATE TABLE t (a int NOT NULL, b int NOT NULL)
 > INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
+> CREATE CLUSTER other REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'))
+
+
+# Test: basic replacement workflow
+
 > CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
 
 > SELECT * FROM mv
@@ -26,8 +39,105 @@ $ set-arg-default single-replica-cluster=quickstart
 3 4
 5 6
 
-# Create downstream objects that depend on the materialized view and that will
-# observe its replacement.
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + b as a, b FROM t
+
+> SELECT * FROM mv
+1 2
+3 4
+5 6
+
+> SELECT * FROM rp
+3  2
+7  4
+11 6
+
+# Ensure that querying the replacement view uses the definition, not the (replacement) materialized view.
+? EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM rp
+Explained Query:
+  Project (#2, #1{b})
+    Map ((#0{a} + #1{b}))
+      ReadStorage materialize.public.t
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+> SHOW MATERIALIZED VIEWS
+name cluster    comment
+-----------------------
+mv   quickstart ""
+rp   quickstart ""
+
+> ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+> SHOW MATERIALIZED VIEWS
+name cluster    comment
+-----------------------
+mv   quickstart ""
+
+> SELECT * FROM mv
+3  2
+7  4
+11 6
+
+
+# Test: aborted replacement workflow
+
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT -a as a, b FROM t
+
+> SELECT * FROM mv
+3  2
+7  4
+11 6
+
+> SHOW MATERIALIZED VIEWS
+name cluster    comment
+-----------------------
+mv   quickstart ""
+rp   quickstart ""
+
+> DROP MATERIALIZED VIEW rp
+
+> SHOW MATERIALIZED VIEWS
+name cluster    comment
+-----------------------
+mv   quickstart ""
+
+> SELECT * FROM mv
+3  2
+7  4
+11 6
+
+
+# Test: replacement can be created in another cluster
+
+> CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER other AS SELECT a, b FROM t;
+
+> SHOW MATERIALIZED VIEWS
+name cluster    comment
+-----------------------
+mv   quickstart ""
+rp   other      ""
+
+> ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+> SHOW MATERIALIZED VIEWS
+name cluster comment
+--------------------
+mv   other   ""
+
+
+> DROP MATERIALIZED VIEW mv CASCADE
+
+
+# Test: replacement with downstream objects
+
+> CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
+
+> SELECT * FROM mv
+1 2
+3 4
+5 6
 
 > CREATE INDEX mv_idx ON mv (a)
 > CREATE MATERIALIZED VIEW mv_downstream AS SELECT a + b AS sum FROM mv
@@ -48,8 +158,6 @@ $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_si
 {"before": null, "after": {"row": {"a": 3, "b": 4}}}
 {"before": null, "after": {"row": {"a": 5, "b": 6}}}
 
-# Create and reply a replacement that changes the MV's output.
-
 > CREATE REPLACEMENT MATERIALIZED VIEW mv_rp FOR mv AS SELECT a * 10 AS a, b FROM t
 
 > SELECT * FROM mv
@@ -63,8 +171,6 @@ $ kafka-verify-data format=avro sort-messages=true sink=materialize.public.mv_si
 50 6
 
 > ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT mv_rp
-
-# Verify that all downstream objects still work and contain the correct data.
 
 > SELECT * FROM mv
 10 2

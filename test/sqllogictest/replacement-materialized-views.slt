@@ -12,166 +12,11 @@ mode cockroach
 # Reset so we get predictable catalog IDs.
 reset-server
 
-# Setup
-
 statement ok
 CREATE TABLE t (a int, b int)
 
 statement ok
-INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
-
-statement ok
-CREATE CLUSTER other REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'))
-
-
-# Test: basic replacement workflow
-
-statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
-
-query II
-SELECT * FROM mv
-----
-1 2
-3 4
-5 6
-
-statement ok
-CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + b as a, b FROM t
-
-query II
-SELECT * FROM mv
-----
-1 2
-3 4
-5 6
-
-query II
-SELECT * FROM rp
-----
-3  2
-7  4
-11 6
-
-
-# Ensure that querying the replacement view uses the definition, not the (replacement) materialized view.
-query T multiline
-EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT * FROM rp
-----
-Explained Query:
-  Project (#2, #1{b})
-    Map ((#0{a} + #1{b}))
-      ReadStorage materialize.public.t
-
-Source materialize.public.t
-
-Target cluster: quickstart
-
-EOF
-
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster    comment
-mv   quickstart (empty)
-rp   quickstart (empty)
-
-statement ok
-ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster    comment
-mv   quickstart (empty)
-
-query II
-SELECT * FROM mv
-----
-3  2
-7  4
-11 6
-
-
-# Test: aborted replacement workflow
-
-statement ok
-CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT -a as a, b FROM t
-
-query II
-SELECT * FROM mv
-----
-3  2
-7  4
-11 6
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster    comment
-mv   quickstart (empty)
-rp   quickstart (empty)
-
-statement ok
-DROP MATERIALIZED VIEW rp
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster    comment
-mv   quickstart (empty)
-
-query II
-SELECT * FROM mv
-----
-3  2
-7  4
-11 6
-
-
-# Test: replacement can be created in another cluster
-
-statement ok
-CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER other AS SELECT a, b FROM t;
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster    comment
-mv   quickstart (empty)
-rp   other      (empty)
-
-statement ok
-ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster comment
-mv   other   (empty)
-
-
-# Test: replacement can have the same query
-
-statement ok
-CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv IN CLUSTER other AS SELECT a, b FROM t;
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster comment
-mv   other   (empty)
-rp   other   (empty)
-
-statement ok
-ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
-
-query TTT colnames,rowsort
-SHOW MATERIALIZED VIEWS
-----
-name cluster comment
-mv   other   (empty)
 
 
 # Test: usage errors
@@ -349,17 +194,17 @@ CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv;
 query TT
 SELECT id, name FROM mz_materialized_views
 ----
-u19  mv
-u20  rp
-u21  mv2
+u15  mv
+u16  rp
+u17  mv2
 
 query TT
 SELECT d.object_id, d.referenced_object_id
 FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 ----
-u20  u19
-u21  u19
+u16  u15
+u17  u15
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
@@ -367,15 +212,15 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 query TT
 SELECT id, name FROM mz_materialized_views
 ----
-u20  mv
-u21  mv2
+u16  mv
+u17  mv2
 
 query TT
 SELECT d.object_id, d.referenced_object_id
 FROM mz_internal.mz_object_dependencies d
 JOIN mz_materialized_views m ON m.id = d.referenced_object_id
 ----
-u21  u20
+u17  u16
 
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE
@@ -400,10 +245,7 @@ GRANT SELECT ON mv TO test_role
 simple conn=test_role,user=test_role
 SELECT * FROM mv
 ----
-1,2
-3,4
-5,6
-COMPLETE 3
+COMPLETE 0
 
 statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT a + 1 AS a, b FROM t
@@ -414,7 +256,4 @@ ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 simple conn=test_role,user=test_role
 SELECT * FROM mv
 ----
-2,2
-4,4
-6,6
-COMPLETE 3
+COMPLETE 0
