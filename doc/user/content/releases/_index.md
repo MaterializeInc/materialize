@@ -15,6 +15,44 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.12.0
+*Released to Materialize Cloud: 2026-02-19* <br>
+*Released to Materialize Self-Managed: 2026-02-20* <br>
+
+This release adds initial OIDC authentication support for Self-Managed
+deployments, improves Iceberg sink performance and correctness, and fixes
+several bugs including panics with unsupported range types and empty
+int2vector values.
+
+### Improvements
+- Added initial OIDC (OpenID Connect) authentication support for Self-Managed
+  deployments, allowing operators to configure OIDC as an authentication method.
+- Improved Iceberg sink performance and correctness, addressing several issues
+  discovered during testing.
+- Updated default resource requirements for Self-Managed Helm charts to ensure
+  correct operation on Kind clusters and prevent poor out-of-the-box experiences.
+- Improved Console query history performance by optimizing RBAC queries to use
+  OIDs instead of names, resulting in 2-3x faster query execution.
+- Added a new troubleshooting guide for PostgreSQL "replication slot is active"
+  errors.
+
+### Bug Fixes
+- Fixed a panic when using unsupported types (e.g., float) with range
+  expressions, now returning a proper error message instead of an internal error.
+- Fixed a panic when using empty `int2vector` values, which could cause internal
+  errors during query optimization or execution.
+- Fixed internal errors that could occur during query optimization due to type
+  checking mismatches in `ColumnKnowledge` and related transforms, adding
+  fallback handling to prevent crashes.
+- Fixed an issue where Iceberg sinks could block on startup when inactive
+  workers failed to release the table-ready signal.
+- Fixed compatibility with older Amazon Aurora PostgreSQL versions when using
+  parallel snapshots, by using `SELECT current_setting()` instead of `SHOW` to
+  retrieve version information.
+- Fixed version comparison in the Materialize Kubernetes operator to correctly
+  follow semver precedence rules, preventing valid upgrades from being
+  incorrectly rejected when only the build metadata changes.
+
 ## v26.11.0
 *Scheduled for release to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-13* <br>
