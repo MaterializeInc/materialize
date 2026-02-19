@@ -305,6 +305,20 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: testdrive-alloydb
+    label: "Testdrive with AlloyDB"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/testdrive]
+    parallelism: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          env:
+            - EXTERNAL_METADATA_STORE: alloydb
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - id: cluster-tests
     label: "Cluster tests"
     depends_on: build-aarch64

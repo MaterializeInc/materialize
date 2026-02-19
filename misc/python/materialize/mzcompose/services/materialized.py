@@ -255,7 +255,7 @@ class Materialized(Service):
                 if external_metadata_store == True
                 else external_metadata_store
             )
-            if metadata_store == "postgres-metadata" or metadata_store == "cockroach":
+            if metadata_store in ("postgres-metadata", "cockroach", "alloydb"):
                 command += [
                     f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
                 ]

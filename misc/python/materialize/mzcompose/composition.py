@@ -1207,7 +1207,7 @@ class Composition:
             )
 
     def metadata_store(self) -> str:
-        for name in ["cockroach", "postgres-metadata", "foundationdb"]:
+        for name in ["cockroach", "postgres-metadata", "alloydb", "foundationdb"]:
             if name in self.compose["services"]:
                 return name
         raise RuntimeError(
@@ -1629,11 +1629,55 @@ class Composition:
         if restart_mz:
             self.up(mz_service)
 
+    def backup_alloydb(self) -> None:
+        backup = self.exec(
+            "alloydb",
+            "pg_dumpall",
+            "--user",
+            "postgres",
+            capture=True,
+        ).stdout
+        with open("backup.sql", "w") as f:
+            f.write(backup)
+
+    def restore_alloydb(
+        self, mz_service: str = "materialized", restart_mz: bool = True
+    ) -> None:
+        self.kill(mz_service)
+        self.kill("alloydb")
+        self.rm("alloydb")
+        self.up("alloydb")
+        with open("backup.sql") as f:
+            backup = f.read()
+        self.exec(
+            "alloydb",
+            "psql",
+            "--user",
+            "postgres",
+            "--file",
+            "-",
+            stdin=backup,
+        )
+        self.up(Service("persistcli", idle=True))
+        self.exec(
+            "persistcli",
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={minio_blob_uri()}",
+            "--consensus-uri=postgres://root@alloydb:26257?options=--search_path=consensus",
+        )
+        if restart_mz:
+            self.up(mz_service)
+
     def backup(self) -> None:
         if self.metadata_store() == "cockroach":
             self.backup_cockroach()
         elif self.metadata_store() == "postgres-metadata":
             self.backup_postgres()
+        elif self.metadata_store() == "alloydb":
+            self.backup_alloydb()
         else:
             raise RuntimeError(
                 f"Unsupported metadata store {self.metadata_store()} for backup"
@@ -1644,6 +1688,8 @@ class Composition:
     ) -> None:
         if self.metadata_store() == "cockroach":
             self.restore_cockroach(mz_service, restart_mz)
+        elif self.metadata_store() == "alloydb":
+            self.restore_alloydb(mz_service, restart_mz)
         else:
             self.restore_postgres(mz_service, restart_mz)
 
