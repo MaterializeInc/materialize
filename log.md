@@ -1325,3 +1325,102 @@ column.
   `Vec<Accum>` per input row. SmallVec<[Accum; 4]> could avoid heap allocation for the
   common case of 1-3 aggregations.
 - JSONB serialization still uses `to_standard_notation_string()` for numeric values.
+
+## Session 15: Direct binary DataRow encoding - bypass per-row Value construction for binary format
+
+**Date:** 2026-02-19
+
+**Problem:** Session 12 optimized the text format DataRow encoding path to bypass `Value`
+construction, but the binary format path still used the old approach: for every non-null
+datum in binary format, the code:
+1. Calls `Value::from_datum(datum, scalar_type)` → constructs an intermediate `Value` enum
+2. For `Datum::String(s)`, clones the string data via `s.to_owned()` into `Value::Text(String)`
+3. For `Datum::Bytes(b)`, clones the bytes via `b.to_vec()` into `Value::Bytea(Vec<u8>)`
+4. Calls `value.encode_binary(ty, dst)` which dispatches through `ToSql` trait implementations
+5. The `Value` is immediately dropped
+
+Binary format is commonly used by production clients: psycopg (Python), JDBC (Java),
+Go's pgx/pgconn, and Rust's tokio-postgres. The per-datum overhead is:
+- `Value` enum construction (match + potential heap alloc for strings/bytes)
+- `ToSql` trait dispatch (dynamic dispatch through postgres-types)
+- For strings/bytes: heap allocation + copy + free just to own the data temporarily
+
+**Fix:** Added `encode_datum_binary_direct()` function that encodes common datum types
+directly into `BytesMut` without constructing an intermediate `Value`:
+- **Bool**: single byte (0/1)
+- **Int16/32/64, UInt8/16/32/64**: big-endian integer encoding (1-8 bytes)
+- **Float32/Float64**: IEEE 754 big-endian encoding
+- **String**: direct `dst.extend_from_slice(s.as_bytes())` — zero-copy from datum
+- **Bytes**: direct `dst.extend_from_slice(b)` — zero-copy from datum
+- **Date**: days since PG epoch (i32 big-endian)
+- **Time**: microseconds since midnight (i64 big-endian)
+- **Timestamp/TimestampTz**: microseconds since PG epoch (i64 big-endian)
+- **Interval**: PG wire format (microseconds i64 + days i32 + months i32)
+- **Uuid**: 16-byte raw encoding
+- **BpChar**: space-padded to declared width, direct bytes copy
+
+Falls back to `Value` path for complex types (Jsonb, Numeric, arrays, lists, maps,
+records, ranges, MzTimestamp, AclItem) where the binary encoding is complex or rarely used.
+
+Added a `PG_EPOCH` static (`LazyLock<NaiveDateTime>` for 2000-01-01) and
+`pg_timestamp_to_microseconds()` helper for timestamp binary encoding.
+
+Updated `encode_data_row_direct()` binary branch to try `encode_datum_binary_direct()`
+first, falling back to the `Value` path only when the direct function returns `false`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-pgrepr --bench datarow_encode -- binary`):
+
+### Per-row binary DataRow encoding (ns/iter)
+
+| Scenario                  | Old (Value path) | New (direct) | Speedup |
+|---------------------------|------------------:|-------------:|--------:|
+| integers_5col             | 137               | 124          | 1.10x   |
+| strings_5col              | 164               | 115          | 1.43x   |
+| mixed_5col (int+str+bool+ts+f64) | 142       | 115          | 1.23x   |
+| timestamps_5col           | 185               | 175          | 1.06x   |
+
+### Batch binary DataRow encoding (10k rows)
+
+| Scenario                         | Old (ms)  | New (ms)  | Speedup   |
+|----------------------------------|-----------|-----------|-----------|
+| mixed_5col (10k rows)            | 1.433     | 1.168     | **1.23x** |
+| strings_5col (10k rows)          | 1.744     | 1.146     | **1.52x** |
+
+**Summary:** 1.06-1.43x faster per row, **1.23-1.52x faster in batch**. The binary format
+gains are more modest than the text format optimization (Session 12) because binary encoding
+is inherently simpler—integers are just big-endian byte writes, not itoa formatting. The
+biggest wins are for string-heavy rows (1.43-1.52x) because the `Value::Text(String)` path
+clones the string onto the heap, while the direct path copies bytes straight from the datum
+to the output buffer. Timestamp improvement is smallest (1.06x) because the `Value`
+construction and `ToSql` encoding for timestamps is already fairly efficient (just
+chrono arithmetic in both paths).
+
+The optimization particularly helps binary protocol clients doing bulk reads (psycopg with
+binary mode, JDBC, Go pgx) where per-row encoding overhead adds up over millions of rows.
+
+**Files changed:**
+- `src/pgrepr/src/value.rs` - Added `encode_datum_binary_direct()` function,
+  `pg_timestamp_to_microseconds()` helper, and `PG_EPOCH` static. Updated binary branch
+  in `encode_data_row_direct()` to try direct encoding first.
+- `src/pgrepr/benches/datarow_encode.rs` - Added binary format benchmarks alongside
+  existing text format benchmarks.
+
+**Future optimization ideas identified during research:**
+- JSONB serialization in `src/repr/src/adt/jsonb.rs:604` and JSON interchange in
+  `src/interchange/src/json.rs:131` still use `to_standard_notation_string()` for numeric
+  values (2 heap allocations per value). Using a stack-buffered approach with
+  `write_numeric_standard_notation()` would eliminate these allocations.
+- The `row_buf.split().freeze()` in the protocol loop creates a `Bytes` (atomic refcount)
+  per row. Writing directly to the codec's internal buffer would eliminate this per-row
+  allocation.
+- Scalar `cast_*_to_string` functions allocate a `String` per call during MFP evaluation.
+  A `RowArena`-based formatting approach or stack-buffered string could eliminate these
+  per-row allocations.
+- The `zero_diffs.clone()` pattern in `reduce.rs` (accumulable aggregation) clones a
+  `Vec<Accum>` per input row. SmallVec<[Accum; 4]> could avoid heap allocation for the
+  common case of 1-3 aggregations.
+- Coverage data shows `persist-types/src/arrow.rs` at 7.3T executions—a potential target
+  for columnar encoding optimizations.
+- Binary encoding for Numeric could be implemented directly (BCD encoding to wire format)
+  without going through the postgres-types ToSql trait, but the complexity of the Numeric
+  wire format makes this a lower priority.
