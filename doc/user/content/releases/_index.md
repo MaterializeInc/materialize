@@ -19,22 +19,19 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-20* <br>
 
-This release adds initial OIDC authentication support for Self-Managed
-deployments, improves Iceberg sink performance and correctness, and fixes
-several bugs including panics with unsupported range types and empty
-int2vector values.
+This release introduces our Roles and Users Management page, performance improvements, and bugfixes.
+
+### Role Management
+The [Roles and Users](https://console.materialize.com/roles) page allows organization administrators to create roles, grant privileges to the roles and grant roles through the Materialize Console.
+
+![Create Role experience](/images/releases/v2612_create_role.png)
+![Graph View experience](/images/releases/v2612_graph_view.png)
 
 ### Improvements
-- Added initial OIDC (OpenID Connect) authentication support for Self-Managed
-  deployments, allowing operators to configure OIDC as an authentication method.
-- Improved Iceberg sink performance and correctness, addressing several issues
-  discovered during testing.
 - Updated default resource requirements for Self-Managed Helm charts to ensure
   correct operation on Kind clusters and prevent poor out-of-the-box experiences.
 - Improved Console query history performance by optimizing RBAC queries to use
   OIDs instead of names, resulting in 2-3x faster query execution.
-- Added a new troubleshooting guide for PostgreSQL "replication slot is active"
-  errors.
 
 ### Bug Fixes
 - Fixed a panic when using unsupported types (e.g., float) with range
@@ -44,8 +41,6 @@ int2vector values.
 - Fixed internal errors that could occur during query optimization due to type
   checking mismatches in `ColumnKnowledge` and related transforms, adding
   fallback handling to prevent crashes.
-- Fixed an issue where Iceberg sinks could block on startup when inactive
-  workers failed to release the table-ready signal.
 - Fixed compatibility with older Amazon Aurora PostgreSQL versions when using
   parallel snapshots, by using `SELECT current_setting()` instead of `SHOW` to
   retrieve version information.
@@ -54,7 +49,7 @@ int2vector values.
   incorrectly rejected when only the build metadata changes.
 
 ## v26.11.0
-*Scheduled for release to Materialize Cloud: 2026-02-19* <br>
+*Released to Materialize Cloud: 2026-02-19* <br>
 *Released to Materialize Self-Managed: 2026-02-13* <br>
 
 This release includes improvements to Avro Schema references, `EXPLAIN` commands, and bug fixes.
