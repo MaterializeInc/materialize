@@ -51,7 +51,8 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     zstd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
+    && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/* \
+    && sed -i 's/^UID_MIN.*/UID_MIN\t500/' /etc/login.defs
 
 RUN curl -fsSL https://github.com/trufflesecurity/trufflehog/releases/download/v3.91.0/trufflehog_3.91.0_linux_$ARCH_GO.tar.gz > trufflehog.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo '694c5c8791c9a30d8ee295cbe991fc6e7c5f4bd8f5dbe8ada100dfe2ece9a628 trufflehog.tar.gz' | sha256sum --check; fi \
