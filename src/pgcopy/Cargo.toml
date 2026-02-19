@@ -13,6 +13,7 @@ workspace = true
 bytes = "1.11.1"
 csv = "1.4.0"
 itertools = "0.14.0"
+memchr = "2.7.6"
 mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
@@ -25,6 +26,10 @@ criterion = { version = "0.5.1", features = ["html_reports"] }
 
 [[bench]]
 name = "copy_encode"
+harness = false
+
+[[bench]]
+name = "copy_parse"
 harness = false
 
 [features]

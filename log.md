@@ -1424,3 +1424,91 @@ binary mode, JDBC, Go pgx) where per-row encoding overhead adds up over millions
 - Binary encoding for Numeric could be implemented directly (BCD encoding to wire format)
   without going through the postgres-types ToSql trait, but the complexity of the Numeric
   wire format makes this a lower priority.
+
+## Session 16: SIMD-accelerated COPY text parsing - memchr replaces byte-by-byte scanning
+
+**Date:** 2026-02-19
+
+**Problem:** The COPY text format parser (`CopyTextFormatParser::consume_raw_value()` in
+`src/pgcopy/src/copy.rs`) scanned input data byte-by-byte, checking 4-6 conditions per byte:
+1. `is_eof()` → `peek().is_none()` (bounds check) + `is_end_of_copy_marker()` (2-byte slice
+   comparison against `b"\\."`)
+2. `is_end_of_copy_marker()` (redundant—already called by `is_eof()`)
+3. `is_end_of_line()` → `peek()` (bounds check) + match against `\n`
+4. `is_column_delimiter()` → `check_bytes(&[delimiter])` (bounds check + 1-byte compare)
+5. `peek()` → bounds check + byte read + match against `\\`
+
+For every normal byte (letters, digits, spaces), ALL of these checks return false, and the byte
+is consumed via `self.consume_n(1)`. For a 100-byte string value, this means ~600 bounds checks
+and comparisons just to scan past normal characters.
+
+Coverage data showed 137 billion executions for the parser's inner loop functions (peek,
+check_bytes), confirming this is a heavily-used code path (COPY FROM data loading, SUBSCRIBE
+output parsing).
+
+**Fix:** Replaced the byte-by-byte scanning loop with SIMD-accelerated `memchr::memchr3()`:
+- Searches for the three special bytes (`column_delimiter`, `\n`, `\\`) in a single vectorized
+  pass using SSE2/AVX2 instructions
+- Processes 16-32 bytes per CPU cycle instead of 1 byte per 5-6 checks
+- When a `\\` is found, checks the next byte for `.` (end-of-copy marker) before processing
+  as an escape sequence, maintaining correct precedence
+- Escape sequence handling (octal, hex, named escapes) remains identical
+- Also handles edge cases: `column_delimiter == b'\\'`, EOF mid-value, etc.
+
+The escape handling within the function was also modernized to use direct `self.data.get()`
+indexing instead of the `peek()`/`consume_n()` helper methods, eliminating redundant bounds
+checks.
+
+**Benchmark results** (criterion, `cargo bench -p mz-pgcopy --bench copy_parse`):
+
+### Batch parsing (10k rows)
+
+| Scenario                          | Old byte-by-byte | New memchr  | Speedup   |
+|-----------------------------------|----------------:|------------:|----------:|
+| int5 (5 short int cols, ~5 chars) | 1.007 ms        | 1.009 ms    | ~1.00x    |
+| str5 (5 string cols, ~17 chars)   | 1.413 ms        | 0.991 ms    | **1.43x** |
+| longstr5 (5 cols, ~80 chars each) | 3.695 ms        | 1.050 ms    | **3.52x** |
+| mixed5 (int+str+bool+int+str)     | 1.035 ms        | 0.985 ms    | 1.05x     |
+| escaped (4 cols, some with \\)    | 1.067 ms        | 0.946 ms    | **1.13x** |
+| wide20 (20 short int cols)        | 4.491 ms        | 4.511 ms    | ~1.00x    |
+
+**Summary:** The improvement is proportional to value length:
+- **3.52x for long strings** (~80 chars) — the biggest win, since memchr skips 80 bytes of
+  normal characters with SIMD in ~10-20ns vs. the old approach's ~480ns (6 checks × 80 bytes)
+- **1.43x for medium strings** (~17 chars) — memchr still wins, but per-value overhead
+  (null string check, delimiter handling) dilutes the improvement
+- **1.13x for escaped data** — escape sequences require per-byte processing regardless, but
+  memchr speeds up the non-escape portions
+- **~1.0x for short integer values** (~5 chars) — per-value framework overhead (null string
+  check, column delimiter parsing) dominates; memchr saves only ~5ns per value which is
+  within noise
+
+For real-world COPY FROM workloads with text columns (common in CSV imports, data migration,
+ETL pipelines), the 1.4-3.5x speedup on the scanning portion translates to meaningful
+throughput improvement. The optimization is especially impactful for wide string data like
+URLs, JSON text, log lines, and document content.
+
+**Files changed:**
+- `src/pgcopy/src/copy.rs` - Rewrote `consume_raw_value()` to use `memchr::memchr3()` for
+  SIMD-accelerated scanning. Escape handling modernized to use direct `self.data.get()`
+  instead of `peek()`/`consume_n()`.
+- `src/pgcopy/Cargo.toml` - Added `memchr = "2.7.6"` dependency, registered copy_parse bench
+- `src/pgcopy/benches/copy_parse.rs` - Added benchmark (new file) comparing old byte-by-byte
+  parser against new memchr-accelerated parser across various data patterns
+
+**Future optimization ideas identified during research:**
+- Coverage data shows `row_spine.rs` at 1.58T executions for `OffsetStride::len()/index()`.
+  These are the core differential dataflow arrangement data structures. The enum match per
+  offset lookup is checked 1.58T times. A branchless formula or cached stride could help.
+- `Row::clone()` at 527B executions is a massive source of allocation pressure. Reducing clone
+  frequency (e.g., using references or Cow-like patterns) or using arena allocation could help.
+- `BytesContainer::index()` at 574B does a LINEAR SCAN through batches for every index
+  operation. A cumulative-length array with binary search would be O(log n) instead of O(n).
+- `Overflowing` arithmetic (add/mul/sub) at 400B: already has `#[cold]` on overflow handler
+  and `#[inline(always)]` on operations. The compiler generates optimal code.
+- JSONB serialization still uses `to_standard_notation_string()` for numeric values.
+- `zero_diffs.clone()` in reduce.rs clones `Vec<Accum>` per row. SmallVec could avoid heap
+  allocation for the common case (1-4 aggregations).
+- The COPY text parser's per-value framework overhead (null string check, delimiter parsing)
+  could be optimized by inlining the null string check into the memchr scan loop, avoiding
+  a separate `consume_null_string()` call per value.

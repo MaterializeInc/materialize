@@ -271,102 +271,135 @@ impl<'a> CopyTextFormatParser<'a> {
         // buffer where unescaped data is accumulated
         self.buffer.clear();
 
-        while !self.is_eof() && !self.is_end_of_copy_marker() {
-            if self.is_end_of_line() || self.is_column_delimiter() {
+        // Use SIMD-accelerated memchr to scan for special characters instead of
+        // checking 4-5 conditions per byte. The three characters we need to find:
+        // - column_delimiter (typically '\t'): end of field
+        // - '\n': end of line
+        // - '\\': escape sequence or end-of-copy marker
+        let delim = self.column_delimiter;
+        loop {
+            let remaining = &self.data[self.position..];
+            if remaining.is_empty() {
                 break;
             }
-            match self.peek() {
-                Some(b'\\') => {
-                    // Add non-escaped data parsed so far
-                    self.buffer.extend(&self.data[start..self.position]);
 
-                    self.consume_n(1);
-                    match self.peek() {
-                        Some(b'b') => {
-                            self.consume_n(1);
-                            self.buffer.push(8);
-                        }
-                        Some(b'f') => {
-                            self.consume_n(1);
-                            self.buffer.push(12);
-                        }
-                        Some(b'n') => {
-                            self.consume_n(1);
-                            self.buffer.push(b'\n');
-                        }
-                        Some(b'r') => {
-                            self.consume_n(1);
-                            self.buffer.push(b'\r');
-                        }
-                        Some(b't') => {
-                            self.consume_n(1);
-                            self.buffer.push(b'\t');
-                        }
-                        Some(b'v') => {
-                            self.consume_n(1);
-                            self.buffer.push(11);
-                        }
-                        Some(b'x') => {
-                            self.consume_n(1);
-                            match self.peek() {
-                                Some(_c @ b'0'..=b'9')
-                                | Some(_c @ b'A'..=b'F')
-                                | Some(_c @ b'a'..=b'f') => {
-                                    let mut value: u8 = 0;
-                                    let decode_nibble = |b| match b {
-                                        Some(c @ b'a'..=b'f') => Some(c - b'a' + 10),
-                                        Some(c @ b'A'..=b'F') => Some(c - b'A' + 10),
-                                        Some(c @ b'0'..=b'9') => Some(c - b'0'),
-                                        _ => None,
-                                    };
-                                    for _ in 0..2 {
-                                        match decode_nibble(self.peek()) {
-                                            Some(c) => {
-                                                self.consume_n(1);
-                                                value = value << 4 | c;
-                                            }
-                                            _ => break,
+            // Find the next special character using SIMD-accelerated search.
+            // This skips over normal bytes (letters, digits, etc.) at ~16-32
+            // bytes per CPU cycle instead of checking each byte individually.
+            let offset = memchr::memchr3(delim, b'\n', b'\\', remaining)
+                .unwrap_or(remaining.len());
+
+            // Advance past all normal bytes
+            self.position += offset;
+
+            if offset == remaining.len() {
+                // No special character found — at EOF
+                break;
+            }
+
+            let byte = self.data[self.position];
+
+            if byte == b'\\' {
+                // Check for end-of-copy marker "\." (highest precedence)
+                if self.data.get(self.position + 1) == Some(&b'.') {
+                    break;
+                }
+
+                // If column_delimiter is '\\', treat as column delimiter
+                if delim == b'\\' {
+                    break;
+                }
+
+                // Process escape sequence
+                self.buffer.extend(&self.data[start..self.position]);
+                self.position += 1; // skip the backslash
+
+                match self.data.get(self.position) {
+                    Some(&b'b') => {
+                        self.position += 1;
+                        self.buffer.push(8);
+                    }
+                    Some(&b'f') => {
+                        self.position += 1;
+                        self.buffer.push(12);
+                    }
+                    Some(&b'n') => {
+                        self.position += 1;
+                        self.buffer.push(b'\n');
+                    }
+                    Some(&b'r') => {
+                        self.position += 1;
+                        self.buffer.push(b'\r');
+                    }
+                    Some(&b't') => {
+                        self.position += 1;
+                        self.buffer.push(b'\t');
+                    }
+                    Some(&b'v') => {
+                        self.position += 1;
+                        self.buffer.push(11);
+                    }
+                    Some(&b'x') => {
+                        self.position += 1;
+                        match self.data.get(self.position) {
+                            Some(&c @ b'0'..=b'9')
+                            | Some(&c @ b'A'..=b'F')
+                            | Some(&c @ b'a'..=b'f') => {
+                                let _ = c;
+                                let mut value: u8 = 0;
+                                let decode_nibble = |b: Option<&u8>| match b {
+                                    Some(&c @ b'a'..=b'f') => Some(c - b'a' + 10),
+                                    Some(&c @ b'A'..=b'F') => Some(c - b'A' + 10),
+                                    Some(&c @ b'0'..=b'9') => Some(c - b'0'),
+                                    _ => None,
+                                };
+                                for _ in 0..2 {
+                                    match decode_nibble(self.data.get(self.position)) {
+                                        Some(c) => {
+                                            self.position += 1;
+                                            value = value << 4 | c;
                                         }
+                                        _ => break,
                                     }
-                                    self.buffer.push(value);
                                 }
-                                _ => {
-                                    self.buffer.push(b'x');
-                                }
+                                self.buffer.push(value);
                             }
-                        }
-                        Some(_c @ b'0'..=b'7') => {
-                            let mut value: u8 = 0;
-                            for _ in 0..3 {
-                                match self.peek() {
-                                    Some(c @ b'0'..=b'7') => {
-                                        self.consume_n(1);
-                                        value = value << 3 | (c - b'0');
-                                    }
-                                    _ => break,
-                                }
+                            _ => {
+                                self.buffer.push(b'x');
                             }
-                            self.buffer.push(value);
-                        }
-                        Some(c) => {
-                            self.consume_n(1);
-                            self.buffer.push(c);
-                        }
-                        None => {
-                            self.buffer.push(b'\\');
                         }
                     }
+                    Some(&c @ b'0'..=b'7') => {
+                        let _ = c;
+                        let mut value: u8 = 0;
+                        for _ in 0..3 {
+                            match self.data.get(self.position) {
+                                Some(&c @ b'0'..=b'7') => {
+                                    self.position += 1;
+                                    value = value << 3 | (c - b'0');
+                                }
+                                _ => break,
+                            }
+                        }
+                        self.buffer.push(value);
+                    }
+                    Some(&c) => {
+                        self.position += 1;
+                        self.buffer.push(c);
+                    }
+                    None => {
+                        self.buffer.push(b'\\');
+                    }
+                }
 
-                    start = self.position;
-                }
-                Some(_) => {
-                    self.consume_n(1);
-                }
-                None => {}
+                start = self.position;
+            } else {
+                // byte is column_delimiter or '\n' — stop scanning
+                break;
             }
         }
 
-        // Return a slice of the original buffer if no escaped characters where processed
+        // Return a slice of the original buffer if no escaped characters were processed
         if self.buffer.is_empty() {
             Ok(Some(&self.data[start..self.position]))
         } else {
