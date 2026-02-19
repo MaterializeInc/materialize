@@ -245,19 +245,17 @@ impl PersistTableWriteWorker {
         updates: Vec<(GlobalId, Vec<TableData>)>,
     ) -> tokio::sync::oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        if updates.is_empty() {
-            tx.send(Ok(()))
-                .expect("rx has not been dropped at this point");
-            rx
-        } else {
-            self.send(PersistTableWriteCmd::Append {
-                write_ts,
-                advance_to,
-                updates,
-                tx,
-            });
-            rx
-        }
+        // Always send the append command to the txn-wal layer, even for empty
+        // updates. The txn-wal commit advances the logical upper of ALL
+        // registered data shards, which is needed for periodic group commits
+        // that have no actual data writes.
+        self.send(PersistTableWriteCmd::Append {
+            write_ts,
+            advance_to,
+            updates,
+            tx,
+        });
+        rx
     }
 
     /// Drops the handles associated with `ids` from this worker.
