@@ -556,15 +556,19 @@ where
     F: FormatBuffer,
 {
     // Build "HH:MM:SS" directly in a stack buffer (8 bytes).
+    // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
+    // second() still returns 59, so we must detect and display 60.
+    let nanos = t.nanosecond();
+    let secs = if nanos >= 1_000_000_000 { 60 } else { t.second() };
     let mut tmp = [0u8; 8];
     write_u2(&mut tmp, 0, t.hour());
     tmp[2] = b':';
     write_u2(&mut tmp, 3, t.minute());
     tmp[5] = b':';
-    write_u2(&mut tmp, 6, t.second());
+    write_u2(&mut tmp, 6, secs);
     // SAFETY: all bytes are ASCII digits or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, t.nanosecond());
+    format_nanos_to_micros(buf, nanos);
     Nestable::Yes
 }
 
@@ -584,6 +588,10 @@ where
 {
     let (year_ad, year) = ts.year_ce();
     write_year(buf, year);
+    // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
+    // second() still returns 59, so we must detect and display 60.
+    let nanos = ts.nanosecond();
+    let secs = if nanos >= 1_000_000_000 { 60 } else { ts.second() };
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
     let mut tmp = [0u8; 15];
     tmp[0] = b'-';
@@ -595,10 +603,10 @@ where
     tmp[9] = b':';
     write_u2(&mut tmp, 10, ts.minute());
     tmp[12] = b':';
-    write_u2(&mut tmp, 13, ts.second());
+    write_u2(&mut tmp, 13, secs);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, nanos);
     if !year_ad {
         buf.write_str(" BC");
     }
@@ -643,6 +651,10 @@ where
 {
     let (year_ad, year) = ts.year_ce();
     write_year(buf, year);
+    // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
+    // second() still returns 59, so we must detect and display 60.
+    let nanos = ts.nanosecond();
+    let secs = if nanos >= 1_000_000_000 { 60 } else { ts.second() };
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
     let mut tmp = [0u8; 15];
     tmp[0] = b'-';
@@ -654,10 +666,10 @@ where
     tmp[9] = b':';
     write_u2(&mut tmp, 10, ts.minute());
     tmp[12] = b':';
-    write_u2(&mut tmp, 13, ts.second());
+    write_u2(&mut tmp, 13, secs);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, nanos);
     buf.write_str("+00");
     if !year_ad {
         buf.write_str(" BC");
@@ -707,7 +719,110 @@ pub fn format_interval<F>(buf: &mut F, iv: Interval) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", iv);
+    let neg_months = iv.months < 0;
+    let years = (iv.months / 12).abs();
+    let months = (iv.months % 12).abs();
+
+    let neg_days = iv.days < 0;
+    let days = i64::from(iv.days).abs();
+
+    let mut nanos = iv.nanoseconds().abs();
+    let mut secs = (iv.micros / 1_000_000).abs();
+
+    let sec_per_hr = 60 * 60;
+    let hours = secs / sec_per_hr;
+    secs %= sec_per_hr;
+
+    let sec_per_min = 60;
+    let minutes = secs / sec_per_min;
+    secs %= sec_per_min;
+
+    let mut int_buf = [0u8; 20];
+
+    if years > 0 {
+        if neg_months {
+            buf.write_str("-");
+        }
+        buf.write_str(write_i64_buf(&mut int_buf, years as i64));
+        if years > 1 || neg_months {
+            buf.write_str(" years");
+        } else {
+            buf.write_str(" year");
+        }
+    }
+
+    if months > 0 {
+        if years != 0 {
+            buf.write_str(" ");
+        }
+        if neg_months {
+            buf.write_str("-");
+        }
+        buf.write_str(write_i64_buf(&mut int_buf, months as i64));
+        if months > 1 || neg_months {
+            buf.write_str(" months");
+        } else {
+            buf.write_str(" month");
+        }
+    }
+
+    if days != 0 {
+        if years > 0 || months > 0 {
+            buf.write_str(" ");
+        }
+        if neg_months && !neg_days {
+            buf.write_str("+");
+        }
+        // Use the original signed value for days to match Postgres output.
+        buf.write_str(write_i64_buf(&mut int_buf, i64::from(iv.days)));
+        if iv.days != 1 {
+            buf.write_str(" days");
+        } else {
+            buf.write_str(" day");
+        }
+    }
+
+    let non_zero_hmsn = hours > 0 || minutes > 0 || secs > 0 || nanos > 0;
+
+    if (years == 0 && months == 0 && days == 0) || non_zero_hmsn {
+        if years > 0 || months > 0 || days > 0 {
+            buf.write_str(" ");
+        }
+        if iv.micros < 0 && non_zero_hmsn {
+            buf.write_str("-");
+        } else if neg_days || (days == 0 && neg_months) {
+            buf.write_str("+");
+        }
+        // Build "HH:MM:SS" in a stack buffer with a single write_str.
+        let mut tmp = [0u8; 8];
+        write_u2(&mut tmp, 0, hours as u32);
+        tmp[2] = b':';
+        write_u2(&mut tmp, 3, minutes as u32);
+        tmp[5] = b':';
+        write_u2(&mut tmp, 6, secs as u32);
+        // SAFETY: all bytes are ASCII digits or ':'.
+        buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
+
+        if nanos > 0 {
+            // Build ".NNNNNNNNN" trimming trailing zeros.
+            let mut frac_buf = [0u8; 10]; // "." + up to 9 digits
+            frac_buf[0] = b'.';
+            let mut width = 9;
+            while nanos % 10 == 0 {
+                width -= 1;
+                nanos /= 10;
+            }
+            // Write nanos right-aligned into frac_buf[1..1+width].
+            let mut n = nanos;
+            for i in (1..=width).rev() {
+                frac_buf[i] = b'0' + (n % 10) as u8;
+                n /= 10;
+            }
+            // SAFETY: all bytes are ASCII digits or '.'.
+            buf.write_str(unsafe { std::str::from_utf8_unchecked(&frac_buf[..1 + width]) });
+        }
+    }
+
     Nestable::MayNeedEscaping
 }
 
@@ -2494,5 +2609,54 @@ mod tests {
         let mut buf = String::new();
         format_bytes(&mut buf, &large);
         assert_eq!(&buf, &expected_large);
+    }
+
+    #[mz_ore::test]
+    fn test_format_interval() {
+        use crate::adt::interval::Interval;
+        let cases: Vec<(Interval, &str)> = vec![
+            // Zero interval
+            (Interval::new(0, 0, 0), "00:00:00"),
+            // Just hours
+            (Interval::new(0, 0, 3_600_000_000), "01:00:00"),
+            // Hours, minutes, seconds
+            (Interval::new(0, 0, 3_723_000_000), "01:02:03"),
+            // Years
+            (Interval::new(12, 0, 0), "1 year"),
+            // Multiple years
+            (Interval::new(24, 0, 0), "2 years"),
+            // Months
+            (Interval::new(3, 0, 0), "3 months"),
+            // 1 month
+            (Interval::new(1, 0, 0), "1 month"),
+            // Years and months
+            (Interval::new(14, 0, 0), "1 year 2 months"),
+            // Days
+            (Interval::new(0, 1, 0), "1 day"),
+            // Multiple days
+            (Interval::new(0, 5, 0), "5 days"),
+            // Negative months
+            (Interval::new(-14, 0, 0), "-1 years -2 months"),
+            // Negative days
+            (Interval::new(0, -3, 0), "-3 days"),
+            // With microseconds
+            (Interval::new(0, 0, 1_500_000), "00:00:01.5"),
+            // Complex with everything
+            (Interval::new(14, 3, 3_723_456_789), "1 year 2 months 3 days 01:02:03.456789"),
+            // Negative time
+            (Interval::new(0, 0, -3_723_000_000), "-01:02:03"),
+        ];
+        for (iv, expected) in &cases {
+            let mut buf = String::new();
+            format_interval(&mut buf, *iv);
+            // Also verify against the Display impl
+            let display = format!("{}", iv);
+            assert_eq!(
+                &buf, &display,
+                "format_interval disagrees with Display for {:?}",
+                iv
+            );
+            assert_eq!(&buf, expected, "format_interval mismatch for {:?}", iv);
+        }
     }
 }

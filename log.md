@@ -636,3 +636,95 @@ overhead elimination.
 - The biggest remaining non-formatting optimization opportunities are in the compute layer:
   `row.iter().nth(index)` pattern in reduce.rs iterates sequentially instead of random access,
   and `Row::unpack()` in top_k allocates a full Vec just to compare a few columns.
+
+## Session 8: Direct interval formatting - bypass Interval::Display fmt machinery
+
+**Date:** 2026-02-19
+
+**Problem:** `format_interval` in `strconv.rs` used `write!(buf, "{}", iv)` which dispatches
+through `Interval`'s `Display` implementation. The Display impl uses multiple `write!` and
+`write_char` calls through the `fmt` machinery:
+- `write!(f, "{}", years)`, `write!(f, " year")` etc. for each component
+- `write!(f, "{:02}:{:02}:{:02}", hours, minutes, seconds)` for the time part
+- Multiple `write_char` calls for fractional seconds
+- Each `write!` call constructs `fmt::Arguments`, creates a `Formatter` with many fields,
+  and dispatches through trait objects
+
+For complex intervals with years, months, days, and fractional time, this results in 6-10+
+separate `write!`/`write_char` calls, each paying the full fmt machinery overhead.
+
+Also investigated `format_uuid` (`write!(buf, "{}", uuid)` → `uuid.hyphenated().encode_lower()`),
+but the uuid crate's Display impl is already well-optimized internally (~12.5ns), and the
+encode_lower approach was actually slightly slower (~14ns). Reverted this change.
+
+Also fixed a minor inefficiency in `format_timestamp`: replaced
+`ts.and_utc().timestamp_subsec_nanos()` with `ts.nanosecond()` to avoid unnecessary
+`DateTime<Utc>` construction just to extract the nanosecond component.
+
+**Fix:** Replaced `write!(buf, "{}", iv)` with direct formatting using:
+- Stack-allocated `[u8; 20]` buffer for integer components via `write_i64_buf()`
+- Stack-allocated `[u8; 8]` buffer for `HH:MM:SS` time formatting using `write_u2()` helper
+  (2-digit lookup from DIGIT_PAIRS table)
+- Stack-allocated `[u8; 10]` buffer for fractional seconds (`.` + up to 9 digits)
+- Single `write_str()` call per component instead of `write!` macro dispatch
+- Sign handling computed once upfront, written as literal strings ("-", "+")
+
+The implementation preserves exact output compatibility with the Display impl, including
+PostgreSQL-compatible sign placement rules (negative sign on months propagates, positive
+sign on days/time after negative months, etc.).
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench interval_format`):
+
+### Per-value interval formatting (ns/iter)
+
+| Value               | Old (Display write!) | New (direct) | Speedup |
+|---------------------|---------------------:|-------------:|--------:|
+| zero                | 53.4                 | 10.3         | 5.2x    |
+| one_hour            | 51.4                 | 10.0         | 5.1x    |
+| hms                 | 50.9                 | 10.1         | 5.0x    |
+| one_year            | 22.3                 | 8.3          | 2.7x    |
+| years_months        | 35.2                 | 10.3         | 3.4x    |
+| one_day             | 20.0                 | 8.5          | 2.4x    |
+| days                | 21.7                 | 8.6          | 2.5x    |
+| neg_months          | 38.8                 | 10.8         | 3.6x    |
+| neg_days            | 23.9                 | 8.9          | 2.7x    |
+| with_micros         | 64.2                 | 15.0         | 4.3x    |
+| complex             | 107.0                | 21.8         | 4.9x    |
+| neg_time            | 48.6                 | 9.1          | 5.4x    |
+| all_parts           | 103.7                | 22.0         | 4.7x    |
+
+### Batch formatting (10k values to shared buffer)
+
+| Approach            | Time (µs) | Speedup   |
+|---------------------|-----------|-----------|
+| Old Display 10k     | 1,080     | -         |
+| New direct 10k      | 225       | **4.8x**  |
+
+**Summary:** 2.4-5.4x faster per value, **4.8x faster in batch**. The speedup comes from
+eliminating the fmt machinery entirely: no `fmt::Arguments` construction, no `Formatter`
+setup, no trait object dispatch. Simple intervals (time-only) see the biggest improvement
+because the old path's overhead dominated the actual formatting work. Complex intervals
+with many components still see ~5x because each component's `write!` overhead is eliminated.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Rewrote `format_interval()` to use direct stack-buffer
+  formatting with `write_i64_buf()` and `write_u2()`. Also changed `format_timestamp` to
+  use `ts.nanosecond()` instead of `ts.and_utc().timestamp_subsec_nanos()`.
+  Added `test_format_interval` correctness test.
+- `src/repr/benches/interval_format.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `format_uuid` uses `write!(buf, "{}", uuid)` but the uuid crate's Display is already
+  fast (~12.5ns). encode_lower approach was slightly slower. Not worth optimizing.
+- JSONB serialization in `src/repr/src/adt/jsonb.rs` uses `to_standard_notation_string()`
+  for numeric values. Could be replaced with stack-buffered formatting.
+- JSON interchange in `src/interchange/src/json.rs` has the same issue.
+- The compute layer has the biggest remaining opportunities:
+  `row.iter().nth(index)` pattern in reduce.rs iterates sequentially instead of random access,
+  and `Row::unpack()` in top_k allocates a full Vec just to compare a few columns.
+- `CheapTimestamp` decoding does integer division + `DateTime::from_timestamp` on every
+  timestamp datum read. Direct `NaiveDateTime` construction could be faster.
+- Most pgwire text formatting is now direct. Remaining `write!`-based formatters:
+  `format_jsonb`, `format_array`, `format_list`, `format_map`, `format_record`,
+  `format_range` - these are more complex (recursive) and harder to optimize.
