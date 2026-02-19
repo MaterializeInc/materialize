@@ -62,7 +62,7 @@ pub(crate) mod format;
 pub(crate) mod impls;
 mod unary;
 mod unmaterializable;
-mod variadic;
+pub mod variadic;
 
 pub use binary::BinaryFunc;
 pub use impls::*;

@@ -232,7 +232,7 @@ pub fn canonicalize_predicates(
     // Relies on the `reduce` above having flattened nested ANDs.
     flat_map_modify(predicates, |p| {
         if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
+            func: VariadicFunc::And(_),
             exprs,
         } = p
         {

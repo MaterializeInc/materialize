@@ -86,6 +86,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
+use mz_expr::func::variadic::And;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
     AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
@@ -1154,7 +1155,7 @@ impl PredicatePushdown {
         column_types: &[SqlColumnType],
     ) -> Option<(MirScalarExpr, MirScalarExpr)> {
         if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
+            func: VariadicFunc::Or(_),
             exprs,
         } = s
         {
@@ -1183,10 +1184,7 @@ impl PredicatePushdown {
         {
             let isnull1 = eq_lhs.clone().call_is_null();
             let isnull2 = eq_rhs.clone().call_is_null();
-            let both_null = MirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
-                exprs: vec![isnull1, isnull2],
-            };
+            let both_null = MirScalarExpr::call_variadic(And, vec![isnull1, isnull2]);
 
             if Self::extract_reduced_conjunction_terms(both_null, column_types)
                 == Self::extract_reduced_conjunction_terms(or_arg1.clone(), column_types)
@@ -1205,7 +1203,7 @@ impl PredicatePushdown {
         s.reduce(column_types);
 
         if let MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
+            func: VariadicFunc::And(_),
             exprs,
         } = s
         {

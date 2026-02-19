@@ -1444,7 +1444,7 @@ pub fn memoize_expr(
             // evaluate to NULL. We could memoize any preceding by expressions that
             // are certain not to error.
             if let MirScalarExpr::CallVariadic {
-                func: crate::VariadicFunc::Coalesce,
+                func: crate::VariadicFunc::Coalesce(_),
                 exprs,
             } = e
             {

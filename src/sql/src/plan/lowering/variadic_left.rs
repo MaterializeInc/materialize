@@ -390,6 +390,7 @@ pub(crate) fn attempt_left_join_magic(
     Ok(Some(body))
 }
 
+use mz_expr::func::variadic::{And, Or};
 use mz_expr::{BinaryFunc, VariadicFunc};
 
 /// If `predicate` can be decomposed as any number of `col(x) = col(y)` expressions anded together, return them.
@@ -400,7 +401,7 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
     while let Some(expr) = todo.pop() {
         match expr {
             MirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
+                func: VariadicFunc::And(_),
                 exprs,
             } => {
                 todo.extend(exprs.iter());
@@ -446,22 +447,20 @@ fn decompose_equations(predicate: &MirScalarExpr) -> Option<Vec<(usize, usize)>>
 fn recompose_equations(pairs: Vec<(usize, usize)>) -> Vec<MirScalarExpr> {
     pairs
         .iter()
-        .map(|(x, y)| MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![
-                MirScalarExpr::CallBinary {
-                    func: func::Eq.into(),
-                    expr1: Box::new(MirScalarExpr::column(*x)),
-                    expr2: Box::new(MirScalarExpr::column(*y)),
-                },
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
-                    exprs: vec![
-                        MirScalarExpr::column(*x).call_is_null(),
-                        MirScalarExpr::column(*y).call_is_null(),
-                    ],
-                },
-            ],
+        .map(|(x, y)| {
+            MirScalarExpr::call_variadic(
+                Or,
+                vec![
+                    MirScalarExpr::column(*x).call_binary(MirScalarExpr::column(*y), func::Eq),
+                    MirScalarExpr::call_variadic(
+                        And,
+                        vec![
+                            MirScalarExpr::column(*x).call_is_null(),
+                            MirScalarExpr::column(*y).call_is_null(),
+                        ],
+                    ),
+                ],
+            )
         })
         .collect()
 }

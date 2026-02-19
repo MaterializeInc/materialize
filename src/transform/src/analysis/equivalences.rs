@@ -812,7 +812,7 @@ impl EquivalenceClasses {
             for expr in class.iter() {
                 // Record-forming expressions can equate their accessors and their members.
                 if let MirScalarExpr::CallVariadic {
-                    func: mz_expr::VariadicFunc::RecordCreate { .. },
+                    func: mz_expr::VariadicFunc::RecordCreate(..),
                     exprs,
                 } = expr
                 {

@@ -44,10 +44,12 @@ use crate::Id::Local;
 use crate::explain::{HumanizedExpr, HumanizerMode};
 use crate::relation::func::{AggregateFunc, LagLeadType, TableFunc};
 use crate::row::{RowCollection, SortedRowCollectionIter};
+use crate::scalar::func::variadic::{
+    JsonbBuildArray, JsonbBuildObject, ListCreate, ListIndex, MapBuild, RecordCreate,
+};
 use crate::visit::{Visit, VisitChildren};
 use crate::{
-    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, VariadicFunc,
-    func as scalar_func,
+    EvalError, FilterCharacteristics, Id, LocalId, MirScalarExpr, UnaryFunc, func as scalar_func,
 };
 
 pub mod canonicalize;
@@ -2718,14 +2720,14 @@ impl AggregateExpr {
             }
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb array.
-            AggregateFunc::JsonbAgg { .. } => MirScalarExpr::CallVariadic {
-                func: VariadicFunc::JsonbBuildArray,
-                exprs: vec![
+            AggregateFunc::JsonbAgg { .. } => MirScalarExpr::call_variadic(
+                JsonbBuildArray,
+                vec![
                     self.expr
                         .clone()
                         .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0))),
                 ],
-            },
+            ),
 
             // JsonbAgg takes _anything_ as input, but must output a Jsonb object.
             AggregateFunc::JsonbObjectAgg { .. } => {
@@ -2733,16 +2735,16 @@ impl AggregateExpr {
                     .expr
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::JsonbBuildObject,
-                    exprs: (0..2)
+                MirScalarExpr::call_variadic(
+                    JsonbBuildObject,
+                    (0..2)
                         .map(|i| {
                             record
                                 .clone()
                                 .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
                         })
                         .collect(),
-                }
+                )
             }
 
             AggregateFunc::MapAgg { value_type, .. } => {
@@ -2750,18 +2752,18 @@ impl AggregateExpr {
                     .expr
                     .clone()
                     .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::MapBuild {
+                MirScalarExpr::call_variadic(
+                    MapBuild {
                         value_type: value_type.clone(),
                     },
-                    exprs: (0..2)
+                    (0..2)
                         .map(|i| {
                             record
                                 .clone()
                                 .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(i)))
                         })
                         .collect(),
-                }
+                )
             }
 
             // StringAgg takes nested records of strings and outputs a string
@@ -2814,17 +2816,17 @@ impl AggregateExpr {
                 let (result_expr, column_name) =
                     Self::on_unique_lag_lead(lag_lead, encoded_args, lag_lead_return_type.clone());
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
+                MirScalarExpr::call_variadic(
+                    ListCreate {
                         elem_type: return_type_with_orig_row,
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result_expr, original_row],
-                    }],
-                }
+                        vec![result_expr, original_row],
+                    )],
+                )
             }
 
             // The input type for FirstValue is ((OriginalRow, InputValue), OrderByExprs...)
@@ -2857,17 +2859,17 @@ impl AggregateExpr {
                     first_value_return_type,
                 );
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
+                MirScalarExpr::call_variadic(
+                    ListCreate {
                         elem_type: return_type_with_orig_row,
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result_expr, original_row],
-                    }],
-                }
+                        vec![result_expr, original_row],
+                    )],
+                )
             }
 
             // The input type for LastValue is ((OriginalRow, InputValue), OrderByExprs...)
@@ -2900,17 +2902,17 @@ impl AggregateExpr {
                     last_value_return_type,
                 );
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
+                MirScalarExpr::call_variadic(
+                    ListCreate {
                         elem_type: return_type_with_orig_row,
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result_expr, original_row],
-                    }],
-                }
+                        vec![result_expr, original_row],
+                    )],
+                )
             }
 
             // The input type for window aggs is ((OriginalRow, InputValue), OrderByExprs...)
@@ -2951,17 +2953,17 @@ impl AggregateExpr {
                     wrapped_aggregate,
                 );
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
+                MirScalarExpr::call_variadic(
+                    ListCreate {
                         elem_type: return_type,
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![column_name, ColumnName::from("?record?")],
                         },
-                        exprs: vec![result, original_row],
-                    }],
-                }
+                        vec![result, original_row],
+                    )],
+                )
             }
 
             // The input type is ((OriginalRow, (Arg1, Arg2, ...)), OrderByExprs...)
@@ -3011,28 +3013,28 @@ impl AggregateExpr {
                     col_names.push(column_name);
                 }
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
+                MirScalarExpr::call_variadic(
+                    ListCreate {
                         elem_type: return_type_with_orig_row,
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![
                                 ColumnName::from("?fused_window_aggr?"),
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate {
+                        vec![
+                            MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: col_names,
                                 },
-                                exprs: func_result_exprs,
-                            },
+                                func_result_exprs,
+                            ),
                             original_row,
                         ],
-                    }],
-                }
+                    )],
+                )
             }
 
             // The input type is ((OriginalRow, (Args1, Args2, ...)), OrderByExprs...)
@@ -3108,28 +3110,28 @@ impl AggregateExpr {
                     col_names.push(column_name);
                 }
 
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate {
+                MirScalarExpr::call_variadic(
+                    ListCreate {
                         elem_type: return_type_with_orig_row,
                     },
-                    exprs: vec![MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::RecordCreate {
+                    vec![MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: vec![
                                 ColumnName::from("?fused_value_window_func?"),
                                 ColumnName::from("?record?"),
                             ],
                         },
-                        exprs: vec![
-                            MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate {
+                        vec![
+                            MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: col_names,
                                 },
-                                exprs: func_result_exprs,
-                            },
+                                func_result_exprs,
+                            ),
                             original_row,
                         ],
-                    }],
-                }
+                    )],
+                )
             }
 
             // All other variants should return the argument to the aggregation.
@@ -3189,32 +3191,32 @@ impl AggregateExpr {
             .call_unary(UnaryFunc::RecordGet(scalar_func::RecordGet(0)));
 
         // extract the expression within the list
-        let record = MirScalarExpr::CallVariadic {
-            func: VariadicFunc::ListIndex,
-            exprs: vec![
+        let record = MirScalarExpr::call_variadic(
+            ListIndex,
+            vec![
                 list,
                 MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
             ],
-        };
+        );
 
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::ListCreate {
+        MirScalarExpr::call_variadic(
+            ListCreate {
                 elem_type: self
                     .typ(input_type)
                     .scalar_type
                     .unwrap_list_element_type()
                     .clone(),
             },
-            exprs: vec![MirScalarExpr::CallVariadic {
-                func: VariadicFunc::RecordCreate {
+            vec![MirScalarExpr::call_variadic(
+                RecordCreate {
                     field_names: vec![ColumnName::from(col_name), ColumnName::from("?record?")],
                 },
-                exprs: vec![
+                vec![
                     MirScalarExpr::literal_ok(Datum::Int64(1), SqlScalarType::Int64),
                     record,
                 ],
-            }],
-        }
+            )],
+        )
     }
 
     /// `on_unique` for `lag` and `lead`

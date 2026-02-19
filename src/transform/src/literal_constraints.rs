@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::canonicalize::canonicalize_predicates;
+use mz_expr::func::variadic::{And, Or};
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{BinaryFunc, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, VariadicFunc};
 use mz_ore::collections::CollectionExt;
@@ -253,7 +254,7 @@ impl LiteralConstraints {
                 let mut row = Row::default();
                 let mut packer = row.packer();
                 for key_field in key {
-                    let and_args = or_arg.and_or_args(VariadicFunc::And);
+                    let and_args = or_arg.and_or_args(And.into());
                     // Let's find a constraint for this key field
                     if let Some((literal, inv_cast)) = and_args
                         .iter()
@@ -340,7 +341,7 @@ impl LiteralConstraints {
                             let recommended_key = or_args
                                 .iter()
                                 .map(|or_arg| {
-                                    let and_args = or_arg.and_or_args(VariadicFunc::And);
+                                    let and_args = or_arg.and_or_args(And.into());
                                     and_args
                                         .iter()
                                         .filter_map(|and_arg| and_arg.any_expr_eq_literal())
@@ -407,7 +408,7 @@ impl LiteralConstraints {
         // `c OR (d AND e)`
         let mut constraints_to_residual_sets = BTreeMap::new();
         or_args.iter().for_each(|or_arg| {
-            let and_args = or_arg.and_or_args(VariadicFunc::And);
+            let and_args = or_arg.and_or_args(And.into());
             let (mut constraints, mut residual): (Vec<_>, Vec<_>) =
                 and_args.iter().cloned().partition(|and_arg| {
                     key.iter()
@@ -440,16 +441,13 @@ impl LiteralConstraints {
             // We can remove the literal constraint
             assert!(residual_sets.len() >= 1); // We already checked `or_args.len() == 0` above
             let residual_set = residual_sets.into_iter().into_first();
-            let new_pred = MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: residual_set
+            let new_pred = MirScalarExpr::call_variadic(
+                Or,
+                residual_set
                     .into_iter()
-                    .map(|residual| MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::And,
-                        exprs: residual,
-                    })
+                    .map(|residual| MirScalarExpr::call_variadic(And, residual))
                     .collect::<Vec<_>>(),
-            };
+            );
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)
@@ -486,7 +484,7 @@ impl LiteralConstraints {
         let mut changed = false;
         or_args.iter_mut().enumerate().for_each(|(i, or_arg)| {
             if let MirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
+                func: VariadicFunc::And(And),
                 exprs: and_args,
             } = or_arg
             {
@@ -527,10 +525,7 @@ impl LiteralConstraints {
         swap_remove_multiple(&mut or_args, to_remove);
         // Rebuild the MFP if needed
         if changed {
-            let new_predicates = vec![MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: or_args,
-            }];
+            let new_predicates = vec![MirScalarExpr::call_variadic(Or, or_args)];
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)
@@ -550,7 +545,7 @@ impl LiteralConstraints {
     fn get_or_args(mfp: &MapFilterProject) -> Vec<MirScalarExpr> {
         assert_eq!(mfp.predicates.len(), 1); // list_of_predicates_to_and_of_predicates ensured this
         let (_, pred) = mfp.predicates.get(0).unwrap();
-        pred.and_or_args(VariadicFunc::Or)
+        pred.and_or_args(Or.into())
     }
 
     /// Makes the job of [LiteralConstraints::detect_literal_constraints] easier by undoing some CSE to
@@ -606,10 +601,10 @@ impl LiteralConstraints {
         // predicates also have a "before" field, which we need to update. (`filter` will recompute
         // these.)
         let (map, _predicates, project) = mfp.as_map_filter_project();
-        let new_predicates = vec![MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
-            exprs: mfp.predicates.iter().map(|(_, p)| p.clone()).collect(),
-        }];
+        let new_predicates = vec![MirScalarExpr::call_variadic(
+            And,
+            mfp.predicates.iter().map(|(_, p)| p.clone()).collect(),
+        )];
         *mfp = MapFilterProject::new(mfp.input_arity)
             .map(map)
             .filter(new_predicates)
@@ -678,7 +673,7 @@ impl LiteralConstraints {
                 old_p = p.clone();
                 p.visit_mut_post(&mut |e: &mut MirScalarExpr| {
                     if let MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::And,
+                        func: VariadicFunc::And(And),
                         exprs: and_args,
                     } = e
                     {
@@ -686,7 +681,7 @@ impl LiteralConstraints {
                             matches!(
                                 a,
                                 MirScalarExpr::CallVariadic {
-                                    func: VariadicFunc::Or,
+                                    func: VariadicFunc::Or(Or),
                                     ..
                                 }
                             )
@@ -694,12 +689,10 @@ impl LiteralConstraints {
                             // We found an AND whose ith argument is an OR. We'll distribute the other
                             // args of the AND over this OR.
                             let mut or = and_args.swap_remove(i);
-                            let to_distribute = MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::And,
-                                exprs: (*and_args).clone(),
-                            };
+                            let to_distribute =
+                                MirScalarExpr::call_variadic(And, (*and_args).clone());
                             if let MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::Or,
+                                func: VariadicFunc::Or(Or),
                                 exprs: ref mut or_args,
                             } = or
                             {
@@ -731,22 +724,16 @@ impl LiteralConstraints {
             if !matches!(
                 or_arg,
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
+                    func: VariadicFunc::And(And),
                     ..
                 }
             ) {
-                *or_arg = MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
-                    exprs: vec![or_arg.clone()],
-                };
+                *or_arg = MirScalarExpr::call_variadic(And, vec![or_arg.clone()]);
                 changed = true;
             }
         });
         if changed {
-            let new_predicates = vec![MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: or_args,
-            }];
+            let new_predicates = vec![MirScalarExpr::call_variadic(Or, or_args)];
             let (map, _predicates, project) = mfp.as_map_filter_project();
             *mfp = MapFilterProject::new(mfp.input_arity)
                 .map(map)

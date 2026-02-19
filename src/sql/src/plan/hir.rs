@@ -22,6 +22,7 @@ use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{CollectionPlan, Id, LetRecLimit, RowSetFinishing, func};
 // these happen to be unchanged at the moment, but there might be additions later
 use mz_expr::AggregateFunc::{FusedWindowAggregate, WindowAggregate};
+use mz_expr::func::variadic::{And, Or};
 pub use mz_expr::{
     BinaryFunc, ColumnOrder, TableFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, WindowFrame,
 };
@@ -3388,9 +3389,9 @@ impl HirScalarExpr {
         HirScalarExpr::CallUnmaterializable(func, NameMetadata::default())
     }
 
-    pub fn call_variadic(func: VariadicFunc, exprs: Vec<Self>) -> Self {
+    pub fn call_variadic<V: Into<VariadicFunc>>(func: V, exprs: Vec<Self>) -> Self {
         HirScalarExpr::CallVariadic {
-            func,
+            func: func.into(),
             exprs,
             name: NameMetadata::default(),
         }
@@ -3410,11 +3411,11 @@ impl HirScalarExpr {
     }
 
     pub fn or(self, other: Self) -> Self {
-        HirScalarExpr::call_variadic(VariadicFunc::Or, vec![self, other])
+        HirScalarExpr::call_variadic(Or, vec![self, other])
     }
 
     pub fn and(self, other: Self) -> Self {
-        HirScalarExpr::call_variadic(VariadicFunc::And, vec![self, other])
+        HirScalarExpr::call_variadic(And, vec![self, other])
     }
 
     pub fn not(self) -> Self {
@@ -3430,7 +3431,7 @@ impl HirScalarExpr {
         match args.len() {
             0 => HirScalarExpr::literal_true(), // Same as unit_of_and_or, but that's MirScalarExpr
             1 => args.swap_remove(0),
-            _ => HirScalarExpr::call_variadic(VariadicFunc::And, args),
+            _ => HirScalarExpr::call_variadic(And, args),
         }
     }
 
@@ -3439,7 +3440,7 @@ impl HirScalarExpr {
         match args.len() {
             0 => HirScalarExpr::literal_false(), // Same as unit_of_and_or, but that's MirScalarExpr
             1 => args.swap_remove(0),
-            _ => HirScalarExpr::call_variadic(VariadicFunc::Or, args),
+            _ => HirScalarExpr::call_variadic(Or, args),
         }
     }
 

@@ -1317,15 +1317,15 @@ where
                 use crate::VariadicFunc::*;
                 let exprs = exprs.iter().map(|expr| self.child(expr));
                 match func {
-                    ArrayCreate { .. } => {
+                    ArrayCreate(..) => {
                         let exprs = separated(", ", exprs);
                         write!(f, "array[{}]", exprs)
                     }
-                    ListCreate { .. } => {
+                    ListCreate(..) => {
                         let exprs = separated(", ", exprs);
                         write!(f, "list[{}]", exprs)
                     }
-                    RecordCreate { .. } => {
+                    RecordCreate(..) => {
                         let exprs = separated(", ", exprs);
                         write!(f, "row({})", exprs)
                     }

@@ -46,6 +46,10 @@ use std::sync::{Arc, LazyLock};
 use std::{iter, mem};
 
 use itertools::Itertools;
+use mz_expr::func::variadic::{
+    ArrayCreate, ArrayIndex, Coalesce, Greatest, Least, ListCreate, ListIndex, ListSliceLinear,
+    MapBuild, RecordCreate,
+};
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
     Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, TableFunc,
@@ -3202,7 +3206,7 @@ fn plan_rows_from_internal<'a>(
         left_expr = left_expr
             .join(right_expr, on, JoinKind::FullOuter)
             .map(vec![HirScalarExpr::call_variadic(
-                VariadicFunc::Coalesce,
+                Coalesce,
                 vec![
                     HirScalarExpr::column(left_col),
                     HirScalarExpr::column(right_col),
@@ -3958,7 +3962,7 @@ fn plan_using_constraint(
                 hidden_cols.push(lhs.column);
                 hidden_cols.push(rhs.column);
                 map_exprs.push(HirScalarExpr::call_variadic(
-                    VariadicFunc::Coalesce,
+                    Coalesce,
                     vec![expr1.clone(), expr2.clone()],
                 ));
                 new_items.push(ScopeItem::from_column_name(column_name));
@@ -4239,9 +4243,9 @@ fn plan_homogenizing_function(
     assert!(!exprs.is_empty()); // `COALESCE()` is a syntax error
     let expr = HirScalarExpr::call_variadic(
         match function {
-            HomogenizingFunction::Coalesce => VariadicFunc::Coalesce,
-            HomogenizingFunction::Greatest => VariadicFunc::Greatest,
-            HomogenizingFunction::Least => VariadicFunc::Least,
+            HomogenizingFunction::Coalesce => VariadicFunc::from(Coalesce),
+            HomogenizingFunction::Greatest => VariadicFunc::from(Greatest),
+            HomogenizingFunction::Least => VariadicFunc::from(Least),
         },
         coerce_homogeneous_exprs(
             &ecx.with_name(&function.to_string().to_lowercase()),
@@ -4364,7 +4368,7 @@ fn plan_subscript_array(
         )?);
     }
 
-    Ok(HirScalarExpr::call_variadic(VariadicFunc::ArrayIndex { offset }, exprs).into())
+    Ok(HirScalarExpr::call_variadic(ArrayIndex { offset }, exprs).into())
 }
 
 fn plan_subscript_list(
@@ -4451,7 +4455,7 @@ fn plan_index_list(
 
     Ok((
         n_layers - depth,
-        HirScalarExpr::call_variadic(VariadicFunc::ListIndex, exprs),
+        HirScalarExpr::call_variadic(ListIndex, exprs),
     ))
 }
 
@@ -4485,10 +4489,7 @@ fn plan_slice_list(
         exprs.push(end);
     }
 
-    Ok(HirScalarExpr::call_variadic(
-        VariadicFunc::ListSliceLinear,
-        exprs,
-    ))
+    Ok(HirScalarExpr::call_variadic(ListSliceLinear, exprs))
 }
 
 fn plan_like(
@@ -4560,7 +4561,7 @@ fn plan_subscript_jsonb(
     // `expr->subscript` as you might expect.
     let expr = expr.call_binary(
         HirScalarExpr::call_variadic(
-            VariadicFunc::ArrayCreate {
+            ArrayCreate {
                 elem_type: SqlScalarType::String,
             },
             exprs,
@@ -4603,7 +4604,7 @@ fn plan_list_subquery(
         ecx,
         query,
         |_| false,
-        |elem_type| VariadicFunc::ListCreate { elem_type },
+        |elem_type| ListCreate { elem_type }.into(),
         |order_by| AggregateFunc::ListConcat { order_by },
         expr_func::ListListConcat.into(),
         |elem_type| {
@@ -4635,7 +4636,7 @@ fn plan_array_subquery(
                     | SqlScalarType::Map { .. }
             )
         },
-        |elem_type| VariadicFunc::ArrayCreate { elem_type },
+        |elem_type| ArrayCreate { elem_type }.into(),
         |order_by| AggregateFunc::ArrayConcat { order_by },
         expr_func::ArrayArrayConcat.into(),
         |elem_type| {
@@ -4744,7 +4745,7 @@ where
             vec![AggregateExpr {
                 func: aggregate_concat(aggregation_order_by),
                 expr: Box::new(HirScalarExpr::call_variadic(
-                    VariadicFunc::RecordCreate {
+                    RecordCreate {
                         field_names: iter::repeat(ColumnName::from(""))
                             .take(aggregation_exprs.len())
                             .collect(),
@@ -4808,7 +4809,7 @@ fn plan_map_subquery(
     }
 
     let aggregation_exprs: Vec<_> = iter::once(HirScalarExpr::call_variadic(
-        VariadicFunc::RecordCreate {
+        RecordCreate {
             field_names: vec![ColumnName::from("key"), ColumnName::from("value")],
         },
         vec![
@@ -4839,7 +4840,7 @@ fn plan_map_subquery(
                     value_type: value_type.clone(),
                 },
                 expr: Box::new(HirScalarExpr::call_variadic(
-                    VariadicFunc::RecordCreate {
+                    RecordCreate {
                         field_names: iter::repeat(ColumnName::from(""))
                             .take(aggregation_exprs.len())
                             .collect(),
@@ -4854,7 +4855,7 @@ fn plan_map_subquery(
 
     // If `expr` has no rows, return an empty map rather than NULL.
     let expr = HirScalarExpr::call_variadic(
-        VariadicFunc::Coalesce,
+        Coalesce,
         vec![
             expr.select(),
             HirScalarExpr::literal(
@@ -4970,7 +4971,7 @@ fn plan_array(
         bail_unsupported!(format!("{}[]", ecx.humanize_scalar_type(&elem_type, false)));
     }
 
-    Ok(HirScalarExpr::call_variadic(VariadicFunc::ArrayCreate { elem_type }, exprs).into())
+    Ok(HirScalarExpr::call_variadic(ArrayCreate { elem_type }, exprs).into())
 }
 
 fn plan_list(
@@ -5007,7 +5008,7 @@ fn plan_list(
         bail_unsupported!("char list");
     }
 
-    Ok(HirScalarExpr::call_variadic(VariadicFunc::ListCreate { elem_type }, exprs).into())
+    Ok(HirScalarExpr::call_variadic(ListCreate { elem_type }, exprs).into())
 }
 
 fn plan_map(
@@ -5050,7 +5051,7 @@ fn plan_map(
         bail_unsupported!("char map");
     }
 
-    let expr = HirScalarExpr::call_variadic(VariadicFunc::MapBuild { value_type }, exprs);
+    let expr = HirScalarExpr::call_variadic(MapBuild { value_type }, exprs);
     Ok(expr.into())
 }
 
@@ -5253,7 +5254,7 @@ fn plan_aggregate_common(
             .collect();
         let mut exprs = vec![expr];
         exprs.extend(order_by_exprs);
-        expr = HirScalarExpr::call_variadic(VariadicFunc::RecordCreate { field_names }, exprs);
+        expr = HirScalarExpr::call_variadic(RecordCreate { field_names }, exprs);
     }
 
     Ok(AggregateExpr {
@@ -5342,7 +5343,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
             let expr = if exprs.len() == 1 && has_exists_column.is_some() {
                 exprs.into_element()
             } else {
-                HirScalarExpr::call_variadic(VariadicFunc::RecordCreate { field_names }, exprs)
+                HirScalarExpr::call_variadic(RecordCreate { field_names }, exprs)
             };
             if let Some(has_exists_column) = has_exists_column {
                 Ok(HirScalarExpr::if_then_else(

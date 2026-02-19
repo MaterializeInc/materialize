@@ -1791,11 +1791,11 @@ mod cardinality {
                     }
                 }
                 MirScalarExpr::CallVariadic { func, exprs } => match func {
-                    VariadicFunc::And => exprs
+                    VariadicFunc::And(_) => exprs
                         .iter()
                         .map(|expr| self.predicate(expr, unique_columns))
                         .product(),
-                    VariadicFunc::Or => {
+                    VariadicFunc::Or(_) => {
                         // TODO(mgree): BETWEEN will get compiled down to an AND of appropriate bounds---we could try to detect it and be clever
 
                         // F(expr1 OR expr2) = F(expr1) + F(expr2) - F(expr1) * F(expr2), but generalized

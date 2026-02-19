@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::MirScalarExpr;
+use mz_expr::func::variadic::ErrorIfNull;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::{SqlColumnType, SqlRelationType, SqlScalarType};
@@ -610,7 +611,7 @@ pub(crate) fn generate_column_casts(
                     table_cast.push((
                         CastType::Natural,
                         HirScalarExpr::call_variadic(
-                            mz_expr::VariadicFunc::ErrorIfNull,
+                            ErrorIfNull,
                             vec![
                                 HirScalarExpr::literal_null(SqlScalarType::String),
                                 HirScalarExpr::literal(
@@ -648,21 +649,18 @@ pub(crate) fn generate_column_casts(
             // constraint changes and we want to error subsource if
             // e.g. the constraint is dropped and we don't notice
             // it.
-            HirScalarExpr::call_variadic(mz_expr::VariadicFunc::ErrorIfNull, vec![
-                                cast_expr,
-                                HirScalarExpr::literal(
-                                    mz_repr::Datum::from(
-                                        format!(
-                                            "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
-                                            table.namespace.clone(),
-                                            table.name.clone(),
-                                            column.name.clone())
-                                            .as_str(),
-                                    ),
-                                    SqlScalarType::String,
-                                ),
-                            ],
-                            )
+            let message = format!(
+                "PG column {}.{}.{} contained NULL data, despite having NOT NULL constraint",
+                table.namespace, table.name, column.name
+            );
+            let exprs = vec![
+                cast_expr,
+                HirScalarExpr::literal(
+                    mz_repr::Datum::from(message.as_str()),
+                    SqlScalarType::String,
+                ),
+            ];
+            HirScalarExpr::call_variadic(ErrorIfNull, exprs)
         };
 
         // We expect only reg* types to encounter this issue. Users

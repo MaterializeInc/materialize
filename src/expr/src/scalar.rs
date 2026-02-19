@@ -37,6 +37,9 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::func::format::DateTimeFormat;
+use crate::scalar::func::variadic::{
+    And, Coalesce, ListCreate, ListIndex, Or, RegexpMatch, RegexpReplace, RegexpSplitToArray,
+};
 use crate::scalar::func::{
     BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc, parse_timezone,
     regexp_replace_parse_flags,
@@ -179,6 +182,14 @@ impl MirScalarExpr {
         }
     }
 
+    /// Call function `func` on `exprs`.
+    pub fn call_variadic<V: Into<VariadicFunc>>(func: V, exprs: Vec<Self>) -> Self {
+        MirScalarExpr::CallVariadic {
+            func: func.into(),
+            exprs,
+        }
+    }
+
     pub fn if_then_else(self, t: Self, f: Self) -> Self {
         MirScalarExpr::If {
             cond: Box::new(self),
@@ -188,17 +199,11 @@ impl MirScalarExpr {
     }
 
     pub fn or(self, other: Self) -> Self {
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Or,
-            exprs: vec![self, other],
-        }
+        MirScalarExpr::call_variadic(Or, vec![self, other])
     }
 
     pub fn and(self, other: Self) -> Self {
-        MirScalarExpr::CallVariadic {
-            func: VariadicFunc::And,
-            exprs: vec![self, other],
-        }
+        MirScalarExpr::call_variadic(And, vec![self, other])
     }
 
     pub fn not(self) -> Self {
@@ -212,7 +217,7 @@ impl MirScalarExpr {
     /// Match AND or OR on self and get the args. If no match, then interpret self as if it were
     /// wrapped in a 1-arg AND/OR.
     pub fn and_or_args(&self, func_to_match: VariadicFunc) -> Vec<MirScalarExpr> {
-        assert!(func_to_match == VariadicFunc::Or || func_to_match == VariadicFunc::And);
+        assert!(func_to_match == Or.into() || func_to_match == And.into());
         match self {
             MirScalarExpr::CallVariadic { func, exprs } if *func == func_to_match => exprs.clone(),
             _ => vec![self.clone()],
@@ -562,7 +567,7 @@ impl MirScalarExpr {
         matches!(
             self,
             Self::CallVariadic {
-                func: VariadicFunc::ErrorIfNull,
+                func: VariadicFunc::ErrorIfNull(_),
                 ..
             }
         )
@@ -767,7 +772,7 @@ impl MirScalarExpr {
                             *e = eval(e);
                         } else if let UnaryFunc::RecordGet(func::RecordGet(i)) = *func {
                             if let MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs,
                             } = &mut **expr
                             {
@@ -1085,7 +1090,7 @@ impl MirScalarExpr {
                                 },
                             ),
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs: rec_create_args,
                             },
                         ) = (&*func, &**expr1, &**expr2)
@@ -1100,9 +1105,9 @@ impl MirScalarExpr {
                             // because `(e1,e2) IN ((1,2))` is desugared using `record_create`.
                             match lit_row.unpack_first() {
                                 Datum::List(datum_list) => {
-                                    *e = MirScalarExpr::CallVariadic {
-                                        func: VariadicFunc::And,
-                                        exprs: datum_list
+                                    *e = MirScalarExpr::call_variadic(
+                                        And,
+                                        datum_list
                                             .iter()
                                             .zip_eq(field_types)
                                             .zip_eq(rec_create_args)
@@ -1114,18 +1119,18 @@ impl MirScalarExpr {
                                                 .call_binary(a.clone(), func::Eq)
                                             })
                                             .collect(),
-                                    };
+                                    );
                                 }
                                 _ => {}
                             }
                         } else if let (
                             BinaryFunc::Eq(_),
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs: rec_create_args1,
                             },
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::RecordCreate { .. },
+                                func: VariadicFunc::RecordCreate(..),
                                 exprs: rec_create_args2,
                             },
                         ) = (&*func, &**expr1, &**expr2)
@@ -1141,14 +1146,14 @@ impl MirScalarExpr {
                             // Note that there is a similar decomposition in
                             // `mz_sql::plan::transform_ast::Desugarer`, but that is earlier in the
                             // pipeline than the compilation of IN lists to `record_create`.
-                            *e = MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::And,
-                                exprs: rec_create_args1
+                            *e = MirScalarExpr::call_variadic(
+                                And,
+                                rec_create_args1
                                     .into_iter()
                                     .zip_eq(rec_create_args2)
                                     .map(|(a, b)| a.clone().call_binary(b.clone(), func::Eq))
                                     .collect(),
-                            }
+                            )
                         }
                     }
                     MirScalarExpr::CallVariadic { .. } => {
@@ -1157,7 +1162,7 @@ impl MirScalarExpr {
                             MirScalarExpr::CallVariadic { func, exprs } => (func, exprs),
                             _ => unreachable!("`flatten_associative` shouldn't change node type"),
                         };
-                        if *func == VariadicFunc::Coalesce {
+                        if *func == Coalesce.into() {
                             // If all inputs are null, output is null. This check must
                             // be done before `exprs.retain...` because `e.typ` requires
                             // > 0 `exprs` remain.
@@ -1199,7 +1204,7 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(column_types).scalar_type,
                             );
-                        } else if *func == VariadicFunc::RegexpMatch
+                        } else if *func == RegexpMatch.into()
                             && exprs[1].is_literal()
                             && exprs.get(2).map_or(true, |e| e.is_literal())
                         {
@@ -1217,7 +1222,7 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
-                        } else if *func == VariadicFunc::RegexpReplace
+                        } else if *func == RegexpReplace.into()
                             && exprs[1].is_literal()
                             && exprs.get(3).map_or(true, |e| e.is_literal())
                         {
@@ -1253,7 +1258,7 @@ impl MirScalarExpr {
                                     )
                                 }
                             };
-                        } else if *func == VariadicFunc::RegexpSplitToArray
+                        } else if *func == RegexpSplitToArray.into()
                             && exprs[1].is_literal()
                             && exprs.get(2).map_or(true, |e| e.is_literal())
                         {
@@ -1271,18 +1276,17 @@ impl MirScalarExpr {
                                     e.typ(column_types).scalar_type,
                                 ),
                             };
-                        } else if *func == VariadicFunc::ListIndex && is_list_create_call(&exprs[0])
-                        {
+                        } else if *func == ListIndex.into() && is_list_create_call(&exprs[0]) {
                             // We are looking for ListIndex(ListCreate, literal), and eliminate
                             // both the ListIndex and the ListCreate. E.g.: `LIST[f1,f2][2]` --> `f2`
                             let ind_exprs = exprs.split_off(1);
                             let top_list_create = exprs.swap_remove(0);
                             *e = reduce_list_create_list_index_literal(top_list_create, ind_exprs);
-                        } else if *func == VariadicFunc::Or || *func == VariadicFunc::And {
+                        } else if *func == Or.into() || *func == And.into() {
                             // Note: It's important that we have called `flatten_associative` above.
                             e.undistribute_and_or();
                             e.reduce_and_canonicalize_and_or();
-                        } else if let VariadicFunc::TimezoneTime = func {
+                        } else if let VariadicFunc::TimezoneTime(_) = func {
                             if exprs[0].is_literal() && exprs[2].is_literal_ok() {
                                 let tz = exprs[0].as_literal_str().unwrap();
                                 *e = match parse_timezone(tz, TimezoneSpec::Posix) {
@@ -1454,7 +1458,7 @@ impl MirScalarExpr {
 
         fn list_create_type(list_create: &MirScalarExpr) -> SqlScalarType {
             if let MirScalarExpr::CallVariadic {
-                func: VariadicFunc::ListCreate { elem_type: typ },
+                func: VariadicFunc::ListCreate(ListCreate { elem_type: typ }),
                 ..
             } = list_create
             {
@@ -1468,7 +1472,7 @@ impl MirScalarExpr {
             matches!(
                 expr,
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListCreate { .. },
+                    func: VariadicFunc::ListCreate(..),
                     ..
                 }
             )
@@ -1523,7 +1527,7 @@ impl MirScalarExpr {
                     for list_create in &mut list_create_mut_refs {
                         let list_create_args = match list_create {
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { elem_type: _ },
+                                func: VariadicFunc::ListCreate(ListCreate { elem_type: _ }),
                                 exprs,
                             } => exprs,
                             _ => unreachable!(), // func cannot be anything else than a ListCreate
@@ -1569,7 +1573,7 @@ impl MirScalarExpr {
                         .into_iter()
                         .flat_map(|list_create| match list_create {
                             MirScalarExpr::CallVariadic {
-                                func: VariadicFunc::ListCreate { elem_type },
+                                func: VariadicFunc::ListCreate(ListCreate { elem_type }),
                                 exprs: list_create_args,
                             } => {
                                 earlier_list_create_types.push(elem_type);
@@ -1588,12 +1592,12 @@ impl MirScalarExpr {
                 assert_eq!(list_create_mut_refs.len(), 1);
                 list_create_to_reduce
             } else {
-                let mut exprs: Vec<MirScalarExpr> = vec![list_create_to_reduce];
-                exprs.append(&mut index_exprs);
-                MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::ListIndex,
-                    exprs,
-                }
+                MirScalarExpr::call_variadic(
+                    ListIndex,
+                    std::iter::once(list_create_to_reduce)
+                        .chain(index_exprs)
+                        .collect(),
+                )
             }
         }
 
@@ -1654,10 +1658,7 @@ impl MirScalarExpr {
             MirScalarExpr::CallVariadic { func, exprs } => {
                 if func.propagates_nulls() && !func.introduces_nulls() {
                     let exprs = exprs.into_iter().map(|e| e.take().call_is_null()).collect();
-                    return Some(MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::Or,
-                        exprs,
-                    });
+                    return Some(MirScalarExpr::call_variadic(Or, exprs));
                 }
             }
             _ => {}
@@ -1709,7 +1710,7 @@ impl MirScalarExpr {
             old_self = self.clone();
             match self {
                 MirScalarExpr::CallVariadic {
-                    func: func @ (VariadicFunc::And | VariadicFunc::Or),
+                    func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
                     exprs,
                 } => {
                     // Canonically order elements so that various deduplications work better,
@@ -1750,7 +1751,7 @@ impl MirScalarExpr {
             inner.flatten_associative();
             match &mut **inner {
                 MirScalarExpr::CallVariadic {
-                    func: inner_func @ (VariadicFunc::And | VariadicFunc::Or),
+                    func: inner_func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
                     exprs,
                 } => {
                     *inner_func = inner_func.switch_and_or();
@@ -1837,7 +1838,7 @@ impl MirScalarExpr {
             self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
             if let MirScalarExpr::CallVariadic {
                 exprs: outer_operands,
-                func: outer_func @ (VariadicFunc::Or | VariadicFunc::And),
+                func: outer_func @ (VariadicFunc::Or(_) | VariadicFunc::And(_)),
             } = self
             {
                 let inner_func = outer_func.switch_and_or();
@@ -3356,62 +3357,44 @@ mod tests {
 
         let test_cases = vec![
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![lit(1)]),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1), lit(2)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![lit(1), lit(2)]),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![null(), lit(2), null()],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![null(), lit(2), null()]),
                 output: lit(2),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![null(), col(0), null(), col(1), lit(2), lit(3)],
-                },
-                output: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(1), lit(2)],
-                },
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![null(), col(0), null(), col(1), lit(2), lit(3)],
+                ),
+                output: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(1), lit(2)]),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2), col(1)],
-                },
-                output: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![col(0), col(2)],
-                },
+                input: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(2), col(1)]),
+                output: MirScalarExpr::call_variadic(Coalesce, vec![col(0), col(2)]),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![lit(1), err(EvalError::DivisionByZero)],
-                },
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![lit(1), err(EvalError::DivisionByZero)],
+                ),
                 output: lit(1),
             },
             TestCase {
-                input: MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Coalesce,
-                    exprs: vec![
+                input: MirScalarExpr::call_variadic(
+                    Coalesce,
+                    vec![
                         null(),
                         err(EvalError::DivisionByZero),
                         err(EvalError::NumericFieldOverflow),
                     ],
-                },
+                ),
                 output: err(EvalError::DivisionByZero),
             },
         ];

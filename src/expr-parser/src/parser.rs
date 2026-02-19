@@ -403,7 +403,10 @@ mod relation {
         let filter = input.parse::<kw::Filter>()?;
 
         let predicates = match scalar::parse_expr(input)? {
-            CallVariadic { func: And, exprs } => exprs,
+            CallVariadic {
+                func: And(_),
+                exprs,
+            } => exprs,
             expr => vec![expr],
         };
 
@@ -762,9 +765,9 @@ mod scalar {
             fn precedence(&self) -> Option<usize> {
                 match self {
                     // 01: logical disjunction
-                    Op::Var(mz_expr::VariadicFunc::Or) => Some(1),
+                    Op::Var(mz_expr::VariadicFunc::Or(_)) => Some(1),
                     // 02: logical conjunction
-                    Op::Var(mz_expr::VariadicFunc::And) => Some(2),
+                    Op::Var(mz_expr::VariadicFunc::And(_)) => Some(2),
                     // 04: equality, assignment
                     Op::Bin(mz_expr::BinaryFunc::Eq(_)) => Some(4),
                     Op::Bin(mz_expr::BinaryFunc::NotEq(_)) => Some(4),
@@ -844,10 +847,10 @@ mod scalar {
                     Op::Bin(func::ModInt64.into()) // TODO: fix placeholder
                 } else if input.eat(kw::AND) {
                     exp_opd = true;
-                    Op::Var(VariadicFunc::And)
+                    Op::Var(VariadicFunc::And(func::variadic::And))
                 } else if input.eat(kw::OR) {
                     exp_opd = true;
-                    Op::Var(VariadicFunc::Or)
+                    Op::Var(VariadicFunc::Or(func::variadic::Or))
                 } else if input.eat(kw::IS) {
                     let negate = input.eat(kw::NOT);
 
@@ -1044,10 +1047,10 @@ mod scalar {
     }
 
     fn parse_literal_array(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ArrayCreate;
 
         let elem_type = SqlScalarType::Int64; // FIXME
-        let func = ArrayCreate { elem_type };
+        let func = VariadicFunc::ArrayCreate(ArrayCreate { elem_type });
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
         // Evaluate into a datum
@@ -1058,10 +1061,10 @@ mod scalar {
     }
 
     fn parse_literal_list(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ListCreate;
 
         let elem_type = SqlScalarType::Int64; // FIXME
-        let func = ListCreate { elem_type };
+        let func = VariadicFunc::ListCreate(ListCreate { elem_type });
         let exprs = input.parse_comma_sep(parse_literal_ok)?;
 
         // Evaluate into a datum
@@ -1072,7 +1075,7 @@ mod scalar {
     }
 
     fn parse_array(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ArrayCreate;
 
         input.parse::<kw::array>()?;
 
@@ -1084,11 +1087,11 @@ mod scalar {
         let func = ArrayCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
-        Ok(MirScalarExpr::CallVariadic { func, exprs })
+        Ok(MirScalarExpr::call_variadic(func, exprs))
     }
 
     fn parse_list(input: ParseStream) -> Result {
-        use mz_expr::func::VariadicFunc::*;
+        use mz_expr::func::variadic::ListCreate;
 
         input.parse::<kw::list>()?;
 
@@ -1100,7 +1103,7 @@ mod scalar {
         let func = ListCreate { elem_type };
         let exprs = inner.parse_comma_sep(parse_expr)?;
 
-        Ok(MirScalarExpr::CallVariadic { func, exprs })
+        Ok(MirScalarExpr::call_variadic(func, exprs))
     }
 
     fn parse_apply(input: ParseStream) -> Result {
@@ -1125,7 +1128,7 @@ mod scalar {
         };
         let parse_variadic = |func: VariadicFunc| -> Result {
             let exprs = inner.parse_comma_sep(parse_expr)?;
-            Ok(MirScalarExpr::CallVariadic { func, exprs })
+            Ok(MirScalarExpr::call_variadic(func, exprs))
         };
 
         // Infix binary and variadic function calls are handled in `parse_scalar_expr`.
@@ -1142,7 +1145,7 @@ mod scalar {
             // Supported binary functions:
             "ltrim" => parse_binary(func::TrimLeading.into()),
             // Supported variadic functions:
-            "greatest" => parse_variadic(VariadicFunc::Greatest),
+            "greatest" => parse_variadic(VariadicFunc::Greatest(func::variadic::Greatest)),
             _ => Err(Error::new(ident.span(), "unsupported function name")),
         }
     }

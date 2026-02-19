@@ -40,6 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
+use mz_expr::func::variadic::{ListCreate, Or, RecordCreate};
 use mz_expr::visit::Visit;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, func};
 use mz_ore::collections::CollectionExt;
@@ -1113,13 +1114,13 @@ impl HirScalarExpr {
                                 .project((0..inner_arity).chain(Some(then_arity)).collect());
 
                             // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
-                            let mut else_inner = get_inner.filter(vec![SS::CallVariadic {
-                                func: mz_expr::VariadicFunc::Or,
-                                exprs: vec![
+                            let mut else_inner = get_inner.filter(vec![SS::call_variadic(
+                                Or,
+                                vec![
                                     cond_expr.clone().call_binary(SS::literal_false(), func::Eq),
                                     cond_expr.clone().call_is_null(),
                                 ],
-                            }]);
+                            )]);
                             let else_expr = else_clone.applied_to(
                                 id_gen,
                                 col_map,
@@ -1195,22 +1196,22 @@ impl HirScalarExpr {
                          order_by_mir: Vec<MirScalarExpr>,
                          original_row_record,
                          original_row_record_type: SqlScalarType| {
-                            let agg_input = MirScalarExpr::CallVariadic {
-                                func: mz_expr::VariadicFunc::ListCreate {
+                            let agg_input = MirScalarExpr::call_variadic(
+                                ListCreate {
                                     elem_type: original_row_record_type.clone(),
                                 },
-                                exprs: vec![original_row_record],
-                            };
+                                vec![original_row_record],
+                            );
                             let mut agg_input = vec![agg_input];
                             agg_input.extend(order_by_mir.clone());
-                            let agg_input = MirScalarExpr::CallVariadic {
-                                func: mz_expr::VariadicFunc::RecordCreate {
+                            let agg_input = MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from(UNKNOWN_COLUMN_NAME))
                                         .collect_vec(),
                                 },
-                                exprs: agg_input,
-                            };
+                                agg_input,
+                            );
                             let list_type = SqlScalarType::List {
                                 element_type: Box::new(original_row_record_type),
                                 custom_id: None,
@@ -1270,15 +1271,15 @@ impl HirScalarExpr {
                                         )
                                     })
                                     .collect();
-                            let fn_input_record = MirScalarExpr::CallVariadic {
-                                func: mz_expr::VariadicFunc::RecordCreate {
+                            let fn_input_record = MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: fn_input_record_fields
                                         .iter()
                                         .map(|(n, _)| n.clone())
                                         .collect_vec(),
                                 },
-                                exprs: vec![original_row_record, mir_encoded_args],
-                            };
+                                vec![original_row_record, mir_encoded_args],
+                            );
                             let fn_input_record_type = SqlScalarType::Record {
                                 fields: fn_input_record_fields,
                                 custom_id: None,
@@ -1289,14 +1290,14 @@ impl HirScalarExpr {
                             // This follows the standard encoding of ORDER BY exprs used by aggregate functions
                             let mut agg_input = vec![fn_input_record];
                             agg_input.extend(order_by_mir.clone());
-                            let agg_input = MirScalarExpr::CallVariadic {
-                                func: mz_expr::VariadicFunc::RecordCreate {
+                            let agg_input = MirScalarExpr::call_variadic(
+                                RecordCreate {
                                     field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from(UNKNOWN_COLUMN_NAME))
                                         .collect_vec(),
                                 },
-                                exprs: agg_input,
-                            };
+                                agg_input,
+                            );
 
                             let agg_input_type = SqlScalarType::Record {
                                 fields: [(
@@ -1496,12 +1497,12 @@ impl HirScalarExpr {
                         .collect();
 
                     // Original row made into a record
-                    let original_row_record = MirScalarExpr::CallVariadic {
-                        func: mz_expr::VariadicFunc::RecordCreate {
+                    let original_row_record = MirScalarExpr::call_variadic(
+                        RecordCreate {
                             field_names: fields.iter().map(|(name, _)| name.clone()).collect_vec(),
                         },
-                        exprs: (0..input_arity).map(MirScalarExpr::column).collect_vec(),
-                    };
+                        (0..input_arity).map(MirScalarExpr::column).collect_vec(),
+                    );
                     let original_row_record_type = SqlScalarType::Record {
                         fields,
                         custom_id: None,

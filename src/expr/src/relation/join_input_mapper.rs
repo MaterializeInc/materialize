@@ -13,6 +13,7 @@ use std::ops::Range;
 use itertools::Itertools;
 use mz_repr::{ReprRelationType, SqlRelationType};
 
+use crate::scalar::func::variadic::{And, Or};
 use crate::visit::Visit;
 use crate::{MirRelationExpr, MirScalarExpr, VariadicFunc};
 
@@ -407,7 +408,7 @@ impl JoinInputMapper {
         } else {
             match expr {
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::Or,
+                    func: VariadicFunc::Or(_),
                     exprs: or_args,
                 } => {
                     // Each OR arg should provide a consequence. If they do, we OR them.
@@ -417,13 +418,10 @@ impl JoinInputMapper {
                             mz_ore::stack::maybe_grow(|| self.consequence_for_input(or_arg, index))
                         })
                         .collect::<Option<Vec<_>>>()?; // return None if any of them are None
-                    Some(MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::Or,
-                        exprs: consequences_per_arg,
-                    })
+                    Some(MirScalarExpr::call_variadic(Or, consequences_per_arg))
                 }
                 MirScalarExpr::CallVariadic {
-                    func: VariadicFunc::And,
+                    func: VariadicFunc::And(_),
                     exprs: and_args,
                 } => {
                     // If any of the AND args provide a consequence, then we take those that do,
@@ -438,10 +436,7 @@ impl JoinInputMapper {
                     if consequences_per_arg.is_empty() {
                         None
                     } else {
-                        Some(MirScalarExpr::CallVariadic {
-                            func: VariadicFunc::And,
-                            exprs: consequences_per_arg,
-                        })
+                        Some(MirScalarExpr::call_variadic(And, consequences_per_arg))
                     }
                 }
                 _ => None,

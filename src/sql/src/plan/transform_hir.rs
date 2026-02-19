@@ -15,6 +15,7 @@ use std::{iter, mem};
 
 use itertools::Itertools;
 use mz_expr::WindowFrame;
+use mz_expr::func::variadic::RecordCreate;
 use mz_expr::visit::Visit;
 use mz_expr::{ColumnOrder, UnaryFunc, VariadicFunc};
 use mz_ore::stack::RecursionLimitError;
@@ -135,7 +136,7 @@ pub fn split_subquery_predicates(expr: &mut HirRelationExpr) -> Result<(), Recur
     ) -> Result<(), RecursionLimitError> {
         match expr {
             HirScalarExpr::CallVariadic {
-                func: VariadicFunc::And,
+                func: VariadicFunc::And(_),
                 exprs,
                 name: _,
             } => {
@@ -519,7 +520,7 @@ pub fn fuse_window_functions(
                         })
                         .unzip();
                     let fused_args = HirScalarExpr::call_variadic(
-                        VariadicFunc::RecordCreate {
+                        RecordCreate {
                             // These field names are not important, because this record will only be an
                             // intermediate expression, which we'll manipulate further before it ends up
                             // anywhere where a column name would be visible.
@@ -572,7 +573,7 @@ pub fn fuse_window_functions(
                         })
                         .unzip();
                     let fused_args = HirScalarExpr::call_variadic(
-                        VariadicFunc::RecordCreate {
+                        RecordCreate {
                             field_names: iter::repeat(ColumnName::from(""))
                                 .take(fused_args.len())
                                 .collect(),

@@ -16,8 +16,9 @@ use std::sync::LazyLock;
 
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
+use mz_expr::func;
+use mz_expr::func::variadic::{JsonbBuildObject, RecordCreate};
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
-use mz_expr::{VariadicFunc, func};
 use mz_repr::{
     ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
 };
@@ -1199,7 +1200,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                         .call_unary(UnaryFunc::RecordGet(func::RecordGet(i))),
                 ));
             }
-            HirScalarExpr::call_variadic(VariadicFunc::JsonbBuildObject, exprs)
+            HirScalarExpr::call_variadic(JsonbBuildObject, exprs)
         }
         ref ty @ List {
             ref element_type, ..
@@ -1414,7 +1415,7 @@ pub fn plan_coerce<'a>(
                 out.push(plan_coerce(ecx, e, &coerce_to)?);
             }
             HirScalarExpr::call_variadic(
-                VariadicFunc::RecordCreate {
+                RecordCreate {
                     field_names: (0..arity)
                         .map(|i| ColumnName::from(format!("f{}", i + 1)))
                         .collect(),

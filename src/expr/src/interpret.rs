@@ -12,6 +12,7 @@ use std::fmt::Debug;
 
 use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType};
 
+use crate::scalar::func::variadic::And;
 use crate::{
     BinaryFunc, EvalError, MapFilterProject, MfpPlan, MirScalarExpr, UnaryFunc,
     UnmaterializableFunc, VariadicFunc, func,
@@ -430,7 +431,7 @@ pub trait Interpreter {
             .iter()
             .map(|(_, e)| mfp_eval.expr(e))
             .collect();
-        mfp_eval.variadic(&VariadicFunc::And, predicates)
+        mfp_eval.variadic(&And.into(), predicates)
     }
 
     /// Similar to [Self::mfp_filter], but includes the additional temporal filters that have been
@@ -455,7 +456,7 @@ pub trait Interpreter {
             let result = mfp_eval.binary(&BinaryFunc::Gte(func::Gte), bound_range, mz_now.clone());
             results.push(result);
         }
-        self.variadic(&VariadicFunc::And, results)
+        self.variadic(&And.into(), results)
     }
 }
 
@@ -1105,6 +1106,7 @@ mod tests {
     use proptest::sample::{Index, select};
 
     use crate::func::*;
+    use crate::scalar::func::variadic::Concat;
     use crate::{BinaryFunc, MirScalarExpr, UnaryFunc};
 
     use super::*;
@@ -1212,8 +1214,17 @@ mod tests {
     }
 
     const INTERESTING_VARIADIC_FUNCS: &[VariadicFunc] = {
+        use crate::scalar::func::variadic as v;
         use VariadicFunc::*;
-        &[Coalesce, Greatest, Least, And, Or, Concat, ConcatWs]
+        &[
+            Coalesce(v::Coalesce),
+            Greatest(v::Greatest),
+            Least(v::Least),
+            And(v::And),
+            Or(v::Or),
+            Concat(v::Concat),
+            ConcatWs(v::ConcatWs),
+        ]
     };
 
     fn variadic_typecheck(func: &VariadicFunc, args: &[SqlColumnType]) -> bool {
@@ -1225,13 +1236,13 @@ mod tests {
             iter.into_iter().all(|t| t.scalar_type.base_eq(other))
         }
         match func {
-            Coalesce | Greatest | Least => match args {
+            Coalesce(_) | Greatest(_) | Least(_) => match args {
                 [] => true,
                 [first, rest @ ..] => all_eq(rest, &first.scalar_type),
             },
-            And | Or => all_eq(args, &SqlScalarType::Bool),
-            Concat => all_eq(args, &SqlScalarType::String),
-            ConcatWs => args.len() > 1 && all_eq(args, &SqlScalarType::String),
+            And(_) | Or(_) => all_eq(args, &SqlScalarType::Bool),
+            Concat(_) => all_eq(args, &SqlScalarType::String),
+            ConcatWs(_) => args.len() > 1 && all_eq(args, &SqlScalarType::String),
             _ => false,
         }
     }
@@ -1481,14 +1492,14 @@ mod tests {
 
     #[mz_ore::test]
     fn test_concat() {
-        let expr = MirScalarExpr::CallVariadic {
-            func: VariadicFunc::Concat,
-            exprs: vec![
+        let expr = MirScalarExpr::call_variadic(
+            Concat,
+            vec![
                 MirScalarExpr::column(0),
                 MirScalarExpr::literal_ok(Datum::String("a"), SqlScalarType::String),
                 MirScalarExpr::literal_ok(Datum::String("b"), SqlScalarType::String),
             ],
-        };
+        );
 
         let relation = SqlRelationType::new(vec![SqlScalarType::String.nullable(false)]);
         let arena = RowArena::new();

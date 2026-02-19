@@ -221,6 +221,40 @@ macro_rules! derive_unary {
     }
 }
 
+/// Generates the `VariadicFunc` enum, `Display` impl (delegating to inner),
+/// and `From<InnerType>` impls for each variant.
+///
+/// All variants must use explicit `Name(Type)` syntax. When the variant name equals
+/// the inner type name, write e.g. `And(And)`.
+macro_rules! derive_variadic {
+    ($($name:ident ( $variant:ident )),* $(,)?) => {
+        #[derive(
+            Ord, PartialOrd, Clone, Debug, Eq, PartialEq,
+            serde::Serialize, serde::Deserialize, Hash,
+            mz_lowertest::MzReflect,
+        )]
+        pub enum VariadicFunc {
+            $($name($variant),)*
+        }
+
+        impl std::fmt::Display for VariadicFunc {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                match self {
+                    $(Self::$name(func) => func.fmt(f),)*
+                }
+            }
+        }
+
+        $(
+            impl From<$variant> for crate::VariadicFunc {
+                fn from(variant: $variant) -> Self {
+                    Self::$name(variant)
+                }
+            }
+        )*
+    }
+}
+
 /// Generates the `BinaryFunc` enum, its `impl` block (with 8 delegating methods),
 /// `Display` impl, and `From<InnerType>` impls for each variant.
 ///

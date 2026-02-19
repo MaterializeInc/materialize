@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::VariadicFunc;
+use mz_expr::func::variadic::{And, Or};
 use mz_expr::visit::Visit;
 use mz_expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
 
@@ -266,20 +266,20 @@ fn unpack_equivalences(equivalences: &Vec<Vec<MirScalarExpr>>) -> Vec<MirScalarE
         // TODO: In the long term, we might want to call the entire `EquivalenceClasses::minimize`.
         class.sort_by(EquivalenceClasses::mir_scalar_expr_complexity);
         for expr in class[1..].iter() {
-            result.push(MirScalarExpr::CallVariadic {
-                func: VariadicFunc::Or,
-                exprs: vec![
+            result.push(MirScalarExpr::call_variadic(
+                Or,
+                vec![
                     MirScalarExpr::CallBinary {
                         func: mz_expr::func::Eq.into(),
                         expr1: Box::new(class[0].clone()),
                         expr2: Box::new(expr.clone()),
                     },
                     MirScalarExpr::CallVariadic {
-                        func: VariadicFunc::And,
+                        func: And.into(),
                         exprs: vec![class[0].clone().call_is_null(), expr.clone().call_is_null()],
                     },
                 ],
-            });
+            ));
         }
     }
     result
