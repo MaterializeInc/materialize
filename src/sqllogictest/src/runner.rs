@@ -202,20 +202,23 @@ impl<'a> Outcome<'a> {
         match self {
             Outcome::Unsupported { error, .. }
             | Outcome::ParseFailure { error, .. }
-            | Outcome::PlanFailure { error, .. } => Some(
+            | Outcome::PlanFailure { error, .. } => {
+                // Take only the first line, which should be sufficient for
+                // meaningfully matching the error.
+                let err_str = error.to_string_with_causes();
+                let err_str = err_str.split('\n').next().unwrap();
+                // Strip the "db error: ERROR: " prefix added by the postgres
+                // client library, as it's noisy and not useful for matching.
+                let err_str = err_str.strip_prefix("db error: ERROR: ").unwrap_or(err_str);
                 // This value gets fed back into regex to check that it matches
-                // `self`, so escape its meta characters.
-                regex::escape(
-                    // Take only the first string in the error message, which should be
-                    // sufficient for meaningfully matching the error.
-                    error.to_string_with_causes().split('\n').next().unwrap(),
-                )
-                // We need to undo the escaping of #. `regex::escape` escapes this because it
-                // expects that we use the `x` flag when building a regex, but this is not the case,
-                // so \# would end up being an invalid escape sequence, which would choke the
-                // parsing of the slt file the next time around.
-                .replace(r"\#", "#"),
-            ),
+                // `self`, so escape its meta characters. We need to undo the
+                // escaping of #. `regex::escape` escapes this because it
+                // expects that we use the `x` flag when building a regex, but
+                // this is not the case, so \# would end up being an invalid
+                // escape sequence, which would choke the parsing of the slt
+                // file the next time around.
+                Some(regex::escape(err_str).replace(r"\#", "#"))
+            }
             _ => None,
         }
     }
