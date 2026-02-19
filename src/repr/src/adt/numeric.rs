@@ -545,6 +545,52 @@ pub fn write_numeric_standard_notation<const N: usize>(
     f.write_str(s)
 }
 
+/// A stack-allocated string buffer for numeric formatting without heap allocation.
+///
+/// Captures the output of [`write_numeric_standard_notation`] in a fixed-size
+/// stack buffer. This avoids the two heap allocations that
+/// `Decimal::to_standard_notation_string()` performs (one for the coefficient
+/// digits Vec, one for the result String).
+///
+/// The 200-byte buffer is sufficient for any `Decimal<N>` representation:
+/// max digits (81 for Decimal<27>) + sign + decimal point + leading zeros.
+#[derive(Debug)]
+pub struct NumericStackStr {
+    buf: [u8; 200],
+    len: usize,
+}
+
+impl NumericStackStr {
+    /// Format a `Decimal` into a stack-allocated string.
+    pub fn new<const N: usize>(d: &Decimal<N>) -> Self {
+        let mut s = Self {
+            buf: [0; 200],
+            len: 0,
+        };
+        write_numeric_standard_notation(&mut s, d).expect("200 bytes sufficient for any Decimal");
+        s
+    }
+
+    /// Returns the formatted string as a `&str`.
+    pub fn as_str(&self) -> &str {
+        // Safety: write_numeric_standard_notation only writes ASCII bytes (0-9, '-', '.')
+        unsafe { std::str::from_utf8_unchecked(&self.buf[..self.len]) }
+    }
+}
+
+impl fmt::Write for NumericStackStr {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let bytes = s.as_bytes();
+        let new_len = self.len + bytes.len();
+        if new_len > self.buf.len() {
+            return Err(fmt::Error);
+        }
+        self.buf[self.len..new_len].copy_from_slice(bytes);
+        self.len = new_len;
+        Ok(())
+    }
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_roundtrip() {
@@ -640,6 +686,30 @@ fn test_write_numeric_standard_notation() {
     check("0.5");
     check("5E+10");
     check("5E-10");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+fn test_numeric_stack_str() {
+    fn check(input: &str) {
+        let mut cx = cx_datum();
+        let d: Numeric = cx.parse(input).unwrap();
+        let expected = d.to_standard_notation_string();
+        let buf = NumericStackStr::new(&d);
+        assert_eq!(buf.as_str(), expected, "mismatch for input {input:?}");
+    }
+
+    check("0");
+    check("-0");
+    check("1");
+    check("42");
+    check("123.456789");
+    check("-3.14159265358979323846264338327950288");
+    check("0.000001");
+    check("999999999999999999999999999999999999999");
+    check("1E+10");
+    check("1E-10");
+    check("0.123456789012345678901234567890123456789");
 }
 
 #[mz_ore::test]

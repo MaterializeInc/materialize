@@ -84,7 +84,7 @@ use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visit
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, SerializeStruct, Serializer};
 
 use crate::adt::jsonb::vec_stack::VecStack;
-use crate::adt::numeric::Numeric;
+use crate::adt::numeric::{Numeric, NumericStackStr};
 use crate::{Datum, Row, RowPacker, SharedRow, strconv};
 
 /// An owned JSON value backed by a [`Row`].
@@ -598,11 +598,11 @@ impl Serialize for JsonbDatum<'_> {
                 //          $serde_json::private::Number: <NUMBER VALUE>,
                 //     }
                 //
+                // Use NumericStackStr to format without heap allocation,
+                // avoiding the 2 heap allocs in to_standard_notation_string().
+                let buf = NumericStackStr::new(&n.into_inner());
                 let mut s = serializer.serialize_struct(SERDE_JSON_NUMBER_TOKEN, 1)?;
-                s.serialize_field(
-                    SERDE_JSON_NUMBER_TOKEN,
-                    &n.into_inner().to_standard_notation_string(),
-                )?;
+                s.serialize_field(SERDE_JSON_NUMBER_TOKEN, buf.as_str())?;
                 s.end()
             }
             Datum::String(s) => serializer.serialize_str(s),

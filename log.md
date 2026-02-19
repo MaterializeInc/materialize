@@ -1617,3 +1617,127 @@ of GROUP BY queries with many columns.
   operation. A cumulative-length array with binary search would be O(log n) instead of O(n).
 - Scalar `cast_*_to_string` functions allocate a String per call during MFP evaluation.
   A RowArena-based or stack-buffered approach would eliminate per-row allocations.
+
+## Session 18: Stack-buffered JSONB/JSON numeric serialization - eliminate heap allocations
+
+**Date:** 2026-02-19
+
+**Problem:** Every time a `Numeric` (decimal) value is serialized within JSONB or JSON
+interchange, the code called `Decimal::to_standard_notation_string()` which performs
+**two heap allocations** per value:
+1. `coefficient_digits()` allocates a `Vec<u8>` (up to 39 bytes) via the C function
+   `decNumberGetBCD`
+2. `to_standard_notation_string()` allocates a `String` for the formatted result
+
+This affects two code paths:
+- **JSONB serialization** (`src/repr/src/adt/jsonb.rs:604`): The `JsonbDatum` Serialize
+  implementation uses `n.into_inner().to_standard_notation_string()` for the serde_json
+  "magic struct" number serialization pattern. The heap-allocated String is passed by
+  reference to `serialize_field` and immediately dropped.
+- **JSON interchange** (`src/interchange/src/json.rs:131`): The `ToJson` implementation
+  uses `datum.unwrap_numeric().0.to_standard_notation_string()` wrapped in `json!()` to
+  create a `serde_json::Value::String`. The heap-allocated String is moved into the Value.
+
+For workloads with JSONB columns containing numeric values (common in analytics, financial
+data, Kafka/Debezium CDC), this means 2 unnecessary heap allocations per numeric value per
+serialization.
+
+**Fix:** Added `NumericStackStr` type in `src/repr/src/adt/numeric.rs` — a stack-allocated
+200-byte buffer that implements `fmt::Write` and captures the output of
+`write_numeric_standard_notation()` (from Session 11):
+- Formats the entire number into a `[u8; 200]` stack buffer with zero heap allocations
+- Provides `as_str()` to get a `&str` reference to the formatted result
+- 200 bytes is sufficient for any `Decimal<N>` representation (max 81 digits + sign + point)
+
+Updated two code paths:
+1. **JSONB serialization**: `NumericStackStr::new(&n.into_inner())` → `buf.as_str()` passed
+   to `serialize_field`. Saves both heap allocations (the `&str` is borrowed from the stack).
+2. **JSON interchange**: `NumericStackStr::new(&datum.unwrap_numeric().0)` →
+   `buf.as_str().to_owned()` for `serde_json::Value::String`. Saves 1 of 2 heap allocations
+   (still needs `to_owned()` for the Value, but eliminates the coefficient Vec).
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench jsonb_numeric`):
+
+### Per-value isolated formatting: to_standard_notation_string() vs NumericStackStr (ns/iter)
+
+| Value                      | Old (to_string) | New (StackStr) | Speedup |
+|----------------------------|----------------:|---------------:|--------:|
+| zero                       | 16.4            | 12.6           | 1.30x   |
+| one                        | 16.2            | 12.5           | 1.30x   |
+| small_int (42)             | 17.7            | 14.9           | 1.19x   |
+| decimal (123.456789)       | 21.8            | 16.4           | 1.33x   |
+| negative (-3.14...)        | 52.9            | 27.7           | 1.91x   |
+| tiny (0.000001)            | 25.7            | 15.7           | 1.64x   |
+| large_int (39 digits)      | 50.2            | 28.6           | 1.76x   |
+| small_exp (1E+10)          | 37.7            | 16.1           | 2.34x   |
+| neg_exp (1E-10)            | 33.5            | 16.1           | 2.08x   |
+| pi (38 digits)             | 48.8            | 26.6           | 1.84x   |
+
+### Batch formatting (10k values)
+
+| Approach                   | Time (µs)  | Speedup   |
+|----------------------------|-----------|-----------|
+| Old to_standard_notation   | 331       | -         |
+| New NumericStackStr        | 182       | **1.82x** |
+
+### End-to-end JSONB serialization: to_serde_json / to_string (ns/iter)
+
+The following benchmarks measure complete JSONB serialization of `{"value": <n>}` including
+row unpacking, datum iteration, serde_json machinery, and string formatting.
+
+| Value                     | to_serde_json | to_string |
+|---------------------------|-------------:|----------:|
+| zero                      | 153          | 90        |
+| one                       | 153          | 93        |
+| small_int (42)            | 158          | 100       |
+| decimal (123.456789)      | 168          | 122       |
+| negative (-3.14...)       | 233          | 161       |
+| tiny (0.000001)           | 154          | 115       |
+| large_int (39 digits)     | 242          | 162       |
+| small_exp (1E+10)         | 176          | 124       |
+| neg_exp (1E-10)           | 163          | 130       |
+| pi (38 digits)            | 237          | 158       |
+
+Note: These are absolute timings with the new optimization. We cannot easily A/B test the
+full JSONB path since the Serialize impl is baked into the library. The isolated formatting
+benchmark above shows the per-value improvement clearly.
+
+**Summary:** 1.19-2.34x faster per value for the isolated formatting step, **1.82x faster
+in batch**. The JSONB serialization path (which uses the serde_json "magic struct" pattern)
+benefits most because it passes a borrowed `&str` to `serialize_field`, eliminating both
+heap allocations entirely. The JSON interchange path saves 1 of 2 allocations (the
+coefficient Vec). Values with many digits or exponents show the largest improvement because
+the allocation overhead is proportional to the formatted string length.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Added `NumericStackStr` type (stack-allocated 200-byte
+  buffer with `fmt::Write` impl and `as_str()` method). Added `test_numeric_stack_str`
+  correctness test.
+- `src/repr/src/adt/jsonb.rs` - Updated `JsonbDatum::serialize` Numeric arm to use
+  `NumericStackStr::new()` + `buf.as_str()` instead of `to_standard_notation_string()`.
+- `src/interchange/src/json.rs` - Updated `ToJson::json` Numeric arm to use
+  `NumericStackStr::new()` + `buf.as_str().to_owned()` instead of
+  `to_standard_notation_string()`.
+- `src/repr/benches/jsonb_numeric.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `zero_diffs.clone()` in `reduce.rs` clones a `Vec<Accum>` per input row during
+  accumulable reductions. SmallVec<[Accum; 4]> could avoid heap allocation for the common
+  case (1-4 aggregations per GROUP BY).
+- `Row::clone()` at 527B executions is a massive source of allocation pressure. Arena
+  allocation or reference-counted rows could reduce this, but Row cloning is fundamental
+  to how differential dataflow works.
+- `BytesContainer::index()` at 574B executions does a linear scan through batches for every
+  index operation. Uses O(log N) batches due to doubling, but a cumulative-length array
+  with binary search would give O(log log N). After merge/compaction there's typically
+  just one batch, limiting the real-world impact.
+- Scalar `cast_*_to_string` functions allocate a String per call during MFP evaluation.
+  However, the String allocation IS the final storage (pushed to RowArena via
+  `push_string`), so there's no wasted intermediate allocation to eliminate.
+- Session variable formatting (`src/sql/src/session/vars/value.rs:271`) and numeric unit
+  formatting (`src/expr/src/scalar/func/impls/numeric.rs:335,345`) still use
+  `to_standard_notation_string()` but are cold paths not worth optimizing.
+- The coverage data shows thin wrapper functions (PartialOrder::less_equal at 856B,
+  AsRef/Deref at 815B, Region::len at 613B) with extremely high execution counts, but
+  these are almost certainly fully inlined by the compiler and represent no real overhead.
