@@ -149,8 +149,9 @@ export MZ_INTERNAL_HTTP_LISTEN_ADDR=${MZ_INTERNAL_HTTP_LISTEN_ADDR:-0.0.0.0:6878
 export MZ_BALANCER_SQL_LISTEN_ADDR=${MZ_BALANCER_SQL_LISTEN_ADDR:-0.0.0.0:6880}
 export MZ_BALANCER_HTTP_LISTEN_ADDR=${MZ_BALANCER_HTTP_LISTEN_ADDR:-0.0.0.0:6881}
 if [[ "$MZ_METADATA_STORE" == "foundationdb" || "$MZ_METADATA_STORE" == "fdb" ]]; then
-  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-foundationdb:${FDB_CLUSTER_FILE}?options=--search_path=consensus}
-  export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-foundationdb:${FDB_CLUSTER_FILE}?options=--search_path=tsoracle}
+  export FDB_CLUSTER_FILE="${FDB_CLUSTER_FILE:-/mzdata/fdb.cluster}"
+  export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-foundationdb:?prefix=consensus}
+  export MZ_TIMESTAMP_ORACLE_URL=${MZ_TIMESTAMP_ORACLE_URL:-foundationdb:?prefix=tsoracle}
 else
   if is_truthy "${MZ_NO_EXTERNAL_CLUSTERD:-0}"; then
     export MZ_PERSIST_CONSENSUS_URL=${MZ_PERSIST_CONSENSUS_URL:-postgresql://$PGUSER@%2Fvar%2Frun%2Fpostgresql:26257/?options=--search_path=consensus}
