@@ -22,16 +22,15 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 This release introduces our Roles and Users Management page, performance improvements, and bugfixes.
 
 ### Role Management
-The [Roles and Users](https://console.materialize.com/roles) page allows organization administrators to create roles, grant privileges to the roles and grant roles through the Materialize Console.
+The Roles and Users page on the Materialize Console allows organization administrators to create roles, grant privileges to roles, and assign roles to users. You can also track the hierarchy of roles using the graph view.
 
 ![Create Role experience](/images/releases/v2612_create_role.png)
+
 ![Graph View experience](/images/releases/v2612_graph_view.png)
 
 ### Improvements
-- Updated default resource requirements for Self-Managed Helm charts to ensure
-  correct operation on Kind clusters and prevent poor out-of-the-box experiences.
-- Improved Console query history performance by optimizing RBAC queries to use
-  OIDs instead of names, resulting in 2-3x faster query execution.
+- **Updated default resource requirements** (<red>*Materialize Self-Managed only*</red>): We've updated the Materialize Self-Managed Helm charts to ensure correct operation on Kind clusters
+- **Improved console query history performance**: We've optimized RBAC queries to use OIDs instead of names, resulting in 2-3x faster page execution.
 
 ### Bug Fixes
 - Fixed a panic when using unsupported types (e.g., float) with range
@@ -42,8 +41,8 @@ The [Roles and Users](https://console.materialize.com/roles) page allows organiz
   checking mismatches in `ColumnKnowledge` and related transforms, adding
   fallback handling to prevent crashes.
 - Fixed compatibility with older Amazon Aurora PostgreSQL versions when using
-  parallel snapshots, by using `SELECT current_setting()` instead of `SHOW` to
-  retrieve version information.
+  parallel snapshots, by using `SELECT current_setting()` instead of `SHOW` for
+  version retrieval.
 - Fixed version comparison in the Materialize Kubernetes operator to correctly
   follow semver precedence rules, preventing valid upgrades from being
   incorrectly rejected when only the build metadata changes.
