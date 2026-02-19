@@ -113,11 +113,11 @@ fn bench_batch_i64(c: &mut Criterion) {
     // Mix of values: typical database IDs, small values, negatives
     let values: Vec<i64> = (0..10_000)
         .map(|i| match i % 5 {
-            0 => i as i64,                    // small positive
-            1 => -(i as i64),                 // small negative
-            2 => 1_000_000 + i as i64,        // typical ID range
-            3 => i as i64 * 12345,            // medium values
-            _ => i64::MAX - i as i64,         // large values
+            0 => i as i64,             // small positive
+            1 => -(i as i64),          // small negative
+            2 => 1_000_000 + i as i64, // typical ID range
+            3 => i as i64 * 12345,     // medium values
+            _ => i64::MAX - i as i64,  // large values
         })
         .collect();
 

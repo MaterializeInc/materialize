@@ -56,7 +56,7 @@ fn make_f64_test_values() -> Vec<(&'static str, f64)> {
         ("one", 1.0),
         ("small_int", 42.0),
         ("pi", std::f64::consts::PI),
-        ("typical", 3.14),
+        ("typical", 3.25),
         ("hundred", 100.0),
         ("thousand", 9999.0),
         ("negative", -42.5),
@@ -77,7 +77,7 @@ fn make_f32_test_values() -> Vec<(&'static str, f32)> {
         ("zero", 0.0f32),
         ("one", 1.0f32),
         ("pi", std::f32::consts::PI),
-        ("typical", 3.14f32),
+        ("typical", 3.25f32),
         ("hundred", 100.0f32),
         ("negative", -42.5f32),
         ("small_frac", 0.001f32),
@@ -92,14 +92,18 @@ fn bench_f64_per_value(c: &mut Criterion) {
     let mut group = c.benchmark_group("f64_per_value");
 
     for (name, val) in &values {
-        group.bench_with_input(BenchmarkId::new("old_peekable_chars", name), val, |b, &v| {
-            let mut buf = String::with_capacity(64);
-            b.iter(|| {
-                buf.clear();
-                format_float_old(&mut buf, black_box(v));
-                black_box(&buf);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("old_peekable_chars", name),
+            val,
+            |b, &v| {
+                let mut buf = String::with_capacity(64);
+                b.iter(|| {
+                    buf.clear();
+                    format_float_old(&mut buf, black_box(v));
+                    black_box(&buf);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("new_write_str", name), val, |b, &v| {
             let mut buf = String::with_capacity(64);
             b.iter(|| {
@@ -117,14 +121,18 @@ fn bench_f32_per_value(c: &mut Criterion) {
     let mut group = c.benchmark_group("f32_per_value");
 
     for (name, val) in &values {
-        group.bench_with_input(BenchmarkId::new("old_peekable_chars", name), val, |b, &v| {
-            let mut buf = String::with_capacity(64);
-            b.iter(|| {
-                buf.clear();
-                format_float_old(&mut buf, black_box(v));
-                black_box(&buf);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("old_peekable_chars", name),
+            val,
+            |b, &v| {
+                let mut buf = String::with_capacity(64);
+                b.iter(|| {
+                    buf.clear();
+                    format_float_old(&mut buf, black_box(v));
+                    black_box(&buf);
+                });
+            },
+        );
         group.bench_with_input(BenchmarkId::new("new_write_str", name), val, |b, &v| {
             let mut buf = String::with_capacity(64);
             b.iter(|| {
@@ -143,13 +151,13 @@ fn bench_batch_f64(c: &mut Criterion) {
     // Mix of values: typical database floats
     let values: Vec<f64> = (0..10_000)
         .map(|i| match i % 7 {
-            0 => i as f64,                          // integer-like
-            1 => i as f64 * 0.1,                    // simple decimal
-            2 => std::f64::consts::PI * i as f64,   // irrational-ish
-            3 => -(i as f64 * 1.5),                 // negative
-            4 => (i as f64) * 1e10,                 // large with exponent
-            5 => 1.0 / (i as f64 + 1.0),           // small fractions
-            _ => (i as f64 + 0.5) * 100.0,         // typical values
+            0 => i as f64,                        // integer-like
+            1 => i as f64 * 0.1,                  // simple decimal
+            2 => std::f64::consts::PI * i as f64, // irrational-ish
+            3 => -(i as f64 * 1.5),               // negative
+            4 => (i as f64) * 1e10,               // large with exponent
+            5 => 1.0 / (i as f64 + 1.0),          // small fractions
+            _ => (i as f64 + 0.5) * 100.0,        // typical values
         })
         .collect();
 
@@ -186,11 +194,11 @@ fn bench_batch_integer_floats(c: &mut Criterion) {
     // Pure integer-valued floats (the fast path target)
     let values: Vec<f64> = (0..10_000)
         .map(|i| match i % 5 {
-            0 => i as f64,                   // small positive
-            1 => -(i as f64),                // small negative
-            2 => (i as f64) * 1000.0,        // medium values
-            3 => 0.0,                        // zero
-            _ => (i as f64) * 100.0 + 42.0,  // typical IDs
+            0 => i as f64,                  // small positive
+            1 => -(i as f64),               // small negative
+            2 => (i as f64) * 1000.0,       // medium values
+            3 => 0.0,                       // zero
+            _ => (i as f64) * 100.0 + 42.0, // typical IDs
         })
         .collect();
 

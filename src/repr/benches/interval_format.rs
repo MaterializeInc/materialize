@@ -40,44 +40,30 @@ fn bench_interval_format(c: &mut Criterion) {
         ("neg_months", Interval::new(-14, 0, 0)),
         ("neg_days", Interval::new(0, -3, 0)),
         ("with_micros", Interval::new(0, 0, 1_500_000)),
-        (
-            "complex",
-            Interval::new(14, 3, 3_723_456_789),
-        ),
+        ("complex", Interval::new(14, 3, 3_723_456_789)),
         ("neg_time", Interval::new(0, 0, -3_723_000_000)),
-        (
-            "all_parts",
-            Interval::new(25, 10, 45_296_123_456),
-        ),
+        ("all_parts", Interval::new(25, 10, 45_296_123_456)),
     ];
 
     // Per-value benchmarks
     let mut group = c.benchmark_group("interval_format_write");
     for (name, iv) in &test_intervals {
-        group.bench_with_input(
-            BenchmarkId::new("old_display", name),
-            iv,
-            |b, iv| {
-                let mut buf = String::with_capacity(128);
-                b.iter(|| {
-                    buf.clear();
-                    format_interval_old(&mut buf, black_box(*iv));
-                    black_box(&buf);
-                });
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("new_direct", name),
-            iv,
-            |b, iv| {
-                let mut buf = String::with_capacity(128);
-                b.iter(|| {
-                    buf.clear();
-                    strconv::format_interval(&mut buf, black_box(*iv));
-                    black_box(&buf);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("old_display", name), iv, |b, iv| {
+            let mut buf = String::with_capacity(128);
+            b.iter(|| {
+                buf.clear();
+                format_interval_old(&mut buf, black_box(*iv));
+                black_box(&buf);
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("new_direct", name), iv, |b, iv| {
+            let mut buf = String::with_capacity(128);
+            b.iter(|| {
+                buf.clear();
+                strconv::format_interval(&mut buf, black_box(*iv));
+                black_box(&buf);
+            });
+        });
     }
     group.finish();
 

@@ -126,7 +126,7 @@ where
 {
     // i16 max is 6 chars ("-32768"), but we use the shared i64 buffer.
     let mut tmp = [0u8; 20];
-    buf.write_str(write_i64_buf(&mut tmp, i as i64));
+    buf.write_str(write_i64_buf(&mut tmp, i64::from(i)));
     Nestable::Yes
 }
 
@@ -146,7 +146,7 @@ where
     F: FormatBuffer,
 {
     let mut tmp = [0u8; 20];
-    buf.write_str(write_i64_buf(&mut tmp, i as i64));
+    buf.write_str(write_i64_buf(&mut tmp, i64::from(i)));
     Nestable::Yes
 }
 
@@ -183,7 +183,7 @@ where
     F: FormatBuffer,
 {
     let mut tmp = [0u8; 20];
-    buf.write_str(write_u64_buf(&mut tmp, u as u64));
+    buf.write_str(write_u64_buf(&mut tmp, u64::from(u)));
     Nestable::Yes
 }
 
@@ -203,7 +203,7 @@ where
     F: FormatBuffer,
 {
     let mut tmp = [0u8; 20];
-    buf.write_str(write_u64_buf(&mut tmp, u as u64));
+    buf.write_str(write_u64_buf(&mut tmp, u64::from(u)));
     Nestable::Yes
 }
 
@@ -237,6 +237,7 @@ const DIGIT_PAIRS: &[u8; 200] = b"\
 /// formatted string slice. Uses the 2-digit lookup table for speed and
 /// negative-number arithmetic to handle `i64::MIN` without overflow.
 #[inline]
+#[allow(clippy::as_conversions)]
 fn write_i64_buf(buf: &mut [u8; 20], n: i64) -> &str {
     if n == 0 {
         return "0";
@@ -274,6 +275,7 @@ fn write_i64_buf(buf: &mut [u8; 20], n: i64) -> &str {
 /// Formats an unsigned 64-bit integer into a stack buffer, returning the
 /// formatted string slice. Uses the 2-digit lookup table for speed.
 #[inline]
+#[allow(clippy::as_conversions)]
 fn write_u64_buf(buf: &mut [u8; 20], mut n: u64) -> &str {
     if n == 0 {
         return "0";
@@ -559,7 +561,11 @@ where
     // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
     // second() still returns 59, so we must detect and display 60.
     let nanos = t.nanosecond();
-    let secs = if nanos >= 1_000_000_000 { 60 } else { t.second() };
+    let secs = if nanos >= 1_000_000_000 {
+        60
+    } else {
+        t.second()
+    };
     let mut tmp = [0u8; 8];
     write_u2(&mut tmp, 0, t.hour());
     tmp[2] = b':';
@@ -591,7 +597,11 @@ where
     // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
     // second() still returns 59, so we must detect and display 60.
     let nanos = ts.nanosecond();
-    let secs = if nanos >= 1_000_000_000 { 60 } else { ts.second() };
+    let secs = if nanos >= 1_000_000_000 {
+        60
+    } else {
+        ts.second()
+    };
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
     let mut tmp = [0u8; 15];
     tmp[0] = b'-';
@@ -654,7 +664,11 @@ where
     // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
     // second() still returns 59, so we must detect and display 60.
     let nanos = ts.nanosecond();
-    let secs = if nanos >= 1_000_000_000 { 60 } else { ts.second() };
+    let secs = if nanos >= 1_000_000_000 {
+        60
+    } else {
+        ts.second()
+    };
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
     let mut tmp = [0u8; 15];
     tmp[0] = b'-';
@@ -715,6 +729,7 @@ pub fn parse_interval_w_disambiguator(
         .map_err(|e| ParseError::invalid_input_syntax("interval", s).with_details(e))
 }
 
+#[allow(clippy::as_conversions)]
 pub fn format_interval<F>(buf: &mut F, iv: Interval) -> Nestable
 where
     F: FormatBuffer,
@@ -987,8 +1002,8 @@ where
         let hex_len = chunk.len() * 2;
 
         for (i, &b) in chunk.iter().enumerate() {
-            hex_buf[i * 2] = HEX_CHARS[(b >> 4) as usize];
-            hex_buf[i * 2 + 1] = HEX_CHARS[(b & 0x0f) as usize];
+            hex_buf[i * 2] = HEX_CHARS[usize::from(b >> 4)];
+            hex_buf[i * 2 + 1] = HEX_CHARS[usize::from(b & 0x0f)];
         }
 
         // SAFETY: hex_buf contains only ASCII hex digits which are valid UTF-8.
@@ -1037,6 +1052,7 @@ where
 
 /// Writes a 2-digit zero-padded value (0-99) into `buf` at `offset`.
 #[inline(always)]
+#[allow(clippy::as_conversions)]
 fn write_u2(buf: &mut [u8], offset: usize, val: u32) {
     buf[offset] = b'0' + (val / 10) as u8;
     buf[offset + 1] = b'0' + (val % 10) as u8;
@@ -1044,6 +1060,7 @@ fn write_u2(buf: &mut [u8], offset: usize, val: u32) {
 
 /// Writes a year with at least 4-digit zero-padding directly to a FormatBuffer.
 #[inline]
+#[allow(clippy::as_conversions)]
 fn write_year<F: FormatBuffer>(buf: &mut F, year: u32) {
     // Common case: 4-digit year (covers 1000-9999).
     if year <= 9999 {
@@ -1061,6 +1078,7 @@ fn write_year<F: FormatBuffer>(buf: &mut F, year: u32) {
     }
 }
 
+#[allow(clippy::as_conversions)]
 fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
 where
     F: FormatBuffer,
@@ -2510,11 +2528,29 @@ mod tests {
         // and applying our transformations (strip ".0", insert "e+" for
         // positive exponents).
         let test_values: Vec<f64> = vec![
-            0.0, 1.0, -1.0, 42.0, 100.0, 3.14, std::f64::consts::PI,
-            0.001, 0.0001, 1e-7, 1.5e-10, -1.5e-10,
-            1e15, 1.5e15, 1e20, 1.23e100, -1.5e10,
-            999999.999, f64::MAX, f64::MIN_POSITIVE, 5e-324,
-            -42.5, -0.001,
+            0.0,
+            1.0,
+            -1.0,
+            42.0,
+            100.0,
+            3.25,
+            std::f64::consts::PI,
+            0.001,
+            0.0001,
+            1e-7,
+            1.5e-10,
+            -1.5e-10,
+            1e15,
+            1.5e15,
+            1e20,
+            1.23e100,
+            -1.5e10,
+            999999.999,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            5e-324,
+            -42.5,
+            -0.001,
         ];
         for val in &test_values {
             let mut buf = String::new();
@@ -2623,7 +2659,10 @@ mod tests {
             // With microseconds
             (Interval::new(0, 0, 1_500_000), "00:00:01.5"),
             // Complex with everything
-            (Interval::new(14, 3, 3_723_456_789), "1 year 2 months 3 days 01:02:03.456789"),
+            (
+                Interval::new(14, 3, 3_723_456_789),
+                "1 year 2 months 3 days 01:02:03.456789",
+            ),
             // Negative time
             (Interval::new(0, 0, -3_723_000_000), "-01:02:03"),
         ];

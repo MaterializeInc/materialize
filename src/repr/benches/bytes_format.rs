@@ -42,22 +42,30 @@ fn bench_bytes_format(c: &mut Criterion) {
     // Per-value benchmarks: write to pre-allocated buffer
     let mut group = c.benchmark_group("bytes_format_write");
     for (name, bytes) in &test_values {
-        group.bench_with_input(BenchmarkId::new("old_hex_encode", name), bytes, |b, bytes| {
-            let mut buf = String::with_capacity(bytes.len() * 2 + 4);
-            b.iter(|| {
-                buf.clear();
-                format_bytes_old(&mut buf, black_box(bytes));
-                black_box(&buf);
-            });
-        });
-        group.bench_with_input(BenchmarkId::new("new_direct_hex", name), bytes, |b, bytes| {
-            let mut buf = String::with_capacity(bytes.len() * 2 + 4);
-            b.iter(|| {
-                buf.clear();
-                strconv::format_bytes(&mut buf, black_box(bytes));
-                black_box(&buf);
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("old_hex_encode", name),
+            bytes,
+            |b, bytes| {
+                let mut buf = String::with_capacity(bytes.len() * 2 + 4);
+                b.iter(|| {
+                    buf.clear();
+                    format_bytes_old(&mut buf, black_box(bytes));
+                    black_box(&buf);
+                });
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("new_direct_hex", name),
+            bytes,
+            |b, bytes| {
+                let mut buf = String::with_capacity(bytes.len() * 2 + 4);
+                b.iter(|| {
+                    buf.clear();
+                    strconv::format_bytes(&mut buf, black_box(bytes));
+                    black_box(&buf);
+                });
+            },
+        );
     }
     group.finish();
 
