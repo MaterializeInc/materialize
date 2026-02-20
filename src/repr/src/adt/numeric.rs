@@ -261,19 +261,18 @@ fn coeff_to_i64(d: &Numeric) -> Option<i64> {
 ///
 /// The caller must ensure the value is representable (≤ 18 significant digits).
 #[inline]
-fn numeric_from_i64_coeff(mut val: i64, exponent: i32) -> Numeric {
+pub fn numeric_from_i64_coeff(mut val: i64, exponent: i32) -> Numeric {
     if val == 0 {
         let lsu = [0u16; 13];
         return Numeric::from_raw_parts(1, exponent, 0, lsu);
     }
-    let bits = if val < 0 {
-        val = -val;
-        0x80u8 // DECNEG
+    let (bits, magnitude) = if val < 0 {
+        (0x80u8, (val as u64).wrapping_neg()) // DECNEG; handles i64::MIN correctly
     } else {
-        0u8
+        (0u8, val as u64)
     };
     let mut lsu = [0u16; 13];
-    let mut remaining = val as u64;
+    let mut remaining = magnitude;
     let mut n_units = 0usize;
     while remaining > 0 {
         lsu[n_units] = (remaining % 1000) as u16;
@@ -290,6 +289,100 @@ fn numeric_from_i64_coeff(mut val: i64, exponent: i32) -> Numeric {
     };
     let sig_digits = (n_units as u32 - 1) * 3 + top_digits;
     Numeric::from_raw_parts(sig_digits, exponent, bits, lsu)
+}
+
+/// Build a `Numeric` from a u64 coefficient and exponent.
+///
+/// The caller must ensure the value is representable (≤ 19 significant digits).
+#[inline]
+pub fn numeric_from_u64_coeff(val: u64, exponent: i32) -> Numeric {
+    if val == 0 {
+        let lsu = [0u16; 13];
+        return Numeric::from_raw_parts(1, exponent, 0, lsu);
+    }
+    let mut lsu = [0u16; 13];
+    let mut remaining = val;
+    let mut n_units = 0usize;
+    while remaining > 0 {
+        lsu[n_units] = (remaining % 1000) as u16;
+        remaining /= 1000;
+        n_units += 1;
+    }
+    let top_unit = lsu[n_units - 1];
+    let top_digits = if top_unit >= 100 {
+        3
+    } else if top_unit >= 10 {
+        2
+    } else {
+        1
+    };
+    let sig_digits = (n_units as u32 - 1) * 3 + top_digits;
+    Numeric::from_raw_parts(sig_digits, exponent, 0, lsu)
+}
+
+/// Powers of 10, precomputed for fast integer rescaling.
+const POW10_TABLE: [i64; 19] = [
+    1,
+    10,
+    100,
+    1_000,
+    10_000,
+    100_000,
+    1_000_000,
+    10_000_000,
+    100_000_000,
+    1_000_000_000,
+    10_000_000_000,
+    100_000_000_000,
+    1_000_000_000_000,
+    10_000_000_000_000,
+    100_000_000_000_000,
+    1_000_000_000_000_000,
+    10_000_000_000_000_000,
+    100_000_000_000_000_000,
+    1_000_000_000_000_000_000,
+];
+
+/// Build a `Numeric` from an i64 value with optional rescaling, bypassing FFI.
+///
+/// When `scale` is `None`, constructs Numeric with exponent 0.
+/// When `scale` is `Some(s)`, constructs with exponent `-s` (equivalent to
+/// rescaling), which requires multiplying the value by `10^s`. Returns `None`
+/// if the scaled value would overflow i64 (> 18 significant digits).
+#[inline]
+pub fn try_numeric_from_i64(val: i64, scale: Option<u8>) -> Option<Numeric> {
+    match scale {
+        None => Some(numeric_from_i64_coeff(val, 0)),
+        Some(s) => {
+            let s_usize = s as usize;
+            if s_usize >= POW10_TABLE.len() {
+                return None;
+            }
+            let pow = POW10_TABLE[s_usize];
+            let scaled = val.checked_mul(pow)?;
+            Some(numeric_from_i64_coeff(scaled, -(s as i32)))
+        }
+    }
+}
+
+/// Build a `Numeric` from a u64 value with optional rescaling, bypassing FFI.
+///
+/// Same semantics as [`try_numeric_from_i64`] but for unsigned values.
+/// Returns `None` if the scaled value would overflow u64.
+#[inline]
+pub fn try_numeric_from_u64(val: u64, scale: Option<u8>) -> Option<Numeric> {
+    match scale {
+        None => Some(numeric_from_u64_coeff(val, 0)),
+        Some(s) => {
+            let s_usize = s as usize;
+            if s_usize >= POW10_TABLE.len() {
+                return None;
+            }
+            let pow = POW10_TABLE[s_usize] as u64;
+            let scaled = val.checked_mul(pow)?;
+            Some(numeric_from_u64_coeff(scaled, -(s as i32)))
+        }
+    }
 }
 
 /// Fast-path addition of two `Numeric` values, bypassing the C FFI.
@@ -850,7 +943,8 @@ impl DecimalLike for f64 {
 
 impl DecimalLike for Numeric {
     fn lossy_from(i: i64) -> Self {
-        Numeric::from(i)
+        // Fast path: bypass C FFI for i64 values.
+        numeric_from_i64_coeff(i, 0)
     }
 }
 
@@ -1083,5 +1177,91 @@ mod tests {
         check_add("5", "0");
         check_add("0", "0");
         check_add("-0", "0");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_try_numeric_from_int() {
+        // Helper: compare fast-path with FFI-based construction
+        fn check_i64(val: i64, scale: Option<u8>) {
+            let fast = try_numeric_from_i64(val, scale);
+            // Build reference via FFI
+            let mut cx = cx_datum();
+            let mut reference = Numeric::from(val);
+            if let Some(s) = scale {
+                let _ = rescale(&mut reference, s);
+            }
+            match fast {
+                Some(f) => {
+                    assert_eq!(
+                        f.to_standard_notation_string(),
+                        reference.to_standard_notation_string(),
+                        "i64 mismatch for val={val}, scale={scale:?}: fast={f}, ref={reference}"
+                    );
+                }
+                None => {
+                    // Fast path declined - that's ok, just ensure it's a valid edge case
+                }
+            }
+        }
+
+        fn check_u64(val: u64, scale: Option<u8>) {
+            let fast = try_numeric_from_u64(val, scale);
+            let mut cx = cx_datum();
+            let mut reference = Numeric::from(val);
+            if let Some(s) = scale {
+                let _ = rescale(&mut reference, s);
+            }
+            match fast {
+                Some(f) => {
+                    assert_eq!(
+                        f.to_standard_notation_string(),
+                        reference.to_standard_notation_string(),
+                        "u64 mismatch for val={val}, scale={scale:?}: fast={f}, ref={reference}"
+                    );
+                }
+                None => {}
+            }
+        }
+
+        // No scale
+        check_i64(0, None);
+        check_i64(1, None);
+        check_i64(-1, None);
+        check_i64(42, None);
+        check_i64(-42, None);
+        check_i64(i32::MAX as i64, None);
+        check_i64(i32::MIN as i64, None);
+        check_i64(i64::MAX, None);
+        check_i64(i64::MIN, None);
+        check_i64(999_999_999_999_999_999, None);
+        check_i64(-999_999_999_999_999_999, None);
+
+        // With scale
+        check_i64(42, Some(0));
+        check_i64(42, Some(2));
+        check_i64(42, Some(6));
+        check_i64(-100, Some(3));
+        check_i64(1, Some(10));
+        check_i64(0, Some(5));
+        check_i64(i32::MAX as i64, Some(2));
+        check_i64(i16::MAX as i64, Some(10));
+
+        // Unsigned
+        check_u64(0, None);
+        check_u64(1, None);
+        check_u64(42, None);
+        check_u64(u32::MAX as u64, None);
+        check_u64(u64::MAX, None);
+        check_u64(42, Some(2));
+        check_u64(u16::MAX as u64, Some(6));
+        check_u64(u32::MAX as u64, Some(2));
+
+        // The fast path must always handle the no-scale case for all integer sizes
+        assert!(try_numeric_from_i64(0, None).is_some());
+        assert!(try_numeric_from_i64(i64::MAX, None).is_some());
+        assert!(try_numeric_from_i64(i64::MIN, None).is_some());
+        assert!(try_numeric_from_u64(0, None).is_some());
+        assert!(try_numeric_from_u64(u64::MAX, None).is_some());
     }
 }
