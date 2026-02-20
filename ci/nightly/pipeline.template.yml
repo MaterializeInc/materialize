@@ -1201,7 +1201,7 @@ steps:
         label: "Checks Self-Managed upgrade across all supported patch releases, manipulate before upgrade"
         depends_on: build-x86_64
         timeout_in_minutes: 180
-        parallelism: 2
+        parallelism: 3
         agents:
           queue: hetzner-x86-64-16cpu-32gb
         plugins:
@@ -1215,7 +1215,7 @@ steps:
         timeout_in_minutes: 180
         agents:
           queue: hetzner-x86-64-16cpu-32gb
-        parallelism: 2
+        parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
