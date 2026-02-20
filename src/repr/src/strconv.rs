@@ -372,6 +372,298 @@ where
 /// <time zone interval> ::=
 ///     <sign> <hours value> <colon> <minutes value>
 /// ```
+// ---------------------------------------------------------------------------
+// Fast-path ISO 8601 timestamp/date/time parsers
+//
+// For the overwhelming majority of real-world data (standard ISO 8601 format
+// like "2024-06-15 14:30:25.123456"), these bypass the general-purpose
+// ParsedDateTime tokenizer+pattern-matcher, which allocates a VecDeque of
+// tokens, builds a 264-byte ParsedDateTime struct, and tries multiple format
+// templates. The fast path does direct byte-level extraction with zero heap
+// allocations. Non-standard formats fall back to the general parser.
+// ---------------------------------------------------------------------------
+
+/// Parse 2 ASCII digits at `buf[off..off+2]` as a u32 in [0, 99].
+#[inline(always)]
+fn parse_2digit(buf: &[u8], off: usize) -> Option<u32> {
+    let d0 = buf[off].wrapping_sub(b'0');
+    let d1 = buf[off + 1].wrapping_sub(b'0');
+    if d0 > 9 || d1 > 9 {
+        return None;
+    }
+    Some(d0 as u32 * 10 + d1 as u32)
+}
+
+/// Parse 4 ASCII digits at `buf[off..off+4]` as an i32 in [0, 9999].
+#[inline(always)]
+fn parse_4digit(buf: &[u8], off: usize) -> Option<i32> {
+    let d0 = buf[off].wrapping_sub(b'0') as u32;
+    let d1 = buf[off + 1].wrapping_sub(b'0') as u32;
+    let d2 = buf[off + 2].wrapping_sub(b'0') as u32;
+    let d3 = buf[off + 3].wrapping_sub(b'0') as u32;
+    if d0 > 9 || d1 > 9 || d2 > 9 || d3 > 9 {
+        return None;
+    }
+    Some((d0 * 1000 + d1 * 100 + d2 * 10 + d3) as i32)
+}
+
+/// Parse fractional seconds (1-9 digits after '.') into nanoseconds.
+#[inline]
+fn parse_frac_nanos(buf: &[u8], start: usize, end: usize) -> Option<u32> {
+    let frac_len = end - start;
+    if frac_len == 0 || frac_len > 9 {
+        return None;
+    }
+    let mut frac: u32 = 0;
+    for i in start..end {
+        let d = buf[i].wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        frac = frac * 10 + d as u32;
+    }
+    // Pad to nanoseconds: multiply by 10^(9 - frac_len)
+    static NANOS_SCALE: [u32; 10] = [
+        1_000_000_000, // 0 digits (unused)
+        100_000_000,   // 1 digit
+        10_000_000,    // 2 digits
+        1_000_000,     // 3 digits
+        100_000,       // 4 digits
+        10_000,        // 5 digits
+        1_000,         // 6 digits
+        100,           // 7 digits
+        10,            // 8 digits
+        1,             // 9 digits
+    ];
+    Some(frac * NANOS_SCALE[frac_len])
+}
+
+/// Try to parse "YYYY-MM-DD" from `buf` at offset 0. Returns `(NaiveDate, next_offset)`.
+#[inline]
+fn try_parse_date_bytes(buf: &[u8]) -> Option<(NaiveDate, usize)> {
+    if buf.len() < 10 {
+        return None;
+    }
+    let year = parse_4digit(buf, 0)?;
+    if buf[4] != b'-' {
+        return None;
+    }
+    let month = parse_2digit(buf, 5)?;
+    if buf[7] != b'-' {
+        return None;
+    }
+    let day = parse_2digit(buf, 8)?;
+    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    Some((date, 10))
+}
+
+/// Try to parse "HH:MM:SS[.fffffffff]" from `buf` at offset `off`.
+/// Returns `(NaiveTime, next_offset)`.
+#[inline]
+fn try_parse_time_bytes(buf: &[u8], off: usize) -> Option<(NaiveTime, usize)> {
+    if buf.len() < off + 8 {
+        return None;
+    }
+    let hour = parse_2digit(buf, off)?;
+    if buf[off + 2] != b':' {
+        return None;
+    }
+    let minute = parse_2digit(buf, off + 3)?;
+    if buf[off + 5] != b':' {
+        return None;
+    }
+    let second = parse_2digit(buf, off + 6)?;
+    let mut pos = off + 8;
+
+    let nanos = if pos < buf.len() && buf[pos] == b'.' {
+        pos += 1; // skip '.'
+        let frac_start = pos;
+        // Scan digits
+        while pos < buf.len() && buf[pos].wrapping_sub(b'0') <= 9 {
+            pos += 1;
+        }
+        parse_frac_nanos(buf, frac_start, pos)?
+    } else {
+        0
+    };
+
+    let time = NaiveTime::from_hms_nano_opt(hour, minute, second, nanos)?;
+    Some((time, pos))
+}
+
+/// Try to parse a fixed-offset timezone like "+00", "+00:00", "-05", "-05:30"
+/// from `buf` at offset `off`. Returns `(FixedOffset, next_offset)`.
+#[inline]
+fn try_parse_tz_offset(buf: &[u8], off: usize) -> Option<(chrono::FixedOffset, usize)> {
+    if off >= buf.len() {
+        return None;
+    }
+    let sign = match buf[off] {
+        b'+' => 1i32,
+        b'-' => -1i32,
+        _ => return None,
+    };
+    let pos = off + 1;
+    if buf.len() < pos + 2 {
+        return None;
+    }
+    let tz_hours = parse_2digit(buf, pos)? as i32;
+    let mut end = pos + 2;
+
+    let tz_minutes = if end < buf.len() && buf[end] == b':' {
+        end += 1;
+        if buf.len() < end + 2 {
+            return None;
+        }
+        let m = parse_2digit(buf, end)? as i32;
+        end += 2;
+        m
+    } else if end + 2 <= buf.len() {
+        // Try compact format like "+0530" (no colon)
+        if let Some(m) = parse_2digit(buf, end) {
+            end += 2;
+            m as i32
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let total_secs = sign * (tz_hours * 3600 + tz_minutes * 60);
+    let offset = chrono::FixedOffset::east_opt(total_secs)?;
+    Some((offset, end))
+}
+
+/// Fast-path: try to parse "YYYY-MM-DD HH:MM:SS[.fff...]" as NaiveDateTime.
+/// Returns None if the format doesn't match (falls back to general parser).
+#[inline]
+fn try_parse_timestamp_fast(s: &str) -> Option<NaiveDateTime> {
+    let buf = s.as_bytes();
+    let (date, date_end) = try_parse_date_bytes(buf)?;
+    if date_end >= buf.len() {
+        return None;
+    }
+    // Accept ' ' or 'T' as date-time separator
+    let sep = buf[date_end];
+    if sep != b' ' && sep != b'T' && sep != b't' {
+        return None;
+    }
+    let (time, time_end) = try_parse_time_bytes(buf, date_end + 1)?;
+    // Must consume entire string
+    if time_end != buf.len() {
+        return None;
+    }
+    Some(date.and_time(time))
+}
+
+/// Fast-path: try to parse "YYYY-MM-DD HH:MM:SS[.fff...]{+|-}HH[:MM]" as DateTime<Utc>.
+/// Returns None if the format doesn't match (falls back to general parser).
+#[inline]
+fn try_parse_timestamptz_fast(s: &str) -> Option<DateTime<Utc>> {
+    let buf = s.as_bytes();
+    let (date, date_end) = try_parse_date_bytes(buf)?;
+    if date_end >= buf.len() {
+        return None;
+    }
+    let sep = buf[date_end];
+    if sep != b' ' && sep != b'T' && sep != b't' {
+        return None;
+    }
+    let (time, time_end) = try_parse_time_bytes(buf, date_end + 1)?;
+    // Must have a timezone offset remaining
+    if time_end >= buf.len() {
+        return None;
+    }
+    let (offset, tz_end) = try_parse_tz_offset(buf, time_end)?;
+    // Must consume entire string
+    if tz_end != buf.len() {
+        return None;
+    }
+    let dt = date.and_time(time);
+    Some(DateTime::from_naive_utc_and_offset(dt - offset, Utc))
+}
+
+/// Fast-path: try to parse "YYYY-MM-DD" as NaiveDate.
+#[inline]
+fn try_parse_date_fast(s: &str) -> Option<NaiveDate> {
+    let buf = s.as_bytes();
+    if buf.len() != 10 {
+        return None;
+    }
+    let (date, _) = try_parse_date_bytes(buf)?;
+    Some(date)
+}
+
+/// Fast-path: try to parse "HH:MM:SS[.fff...]" as NaiveTime.
+#[inline]
+fn try_parse_time_fast(s: &str) -> Option<NaiveTime> {
+    let buf = s.as_bytes();
+    let (time, end) = try_parse_time_bytes(buf, 0)?;
+    if end != buf.len() {
+        return None;
+    }
+    Some(time)
+}
+
+/// Parse a timestamp using only the general ParsedDateTime path (for benchmarking).
+#[doc(hidden)]
+pub fn parse_timestamp_general(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
+    match parse_timestamp_string(s) {
+        Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
+            .map_err(|_| ParseError::out_of_range("timestamp", s)),
+        Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
+    }
+}
+
+/// Parse a timestamptz using only the general ParsedDateTime path (for benchmarking).
+#[doc(hidden)]
+pub fn parse_timestamptz_general(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
+    parse_timestamp_string(s)
+        .and_then(|(date, time, timezone)| {
+            use Timezone::*;
+            let mut dt = date.and_time(time);
+            let offset = match timezone {
+                FixedOffset(offset) => offset,
+                Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
+                    Some(offset) => offset.fix(),
+                    None => {
+                        dt += Duration::try_hours(1).unwrap();
+                        tz.offset_from_local_datetime(&dt)
+                            .latest()
+                            .ok_or_else(|| "invalid timezone conversion".to_owned())?
+                            .fix()
+                    }
+                },
+            };
+            Ok(DateTime::from_naive_utc_and_offset(dt - offset, Utc))
+        })
+        .map_err(|e| {
+            ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)
+        })
+        .and_then(|ts| {
+            CheckedTimestamp::from_timestamplike(ts)
+                .map_err(|_| ParseError::out_of_range("timestamp with time zone", s))
+        })
+}
+
+/// Parse a date using only the general ParsedDateTime path (for benchmarking).
+#[doc(hidden)]
+pub fn parse_date_general(s: &str) -> Result<Date, ParseError> {
+    match parse_timestamp_string(s) {
+        Ok((date, _, _)) => Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s)),
+        Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
+    }
+}
+
+/// Parse a time using only the general ParsedDateTime path (for benchmarking).
+#[doc(hidden)]
+pub fn parse_time_general(s: &str) -> Result<NaiveTime, ParseError> {
+    ParsedDateTime::build_parsed_datetime_time(s)
+        .and_then(|pdt| pdt.compute_time())
+        .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
+}
+
 fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
     if s.is_empty() {
         return Err("timestamp string is empty".into());
@@ -406,6 +698,11 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), S
 
 /// Parses a [`Date`] from `s`.
 pub fn parse_date(s: &str) -> Result<Date, ParseError> {
+    // Fast path for "YYYY-MM-DD" (10 chars, the overwhelmingly common format)
+    if let Some(date) = try_parse_date_fast(s) {
+        return Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s));
+    }
+    // Fall back to general parser for exotic formats
     match parse_timestamp_string(s) {
         Ok((date, _, _)) => Date::try_from(date).map_err(|_| ParseError::out_of_range("date", s)),
         Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
@@ -434,6 +731,11 @@ where
 ///     [ <period> [ <seconds fraction> ] ]
 /// ```
 pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
+    // Fast path for "HH:MM:SS[.ffffff]"
+    if let Some(time) = try_parse_time_fast(s) {
+        return Ok(time);
+    }
+    // Fall back to general parser
     ParsedDateTime::build_parsed_datetime_time(s)
         .and_then(|pdt| pdt.compute_time())
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
@@ -451,6 +753,12 @@ where
 
 /// Parses a `NaiveDateTime` from `s`.
 pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
+    // Fast path for "YYYY-MM-DD HH:MM:SS[.ffffff]"
+    if let Some(ndt) = try_parse_timestamp_fast(s) {
+        return CheckedTimestamp::from_timestamplike(ndt)
+            .map_err(|_| ParseError::out_of_range("timestamp", s));
+    }
+    // Fall back to general parser for exotic formats
     match parse_timestamp_string(s) {
         Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
             .map_err(|_| ParseError::out_of_range("timestamp", s)),
@@ -475,6 +783,12 @@ where
 
 /// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
+    // Fast path for "YYYY-MM-DD HH:MM:SS[.fff...]{+|-}HH[:MM]"
+    if let Some(dt) = try_parse_timestamptz_fast(s) {
+        return CheckedTimestamp::from_timestamplike(dt)
+            .map_err(|_| ParseError::out_of_range("timestamp with time zone", s));
+    }
+    // Fall back to general parser for named timezones, exotic formats, etc.
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
             use Timezone::*;
