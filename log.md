@@ -2145,3 +2145,106 @@ encoding and neutral string encoding.
 - DatumContainer::index linear scan (573B calls) could use a cached batch index
 - Join output row construction still uses datum decode+re-encode
 - Row::clone() at 527B calls - investigate if some clones can be eliminated
+
+---
+
+## Session 24: Arrangement formation - byte-project values + selective key decode
+
+**Date:** 2026-02-20
+
+**Problem:** Every time an arrangement is formed via `arrange_collection` in
+`src/compute/src/render/context.rs` (the "FormArrangementKey" operator), the code:
+1. Decoded ALL datums from the input row via `datums.borrow_with(row)`, including columns
+   only needed for the value (thinning) — these are decoded via expensive `read_datum`
+   (chrono DateTime construction for timestamps, Decimal for numerics, etc.)
+2. Evaluated key expressions against the full datum slice (correct but wasteful — only
+   key-referenced columns are needed)
+3. For the value: indexed into the decoded datums via `thinning.iter().map(|c| datums[*c])`
+   and re-encoded each datum via `val_buf.packer().extend(...)`, which calls `push_datum`
+   for each value column (type matching, encoding size computation, tag+payload writes)
+
+Coverage data showed 36.9 billion executions for the key lines in this operator, confirming
+it's one of the hottest paths in the compute layer. The arrangement formation happens for
+every indexed view, every join input, every GROUP BY, and every ORDER BY.
+
+For a 20-column table with 2 key columns and 18 value columns, the old approach:
+- Decoded all 20 columns (~200ns for Int64, more for timestamps/numerics)
+- Evaluated 2 key expressions (~10ns)
+- Re-encoded 18 value columns via push_datum (~100ns)
+- Total: ~310ns per row
+
+**Fix:** Two optimizations applied together:
+
+1. **Selective datum decoding for key expressions**: Pre-computed `key_needed_columns: Vec<bool>`
+   (a bitmask of which columns the key expressions reference) once during operator setup.
+   In the per-row loop, replaced `borrow_with(row)` with `borrow_with_selective(row, &key_needed)`
+   which uses `skip_datum` (fast O(1) pointer arithmetic from Session 9) for non-key columns
+   and `read_datum` only for key-referenced columns.
+
+2. **Byte-level projection for value construction**: Replaced datum-level value packing
+   (`thinning.iter().map(|c| datums[*c])` → `push_datum` per column) with
+   `row.project_onto(&thinning, &mut val_buf)` (from Session 19) which copies value columns
+   as raw byte ranges without any datum decoding or re-encoding. The `thinning` array is
+   always sorted ascending (constructed from `(0..arity).filter(|c| !key_columns.contains(c))`
+   in `permutation_for_arrangement`), making `project_onto` applicable.
+
+The two-phase approach separates key evaluation from value construction: the DatumVecBorrow
+is scoped to a block, dropped before calling `project_onto`, which releases the borrow on
+the source row. The `key_result: Result<(), EvalError>` is fully owned and doesn't hold
+references into the DatumVecBorrow.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench arrange_kv`, 10K rows):
+
+### Batch arrangement formation (10k rows)
+
+| Scenario                               | Old (ms) | New (ms) | Speedup   |
+|----------------------------------------|----------|----------|-----------|
+| int10, key=col0, thin=cols 1-9         | 1.76     | 0.88     | **2.0x**  |
+| int20, key=cols 0,1, thin=cols 2-19    | 3.78     | 1.77     | **2.1x**  |
+| mixed10, key=col0, thin=cols 1-9       | 1.55     | 0.90     | **1.7x**  |
+| int50, key=col0, thin=cols 1-49        | 8.84     | 3.59     | **2.5x**  |
+| numeric10, key=col0, thin=cols 1-9     | 3.03     | 1.19     | **2.6x**  |
+| int5, key=cols 0,1,2, thin=cols 3,4    | 1.08     | 0.88     | **1.2x**  |
+
+**Summary:** **1.2-2.6x faster** for arrangement formation across all tested scenarios.
+The speedup comes from two sources: (1) selective decoding avoids constructing Datum values
+for non-key columns (~30-60% of savings), and (2) byte-level projection avoids per-datum
+type matching, encoding size computation, and separate tag+payload writes for value columns
+(~40-70% of savings).
+
+The optimization scales with row width and type complexity:
+- **Numeric columns** (2.6x): most expensive to decode (arbitrary-precision decimal) and
+  encode (variable-length with min_bytes_signed computation), so byte copying saves the most
+- **Wide rows** (2.5x for 50 cols): more columns skipped by selective decode and more
+  columns byte-projected
+- **Narrow rows with many key columns** (1.2x for 5 cols, 3 keys): fewer savings because
+  most columns are key columns (need full decode) and only 2 value columns are byte-projected
+- **Mixed types** (1.7x): intermediate between pure-int and pure-numeric
+
+Since arrangement formation is one of the hottest operations in the compute layer (36.9B
+executions in coverage data), a 2x improvement here directly speeds up materialized view
+maintenance, join processing, and aggregation for all queries that use indexed access.
+
+**Files changed:**
+- `src/compute/src/render/context.rs` - Modified `arrange_collection` to pre-compute
+  `key_needed_columns` bitmask from key expressions, use `borrow_with_selective` for
+  key evaluation, and `project_onto` for value construction. Scoped DatumVecBorrow to
+  release row borrow before byte-projection.
+- `src/repr/benches/arrange_kv.rs` - Added benchmark (new file) simulating arrangement
+  key/value formation with 6 scenarios (int10/int20/mixed10/int50/numeric10/int5)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- The same thinning pattern appears in `linear_join.rs` (line 381-382) and `delta_join.rs`
+  (line 352-353), but those use `datums_local` which contains datums from MULTIPLE source
+  rows (stream + lookup), so byte-level projection from a single Row won't work. A different
+  approach (e.g., byte-project the stream portion, then append lookup portion) would be needed.
+- `parse_bool` in `strconv.rs` calls `s.trim().to_lowercase()` which always heap-allocates
+  a String for case-insensitive matching. Could be replaced with `eq_ignore_ascii_case` or
+  manual byte matching to eliminate the allocation.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row during accumulable
+  reductions. SmallVec<[Accum; 4]> would avoid heap allocation for the common case.
+- `Row::clone()` at 527B executions is a massive source of allocation pressure. Arena
+  allocation or reference-counted rows could reduce this.
+- `RowColumnarDecoder::decode()` at 61B calls processes columns sequentially per row.
+  Batched column-at-a-time decoding could improve cache utilization and enable SIMD.
