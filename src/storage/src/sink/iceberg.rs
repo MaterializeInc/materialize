@@ -1664,7 +1664,7 @@ where
                             ("mz-frontier".to_string(), frontier_json),
                             ("mz-sink-version".to_string(), sink_version.to_string()),
                         ].into_iter().collect()
-                    );
+                    ).with_check_duplicate(false);
 
                     if !data_files.is_empty() || !delete_files.is_empty() {
                         action = action.add_data_files(data_files).add_delete_files(delete_files);
