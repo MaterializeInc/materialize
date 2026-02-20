@@ -24,7 +24,6 @@ import inspect
 import io
 import json
 import os
-import re
 import selectors
 import subprocess
 import sys
@@ -1428,48 +1427,35 @@ class Composition:
 
         return str(output_list[0])
 
-    def stats(
-        self,
-        service: str,
-    ) -> str:
-        """Delegates to `docker stats`
+    def mem(self, service: str) -> int:
+        """Return memory usage in bytes for the given service's container.
 
-        Args:
-            service: The service whose container's stats will be probed.
+        Uses ``docker exec`` to read the cgroup memory file from inside the
+        container, where the path is always predictable regardless of the
+        host's cgroup driver or directory layout.
         """
-
         container_id = self.container_id(service)
         assert container_id is not None
 
-        return subprocess.run(
-            [
-                "docker",
-                "stats",
-                container_id,
-                "--format",
-                "{{json .}}",
-                "--no-stream",
-                "--no-trunc",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-        ).stdout
+        # Inside the container the cgroup root is always at /sys/fs/cgroup.
+        # Try v2 first, then v1.
+        for path in (
+            "/sys/fs/cgroup/memory.current",
+            "/sys/fs/cgroup/memory/memory.usage_in_bytes",
+        ):
+            try:
+                out = subprocess.check_output(
+                    ["docker", "exec", container_id, "cat", path],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                return int(out)
+            except (subprocess.CalledProcessError, ValueError):
+                continue
 
-    def mem(self, service: str) -> int:
-        stats_str = self.stats(service)
-        stats = json.loads(stats_str)
-        assert service in stats["Name"]
-        mem_str, _ = stats["MemUsage"].split("/")  # "MemUsage":"1.542GiB / 62.8GiB"
-        mem_float = float(re.findall(r"[\d.]+", mem_str)[0])
-        if "MiB" in mem_str:
-            mem_float = mem_float * 10**6
-        elif "GiB" in mem_str:
-            mem_float = mem_float * 10**9
-        else:
-            raise RuntimeError(f"Unable to parse {mem_str}")
-        return round(mem_float)
+        raise FileNotFoundError(
+            f"Could not read cgroup memory usage from container {container_id}"
+        )
 
     def testdrive(
         self,

@@ -156,7 +156,7 @@ steps:
         label: "Feature benchmark against merge base or 'latest'"
         depends_on: build-x86_64
         timeout_in_minutes: 720
-        parallelism: 14
+        parallelism: 12
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
         plugins:
