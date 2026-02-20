@@ -32,6 +32,10 @@ harness = false
 name = "copy_parse"
 harness = false
 
+[[bench]]
+name = "copy_decode"
+harness = false
+
 [features]
 default = ["workspace-hack"]
 

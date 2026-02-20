@@ -79,9 +79,55 @@ pub enum Nestable {
 /// "0", or any unambiguous prefix of one of those values. Leading or trailing
 /// whitespace is permissible.
 pub fn parse_bool(s: &str) -> Result<bool, ParseError> {
-    match s.trim().to_lowercase().as_str() {
-        "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(true),
-        "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => Ok(false),
+    // Use ASCII case-insensitive byte matching instead of `.to_lowercase()` which
+    // heap-allocates a String on every call.
+    let buf = s.trim().as_bytes();
+    match buf.len() {
+        1 => match buf[0] {
+            b't' | b'T' | b'y' | b'Y' | b'1' => Ok(true),
+            b'f' | b'F' | b'n' | b'N' | b'0' => Ok(false),
+            _ => Err(ParseError::invalid_input_syntax("boolean", s)),
+        },
+        2 => {
+            if buf.eq_ignore_ascii_case(b"tr")
+                || buf.eq_ignore_ascii_case(b"ye")
+                || buf.eq_ignore_ascii_case(b"on")
+            {
+                Ok(true)
+            } else if buf.eq_ignore_ascii_case(b"fa")
+                || buf.eq_ignore_ascii_case(b"no")
+                || buf.eq_ignore_ascii_case(b"of")
+            {
+                Ok(false)
+            } else {
+                Err(ParseError::invalid_input_syntax("boolean", s))
+            }
+        }
+        3 => {
+            if buf.eq_ignore_ascii_case(b"tru") || buf.eq_ignore_ascii_case(b"yes") {
+                Ok(true)
+            } else if buf.eq_ignore_ascii_case(b"fal") || buf.eq_ignore_ascii_case(b"off") {
+                Ok(false)
+            } else {
+                Err(ParseError::invalid_input_syntax("boolean", s))
+            }
+        }
+        4 => {
+            if buf.eq_ignore_ascii_case(b"true") {
+                Ok(true)
+            } else if buf.eq_ignore_ascii_case(b"fals") {
+                Ok(false)
+            } else {
+                Err(ParseError::invalid_input_syntax("boolean", s))
+            }
+        }
+        5 => {
+            if buf.eq_ignore_ascii_case(b"false") {
+                Ok(false)
+            } else {
+                Err(ParseError::invalid_input_syntax("boolean", s))
+            }
+        }
         _ => Err(ParseError::invalid_input_syntax("boolean", s)),
     }
 }
