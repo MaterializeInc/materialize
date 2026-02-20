@@ -8569,15 +8569,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"framer-motion@npm:^11.11.10":
-  version: 11.11.10
-  resolution: "framer-motion@npm:11.11.10"
+"framer-motion@npm:^12.34.1":
+  version: 12.34.3
+  resolution: "framer-motion@npm:12.34.3"
   dependencies:
+    motion-dom: "npm:^12.34.3"
+    motion-utils: "npm:^12.29.2"
     tslib: "npm:^2.4.0"
   peerDependencies:
     "@emotion/is-prop-valid": "*"
-    react: ^18.0.0
-    react-dom: ^18.0.0
+    react: ^18.0.0 || ^19.0.0
+    react-dom: ^18.0.0 || ^19.0.0
   peerDependenciesMeta:
     "@emotion/is-prop-valid":
       optional: true
@@ -8585,7 +8587,7 @@ __metadata:
       optional: true
     react-dom:
       optional: true
-  checksum: 10c0/0f8cdcfad0b1bb371db70a93605da17f191484b47e197387349c5f30b848f799d35e51ec8b54245756e5652903607a051c718fc16997616cf0cd97b1ee642871
+  checksum: 10c0/e36d8d2b33200c6d8ad8af6508090276674dcd239da8026ab19ec4f739b8943197c7b1777f28f96c7149f65ccd35efb5905cbdfdaf6e75017bcd7cc4eb69328b
   languageName: node
   linkType: hard
 
@@ -10644,7 +10646,7 @@ __metadata:
     extract-zip: "npm:^2.0.1"
     fast-deep-equal: "npm:^3.1.3"
     fast-xml-parser: "npm:^4.5.0"
-    framer-motion: "npm:^11.11.10"
+    framer-motion: "npm:^12.34.1"
     intersection-observer: "npm:^0.12.2"
     jotai: "npm:^2.9.3"
     jotai-devtools: "npm:^0.10.1"
@@ -10967,6 +10969,22 @@ __metadata:
   version: 2.2.3
   resolution: "module-alias@npm:2.2.3"
   checksum: 10c0/47dc5b6d04f6e7df0ff330ca9b2a37c688a682ed661e9432b0b327e1e6c43eedad052151b8d50d6beea8b924828d2a92fa4625c18d651bf2d93d8f03aa0172fa
+  languageName: node
+  linkType: hard
+
+"motion-dom@npm:^12.34.3":
+  version: 12.34.3
+  resolution: "motion-dom@npm:12.34.3"
+  dependencies:
+    motion-utils: "npm:^12.29.2"
+  checksum: 10c0/9a336be96dbb24a2ea3cafe401043553bc326274d118b86d6414e505cd394f26c071cd420d2e71c2cf19e76abc89bfdac4a7c5c1b3842eca56b11d6b8687dfdc
+  languageName: node
+  linkType: hard
+
+"motion-utils@npm:^12.29.2":
+  version: 12.29.2
+  resolution: "motion-utils@npm:12.29.2"
+  checksum: 10c0/8058fbb3467602e8263a8a6df0e5d318d00d30d7148415d2ebc13c78a3c7a1b0cbec0808bb62e82c34714979ecbed15b9fffb91bde654dbf3602c84b7d66a5b6
   languageName: node
   linkType: hard
 
