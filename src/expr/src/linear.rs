@@ -1845,6 +1845,27 @@ pub mod plan {
             Some(proj)
         }
 
+        /// Returns the projection slice if this MFP's projection references only
+        /// input columns (no computed expressions), even when predicates/expressions
+        /// exist. Unlike `has_input_sorted_projection()`, this does NOT require
+        /// the projection indices to be sorted — arbitrary orderings like
+        /// `[2, 0, 1]` are accepted.
+        ///
+        /// Returns `None` if any projection index references a computed expression
+        /// column (index >= input_arity) or if the projection is empty.
+        pub fn has_input_projection(&self) -> Option<&[usize]> {
+            let proj = &self.mfp.projection;
+            if proj.is_empty() {
+                return None;
+            }
+            for &col in proj {
+                if col >= self.mfp.input_arity {
+                    return None;
+                }
+            }
+            Some(proj)
+        }
+
         /// Returns a bitmask of columns needed for evaluating expressions and
         /// predicates only (NOT the projection). See
         /// [`MapFilterProject::eval_needed_columns`] for details.
@@ -1874,6 +1895,28 @@ pub mod plan {
                 Ok(None)
             } else {
                 source_row.project_onto(projection, row_buf);
+                Ok(Some(row_buf))
+            }
+        }
+
+        /// Like `evaluate_into_project`, but for unsorted projections.
+        ///
+        /// Uses `project_onto_unordered` which handles arbitrary column orderings
+        /// like `[2, 0, 1]` (e.g., `SELECT c, a, b FROM table`).
+        #[inline(always)]
+        pub fn evaluate_into_project_unordered<'a, 'row>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            source_row: &mz_repr::RowRef,
+            projection: &[usize],
+            row_buf: &'row mut Row,
+        ) -> Result<Option<&'row Row>, EvalError> {
+            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            if !passed_predicates {
+                Ok(None)
+            } else {
+                source_row.project_onto_unordered(projection, row_buf);
                 Ok(Some(row_buf))
             }
         }
@@ -2204,6 +2247,30 @@ pub mod plan {
                 return None;
             }
             self.mfp.has_input_sorted_projection()
+        }
+
+        /// Returns the projection slice if the projection references only
+        /// input columns (no computed expressions), with arbitrary ordering.
+        /// Also requires no temporal bounds.
+        /// See [`SafeMfpPlan::has_input_projection`] for details.
+        pub fn has_input_projection(&self) -> Option<&[usize]> {
+            if !self.lower_bounds.is_empty() || !self.upper_bounds.is_empty() {
+                return None;
+            }
+            self.mfp.has_input_projection()
+        }
+
+        /// Like `evaluate_into_project`, but for unsorted projections.
+        pub fn evaluate_into_project_unordered<'a, 'row>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            source_row: &mz_repr::RowRef,
+            projection: &[usize],
+            row_buf: &'row mut Row,
+        ) -> Result<Option<&'row Row>, EvalError> {
+            self.mfp
+                .evaluate_into_project_unordered(datums, arena, source_row, projection, row_buf)
         }
 
         /// Returns a bitmask of columns needed for evaluating expressions,

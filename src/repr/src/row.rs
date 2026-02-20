@@ -729,6 +729,79 @@ impl RowRef {
         }
     }
 
+    /// Project columns from this row in arbitrary order using byte-level
+    /// copying, writing the result into `dest`.
+    ///
+    /// Unlike [`project_onto`](Self::project_onto) which requires sorted
+    /// projection indices, this method handles arbitrary orderings like
+    /// `[2, 0, 1]` (e.g., `SELECT c, a, b FROM table`).
+    ///
+    /// Implementation:
+    /// 1. Single scan through the row using `skip_datum` to find byte boundaries
+    ///    for each column up to the maximum projected index
+    /// 2. Copy byte ranges in the projection order
+    ///
+    /// This is faster than decode+re-encode via `push_datum` because it replaces
+    /// per-datum type matching and value encoding with simple `memcpy`.
+    pub fn project_onto_unordered(&self, projection: &[usize], dest: &mut Row) {
+        let data = &self.0;
+        if projection.is_empty() {
+            dest.packer();
+            return;
+        }
+
+        let max_col = projection.iter().copied().max().unwrap();
+
+        // Phase 1: Find byte boundaries for each column up to max_col.
+        // Use a stack-allocated array for the common case (≤64 columns).
+        const STACK_LIMIT: usize = 64;
+        if max_col < STACK_LIMIT {
+            let mut boundaries = [(0u32, 0u32); STACK_LIMIT];
+            let mut remaining: &[u8] = data;
+            for col in 0..=max_col {
+                if remaining.is_empty() {
+                    break;
+                }
+                let start = (data.len() - remaining.len()) as u32;
+                // SAFETY: remaining points to a valid datum encoding.
+                unsafe { skip_datum(&mut remaining) };
+                let end = (data.len() - remaining.len()) as u32;
+                boundaries[col] = (start, end);
+            }
+
+            // Phase 2: Copy byte ranges in projection order.
+            let mut packer = dest.packer();
+            for &col in projection {
+                let (start, end) = boundaries[col];
+                // SAFETY: data[start..end] is a valid encoded datum.
+                unsafe {
+                    packer.extend_by_slice_unchecked(&data[start as usize..end as usize]);
+                }
+            }
+        } else {
+            // Wide rows: heap-allocate boundaries.
+            let mut boundaries: Vec<(u32, u32)> = Vec::with_capacity(max_col + 1);
+            let mut remaining: &[u8] = data;
+            for _col in 0..=max_col {
+                if remaining.is_empty() {
+                    break;
+                }
+                let start = (data.len() - remaining.len()) as u32;
+                unsafe { skip_datum(&mut remaining) };
+                let end = (data.len() - remaining.len()) as u32;
+                boundaries.push((start, end));
+            }
+
+            let mut packer = dest.packer();
+            for &col in projection {
+                let (start, end) = boundaries[col];
+                unsafe {
+                    packer.extend_by_slice_unchecked(&data[start as usize..end as usize]);
+                }
+            }
+        }
+    }
+
     /// Decode datums from this row selectively: only decode columns marked
     /// `true` in `needed`, and use fast `skip_datum` for the rest.
     ///

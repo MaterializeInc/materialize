@@ -1978,3 +1978,95 @@ mixed types where the optimization consistently helps.
   at the MFP level, which currently isn't available.
 - The `zero_diffs.clone()` pattern in `reduce.rs` remains a candidate for SmallVec
   optimization (blocked by DD orphan rule issues).
+
+---
+
+## Session 22: Unsorted byte-level row projection (project_onto_unordered)
+
+**Date:** 2026-02-20
+
+**Idea:** Session 19 introduced `project_onto()` for byte-level row projection, but it
+only works when the projection columns are in sorted ascending order. Many real-world
+queries reorder columns (e.g., `SELECT c, a, b FROM t`, join outputs, column swaps).
+For unsorted projections, the system falls back to the expensive unpack-all-datums +
+repack path. We can extend byte-level projection to handle arbitrary column orderings
+with a two-phase approach: (1) scan once with skip_datum to find byte boundaries of
+each needed column, (2) copy in the projection order.
+
+**Implementation:**
+
+*New method: `RowRef::project_onto_unordered()`* (`src/repr/src/row.rs`)
+- Two-phase scan+copy: first pass uses skip_datum to record (start, end) byte boundaries
+  for columns 0..max_col, second pass copies bytes in the arbitrary projection order
+- Stack-allocated `[(u32, u32); 64]` boundary array for rows ≤64 columns (common case),
+  heap fallback via Vec for wider rows
+- Uses u32 for byte offsets (saves stack space, rows never exceed 4GB)
+- Calls `extend_by_slice_unchecked()` for each projected column's bytes
+
+*New MFP methods* (`src/expr/src/linear.rs`)
+- `SafeMfpPlan::has_input_projection()` - like `has_input_sorted_projection()` but
+  without the sorted requirement; returns projection if all projected columns reference
+  input columns (no expressions/computed columns)
+- `SafeMfpPlan::evaluate_into_project_unordered()` - evaluates predicates with selective
+  decode, then calls `project_onto_unordered()` on the source row
+- `MfpPlan::has_input_projection()` / `evaluate_into_project_unordered()` - wrappers
+  that also check temporal bounds
+
+*Integration sites:*
+- `src/storage-operators/src/persist_source.rs` - Added unordered fast path after sorted
+  fast path in `do_work()`
+- `src/compute/src/compute_state.rs` - Added unordered branch in peek evaluation chain
+- `src/storage-operators/src/oneshot_source.rs` - Added unordered branch in oneshot eval
+
+**Benchmark results** (10K rows, `cargo bench -p mz-repr --bench row_project`):
+
+*Pure projection: byte_project_unordered vs unpack_repack*
+
+| Scenario | unpack_repack | byte_unordered | Speedup |
+|---|---|---|---|
+| int 20col, reversed 5 | 3.165 ms | 776 µs | **4.1x** |
+| int 20col, shuffled 5 | 3.345 ms | 795 µs | **4.2x** |
+| mixed 10col, shuffled 4 | 1.285 ms | 336 µs | **3.8x** |
+| int 50col, shuffled 3 | 6.713 ms | 1.155 ms | **5.8x** |
+
+*Pure projection: byte_project_unordered vs mfp_selective_decode*
+
+| Scenario | mfp_selective_decode | byte_unordered | Speedup |
+|---|---|---|---|
+| int 20col, shuffled 5 | 1.490 ms | 750 µs | **2.0x** |
+| mixed 10col, shuffled 4 | 669 µs | 335 µs | **2.0x** |
+
+*Eval + projection: old selective-decode-all vs new eval+byte-unordered*
+
+| Scenario | old_decode_all | new_byte_unordered | Speedup |
+|---|---|---|---|
+| int 20col, pred+shuffle5 | 1.508 ms | 1.370 ms | **1.10x** |
+| mixed 10col, pred+shuffle4 | 720 µs | 724 µs | ~1.0x |
+
+**Analysis:** For pure projection (no predicates), the unsorted byte-level approach is
+**4-6x faster** than unpack+repack and **2x faster** than selective datum decode. The
+speedup comes from avoiding per-datum type matching, decode, and re-encode entirely -
+it just copies raw bytes. The eval+project path shows minimal improvement because
+predicate evaluation dominates the time (the projection savings are amortized against
+the selective decode cost for the predicate columns).
+
+The optimization is most impactful for:
+- Column reordering queries (`SELECT c, a, b`)
+- Join outputs where column order doesn't match input order
+- Views/CTEs that rearrange columns
+- Any MFP with unsorted pure-input-column projections
+
+**Files changed:**
+- `src/repr/src/row.rs` - Added `project_onto_unordered()` method
+- `src/expr/src/linear.rs` - Added `has_input_projection()`, `evaluate_into_project_unordered()`
+  on SafeMfpPlan and MfpPlan
+- `src/compute/src/compute_state.rs` - Added unordered projection branch
+- `src/storage-operators/src/persist_source.rs` - Added unordered projection fast path
+- `src/storage-operators/src/oneshot_source.rs` - Added unordered projection branch
+- `src/repr/benches/row_project.rs` - Added 8 unordered projection benchmarks
+
+**Future optimization ideas:**
+- Join output row construction currently uses datum decode+re-encode for all columns;
+  byte-level projection could be applied to join linear closures
+- The `zero_diffs.clone()` pattern in `reduce.rs` remains a candidate
+- Row::clone() at 527B calls in coverage data - investigate if some clones can be eliminated
