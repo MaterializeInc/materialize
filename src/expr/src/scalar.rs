@@ -2057,7 +2057,50 @@ impl MirScalarExpr {
             )),
             MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, &[expr1, expr2])
+                // Fast path for comparison operators: bypass the EagerBinaryFunc
+                // ceremony (212-arm BinaryFunc match, InputDatumType try_from_iter
+                // with 6 match ops, OutputDatumType into_result) and evaluate
+                // directly using Datum's Ord/Eq.
+                match func {
+                    BinaryFunc::Eq(_)
+                    | BinaryFunc::NotEq(_)
+                    | BinaryFunc::Lt(_)
+                    | BinaryFunc::Lte(_)
+                    | BinaryFunc::Gt(_)
+                    | BinaryFunc::Gte(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        // Fast-path for Numeric: bypass OrderedDecimal's
+                        // 2×reduce + partial_cmp (3 C FFI calls per comparison)
+                        // by comparing coefficient units directly in Rust.
+                        let result = if let (Datum::Numeric(a_num), Datum::Numeric(b_num)) = (a, b)
+                        {
+                            let ord = mz_repr::adt::numeric::fast_numeric_cmp(&a_num.0, &b_num.0);
+                            match func {
+                                BinaryFunc::Eq(_) => ord == std::cmp::Ordering::Equal,
+                                BinaryFunc::NotEq(_) => ord != std::cmp::Ordering::Equal,
+                                BinaryFunc::Lt(_) => ord == std::cmp::Ordering::Less,
+                                BinaryFunc::Lte(_) => ord != std::cmp::Ordering::Greater,
+                                BinaryFunc::Gt(_) => ord == std::cmp::Ordering::Greater,
+                                _ => ord != std::cmp::Ordering::Less, // Gte
+                            }
+                        } else {
+                            match func {
+                                BinaryFunc::Eq(_) => a == b,
+                                BinaryFunc::NotEq(_) => a != b,
+                                BinaryFunc::Lt(_) => a < b,
+                                BinaryFunc::Lte(_) => a <= b,
+                                BinaryFunc::Gt(_) => a > b,
+                                _ => a >= b, // Gte is the only remaining case
+                            }
+                        };
+                        Ok(if result { Datum::True } else { Datum::False })
+                    }
+                    _ => func.eval(datums, temp_storage, &[expr1, expr2]),
+                }
             }
             MirScalarExpr::CallVariadic { func, exprs } => func.eval(datums, temp_storage, exprs),
             MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {

@@ -17,7 +17,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use anyhow::bail;
-use dec::{Context, Decimal};
+use dec::{Context, Decimal, OrderedDecimal};
 use mz_lowertest::MzReflect;
 use mz_ore::cast;
 use mz_persist_types::columnar::FixedSizeCodec;
@@ -418,6 +418,106 @@ pub fn try_sub_fast(a: &Numeric, b: &Numeric) -> Option<Numeric> {
     let cb = coeff_to_i64(b)?;
     let result = ca.checked_sub(cb)?;
     Some(numeric_from_i64_coeff(result, a.exponent()))
+}
+
+/// Fast-path comparison of two `Numeric` values, bypassing the C FFI.
+///
+/// `OrderedDecimal<Decimal<N>>::cmp()` calls `reduce` on both operands (2 C FFI
+/// calls) plus `partial_cmp` (1 C FFI call) on every comparison. This function
+/// avoids all three FFI calls for the common case where both values are finite.
+///
+/// For values with the same exponent (which covers >99% of comparisons since
+/// column values share the same SQL scale), this compares coefficient units
+/// directly as integers. For different exponents, it uses the adjusted exponent
+/// (magnitude) for fast ordering and only falls back to C FFI when the adjusted
+/// exponents are equal but raw exponents differ (which requires rescaling).
+///
+/// Maintains the `OrderedDecimal` convention: NaN > all non-NaN values.
+#[inline]
+pub fn fast_numeric_cmp(a: &Numeric, b: &Numeric) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    // Special values (NaN, Inf) are rare — fall back to C FFI.
+    if a.is_special() || b.is_special() {
+        return OrderedDecimal(*a).cmp(&OrderedDecimal(*b));
+    }
+
+    // Both finite.
+    let a_zero = a.is_zero();
+    let b_zero = b.is_zero();
+    if a_zero && b_zero {
+        return Ordering::Equal;
+    }
+
+    let a_neg = a.is_negative();
+    let b_neg = b.is_negative();
+
+    // Zeros: +0 and -0 are equal, handled above. A zero vs non-zero:
+    if a_zero {
+        return if b_neg {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        };
+    }
+    if b_zero {
+        return if a_neg {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
+    }
+
+    // Different signs — no need to examine coefficients.
+    if a_neg != b_neg {
+        return if a_neg {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        };
+    }
+
+    // Same sign. Compare magnitudes via coefficient units.
+    // For negative numbers, the magnitude ordering is reversed.
+
+    if a.exponent() == b.exponent() {
+        // Same exponent: compare coefficient_units from MSU to LSU.
+        let a_units = a.coefficient_units();
+        let b_units = b.coefficient_units();
+        let a_len = a_units.len();
+        let b_len = b_units.len();
+        let max_len = if a_len > b_len { a_len } else { b_len };
+
+        // Compare from MSU (highest index) to LSU.
+        let mut i = max_len;
+        while i > 0 {
+            i -= 1;
+            let a_u = if i < a_len { a_units[i] } else { 0 };
+            let b_u = if i < b_len { b_units[i] } else { 0 };
+            if a_u != b_u {
+                let ord = if a_u < b_u {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
+                return if a_neg { ord.reverse() } else { ord };
+            }
+        }
+        Ordering::Equal
+    } else {
+        // Different exponents — compare adjusted exponents (magnitude).
+        // adjusted_exponent = exponent + digits - 1, giving the order of
+        // magnitude of the value.
+        let a_adj = a.exponent() + a.digits() as i32 - 1;
+        let b_adj = b.exponent() + b.digits() as i32 - 1;
+        if a_adj != b_adj {
+            let ord = a_adj.cmp(&b_adj);
+            return if a_neg { ord.reverse() } else { ord };
+        }
+        // Same adjusted exponent but different raw exponents — rare case
+        // requiring coefficient rescaling. Fall back to C FFI.
+        OrderedDecimal(*a).cmp(&OrderedDecimal(*b))
+    }
 }
 
 fn twos_complement_be_to_u128(input: &[u8]) -> u128 {
@@ -1263,5 +1363,83 @@ mod tests {
         assert!(try_numeric_from_i64(i64::MIN, None).is_some());
         assert!(try_numeric_from_u64(0, None).is_some());
         assert!(try_numeric_from_u64(u64::MAX, None).is_some());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_fast_numeric_cmp() {
+        use dec::OrderedDecimal;
+
+        let mut cx = cx_datum();
+
+        // Helper: compare fast_numeric_cmp result against OrderedDecimal::cmp.
+        fn check(a: &Numeric, b: &Numeric) {
+            let fast = fast_numeric_cmp(a, b);
+            let ffi = OrderedDecimal(*a).cmp(&OrderedDecimal(*b));
+            assert_eq!(
+                fast, ffi,
+                "mismatch for a={}, b={}: fast={fast:?}, ffi={ffi:?}",
+                a, b,
+            );
+            // Also check reverse.
+            let fast_rev = fast_numeric_cmp(b, a);
+            let ffi_rev = OrderedDecimal(*b).cmp(&OrderedDecimal(*a));
+            assert_eq!(fast_rev, ffi_rev, "reverse mismatch for a={a}, b={b}");
+        }
+
+        // Zero comparisons
+        let zero = Numeric::from(0i32);
+        let pos = Numeric::from(42i32);
+        let neg = Numeric::from(-42i32);
+        check(&zero, &zero);
+        check(&zero, &pos);
+        check(&zero, &neg);
+        check(&pos, &zero);
+        check(&neg, &zero);
+
+        // Same exponent, different values
+        check(&Numeric::from(1i32), &Numeric::from(2i32));
+        check(&Numeric::from(100i32), &Numeric::from(99i32));
+        check(&Numeric::from(-50i32), &Numeric::from(-100i32));
+
+        // Equal values
+        check(&Numeric::from(42i32), &Numeric::from(42i32));
+        check(&Numeric::from(-7i32), &Numeric::from(-7i32));
+
+        // Same exponent, large coefficients
+        let a_large: Numeric = cx.parse("123456789012345678").unwrap();
+        let b_large: Numeric = cx.parse("987654321098765432").unwrap();
+        check(&a_large, &b_large);
+
+        // Money-like (same exponent -2)
+        let a_money: Numeric = cx.parse("12345.67").unwrap();
+        let b_money: Numeric = cx.parse("98765.43").unwrap();
+        check(&a_money, &b_money);
+        check(&b_money, &a_money);
+
+        // Different exponents
+        let a_diff: Numeric = cx.parse("100").unwrap();
+        let b_diff: Numeric = cx.parse("99.99").unwrap();
+        check(&a_diff, &b_diff);
+
+        // Different exponents, same adjusted exponent (1.20 vs 1.2)
+        let a_trail: Numeric = cx.parse("1.20").unwrap();
+        let b_trail: Numeric = cx.parse("1.2").unwrap();
+        check(&a_trail, &b_trail);
+
+        // Negative values
+        let a_neg: Numeric = cx.parse("-500.25").unwrap();
+        let b_neg: Numeric = cx.parse("-100.50").unwrap();
+        check(&a_neg, &b_neg);
+
+        // Mixed signs
+        check(&a_neg, &b_money);
+        check(&b_money, &a_neg);
+
+        // NaN
+        let nan = Numeric::nan();
+        check(&nan, &pos);
+        check(&pos, &nan);
+        check(&nan, &nan);
     }
 }
