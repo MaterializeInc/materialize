@@ -7,8 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: materialized
-description: Materialize is a fast, distributed SQL database built on streaming internals.
-pre-image:
-  - type: cargo-build
-    bin: [ materialized ]
+MZFROM materialized-fdb-base
+
+COPY listener_configs/ /listener_configs/
+COPY materialized entrypoint.sh /usr/local/bin/
+
+USER root
+RUN ln -s /usr/local/bin/materialized /usr/local/bin/environmentd \
+  && ln -s /usr/local/bin/materialized /usr/local/bin/clusterd
+
+USER materialize
+
+ENV MZ_METADATA_STORE=fdb
+
+ENTRYPOINT ["tini", "--", "entrypoint.sh"]
