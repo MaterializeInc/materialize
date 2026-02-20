@@ -6181,6 +6181,7 @@ dependencies = [
  "bytesize",
  "columnar",
  "core_affinity",
+ "criterion 0.8.2",
  "dec",
  "differential-dataflow",
  "differential-dogs3",

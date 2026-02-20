@@ -21,6 +21,7 @@ mod extensions;
 mod logging;
 mod metrics;
 mod render;
-mod row_spine;
+/// Row-specialized container and offset types for differential dataflow spines.
+pub mod row_spine;
 mod sink;
 mod typedefs;

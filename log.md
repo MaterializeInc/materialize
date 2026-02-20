@@ -2845,3 +2845,108 @@ construction + `Vec<Datum>` allocation.
 - The mixed5 result (1.3x) is limited by timestamp parsing (chrono DateTime construction
   ~550ns for the timestamp field alone). A faster timestamp parser that avoids chrono's
   internal validation overhead could help, but is complex to implement correctly.
+
+---
+
+## Session 31: OffsetOptimized index_pair + strided_len caching + single-batch fast path (2026-02-20)
+
+**Target:** `OffsetOptimized`, `BytesBatch`, and `BytesContainer` in
+`src/compute/src/row_spine.rs` — the core offset lookup data structures for differential
+dataflow arrangement spines. Coverage data showed 1.58 trillion executions for
+`OffsetStride::len()/index()` operations.
+
+**Problem:** Every key/value lookup in a DD arrangement goes through
+`DatumContainer::index()` → `BytesContainer::index()` → `BytesBatch::index()` →
+`OffsetOptimized`. The old code had three sources of overhead:
+
+1. **Double index lookup in BytesBatch::index()**: To get the byte range for item `i`,
+   the old code called `self.offsets.index(i)` and `self.offsets.index(i + 1)` separately.
+   Each call involved: (a) compare index against `strided.len()` (enum dispatch), (b)
+   match on `OffsetStride` variant (enum dispatch), (c) compute the value. Two separate
+   calls = two enum dispatches each = 4 total enum matches per lookup.
+
+2. **Repeated `strided.len()` calls in OffsetOptimized::index()**: The `index()` method
+   called `self.strided.len()` (an enum match) to determine whether the index falls in the
+   strided range. For the fallthrough (spilled) case, `strided.len()` was called TWICE
+   (once for the comparison, once for the subtraction). This enum dispatch was pure waste
+   since the strided length only changes during `push_into()`.
+
+3. **Iterator loop in BytesContainer::index()**: Even when the container had a single batch
+   (the common case after compaction/merge), the code iterated through `self.batches.iter()`
+   with iterator setup and loop overhead.
+
+**Fix:** Three optimizations:
+
+1. **`OffsetStride::index_pair()`**: Returns `(index(i), index(i+1))` with a single enum
+   dispatch instead of two. For the common `Striding` case (uniform row sizes), computes
+   both values with one multiplication: `(stride * index, stride * index + stride)`.
+   `BytesBatch::index()` now calls `self.offsets.index_pair(index)` instead of two
+   separate `self.offsets.index()` calls.
+
+2. **`strided_len` field caching**: Added a `strided_len: usize` field to `OffsetOptimized`
+   that caches `strided.len()`. Updated on every `push_into()` when the strided range
+   changes. `OffsetOptimized::index()` and `len()` now read this field directly instead
+   of calling `strided.len()` (enum dispatch).
+
+3. **Single-batch fast path in BytesContainer::index()**: Added an early-return check for
+   `self.batches.len() == 1` that directly indexes the single batch, avoiding the iterator
+   loop setup. This is the common case after compaction/merge.
+
+**Benchmark results** (criterion, `cargo bench -p mz-compute --bench offset_optimized`):
+
+### OffsetOptimized isolated: two index() calls vs one index_pair() (10K lookups)
+
+| Scenario            | two index() calls | index_pair() | Speedup |
+|---------------------|------------------:|-------------:|--------:|
+| uniform stride      | 7.19 µs           | 5.80 µs      | 1.24x   |
+| variable (spilled)  | 11.30 µs          | 7.69 µs      | 1.47x   |
+
+Note: The `two index() calls` benchmark in the baseline uses the same `index()` function
+for both calls. The `index_pair()` column shows the optimized single-dispatch method.
+
+### DatumContainer::index() end-to-end throughput (10K lookups)
+
+| Scenario              | Baseline    | Optimized   | Speedup   |
+|-----------------------|-------------|-------------|-----------|
+| sequential_int5       | 31.44 µs    | 15.00 µs    | **2.10x** |
+| sequential_mixed5     | 29.88 µs    | 15.10 µs    | **1.98x** |
+| sequential_narrow1    | 28.14 µs    | 12.52 µs    | **2.25x** |
+| random_int5           | 31.67 µs    | 19.42 µs    | **1.63x** |
+
+**Summary:** **2.0-2.25x faster for sequential access, 1.63x faster for random access**.
+The speedup comes from three sources: (1) `index_pair()` eliminates one enum dispatch per
+byte-range lookup, (2) `strided_len` caching eliminates `strided.len()` enum dispatch on
+every `index()` call, (3) the single-batch fast path avoids iterator overhead. Narrow rows
+benefit most (2.25x) because the offset computation is a larger fraction of the per-lookup
+time (less data to copy/reference). Random access shows less improvement (1.63x) because
+cache misses for the data payload dominate.
+
+Per-lookup latency improved from 3.14 ns/lookup to 1.50 ns/lookup (sequential int5).
+At 1.58 trillion `OffsetStride` operations in the coverage trace, this optimization
+affects the most frequently executed code path in the entire compute layer. Every arrangement
+lookup (used in joins, aggregations, top-k, indexed views) flows through this path.
+
+**Files changed:**
+- `src/compute/src/row_spine.rs` - Added `OffsetStride::index_pair()`, `strided_len` field
+  on `OffsetOptimized` with caching in `push_into()`, `OffsetOptimized::index_pair()`,
+  single-batch fast path in `BytesContainer::index()`.
+- `src/compute/src/lib.rs` - Made `row_spine` module `pub` for benchmark access.
+- `src/compute/Cargo.toml` - Added criterion dev-dependency, registered benchmark.
+- `src/compute/benches/offset_optimized.rs` - Added benchmark (new file).
+
+**Future optimization ideas identified during research:**
+- `sink/correction_v2.rs` at 588B executions: `Chain::iter()` clones every element via
+  `d.clone()` in the iterator. This is a massive source of allocation pressure for the
+  correction buffer used in compute sinks.
+- `persist-types/src/arrow.rs` at 7.4T executions: `ArrayIdx::cmp()` does double enum
+  dispatch for Arrow array comparison during persist's merge-sort. Specializing the common
+  cases (single-field structs, pure numeric columns) or using function pointers could
+  reduce branch overhead.
+- `persist-client/src/fetch.rs` at 599B executions: `decode_kv()` goes through an
+  `EitherOrBoth` match where only the `Right` (structured) branch is ever taken. The dead
+  `Left` (legacy codec) branch wastes icache space.
+- `row/encode.rs` DatumColumnDecoder::get() at 61B iterations: each datum decode does
+  `is_valid(idx).then(|| array.value(idx)).map(|x| Datum::Type)` through an Option chain.
+  Direct packer methods (bypassing Datum construction) could save ~2-4ns per datum.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row. SmallVec newtype
+  wrapper could avoid heap allocation for 1-4 aggregations.

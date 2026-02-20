@@ -53,5 +53,13 @@ core_affinity = "0.8.3"
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
+[dev-dependencies]
+criterion = { version = "0.8.2" }
+mz-repr = { path = "../repr" }
+
+[[bench]]
+name = "offset_optimized"
+harness = false
+
 [features]
 default = ["workspace-hack"]
