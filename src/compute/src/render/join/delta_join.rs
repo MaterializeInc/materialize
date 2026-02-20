@@ -435,6 +435,9 @@ where
             errs.concat(&errs2.as_collection()),
         )
     } else {
+        // Pre-compute projection for pure-projection closures.
+        let halfjoin_projection = closure.pure_projection().map(|p| p.to_vec());
+        let mut concat_buf = Row::default();
         let oks = differential_dogs3::operators::half_join::half_join_internal_unsafe(
             &updates,
             trace,
@@ -465,6 +468,21 @@ where
                     key.copy_into(&mut packer);
                     stream_row.copy_into(&mut packer);
                     lookup_row.copy_into(&mut packer);
+                    let row = &*row_builder;
+                    for (time, diff2) in output.drain(..) {
+                        let diff = diff1.clone() * diff2.clone();
+                        session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                    }
+                } else if let Some(ref projection) = halfjoin_projection {
+                    // Fast path: pure projection closure — byte-level concat
+                    // + byte-level project avoids all datum decode/re-encode.
+                    {
+                        let mut packer = concat_buf.packer();
+                        key.copy_into(&mut packer);
+                        stream_row.copy_into(&mut packer);
+                        lookup_row.copy_into(&mut packer);
+                    }
+                    concat_buf.project_onto_unordered(projection, &mut row_builder);
                     let row = &*row_builder;
                     for (time, diff2) in output.drain(..) {
                         let diff = diff1.clone() * diff2.clone();
@@ -522,11 +540,15 @@ where
         inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
     }
 
+    // Pre-compute projection for pure-projection closures (no filters/maps).
+    let initial_projection = initial_closure.pure_projection().map(|p| p.to_vec());
+
     let (ok_stream, err_stream) =
         trace
             .stream
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
+                let mut concat_buf = Row::default();
                 Box::new(move |input, ok_output, err_output| {
                     // Buffer to accumulate contributing (time, diff) pairs for each (key, val).
                     let mut times_diffs = Vec::default();
@@ -555,6 +577,20 @@ where
                                                     val.copy_into(&mut packer);
                                                     row_builder.clone()
                                                 };
+                                                ok_session.give((row, time, Tr::owned_diff(diff)));
+                                            } else if let Some(ref projection) = initial_projection {
+                                                // Fast path: pure projection closure —
+                                                // byte-level concat + byte-level project.
+                                                {
+                                                    let mut packer = concat_buf.packer();
+                                                    key.copy_into(&mut packer);
+                                                    val.copy_into(&mut packer);
+                                                }
+                                                concat_buf.project_onto_unordered(
+                                                    projection,
+                                                    &mut row_builder,
+                                                );
+                                                let row = row_builder.clone();
                                                 ok_session.give((row, time, Tr::owned_diff(diff)));
                                             } else {
                                                 // TODO: Consolidate as we push, defensively.
