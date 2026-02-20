@@ -223,6 +223,18 @@ impl JoinClosure {
             || !self.ready_equivalences.is_empty()
     }
 
+    /// Returns the projection indices if this closure is a non-identity pure
+    /// projection (no filters, no maps, no ready_equivalences—just column
+    /// selection or reordering). Returns `None` if the closure is identity
+    /// (handled separately) or has any computation/filtering.
+    pub fn pure_projection(&self) -> Option<&[usize]> {
+        if self.maps_or_filters() || self.is_identity() {
+            None
+        } else {
+            Some(&self.before.projection)
+        }
+    }
+
     /// Returns true if evaluation could introduce an error on non-error inputs.
     pub fn could_error(&self) -> bool {
         self.before.could_error()

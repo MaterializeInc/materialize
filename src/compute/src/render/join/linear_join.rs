@@ -534,6 +534,27 @@ where
                     });
 
             (oks, None)
+        } else if let Some(projection) = closure.pure_projection() {
+            // Fast path: pure projection closure (no filters/maps/equivalences,
+            // just column selection/reordering). Byte-level concat + byte-level
+            // project avoids all datum decode/re-encode.
+            let projection = projection.to_vec();
+            let mut concat_buf = Row::default();
+            let oks =
+                self.linear_join_spec
+                    .render(&prev_keyed, &next_input, move |key, old, new| {
+                        {
+                            let mut packer = concat_buf.packer();
+                            key.copy_into(&mut packer);
+                            old.copy_into(&mut packer);
+                            new.copy_into(&mut packer);
+                        }
+                        let mut row_builder = SharedRow::get();
+                        concat_buf.project_onto_unordered(&projection, &mut row_builder);
+                        Some(row_builder.clone())
+                    });
+
+            (oks, None)
         } else if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec

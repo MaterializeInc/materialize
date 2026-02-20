@@ -2411,7 +2411,102 @@ are both optimized.
 - `src/repr/Cargo.toml` — benchmark registration
 
 **Future ideas**:
-- Selective decode in join closure: when the closure IS NOT identity but only references a
-  subset of columns, we could use byte-level projection to extract only needed columns instead
-  of decoding all datums. This combines the Session 19-22 byte projection work with join closures.
+- Selective decode in join closure: when the closure has filters/maps that reference only a
+  subset of columns, we could use selective decode for the filter columns + byte-level project
+  for the output. This would extend Sessions 19-22 to the join closure path.
 - Byte-level concat could also apply to UNION ALL operations and other row concatenation sites.
+
+---
+
+## Session 27: Join closure byte-level projection for pure-projection closures (2026-02-20)
+
+**Target**: When a join closure is a non-identity pure projection (no filters, no maps, no
+ready_equivalences — just column selection or reordering), the compute layer decodes ALL
+datums from key + val1 + val2, applies the projection in the MFP, and re-encodes the projected
+datums. This decode→project→re-encode is wasteful — we can do byte-level concat + byte-level
+project instead, avoiding all datum construction and re-encoding.
+
+**When does this apply?** Very commonly. After the query planner handles equi-join via
+arrangement lookup, the remaining closure often just removes duplicate key columns. For
+example, `SELECT * FROM a JOIN b ON a.id = b.id` has a closure that projects away the
+duplicate `b.id` column from the concatenated `[a.id, a.*, b.*]` output. The closure has:
+- `ready_equivalences`: empty (equi-join handled by arrangement lookup)
+- `before.expressions`: empty (no computed columns)
+- `before.predicates`: empty (no filters)
+- `before.projection`: subset/reorder of input columns (e.g., [0,1,2,3,5,6,7] dropping col 4)
+
+**Changes**:
+- Added `JoinClosure::pure_projection()` method in `src/compute-types/src/plan/join.rs`:
+  Returns `Some(&[usize])` (the projection indices) when the closure has no filters, maps,
+  or ready_equivalences AND is not identity. Returns `None` otherwise.
+- Added pure-projection fast path in linear join (`src/compute/src/render/join/linear_join.rs`):
+  Between the identity and could_error branches in `differential_join_inner`, byte-level
+  concat key+old+new into a reusable `concat_buf`, then `project_onto_unordered` into the
+  output row.
+- Added pure-projection fast path in delta join `build_update_stream`
+  (`src/compute/src/render/join/delta_join.rs`): Between identity and slow path, byte-level
+  concat key+val into `concat_buf`, then `project_onto_unordered`.
+- Added pure-projection fast path in delta join `build_halfjoin`
+  (`src/compute/src/render/join/delta_join.rs`): In the `!could_error()` branch, between
+  identity and slow path, byte-level concat key+stream_row+lookup_row into `concat_buf`,
+  then `project_onto_unordered`.
+
+All three paths use a reusable `Row` buffer (`concat_buf`) allocated once outside the closure
+and reused across invocations via `packer()` (which clears without deallocating). The
+projection is pre-computed as an owned `Vec<usize>` before the closure to avoid per-row
+borrowing overhead.
+
+**Benchmark** (`cargo bench -p mz-repr --bench join_concat -- join_project`):
+
+Per-operation (single join result, key(2) + val1(10) + val2(10) = 22 int columns):
+
+| Scenario | datum_decode | byte_project | Speedup |
+|---|---|---|---|
+| drop_2_of_22 (typical: remove dup key cols) | 426 ns | 110 ns | **3.9x** |
+| keep_8_of_22 (narrow projection) | 327 ns | 93 ns | **3.5x** |
+| reversed_22 (all cols, reversed order) | 438 ns | 117 ns | **3.7x** |
+
+Batch (10k join result rows):
+
+| Scenario | datum_decode | byte_project | Speedup |
+|---|---|---|---|
+| drop_2_of_22 int (10k rows) | 4.08 ms | 1.12 ms | **3.6x** |
+| mixed_type (11 cols, str+float+bool+int, 10k rows) | 2.00 ms | 625 µs | **3.2x** |
+
+**Analysis**: The speedup is **3.2-3.9x** across all scenarios. Unlike the identity concat
+optimization (Session 26, which was 4.6-32.5x) where the speedup scaled with column count,
+the projection optimization has a more consistent 3-4x improvement because both old and new
+approaches process all columns — the difference is in HOW they process them:
+- Old: `read_datum` (type matching, value parsing, Datum construction) for ALL columns, then
+  `push_datum` (type matching, encoding size, tag+payload writes) for PROJECTED columns
+- New: `skip_datum` (tag byte + pointer advance) for ALL columns during `project_onto_unordered`'s
+  boundary scan, then `memcpy` for each projected column's byte range
+
+The byte-level approach wins because `skip_datum` is 2-5x cheaper than `read_datum` (just
+pointer arithmetic vs full datum construction), and `memcpy` is cheaper than per-datum
+`push_datum` (no type matching, no encoding size computation).
+
+**Impact**: This optimization applies to all joins where the closure is a non-identity pure
+projection — which is the most common non-identity case, since the query planner typically
+adds a projection to remove duplicate join key columns. It benefits:
+- Linear joins (most 2-table joins)
+- Delta joins (multi-way joins), both initial scan and per-stage half-join
+- Materialized view maintenance (incremental join updates)
+
+**Files modified**:
+- `src/compute-types/src/plan/join.rs` — `JoinClosure::pure_projection()` method
+- `src/compute/src/render/join/linear_join.rs` — projection fast path in `differential_join_inner`
+- `src/compute/src/render/join/delta_join.rs` — projection fast paths in `build_update_stream`
+  and `build_halfjoin`
+- `src/repr/benches/join_concat.rs` — added projection benchmark scenarios
+
+**Future ideas**:
+- When the join closure has filters/maps AND a pure-input-column projection, we could combine
+  selective decode for filter evaluation with byte-level project for the output columns. This
+  extends the Session 21 `evaluate_into_project` pattern to join closures.
+- `zero_diffs.clone()` in `reduce.rs` (line 1313) clones a `Vec<Accum>` per input row during
+  accumulable reductions. SmallVec<[Accum; 4]> would avoid heap allocation for 1-4 aggregations.
+- The `build_bucketed` function in reduce.rs (line 846) has a TODO to convert `chain(hash_key_iter)`
+  into a memcpy for hash key reconstruction.
+- `Row::clone()` at 527B executions in coverage data remains a massive source of allocation.
+- Byte-level concat could apply to UNION ALL operations and other row concatenation sites.
