@@ -420,6 +420,78 @@ pub fn try_sub_fast(a: &Numeric, b: &Numeric) -> Option<Numeric> {
     Some(numeric_from_i64_coeff(result, a.exponent()))
 }
 
+/// Fast-path multiplication of two `Numeric` values, bypassing the C FFI.
+///
+/// Returns `Some(result)` if both operands are finite, their coefficients fit
+/// in i64 (≤18 digits each), and the product fits within
+/// [`NUMERIC_DATUM_MAX_PRECISION`] (39 digits) without rescaling.
+/// Returns `None` to fall back to the general FFI path.
+#[inline]
+pub fn try_mul_fast(a: &Numeric, b: &Numeric) -> Option<Numeric> {
+    if a.is_special() || b.is_special() {
+        return None;
+    }
+    if a.is_zero() || b.is_zero() {
+        let lsu = [0u16; 13];
+        return Some(Numeric::from_raw_parts(1, 0, 0, lsu));
+    }
+    let ca = coeff_to_i64(a)?;
+    let cb = coeff_to_i64(b)?;
+    // i64 × i64 always fits in i128 (max 36 digits < 39 i128 digits).
+    let product: i128 = ca as i128 * cb as i128;
+    let result_exp = a.exponent() + b.exponent();
+    numeric_from_i128_coeff(product, result_exp)
+}
+
+/// Build a `Numeric` from an i128 coefficient and exponent, if it fits within
+/// [`NUMERIC_DATUM_MAX_PRECISION`] (39 digits).
+///
+/// Returns `None` if the result would exceed max precision (needs rescaling).
+#[inline]
+fn numeric_from_i128_coeff(val: i128, exponent: i32) -> Option<Numeric> {
+    if val == 0 {
+        let lsu = [0u16; 13];
+        return Some(Numeric::from_raw_parts(1, exponent, 0, lsu));
+    }
+    let (bits, magnitude) = if val < 0 {
+        (0x80u8, (val as u128).wrapping_neg()) // DECNEG
+    } else {
+        (0u8, val as u128)
+    };
+    let mut lsu = [0u16; 13];
+    let mut remaining = magnitude;
+    let mut n_units = 0usize;
+    while remaining > 0 {
+        lsu[n_units] = (remaining % 1000) as u16;
+        remaining /= 1000;
+        n_units += 1;
+        if n_units > 13 {
+            return None; // Overflow, shouldn't happen for i64×i64
+        }
+    }
+    let top_unit = lsu[n_units - 1];
+    let top_digits = if top_unit >= 100 {
+        3
+    } else if top_unit >= 10 {
+        2
+    } else {
+        1
+    };
+    let sig_digits = (n_units as u32 - 1) * 3 + top_digits;
+    // Check if result precision fits within max (39 digits).
+    // precision = max(sig_digits, -exponent) for negative exponents,
+    //           = sig_digits + exponent for non-negative exponents.
+    let precision = if exponent >= 0 {
+        sig_digits + exponent as u32
+    } else {
+        std::cmp::max(sig_digits, (-exponent) as u32)
+    };
+    if precision > NUMERIC_DATUM_MAX_PRECISION as u32 {
+        return None;
+    }
+    Some(Numeric::from_raw_parts(sig_digits, exponent, bits, lsu))
+}
+
 /// Fast-path comparison of two `Numeric` values, bypassing the C FFI.
 ///
 /// `OrderedDecimal<Decimal<N>>::cmp()` calls `reduce` on both operands (2 C FFI
@@ -1936,5 +2008,86 @@ mod tests {
         check(&nan, &pos);
         check(&pos, &nan);
         check(&nan, &nan);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_try_mul_fast() {
+        let mut cx = cx_datum();
+
+        // Helper: compare fast-path result against FFI multiplication.
+        fn check(a: &Numeric, b: &Numeric) {
+            let fast = try_mul_fast(a, b);
+            // Compute FFI result.
+            let mut cx = cx_datum();
+            let mut ffi_result = *a;
+            cx.mul(&mut ffi_result, b);
+            assert!(
+                !cx.status().overflow() && !cx.status().subnormal(),
+                "FFI mul overflowed for a={a}, b={b}"
+            );
+            super::munge_numeric(&mut ffi_result).unwrap();
+
+            if let Some(fast_val) = fast {
+                // Reduce both for comparison (trailing zeros may differ).
+                let mut fast_reduced = fast_val;
+                let mut ffi_reduced = ffi_result;
+                cx_datum().reduce(&mut fast_reduced);
+                cx_datum().reduce(&mut ffi_reduced);
+                assert_eq!(
+                    fast_reduced.to_string(),
+                    ffi_reduced.to_string(),
+                    "mismatch for {a} * {b}: fast={fast_val}, ffi={ffi_result}",
+                );
+            }
+            // If fast returns None, that's OK — it means fallback to FFI.
+        }
+
+        // Basic cases
+        check(&Numeric::from(0i32), &Numeric::from(42i32));
+        check(&Numeric::from(42i32), &Numeric::from(0i32));
+        check(&Numeric::from(1i32), &Numeric::from(1i32));
+        check(&Numeric::from(7i32), &Numeric::from(6i32));
+        check(&Numeric::from(-7i32), &Numeric::from(6i32));
+        check(&Numeric::from(-7i32), &Numeric::from(-6i32));
+
+        // Money-like: price * quantity
+        let price: Numeric = cx.parse("12345.67").unwrap();
+        let qty: Numeric = cx.parse("99").unwrap();
+        check(&price, &qty);
+
+        // Same scale
+        let a_money: Numeric = cx.parse("100.00").unwrap();
+        let b_money: Numeric = cx.parse("50.00").unwrap();
+        check(&a_money, &b_money);
+
+        // Large values (still < 18 digits each)
+        let a_large: Numeric = cx.parse("999999999999.99").unwrap();
+        let b_large: Numeric = cx.parse("123456").unwrap();
+        check(&a_large, &b_large);
+
+        // Negative × positive
+        let a_neg: Numeric = cx.parse("-500.25").unwrap();
+        let b_pos: Numeric = cx.parse("200.50").unwrap();
+        check(&a_neg, &b_pos);
+
+        // Negative × negative
+        check(&a_neg, &a_neg);
+
+        // Very small values
+        let tiny: Numeric = cx.parse("0.000001").unwrap();
+        let small: Numeric = cx.parse("0.000002").unwrap();
+        check(&tiny, &small);
+
+        // One is 1
+        check(&Numeric::from(1i32), &price);
+        check(&price, &Numeric::from(1i32));
+
+        // Large coefficient (> 18 digits) should return None (fall back)
+        let big: Numeric = cx.parse("1234567890123456789.12").unwrap();
+        assert!(
+            try_mul_fast(&big, &Numeric::from(2i32)).is_none(),
+            "should fall back for >18 digit coefficient"
+        );
     }
 }

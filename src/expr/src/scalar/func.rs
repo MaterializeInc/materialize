@@ -996,6 +996,9 @@ fn mul_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     propagates_nulls = true
 )]
 fn mul_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
+    if let Some(result) = numeric::try_mul_fast(&a, &b) {
+        return Ok(result);
+    }
     let mut cx = numeric::cx_datum();
     cx.mul(&mut a, &b);
     let cx_status = cx.status();

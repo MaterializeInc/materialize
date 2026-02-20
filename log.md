@@ -4101,3 +4101,88 @@ integer arithmetic on the coefficient units, with no struct copies.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
 - `push_signed_int` at 992M executions — already optimized with `#[inline(always)]`.
 - `DatumColumnDecoder::get()` at 978M executions — double dispatch pattern could be optimized.
+
+## Session 43: Fast-path Numeric multiplication - bypass C FFI
+
+**Date:** 2026-02-20
+
+**Problem:** `mul_numeric()` in expression evaluation calls `cx.mul(&mut a, &b)` — a C FFI
+call to the decNumber library — for every Numeric multiplication. This is followed by
+`munge_numeric()` which checks precision constraints and potentially rescales (another FFI
+call). For TPC-H-style workloads with `revenue = price * quantity`, Numeric multiplication
+is a hot operation.
+
+The C library handles all edge cases (NaN, Inf, arbitrary precision, rounding) but is
+overkill for the common case: two finite values with ≤18 significant digits each, where
+the product naturally fits within the 39-digit Numeric precision limit.
+
+**Fix:** Added `try_mul_fast()` in `src/repr/src/adt/numeric.rs` that multiplies two
+`Numeric` values entirely in Rust for the common case:
+
+1. **Special/zero check:** Falls back to FFI for NaN/Inf. Returns zero immediately for
+   zero operands.
+2. **Coefficient extraction:** Uses `coeff_to_i64()` (existing helper) to extract both
+   coefficients as i64 (≤18 digits each). Falls back if either has >18 digits.
+3. **i128 multiplication:** `i64 × i64` always fits in i128 (max 36 digits).
+4. **Result construction:** `numeric_from_i128_coeff()` converts the i128 product to
+   base-1000 coefficient units and constructs the Numeric via `from_raw_parts()`.
+5. **Precision check:** Verifies result precision ≤ 39 digits. Falls back to FFI if
+   rescaling would be needed (rare — only when both operands have many digits AND
+   large negative exponents).
+
+Also added `numeric_from_i128_coeff()` helper that converts i128 to the Decimal internal
+representation (base-1000 coefficient units in `[u16; 13]` array).
+
+Integrated into `mul_numeric()` in `src/expr/src/scalar/func.rs`: tries fast path first,
+falls back to FFI + `munge_numeric()` only when needed.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench numeric_mul`):
+
+### Per-multiplication (ns/iter)
+
+| Scenario | FFI (ns) | Fast (ns) | Speedup |
+|---|---|---|---|
+| small_int (42×7) | 12.2 | 8.6 | **1.4x** |
+| money_x_qty (12345.67×99) | 16.8 | 11.2 | **1.5x** |
+| same_scale (100.00×50.00) | 14.5 | 11.2 | **1.3x** |
+| large_coeff (999999999999.99×123456) | 32.4 | 20.4 | **1.6x** |
+| neg_x_pos (-500.25×200.50) | 23.7 | 13.2 | **1.8x** |
+| tiny (0.000001×0.000002) | 12.3 | 8.7 | **1.4x** |
+| one_x_price (1×12345.67) | 13.0 | 11.5 | **1.1x** |
+| zero_x_val (0×12345.67) | 11.6 | 4.9 | **2.4x** |
+
+### Batch multiplication (10k values)
+
+| Scenario | FFI (µs) | Fast (µs) | Speedup |
+|---|---|---|---|
+| 10k revenue (price×qty+sum) | 299 | 181 | **1.7x** |
+| 10k same_scale (dec×dec) | 202 | 95 | **2.1x** |
+
+**Per-multiplication speedup: 1.1-2.4x. Batch speedup: 1.7-2.1x.**
+
+The speedup is moderate but consistent. The FFI overhead for multiplication is lower than
+for comparison (which needed 3 FFI calls) or reduce, so the absolute savings per call are
+smaller. But for batch workloads, the improvement is significant: 2.1x for pure
+multiplication, 1.7x for the realistic revenue computation (mul + add pipeline).
+
+The zero case shows the largest speedup (2.4x) because the fast path returns immediately
+without touching coefficients. The large_coeff case shows 1.6x because the i128
+multiplication and base-1000 reconstruction are more work for larger values.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Added `try_mul_fast()` and `numeric_from_i128_coeff()`
+  functions. Added `test_try_mul_fast` correctness test.
+- `src/expr/src/scalar/func.rs` - Updated `mul_numeric` to try fast path first.
+- `src/repr/benches/numeric_mul.rs` - New benchmark file.
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas:**
+- `div_numeric` could use a similar fast path for simple cases (division where both fit
+  in i128 and the quotient has no remainder, or where the quotient can be computed exactly).
+- `Numeric::from(f64/f32)` still goes through FFI.
+- `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+- The `Datum` derived `Ord` still uses `OrderedDecimal::cmp` (3 FFI calls) for all
+  non-expression-evaluation Numeric comparisons (sorting, deduplication, DDFlow operations).
+  A manual `Ord` for `Datum` could intercept this, but requires handling all ~30 variants.
