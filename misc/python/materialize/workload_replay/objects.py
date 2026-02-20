@@ -545,7 +545,7 @@ def run_create_objects_part_1(
 def run_create_objects_part_2(
     c: Composition, services: set[str], workload: dict[str, Any], verbose: bool
 ) -> None:
-    """Create sources, tables, views, materialized views, and sinks."""
+    """Create sources, tables, views, materialized views, indexes, and sinks."""
     print("Creating sources")
     for schemas in workload["databases"].values():
         for items in schemas.values():
@@ -601,7 +601,7 @@ def run_create_objects_part_2(
                     print_statement=verbose,
                 )
 
-    print("Creating view, materialized views, sinks")
+    print("Creating views, materialized views, sinks")
     pending = set()
     for schemas in workload["databases"].values():
         for items in schemas.values():
@@ -626,3 +626,14 @@ def run_create_objects_part_2(
             progress = True
         if not progress:
             raise RuntimeError(f"No progress, remaining creates: {pending}")
+
+    print("Creating indexes")
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for index in items["indexes"].values():
+                c.sql(
+                    index["create_sql"],
+                    user="mz_system",
+                    port=6877,
+                    print_statement=verbose,
+                )
