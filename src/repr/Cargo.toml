@@ -78,6 +78,10 @@ name = "jsonb_numeric"
 harness = false
 
 [[bench]]
+name = "jsonb_format"
+harness = false
+
+[[bench]]
 name = "row_project"
 harness = false
 

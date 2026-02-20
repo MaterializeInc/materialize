@@ -3433,3 +3433,108 @@ suite verifies bit-exact agreement for a comprehensive set of values.
 - `MirScalarExpr::eval()` dispatch chain: 3 dispatch points for simple predicates.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
+
+## Session 36: Direct JSONB formatting - bypass serde_json for simple scalar types
+
+**Date:** 2026-02-20
+
+**Problem:** Every time a JSONB value is formatted for pgwire output—via `format_jsonb` in
+`strconv.rs`—the code went through 9 layers of dispatch:
+1. `write!(buf, "{}", jsonb)` → constructs `fmt::Arguments`, calls `FormatBuffer::write_fmt`
+2. `FormatBuffer::write_fmt` → dispatches to `fmt::Write::write_fmt`
+3. `JsonbRef::Display::fmt` → creates `WriterFormatter` adapter
+4. `serde_json::to_writer` → creates `Serializer` state machine with internal buffer
+5. `Serializer::serialize_*` → calls `JsonbDatum::serialize`
+6. `JsonbDatum::serialize` → matches on Datum type, calls appropriate serde method
+7. For numerics: `serialize_struct` with magic `$serde_json::private::Number` token
+8. Each write goes through `WriterFormatter` → `io::Write` → `fmt::Formatter`
+9. `fmt::Formatter` → finally writes to the `FormatBuffer`
+
+For simple JSONB scalars (null, true, false, numbers, strings)—which are the most common
+JSONB values in practice—all of this machinery is completely unnecessary. The same result can
+be achieved by matching on the Datum type and writing directly to the FormatBuffer.
+
+**Fix:** Two changes in `format_jsonb`:
+
+1. **Direct scalar formatting**: Match on `jsonb.into_datum()` for simple types:
+   - `Datum::JsonNull` → write `"null"` directly
+   - `Datum::True`/`Datum::False` → write `"true"`/`"false"` directly
+   - `Datum::Numeric(n)` → use `write_numeric_standard_notation` directly (from session 2)
+   - `Datum::String(s)` → use `write_json_string` (see below)
+   - Complex types (List, Map) → fall through to the serde_json path
+
+2. **`write_json_string()`**: Direct JSON string escaping that matches serde_json's behavior
+   exactly, using a 256-entry `JSON_NEEDS_ESCAPE` lookup table:
+   - **Fast path**: If no byte needs escaping (checked via `.any()` with lookup table,
+     which LLVM autovectorizes), write `"` + string + `"` with just 3 `write_str` calls
+   - **Slow path**: Write unescaped chunks interspersed with escape sequences
+     (`\"`, `\\`, `\b`, `\t`, `\n`, `\f`, `\r`, or `\uXXXX` for other control chars)
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench jsonb_format`):
+
+### Per-value JSONB formatting (ns/iter)
+
+| Value                    | Old (serde_json) | New (direct) | Speedup |
+|--------------------------|----------------:|-------------:|--------:|
+| null                     | 13.7            | 8.7          | 1.6x    |
+| true                     | 14.6            | 9.0          | 1.6x    |
+| false                    | 14.5            | 9.1          | 1.6x    |
+| num_zero (0)             | 28.4            | 14.5         | 2.0x    |
+| num_one (1)              | 28.3            | 14.3         | 2.0x    |
+| num_42 (42)              | 31.6            | 17.4         | 1.8x    |
+| num_pi (3.14159...)      | 49.9            | 32.7         | 1.5x    |
+| num_negative (-99.99)    | 32.4            | 18.4         | 1.8x    |
+| num_tiny (0.000001)      | 32.2            | 18.1         | 1.8x    |
+| num_large (39 digits)    | 57.1            | 38.9         | 1.5x    |
+| str_empty ("")           | 18.6            | 9.5          | 2.0x    |
+| str_hello ("hello")      | 27.7            | 11.1         | 2.5x    |
+| str_medium (44 chars)    | 44.7            | 19.0         | 2.4x    |
+| str_long (200 chars)     | 106             | 55           | 1.9x    |
+| str_quote (has `"`)      | 43.1            | 17.1         | 2.5x    |
+| str_backslash (has `\`)  | 52.9            | 20.6         | 2.6x    |
+| str_newline (has `\n`)   | 58.3            | 22.8         | 2.6x    |
+| str_mixed_esc            | 74.4            | 32.6         | 2.3x    |
+
+### Batch formatting (10k values)
+
+| Approach                        | Time (µs) | Speedup   |
+|---------------------------------|-----------|-----------|
+| Old serde 10k mixed             | 492       | -         |
+| New direct 10k mixed            | 300       | **1.6x**  |
+| Old serde 10k scalars only      | 322       | -         |
+| New direct 10k scalars only     | 205       | **1.6x**  |
+
+**Summary:** 1.5-2.6x faster per value depending on type, **1.6x faster in batch**. The
+speedup comes from eliminating 7 layers of dispatch: serde_json Serializer creation,
+WriterFormatter adapter, fmt::Formatter construction, and all serde trait dispatch. For
+strings, the 256-entry lookup table with LLVM-autovectorized fast-path check avoids per-byte
+scanning overhead for clean strings. The optimization handles all simple JSONB scalar types
+(null, bool, number, string) directly; complex types (arrays, objects) fall through to serde.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Modified `format_jsonb()` to add direct Datum matching for
+  simple scalar types. Added `JSON_NEEDS_ESCAPE` lookup table and `write_json_string()`
+  function for direct JSON string escaping. Added `test_format_jsonb_direct` correctness
+  test verifying bit-exact output match with serde_json for all value types including
+  strings with escapes, control characters, and Unicode.
+- `src/repr/benches/jsonb_format.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `ArrayOrd::at()` in persist merge sort has NO `#[inline]` annotation despite being called
+  705B times. `ArrayIdx::cmp` (327B calls) does a 16-arm enum match on every comparison.
+  Specializing for Binary arrays (the common case for Row data) or using function pointers
+  set up at batch creation time could eliminate per-comparison dispatch.
+- `Region<T>::len()` (613B calls) and `Region<T>::extend_from_slice()` (352B calls) each
+  perform multiple enum matches (`Heap` vs `MMap`) per call. Caching length/capacity in
+  plain fields would eliminate the dispatch overhead.
+- `OffsetStride::push` (580B calls) uses `stride * count` multiplication in the hot path.
+  Pre-computing the expected next value would replace the multiply with a comparison.
+- `Row::clone()` at 527B calls is the largest source of allocation pressure. For inline
+  rows (≤22 bytes) it's just a memcpy; for spilled rows, `Rc<Row>` or `Arc<Row>` sharing
+  could reduce allocation pressure in hot paths like delta joins and reductions.
+- `Overflowing<i64>::mul` (400B calls) always checks for overflow even though it never
+  occurs in practice. Using `wrapping_mul` in release builds could save cycles.
+- `RowRef` Hash (1,274B calls) uses whatever hasher the caller provides. If differential
+  dataflow uses SipHash (the default), switching to a faster non-cryptographic hasher
+  (FxHash, AHash) for arrangement key hashing could provide 2-4x hash speedup.

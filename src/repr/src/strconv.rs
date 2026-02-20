@@ -1705,8 +1705,105 @@ pub fn format_jsonb<F>(buf: &mut F, jsonb: JsonbRef) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", jsonb);
+    // Fast path: handle simple JSONB scalar types directly, bypassing
+    // serde_json::to_writer and the fmt::Display machinery. This avoids
+    // the Serializer state machine, WriterFormatter adapter, and
+    // fmt::Formatter construction overhead for every value.
+    use crate::scalar::Datum;
+    match jsonb.into_datum() {
+        Datum::JsonNull => buf.write_str("null"),
+        Datum::True => buf.write_str("true"),
+        Datum::False => buf.write_str("false"),
+        Datum::Numeric(n) => {
+            crate::adt::numeric::write_numeric_standard_notation(
+                &mut FmtWriteFormatBuffer(buf),
+                &n.into_inner(),
+            )
+            .expect("write to FormatBuffer cannot fail");
+        }
+        Datum::String(s) => {
+            write_json_string(buf, s);
+        }
+        // Complex types (List, Map): fall through to serde_json.
+        _ => {
+            write!(buf, "{}", jsonb);
+        }
+    }
     Nestable::MayNeedEscaping
+}
+
+/// 256-entry lookup table: `true` if the byte requires JSON escaping.
+/// Control characters (0x00-0x1F), `"` (0x22), and `\` (0x5C) need escaping.
+static JSON_NEEDS_ESCAPE: [bool; 256] = {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < 0x20 {
+        table[i] = true;
+        i += 1;
+    }
+    table[b'"' as usize] = true;
+    table[b'\\' as usize] = true;
+    table
+};
+
+/// Writes a JSON-escaped string (with surrounding double quotes) directly
+/// to the buffer, matching serde_json's escaping behavior exactly.
+///
+/// For strings with no special characters (the common case), this writes
+/// `"str"` with a single `write_str` call for the content—no per-byte
+/// scanning overhead. For strings needing escaping, it writes unescaped
+/// chunks interspersed with the correct escape sequences.
+#[inline]
+fn write_json_string<F: FormatBuffer>(buf: &mut F, s: &str) {
+    let bytes = s.as_bytes();
+
+    // Fast path: check if any byte needs escaping using lookup table.
+    // LLVM autovectorizes this .any() check for large strings.
+    if !bytes.iter().any(|&b| JSON_NEEDS_ESCAPE[b as usize]) {
+        buf.write_str("\"");
+        buf.write_str(s);
+        buf.write_str("\"");
+        return;
+    }
+
+    // Slow path: string has at least one byte that needs escaping.
+    buf.write_str("\"");
+    let mut start = 0;
+
+    for (i, &byte) in bytes.iter().enumerate() {
+        if !JSON_NEEDS_ESCAPE[byte as usize] {
+            continue;
+        }
+        // Write the preceding unescaped chunk.
+        if start < i {
+            buf.write_str(&s[start..i]);
+        }
+        // Write the escape sequence for this byte.
+        match byte {
+            b'"' => buf.write_str("\\\""),
+            b'\\' => buf.write_str("\\\\"),
+            b'\x08' => buf.write_str("\\b"),
+            b'\t' => buf.write_str("\\t"),
+            b'\n' => buf.write_str("\\n"),
+            b'\x0C' => buf.write_str("\\f"),
+            b'\r' => buf.write_str("\\r"),
+            _ => {
+                // Generic \uXXXX escape for other control characters (0x00-0x1F).
+                let hi = HEX_CHARS[usize::from(byte >> 4)];
+                let lo = HEX_CHARS[usize::from(byte & 0x0f)];
+                let esc = [b'\\', b'u', b'0', b'0', hi, lo];
+                // SAFETY: all bytes are ASCII.
+                buf.write_str(unsafe { std::str::from_utf8_unchecked(&esc) });
+            }
+        }
+        start = i + 1;
+    }
+
+    // Write the remaining unescaped tail.
+    if start < bytes.len() {
+        buf.write_str(&s[start..]);
+    }
+    buf.write_str("\"");
 }
 
 pub fn format_jsonb_pretty<F>(buf: &mut F, jsonb: JsonbRef)
@@ -3675,5 +3772,83 @@ mod tests {
         assert!(parse_float64("NaN").is_ok());
         assert!(parse_float64("Infinity").is_ok());
         assert!(parse_float64("inf").is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_format_jsonb_direct() {
+        use crate::adt::jsonb::JsonbRef;
+        use crate::adt::numeric::Numeric;
+        use crate::scalar::Datum;
+        use dec::OrderedDecimal;
+
+        // Helper: format a single JSONB datum using format_jsonb (new direct path)
+        fn format_direct(datum: Datum) -> String {
+            let mut buf = String::new();
+            format_jsonb(&mut buf, JsonbRef::from_datum(datum));
+            buf
+        }
+
+        // Helper: format a single JSONB datum using serde_json (reference path)
+        fn format_serde(datum: Datum) -> String {
+            let jsonb = JsonbRef::from_datum(datum);
+            format!("{}", jsonb)
+        }
+
+        // Test null
+        assert_eq!(format_direct(Datum::JsonNull), "null");
+        assert_eq!(format_direct(Datum::JsonNull), format_serde(Datum::JsonNull));
+
+        // Test booleans
+        assert_eq!(format_direct(Datum::True), "true");
+        assert_eq!(format_direct(Datum::True), format_serde(Datum::True));
+        assert_eq!(format_direct(Datum::False), "false");
+        assert_eq!(format_direct(Datum::False), format_serde(Datum::False));
+
+        // Test numeric values
+        let test_numerics = [
+            "0", "1", "42", "-1", "3.14", "0.001", "123456789",
+            "-99.99", "0.000001",
+        ];
+        for s in &test_numerics {
+            let n: Numeric = s.parse::<f64>().unwrap().try_into().unwrap();
+            let datum = Datum::Numeric(OrderedDecimal(n));
+            let direct = format_direct(datum);
+            let serde = format_serde(datum);
+            assert_eq!(direct, serde, "numeric mismatch for {}: direct='{}' serde='{}'", s, direct, serde);
+        }
+
+        // Test strings - no escaping needed
+        let clean_strings = ["", "hello", "world", "foo bar", "the quick brown fox"];
+        for s in &clean_strings {
+            let datum = Datum::String(s);
+            let direct = format_direct(datum);
+            let serde = format_serde(datum);
+            assert_eq!(direct, serde, "string mismatch for {:?}: direct='{}' serde='{}'", s, direct, serde);
+        }
+
+        // Test strings - with escaping
+        let escape_strings = [
+            "hello\"world",
+            "back\\slash",
+            "tab\there",
+            "new\nline",
+            "carriage\rreturn",
+            "null\x00byte",
+            "bell\x07char",
+            "form\x0Cfeed",
+            "backspace\x08here",
+            "mixed\t\n\r\"\\end",
+            "control\x01\x02\x03chars",
+            // Unicode (non-ASCII) should pass through unchanged
+            "\u{00e9}",      // é
+            "\u{1f600}",     // emoji
+            "hello \u{00e9} world",
+        ];
+        for s in &escape_strings {
+            let datum = Datum::String(s);
+            let direct = format_direct(datum);
+            let serde = format_serde(datum);
+            assert_eq!(direct, serde, "escape mismatch for {:?}: direct='{}' serde='{}'", s, direct, serde);
+        }
     }
 }
