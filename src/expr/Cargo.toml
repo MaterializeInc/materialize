@@ -17,6 +17,10 @@ harness = false
 name = "window_functions"
 harness = false
 
+[[bench]]
+name = "comparison_eval"
+harness = false
+
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1.0.101"
