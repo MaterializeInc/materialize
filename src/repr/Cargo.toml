@@ -129,6 +129,10 @@ harness = false
 name = "inline_hot_paths"
 harness = false
 
+[[bench]]
+name = "numeric_arith"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }

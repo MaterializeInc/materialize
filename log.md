@@ -3788,3 +3788,76 @@ predicates.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
 - The literal `unpack_first()` call (~8-10ns per literal access) could be optimized by caching
   the unpacked Datum in the MirScalarExpr::Literal variant instead of storing a Row.
+
+## Session 39: Fast-path numeric addition/subtraction - bypass C FFI
+
+**Date:** 2026-02-20
+
+**Problem:** `add_numeric` and `sub_numeric` in `src/expr/src/scalar/func.rs` perform every
+decimal addition/subtraction through the C FFI boundary: clone a `Context<Numeric>` (memcpy of
+the context struct), call `decNumberAdd`/`decNumberSubtract` through FFI, then check status flags.
+This costs ~11-21ns per operation. Since numeric arithmetic is used in every SUM/AVG aggregation,
+arithmetic expressions, and window functions, this overhead adds up significantly.
+
+**Fix:** Added a fast path that bypasses the C FFI entirely for common cases:
+1. Both operands must be finite (not NaN/Infinity)
+2. Both must have the same exponent (scale) — e.g., both `123.45` and `678.90` have exponent -2
+3. Both coefficients must fit in i64 (≤18 significant digits, i.e. ≤6 base-1000 lsu units)
+4. The result must not overflow i64
+
+When all conditions are met, we extract coefficients from the `lsu` array as i64, do native
+Rust `checked_add`/`checked_sub`, then reconstruct the result via `Numeric::from_raw_parts()`.
+This avoids: Context clone, FFI boundary crossing, C library overhead, and status flag checking.
+
+The same-exponent requirement is met in the vast majority of real-world cases: SUM aggregations
+add values with the same column scale, and arithmetic between same-typed columns preserves scale.
+
+**Benchmark results (per-operation):**
+```
+numeric_add/old_small_int        11.4 ns
+numeric_add/new_small_int         6.8 ns   (1.67x faster)
+numeric_add/old_decimal          12.6 ns
+numeric_add/new_decimal           7.4 ns   (1.70x faster)
+numeric_add/old_large_coeff      20.6 ns
+numeric_add/new_large_coeff      10.3 ns   (2.0x faster)
+numeric_add/old_money            15.7 ns
+numeric_add/new_money             8.4 ns   (1.87x faster)
+numeric_add/old_diff_scale       11.9 ns
+numeric_add/new_diff_scale       13.4 ns   (fallback, ~1.4ns overhead)
+numeric_sub/old_money            11.6 ns
+numeric_sub/new_money             8.0 ns   (1.45x faster)
+```
+
+**Batch SUM results (10k values):**
+```
+numeric_add_batch/old_sum_10k       180 µs
+numeric_add_batch/new_sum_10k       155 µs   (1.16x faster)
+numeric_add_batch/old_sum_ints_10k  167 µs
+numeric_add_batch/new_sum_ints_10k  146 µs   (1.14x faster)
+```
+
+Per-operation: **1.5-2.0x speedup** for same-scale values (the common case).
+Batch SUM: **1.14-1.16x** (accumulator grows beyond 18 digits after many additions,
+causing fallback to FFI for later iterations).
+Fallback overhead: ~1.4ns for the exponent check on different-scale values (negligible).
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Added `coeff_to_i64()`, `numeric_from_i64_coeff()`,
+  `try_add_fast()`, and `try_sub_fast()` helper functions. Added `test_try_add_sub_fast` test.
+- `src/expr/src/scalar/func.rs` - Added fast-path calls to `try_add_fast`/`try_sub_fast`
+  before the FFI fallback in `add_numeric` and `sub_numeric`.
+- `src/repr/benches/numeric_arith.rs` - Added benchmark (new file) with per-call tests
+  (small_int, decimal, large_coeff, money, diff_scale) and batch SUM tests (10k decimal,
+  10k integer).
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas identified during research:**
+- `mul_numeric` and `div_numeric` could use a similar fast path for simple cases (same-scale
+  multiplication with result fitting in i64), but multiplication changes the exponent so
+  the reconstruction is more complex.
+- The `NumericAgg` (27-unit) accumulator in `reduce.rs` SUM aggregation also goes through
+  FFI via `cx_agg.add()` — a similar fast path for the wider type could help aggregation
+  performance.
+- `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
