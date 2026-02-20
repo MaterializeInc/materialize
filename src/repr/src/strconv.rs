@@ -187,6 +187,102 @@ fn try_parse_int_fast(s: &str) -> Option<(u64, bool)> {
     Some((val, neg))
 }
 
+/// Fast-path float parser for clean ASCII inputs without whitespace.
+///
+/// Handles two cases:
+/// 1. Pure integer strings: "42", "-999", "0" → parse to u64 and cast to f64
+///    (exact for mantissa ≤ 2^53)
+/// 2. Simple decimal strings: "3.14", "0.001", "123.456789" → parse digits as u64
+///    mantissa and divide by exact power of 10 (correct when mantissa ≤ 2^53 and
+///    decimal_places ≤ 22, since IEEE 754 guarantees correctly-rounded division)
+///
+/// Returns `None` for: whitespace-padded inputs, scientific notation, NaN, Inf,
+/// values with >15 significant digits or >22 decimal places, empty input.
+/// Callers fall back to the general `trim() + FromStr + regex` path.
+#[inline]
+fn try_parse_float_fast(s: &str) -> Option<f64> {
+    // Powers of 10 exactly representable as f64 (10^0 through 10^22).
+    // Used as divisors for decimal values. IEEE 754 division of two exact
+    // f64 values produces the correctly-rounded result.
+    static POW10: [f64; 23] = [
+        1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+        1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+    ];
+
+    let buf = s.as_bytes();
+    if buf.is_empty() {
+        return None;
+    }
+
+    let (neg, start) = match buf[0] {
+        b'-' => (true, 1),
+        b'+' => (false, 1),
+        b'0'..=b'9' | b'.' => (false, 0),
+        _ => return None, // whitespace, 'i'nf, 'n'an, etc.
+    };
+
+    if start >= buf.len() {
+        return None;
+    }
+
+    let mut mantissa: u64 = 0;
+    let mut decimal_places: u32 = 0;
+    let mut has_dot = false;
+    let mut digit_count: u32 = 0;
+
+    let mut i = start;
+    while i < buf.len() {
+        let b = buf[i];
+        let d = b.wrapping_sub(b'0');
+        if d <= 9 {
+            // Skip leading zeros in mantissa to maximize precision range
+            if mantissa != 0 || d != 0 {
+                digit_count += 1;
+                if digit_count > 15 {
+                    // >15 significant digits: mantissa might exceed 2^53.
+                    // Fall back to general parser for exact rounding.
+                    return None;
+                }
+                mantissa = mantissa * 10 + d as u64;
+            }
+            if has_dot {
+                decimal_places += 1;
+            }
+            i += 1;
+        } else if b == b'.' {
+            if has_dot {
+                return None; // double dot
+            }
+            has_dot = true;
+            i += 1;
+        } else {
+            // 'e'/'E' (scientific notation), or any other char
+            return None;
+        }
+    }
+
+    // Must have at least one digit
+    if i == start || (i == start + 1 && has_dot && digit_count == 0) {
+        return None;
+    }
+
+    if !has_dot {
+        // Pure integer: u64 → f64 cast is exact for ≤ 2^53
+        let result = mantissa as f64;
+        return Some(if neg { -result } else { result });
+    }
+
+    if decimal_places > 22 {
+        return None; // 10^n not exactly representable beyond 22
+    }
+
+    // Decimal: mantissa / 10^decimal_places
+    // Both operands are exact f64 values (mantissa ≤ 2^53, 10^n ≤ 10^22),
+    // so IEEE 754 division produces the correctly-rounded result.
+    let result = mantissa as f64 / POW10[decimal_places as usize];
+    Some(if neg { -result } else { result })
+}
+
 /// Parses an [`i16`] from `s`.
 ///
 /// Valid values are whatever the [`std::str::FromStr`] implementation on `i16` accepts,
@@ -564,6 +660,14 @@ where
 
 /// Parses an `f32` from `s`.
 pub fn parse_float32(s: &str) -> Result<f32, ParseError> {
+    // Fast path for clean ASCII values (no whitespace, no scientific notation,
+    // no NaN/Inf). Values from this path have ≤15 significant digits and
+    // magnitude ≤~1e15, so overflow/underflow to f32 is impossible.
+    // Double rounding (f64 → f32) is always correct when intermediate precision
+    // (53 bits) > 2 * target precision (24 bits) - 1 = 47 bits.
+    if let Some(f) = try_parse_float_fast(s) {
+        return Ok(f as f32);
+    }
     parse_float("real", s)
 }
 
@@ -577,6 +681,12 @@ where
 
 /// Parses an `f64` from `s`.
 pub fn parse_float64(s: &str) -> Result<f64, ParseError> {
+    // Fast path for clean ASCII values (no whitespace, no scientific notation,
+    // no NaN/Inf). Handles integer and simple decimal strings with ≤15
+    // significant digits. Falls back to the general parser for anything else.
+    if let Some(f) = try_parse_float_fast(s) {
+        return Ok(f);
+    }
     parse_float("double precision", s)
 }
 
@@ -3473,5 +3583,97 @@ mod tests {
         assert!(parse_numeric("NaN").is_ok());
         assert!(parse_numeric("1e10").is_ok());
         assert!(parse_numeric("123.456").is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_float_fast_path() {
+        // Compare fast path f64 results against the general trim+FromStr path.
+        // The fast path must produce bit-identical results.
+        let test_cases = vec![
+            // Pure integers
+            "0", "1", "42", "-42", "100", "9999", "-9999", "1000000",
+            "123456789", "-123456789",
+            // Integers at f64 precision boundary
+            "999999999999999",     // 15 digits, fits in 2^53
+            // Simple decimals
+            "0.0", "0.1", "0.5", "1.0", "3.14", "-3.14",
+            "0.001", "123.456", "-123.456789",
+            "99.99", "0.000001", "1234567890.12345",
+            // Leading zeros
+            "00042", "000.5", "00.001",
+            // Sign variants
+            "+42", "+3.14", "-0",
+            // Edge cases
+            ".5", ".0", ".123456",
+            "0.", "42.",
+        ];
+
+        for input in &test_cases {
+            let fast = try_parse_float_fast(input);
+            assert!(
+                fast.is_some(),
+                "fast path should handle {input:?}"
+            );
+
+            // Compare with general parser (trim + FromStr)
+            let expected: f64 = input.trim().parse().unwrap();
+            let fast_val = fast.unwrap();
+            assert!(
+                fast_val.to_bits() == expected.to_bits(),
+                "f64 mismatch for {input:?}: fast={fast_val} (bits={:016x}), expected={expected} (bits={:016x})",
+                fast_val.to_bits(),
+                expected.to_bits(),
+            );
+
+            // Also verify through the full parse_float64 path
+            let full = parse_float64(input).unwrap();
+            assert!(
+                full.to_bits() == expected.to_bits(),
+                "parse_float64 mismatch for {input:?}: got={full}, expected={expected}"
+            );
+        }
+
+        // f32 comparison: fast path f64 → f32 must match direct f32 parse
+        let f32_cases = vec![
+            "0", "1", "42", "-42", "3.14", "0.001", "123.456", "99999.0",
+            "0.5", ".5", "-0", "+42",
+        ];
+        for input in &f32_cases {
+            let fast = try_parse_float_fast(input);
+            assert!(fast.is_some(), "fast path should handle {input:?}");
+            let fast_f32 = fast.unwrap() as f32;
+            let expected: f32 = input.trim().parse().unwrap();
+            assert!(
+                fast_f32.to_bits() == expected.to_bits(),
+                "f32 mismatch for {input:?}: fast={fast_f32}, expected={expected}"
+            );
+        }
+
+        // These should fall back to the general parser (fast path returns None)
+        assert!(try_parse_float_fast("NaN").is_none());
+        assert!(try_parse_float_fast("nan").is_none());
+        assert!(try_parse_float_fast("inf").is_none());
+        assert!(try_parse_float_fast("Infinity").is_none());
+        assert!(try_parse_float_fast("-Infinity").is_none());
+        assert!(try_parse_float_fast("1e10").is_none());
+        assert!(try_parse_float_fast("1.5e-3").is_none());
+        assert!(try_parse_float_fast("  42  ").is_none());
+        assert!(try_parse_float_fast("  42").is_none());
+        assert!(try_parse_float_fast("42  ").is_none());
+        assert!(try_parse_float_fast("").is_none());
+        assert!(try_parse_float_fast("abc").is_none());
+        // >15 significant digits
+        assert!(try_parse_float_fast("1234567890123456").is_none());
+        // >22 decimal places
+        assert!(try_parse_float_fast("0.00000000000000000000001").is_none());
+
+        // The full parse_float64 should handle all of them (via fallback)
+        assert!(parse_float64("42").is_ok());
+        assert!(parse_float64("  42  ").is_ok());
+        assert!(parse_float64("3.14").is_ok());
+        assert!(parse_float64("1e10").is_ok());
+        assert!(parse_float64("NaN").is_ok());
+        assert!(parse_float64("Infinity").is_ok());
+        assert!(parse_float64("inf").is_ok());
     }
 }

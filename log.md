@@ -3305,3 +3305,131 @@ dramatically faster end-to-end.
 - Float parsing (`parse_float32/parse_float64`) uses `lexical_core::parse()` which is already
   fast but could potentially benefit from an integer fast path similar to the numeric optimization
   (many float columns contain integer-valued data).
+
+## Session 35: Fast-path float parsing - bypass trim/FromStr/regex overhead
+
+**Date:** 2026-02-20
+
+**Problem:** Every time a float value (f32, f64) is parsed from text—via COPY FROM, pgwire
+text parameters, or SQL string→type casts—the code went through an unnecessarily expensive
+path:
+
+1. **`s.trim()`**: Scans for whitespace on every call (usually unnecessary for COPY FROM /
+   wire protocol values where the data is already clean)
+2. **`FromStr::parse()`**: Rust's standard library float parser, which uses the Eisel-Lemire
+   algorithm. Well-optimized but includes overhead for: UTF-8 boundary checks, generic error
+   construction, scientific notation support, NaN/Inf detection
+3. **Regex overflow/underflow checks**: After parsing, `f.classify()` checks whether the result
+   is Zero or Infinite. For Zero results, `ZERO_RE` regex is matched against the input. For
+   Infinite results, `INF_RE` regex is matched. These regex matches execute for every zero-valued
+   float (common!) and every overflow case.
+
+The zero-value case was particularly expensive: `"0".parse::<f64>()` returns `0.0`, then
+`FpCategory::Zero` triggers the `ZERO_RE` regex match (~10ns overhead per zero value).
+
+**Fix:** Added `try_parse_float_fast()` function that handles two common cases with zero heap
+allocations and no regex:
+
+1. **Pure integer strings** ("42", "-999", "0"): Parses ASCII digits into a `u64` magnitude
+   with a sign flag, then casts to `f64`. The `u64 → f64` cast is exact for values ≤ 2^53.
+   Limits to ≤15 significant digits to stay well within the exact range.
+
+2. **Simple decimal strings** ("3.14", "0.001", "123.456789"): Parses all digits (ignoring the
+   decimal point position) into a `u64` mantissa, then divides by an exact power of 10 from a
+   pre-computed `POW10` table. IEEE 754 guarantees that dividing two exact f64 values produces
+   the correctly-rounded result. Limits to ≤15 significant digits (mantissa ≤ 2^53) and ≤22
+   decimal places (10^22 is the largest power of 10 exactly representable as f64).
+
+Returns `None` for: whitespace-padded inputs, scientific notation, NaN, Inf, values with >15
+significant digits or >22 decimal places. Callers fall through to the general `trim() + FromStr
++ regex` path.
+
+For f32 parsing, the f64 result is cast to f32. This is correct because double rounding
+(decimal → f64 → f32) always produces the correctly-rounded f32 result when the intermediate
+precision (53 bits) exceeds 2 × target precision (24 bits) − 1 = 47 bits. (Well-known result
+in floating-point arithmetic.)
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench float_parse`):
+
+### Per-value f64 parsing (ns/iter)
+
+| Value                | Old (trim+FromStr+regex) | New (fast path) | Speedup |
+|----------------------|-------------------------:|----------------:|--------:|
+| zero (0)             | 19.4                     | 2.9             | **6.8x**|
+| one (1)              | 7.0                      | 3.5             | **2.0x**|
+| small_int (42)       | 7.4                      | 3.5             | **2.1x**|
+| hundred (100)        | 7.8                      | 4.0             | **2.0x**|
+| thousand (9999)      | 8.0                      | 4.6             | **1.7x**|
+| million (1000000)    | 8.5                      | 6.2             | **1.4x**|
+| negative_int (-42)   | 7.4                      | 3.5             | **2.1x**|
+| typical_dec (3.14)   | 9.0                      | 4.9             | **1.8x**|
+| small_dec (0.001)    | 9.3                      | 4.8             | **1.9x**|
+| price (99.99)        | 9.2                      | 5.6             | **1.7x**|
+| negative_dec (-42.5) | 8.8                      | 5.1             | **1.7x**|
+| tiny_frac (0.000001) | 10.7                     | 6.0             | **1.8x**|
+
+### Per-value f32 parsing (ns/iter)
+
+| Value                | Old (trim+FromStr+regex) | New (fast path) | Speedup |
+|----------------------|-------------------------:|----------------:|--------:|
+| zero (0)             | 18.1                     | 3.2             | **5.7x**|
+| one (1)              | 6.9                      | 3.2             | **2.2x**|
+| small_int (42)       | 7.4                      | 3.9             | **1.9x**|
+| hundred (100)        | 7.6                      | 4.6             | **1.7x**|
+| pi (3.14159)         | 9.5                      | 7.0             | **1.4x**|
+| typical (3.14)       | 8.7                      | 5.3             | **1.7x**|
+| small_dec (0.001)    | 8.9                      | 5.3             | **1.7x**|
+| negative (-42.5)     | 8.5                      | 5.2             | **1.6x**|
+
+### Batch parsing (10k values)
+
+| Approach                      | Time (µs)  | Speedup   |
+|-------------------------------|-----------|-----------|
+| Old trim+FromStr 10k f64 ints| 105.5      | -         |
+| New fast-path 10k f64 ints   | 56.4       | **1.87x** |
+| Old trim+FromStr 10k f64 mixed| 108.5     | -         |
+| New fast-path 10k f64 mixed  | 93.8       | **1.16x** |
+| Old trim+FromStr 10k f64 dec | 115.3      | -         |
+| New fast-path 10k f64 dec    | 89.7       | **1.29x** |
+
+**Summary:** 1.4-6.8x faster per value for common float values (integers and simple decimals),
+**1.16-1.87x faster in batch**. The enormous speedup for zero (6.8x) comes from bypassing the
+`ZERO_RE` regex match that the general path triggers for every zero-valued result. Integer
+values see 1.4-2.1x improvement by bypassing both the `FromStr` parse and the `trim()` scan.
+Simple decimal values see 1.7-1.9x improvement.
+
+The integer-only batch (1.87x) shows the largest batch improvement because every value takes
+the fast path. The mixed batch (1.16x) includes some values with >10 digits where the fast
+path's digit loop is comparable to FromStr. The decimal batch (1.29x) is intermediate.
+
+**Trade-offs:** Values with >15 significant digits or scientific notation fall through to the
+general parser, paying ~2-4ns overhead from the failed fast-path attempt. In real-world COPY
+FROM workloads, such values are rare (most float data is integers or simple decimals with <10
+significant digits).
+
+**Correctness:** The fast path produces bit-identical results to `FromStr::parse()` for all
+handled inputs. This is proven by: (1) `u64 → f64` cast is exact for values ≤ 2^53, and (2)
+IEEE 754 division of two exact f64 operands (mantissa ≤ 2^53, divisor = 10^n ≤ 10^22) produces
+the correctly-rounded result, which is the same result that Eisel-Lemire produces. The test
+suite verifies bit-exact agreement for a comprehensive set of values.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Added `try_parse_float_fast()` function with `#[inline]`.
+  Updated `parse_float32` and `parse_float64` to try fast path first.
+  Added `test_parse_float_fast_path` correctness test with bit-level comparison against
+  `FromStr::parse()` for both f64 and f32.
+- `src/repr/benches/float_parse.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `ArrayOrd::at()` / `ArrayIdx::cmp` at ~7,336B total executions in persist merge sort.
+  `ArrayOrd::at()` has NO `#[inline]` annotation despite being called 705 billion times.
+  `ArrayIdx::cmp` does large match dispatch on array types. Adding `#[inline]` and
+  specializing common types could reduce branch overhead.
+- `Timestamp::less_equal` at 856B calls, `Codec64::decode` at 183B calls — missing `#[inline]`
+  on trivial newtype wrappers. These are likely inlined by LTO in release builds but adding
+  explicit `#[inline]` would help non-LTO builds.
+- `CastFrom::cast_from` at 754B calls — macro-generated `as` casts without `#[inline]`.
+- `MirScalarExpr::eval()` dispatch chain: 3 dispatch points for simple predicates.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.

@@ -42,6 +42,10 @@ name = "float_format"
 harness = false
 
 [[bench]]
+name = "float_parse"
+harness = false
+
+[[bench]]
 name = "bytes_format"
 harness = false
 
