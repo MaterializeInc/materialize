@@ -103,10 +103,11 @@ describe("buildSourceStatisticsQuery", () => {
           FROM KAFKA CONNECTION kafka_conn_multi (TOPIC 'testdrive-multi_rep_input-\${testdrive.seed}')
           ENVELOPE NONE
 
-        # Wait for statistics to show up on multiple replicas.
-        # This confirms that stats are being generated for more than one replica before we test the filtering.
+        # Wait for statistics to show up on multiple replicas with offsets fully committed.
+        # This confirms that stats are being generated for more than one replica and that
+        # offset_committed has caught up to offset_known, so offsetDelta will be 0.
         $ set-sql-timeout duration=20s
-        > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics JOIN mz_sources using(id) where name = 'kafka_multi'
+        > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics JOIN mz_sources using(id) where name = 'kafka_multi' AND offset_committed = 3 AND offset_known = 3
         3
       `,
       );
