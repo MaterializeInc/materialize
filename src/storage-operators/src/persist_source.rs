@@ -759,7 +759,6 @@ impl PendingWork {
                             }
                             continue;
                         }
-
                         let arena = mz_repr::RowArena::new();
                         let mut datums_local = match mfp_needed_columns {
                             Some(needed) => {

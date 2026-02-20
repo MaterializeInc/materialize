@@ -10,7 +10,7 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{Datum, Row};
+use mz_repr::{Datum, DatumVec, Row, RowArena};
 
 const NUM_ROWS: u64 = 10_000;
 

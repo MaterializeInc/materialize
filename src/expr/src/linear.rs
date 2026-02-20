@@ -153,6 +153,38 @@ impl MapFilterProject {
         needed
     }
 
+    /// Returns a bitmask of which input columns are needed for evaluating
+    /// expressions and predicates only (NOT the projection).
+    ///
+    /// This is used when the projection will be handled separately via
+    /// byte-level row projection (`RowRef::project_onto`), so projection
+    /// columns don't need to be decoded - only columns referenced by
+    /// expressions and predicates need full datum decoding.
+    pub fn eval_needed_columns(&self) -> Vec<bool> {
+        let mut needed = vec![false; self.input_arity];
+        // Columns referenced by expressions
+        for expr in &self.expressions {
+            expr.visit_pre(|e| {
+                if let MirScalarExpr::Column(i, _) = e {
+                    if *i < self.input_arity {
+                        needed[*i] = true;
+                    }
+                }
+            });
+        }
+        // Columns referenced by predicates
+        for (_, pred) in &self.predicates {
+            pred.visit_pre(|e| {
+                if let MirScalarExpr::Column(i, _) = e {
+                    if *i < self.input_arity {
+                        needed[*i] = true;
+                    }
+                }
+            });
+        }
+        needed
+    }
+
     /// Retain only the indicated columns in the presented order.
     pub fn project<I>(mut self, columns: I) -> Self
     where
@@ -1888,6 +1920,102 @@ pub mod plan {
                 Ok(Some(row_buf))
             }
         }
+
+        /// Returns the projection slice if this MFP is a "pure sorted projection":
+        /// no expressions, no predicates, and the projection indices are strictly
+        /// monotonically increasing. This enables byte-level row projection via
+        /// `RowRef::project_onto()` which avoids datum decoding and re-encoding.
+        pub fn is_pure_sorted_project(&self) -> Option<&[usize]> {
+            if !self.mfp.expressions.is_empty() || !self.mfp.predicates.is_empty() {
+                return None;
+            }
+            let proj = &self.mfp.projection;
+            if proj.is_empty() {
+                return None;
+            }
+            // Check that all indices reference input columns (not computed expressions)
+            // and are strictly monotonically increasing.
+            let mut prev = None;
+            for &col in proj {
+                if col >= self.mfp.input_arity {
+                    return None;
+                }
+                if let Some(p) = prev {
+                    if col <= p {
+                        return None;
+                    }
+                }
+                prev = Some(col);
+            }
+            Some(proj)
+        }
+
+        /// Returns the projection slice if the projection references only sorted
+        /// input columns (no computed expressions), even when predicates/expressions
+        /// exist. Unlike `is_pure_sorted_project()`, this does NOT require empty
+        /// predicates/expressions.
+        ///
+        /// When this returns `Some(projection)`, the evaluation path can:
+        /// 1. Decode only columns needed for expressions/predicates (not projection)
+        /// 2. Evaluate predicates normally
+        /// 3. Use byte-level `RowRef::project_onto()` for the projection step
+        ///
+        /// This avoids decoding projection-only columns and avoids re-encoding
+        /// them via `push_datum`.
+        pub fn has_input_sorted_projection(&self) -> Option<&[usize]> {
+            let proj = &self.mfp.projection;
+            if proj.is_empty() {
+                return None;
+            }
+            // Check that all indices reference input columns (not computed expressions)
+            // and are strictly monotonically increasing.
+            let mut prev = None;
+            for &col in proj {
+                if col >= self.mfp.input_arity {
+                    return None;
+                }
+                if let Some(p) = prev {
+                    if col <= p {
+                        return None;
+                    }
+                }
+                prev = Some(col);
+            }
+            Some(proj)
+        }
+
+        /// Returns a bitmask of columns needed for evaluating expressions and
+        /// predicates only (NOT the projection). See
+        /// [`MapFilterProject::eval_needed_columns`] for details.
+        pub fn eval_needed_columns(&self) -> Vec<bool> {
+            self.mfp.eval_needed_columns()
+        }
+
+        /// Evaluate the MFP, using byte-level projection from `source_row` when
+        /// the projection references only sorted input columns.
+        ///
+        /// This is faster than `evaluate_into` because:
+        /// - Projection columns that aren't needed by predicates/expressions skip
+        ///   both decoding AND re-encoding
+        /// - Byte-level copying via `project_onto` is 4-7x faster than
+        ///   decode + re-encode via `push_datum`
+        #[inline(always)]
+        pub fn evaluate_into_project<'a, 'row>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            source_row: &mz_repr::RowRef,
+            projection: &[usize],
+            row_buf: &'row mut Row,
+        ) -> Result<Option<&'row Row>, EvalError> {
+            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            if !passed_predicates {
+                Ok(None)
+            } else {
+                source_row.project_onto(projection, row_buf);
+                Ok(Some(row_buf))
+            }
+        }
     }
 
     impl std::ops::Deref for SafeMfpPlan {
@@ -2050,6 +2178,21 @@ pub mod plan {
                 .chain(&mut self.mfp.mfp.expressions)
                 .chain(&mut self.lower_bounds)
                 .chain(&mut self.upper_bounds)
+        }
+
+        /// Evaluate the MFP, using byte-level projection from `source_row` when
+        /// the projection references only sorted input columns.
+        /// Delegates to [`SafeMfpPlan::evaluate_into_project`].
+        #[inline(always)]
+        pub fn evaluate_into_project<'a, 'row>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            source_row: &mz_repr::RowRef,
+            projection: &[usize],
+            row_buf: &'row mut Row,
+        ) -> Result<Option<&'row Row>, EvalError> {
+            self.mfp.evaluate_into_project(datums, arena, source_row, projection, row_buf)
         }
 
         /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.
@@ -2225,7 +2368,6 @@ pub mod plan {
             self.mfp
                 .evaluate_into_project_unordered(datums, arena, source_row, projection, row_buf)
         }
-
         /// Returns a bitmask of columns needed for evaluating expressions,
         /// predicates, and temporal bounds only (NOT the projection).
         pub fn eval_needed_columns(&self) -> Vec<bool> {
