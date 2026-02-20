@@ -200,9 +200,6 @@ class Test:
             action_or_factory = self._pick_action_or_factory()
             self._actions.extend(self.generate_actions(action_or_factory))
 
-        for action_or_factory in self._scenario.finalization():
-            self._final_actions.extend(self.generate_actions(action_or_factory))
-
     def generate_actions(self, action_def: ActionOrFactory) -> list[Action]:
         if isinstance(action_def, ActionFactory):
             actions = action_def.new(capabilities=self._capabilities)
@@ -225,14 +222,27 @@ class Test:
     def run(self, c: Composition) -> None:
         """Run the Zippy test."""
         max_time = datetime.now() + self._max_execution_time
-        for action in self._actions:
+        executed_count = len(self._actions)
+        for i, action in enumerate(self._actions):
             print(action)
             action.run(c, self._state)
             if datetime.now() > max_time:
                 print(
                     f"--- Desired execution time of {self._max_execution_time} has been reached."
                 )
+                executed_count = i + 1
                 break
+
+        # Remove capability effects of actions that were never executed,
+        # so that finalization only validates objects that actually exist.
+        for action in self._actions[executed_count:]:
+            for cap in action.provides():
+                self._capabilities.remove_capability_instance(cap)
+
+        # Generate finalization actions now, after the main loop, so that
+        # capabilities reflect what was actually created during execution.
+        for action_or_factory in self._scenario.finalization():
+            self._final_actions.extend(self.generate_actions(action_or_factory))
 
         for action in self._final_actions:
             print(action)

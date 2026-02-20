@@ -487,6 +487,8 @@ where
             .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
+                    // Buffer to accumulate contributing (time, diff) pairs for each (key, val).
+                    let mut times_diffs = Vec::default();
                     input.for_each(|time, data| {
                         let mut row_builder = SharedRow::get();
                         let mut ok_session = ok_output.session(&time);
@@ -497,50 +499,61 @@ where
                             let mut cursor = batch.cursor();
                             while let Some(key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
+                                    // Collect contributing (time, diff) pairs before invoking the closure.
                                     cursor.map_times(batch, |time, diff| {
-                                        // note: only the delta path for the first relation will see
-                                        // updates at start-up time
                                         if source_relation == 0
                                             || inner_as_of.elements().iter().all(|e| e != time)
                                         {
-                                            let time = Tr::owned_time(time);
-                                            let temp_storage = RowArena::new();
-
-                                            let mut datums_local = datums.borrow();
-                                            datums_local.extend(key.to_datum_iter());
-                                            datums_local.extend(val.to_datum_iter());
-
-                                            if !initial_closure.is_identity() {
-                                                match initial_closure
-                                                    .apply(
-                                                        &mut datums_local,
-                                                        &temp_storage,
-                                                        &mut row_builder,
-                                                    )
-                                                    .map(|row| row.cloned())
-                                                    .transpose()
-                                                {
-                                                    Some(Ok(row)) => ok_session.give((
-                                                        row,
-                                                        time,
-                                                        Tr::owned_diff(diff),
-                                                    )),
-                                                    Some(Err(err)) => err_session.give((
-                                                        err,
-                                                        time,
-                                                        Tr::owned_diff(diff),
-                                                    )),
-                                                    None => {}
-                                                }
-                                            } else {
-                                                let row = {
-                                                    row_builder.packer().extend(&*datums_local);
-                                                    row_builder.clone()
-                                                };
-                                                ok_session.give((row, time, Tr::owned_diff(diff)));
-                                            }
+                                            // TODO: Consolidate as we push, defensively.
+                                            times_diffs
+                                                .push((Tr::owned_time(time), Tr::owned_diff(diff)));
                                         }
                                     });
+                                    differential_dataflow::consolidation::consolidate(
+                                        &mut times_diffs,
+                                    );
+                                    // The can not-uncommonly be empty, if the inbound updates cancel.
+                                    if !times_diffs.is_empty() {
+                                        let temp_storage = RowArena::new();
+
+                                        let mut datums_local = datums.borrow();
+                                        datums_local.extend(key.to_datum_iter());
+                                        datums_local.extend(val.to_datum_iter());
+
+                                        if !initial_closure.is_identity() {
+                                            match initial_closure
+                                                .apply(
+                                                    &mut datums_local,
+                                                    &temp_storage,
+                                                    &mut row_builder,
+                                                )
+                                                .map(|row| row.cloned())
+                                                .transpose()
+                                            {
+                                                Some(Ok(row)) => {
+                                                    for (time, diff) in times_diffs.drain(..) {
+                                                        ok_session.give((row.clone(), time, diff))
+                                                    }
+                                                }
+                                                Some(Err(err)) => {
+                                                    for (time, diff) in times_diffs.drain(..) {
+                                                        err_session.give((err.clone(), time, diff))
+                                                    }
+                                                }
+                                                None => {}
+                                            }
+                                        } else {
+                                            let row = {
+                                                row_builder.packer().extend(&*datums_local);
+                                                row_builder.clone()
+                                            };
+                                            for (time, diff) in times_diffs.drain(..) {
+                                                ok_session.give((row.clone(), time, diff));
+                                            }
+                                        }
+                                    }
+                                    times_diffs.clear();
+
                                     cursor.step_val(batch);
                                 }
                                 cursor.step_key(batch);

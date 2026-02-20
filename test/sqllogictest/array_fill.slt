@@ -170,10 +170,10 @@ ORDER BY 1;
 
 # Polymorphic solution
 
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_fill(null, array[3])
 
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_fill(null, null)
 
 query T
@@ -195,10 +195,10 @@ SELECT array_fill(LIST[1], array[3, 2])
 query error array_fill on integer list not yet supported
 SELECT array_fill(LIST[1], array[3, 2], array[2, 3])
 
-query error db error: ERROR: array_fill on char\(1\) not yet supported
+query error array_fill on char\(1\) not yet supported
 SELECT array_fill('c'::char, array[3, 2])
 
-query error db error: ERROR: array_fill on char\(1\) not yet supported
+query error array_fill on char\(1\) not yet supported
 SELECT array_fill('c'::char, array[3, 2], array[2, 3])
 
 query error array_fill on map\[text=>integer\] not yet supported

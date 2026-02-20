@@ -201,7 +201,7 @@ SELECT '1082'::regtype::text;
 ----
 date
 
-query error db error: ERROR: more than one function named "date"
+query error more than one function named "date"
 SELECT 'date'::regproc::text;
 
 query T

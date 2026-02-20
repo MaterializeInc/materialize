@@ -105,7 +105,7 @@ use mz_catalog::memory::objects::{
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::{
-    CollectionLookupError, DataflowCreationError, InstanceMissing,
+    CollectionLookupError, CollectionMissing, DataflowCreationError, InstanceMissing,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -3856,7 +3856,7 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) -> Result<(), CollectionLookupError> {
+    ) -> Result<(), CollectionMissing> {
         let ws_id = self.controller.install_storage_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())

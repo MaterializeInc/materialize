@@ -54,7 +54,6 @@ from materialize.mzcompose.services.materialized import (
     DeploymentStatus,
     Materialized,
 )
-from materialize.mzcompose.services.minio import minio_blob_uri
 from materialize.mzcompose.test_result import (
     FailedTestExecutionError,
     TestFailureDetails,
@@ -1207,7 +1206,7 @@ class Composition:
             )
 
     def metadata_store(self) -> str:
-        for name in ["cockroach", "postgres-metadata", "foundationdb"]:
+        for name in ["cockroach", "postgres-metadata", "alloydb", "foundationdb"]:
             if name in self.compose["services"]:
                 return name
         raise RuntimeError(
@@ -1538,114 +1537,37 @@ class Composition:
 
         self.exec("mc", "mc", "version", "enable", "persist/persist")
 
-    def backup_cockroach(self) -> None:
-        self.up(Service("mc", idle=True))
-        self.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
-        self.exec(
-            "cockroach",
-            "cockroach",
-            "sql",
-            "--insecure",
-            "-e",
-            """
-                CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
-                BACKUP INTO 'external://backup_bucket';
-                DROP EXTERNAL CONNECTION backup_bucket;
-            """,
-        )
-
-    def restore_cockroach(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
-        self.kill(mz_service)
-        self.exec(
-            "cockroach",
-            "cockroach",
-            "sql",
-            "--insecure",
-            "-e",
-            """
-                DROP DATABASE defaultdb;
-                CREATE EXTERNAL CONNECTION backup_bucket
-                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
-                RESTORE DATABASE defaultdb
-                FROM LATEST IN 'external://backup_bucket';
-                DROP EXTERNAL CONNECTION backup_bucket;
-            """,
-        )
-        self.up(Service("persistcli", idle=True))
-        self.exec(
-            "persistcli",
-            "persistcli",
-            "admin",
-            "--commit",
-            "restore-blob",
-            f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
-        )
-        if restart_mz:
-            self.up(mz_service)
-
-    def backup_postgres(self) -> None:
-        backup = self.exec(
-            "postgres-metadata",
-            "pg_dumpall",
-            "--user",
-            "postgres",
-            capture=True,
-        ).stdout
-        with open("backup.sql", "w") as f:
-            f.write(backup)
-
-    def restore_postgres(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
-        self.kill(mz_service)
-        self.kill("postgres-metadata")
-        self.rm("postgres-metadata")
-        self.up("postgres-metadata")
-        with open("backup.sql") as f:
-            backup = f.read()
-        self.exec(
-            "postgres-metadata",
-            "psql",
-            "--user",
-            "postgres",
-            "--file",
-            "-",
-            stdin=backup,
-        )
-        self.up(Service("persistcli", idle=True))
-        self.exec(
-            "persistcli",
-            "persistcli",
-            "admin",
-            "--commit",
-            "restore-blob",
-            f"--blob-uri={minio_blob_uri()}",
-            "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
-        )
-        if restart_mz:
-            self.up(mz_service)
-
     def backup(self) -> None:
-        if self.metadata_store() == "cockroach":
-            self.backup_cockroach()
-        elif self.metadata_store() == "postgres-metadata":
-            self.backup_postgres()
+        from materialize.mzcompose.services.alloydb import AlloyDB
+        from materialize.mzcompose.services.cockroach import Cockroach
+        from materialize.mzcompose.services.postgres import PostgresMetadata
+
+        store = self.metadata_store()
+        if store == "cockroach":
+            Cockroach.backup(self)
+        elif store == "postgres-metadata":
+            PostgresMetadata.backup(self)
+        elif store == "alloydb":
+            AlloyDB.backup(self)
         else:
-            raise RuntimeError(
-                f"Unsupported metadata store {self.metadata_store()} for backup"
-            )
+            raise RuntimeError(f"Unsupported metadata store {store} for backup")
 
     def restore(
         self, mz_service: str = "materialized", restart_mz: bool = True
     ) -> None:
-        if self.metadata_store() == "cockroach":
-            self.restore_cockroach(mz_service, restart_mz)
+        from materialize.mzcompose.services.alloydb import AlloyDB
+        from materialize.mzcompose.services.cockroach import Cockroach
+        from materialize.mzcompose.services.postgres import PostgresMetadata
+
+        store = self.metadata_store()
+        if store == "cockroach":
+            Cockroach.restore(self, mz_service, restart_mz)
+        elif store == "postgres-metadata":
+            PostgresMetadata.restore(self, mz_service, restart_mz)
+        elif store == "alloydb":
+            AlloyDB.restore(self, mz_service, restart_mz)
         else:
-            self.restore_postgres(mz_service, restart_mz)
+            raise RuntimeError(f"Unsupported metadata store {store} for restore")
 
     def await_mz_deployment_status(
         self,

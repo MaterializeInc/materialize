@@ -18,21 +18,21 @@ CREATE TABLE t(x string);
 statement ok
 INSERT INTO t VALUES ('a'), ('b'), ('c');
 
-statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+statement error window function pg_catalog\.row_number requires an OVER clause
 SELECT row_number()
 FROM t;
 
-statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+statement error window function pg_catalog\.row_number requires an OVER clause
 SELECT *
 FROM t
 ORDER BY row_number();
 
-statement error db error: ERROR: window function pg_catalog\.row_number requires an OVER clause
+statement error window function pg_catalog\.row_number requires an OVER clause
 SELECT *
 FROM t
 QUALIFY row_number();
 
-statement error db error: ERROR: OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
+statement error OVER clause not allowed on pg_catalog\.int8range\. The OVER clause can only be used with window functions \(including aggregations\)\.
 SELECT int8range(1, 1, '') OVER (PARTITION BY 1 ORDER BY 1);
 
 query IT
@@ -437,7 +437,7 @@ INSERT INTO not_allowed_tests (k, v) VALUES (99, 100) RETURNING sum(v) OVER ();
 query error window functions are not allowed in LIMIT
 SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT sum(v) OVER ();
 
-query error db error: ERROR: window functions are not allowed in OFFSET \(function pg_catalog\.sum\)
+query error window functions are not allowed in OFFSET \(function pg_catalog\.sum\)
 SELECT sum(v) FROM not_allowed_tests GROUP BY k LIMIT 1 OFFSET sum(v) OVER ();
 
 query error window functions are not allowed in VALUES
@@ -460,7 +460,7 @@ c
 
 # rank and dense_rank
 
-query error db error: ERROR: function rank has 0 parameters, but was called with 1
+query error function rank has 0 parameters, but was called with 1
 SELECT rank(x) OVER (ORDER BY x), dense_rank() OVER (ORDER BY x), x FROM t
 ORDER BY dense_rank;
 
@@ -2422,13 +2422,13 @@ ORDER BY x;
 15  16  1  14  14  18  18
 17  18  1  16  16  NULL  NULL
 
-query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+query error IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select first_value(x) ignore nulls over() from t6;
 
-query error db error: ERROR: IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
+query error IGNORE NULLS and RESPECT NULLS options for functions other than LAG and LEAD not yet supported
 select row_number() ignore nulls over();
 
-query error db error: ERROR: Both IGNORE NULLS and RESPECT NULLS were given\.
+query error Both IGNORE NULLS and RESPECT NULLS were given\.
 select row_number() ignore nulls respect nulls over();
 
 ## window frames
@@ -3579,20 +3579,20 @@ ORDER BY f2, f3, f1, first_value
 7  d  10  NULL
 
 # Test offset limits
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 100 FOLLOWING AND 1000001 FOLLOWING)
 
 # Test near-overflow behavior on offsets
 # u64::MAX FOLLOWING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 1000001 PRECEDING AND 100 FOLLOWING)
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -3603,12 +3603,12 @@ FROM t
 ORDER BY f2, f3, f1, last_value
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551615 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, first_value(f1) OVER (PARTITION BY f2 ORDER BY f1, f3 ROWS BETWEEN 18446744073709551615 PRECEDING AND 18446744073709551614 PRECEDING)
 FROM t
 ORDER BY f2, f3, f1, first_value
@@ -4893,12 +4893,12 @@ ORDER BY f2, f3, f1, last_value
 # u64::MAX FOLLOWING
 
 # u64::MAX PRECEDING
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551615 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
 
-query error db error: ERROR: Window frame offsets greater than 1000000 are currently not supported
+query error Window frame offsets greater than 1000000 are currently not supported
 SELECT f1, f2, f3, last_value(f1) OVER (PARTITION BY f2 ORDER BY f1 DESC, f3 DESC ROWS BETWEEN 18446744073709551614 FOLLOWING AND 18446744073709551615 FOLLOWING)
 FROM t
 ORDER BY f2, f3, f1, last_value
@@ -5352,7 +5352,7 @@ ORDER BY 1 + lag(a, 1, 0) OVER (ORDER BY a), a ASC;
 2  two
 3  three
 
-query error db error: ERROR: SELECT DISTINCT ON expressions must match initial ORDER BY expressions
+query error SELECT DISTINCT ON expressions must match initial ORDER BY expressions
 SELECT DISTINCT ON(1 + lag(a, 1, 0) OVER (ORDER BY a)) *
 FROM foo
 ORDER BY lag(a, 1, 0) OVER (ORDER BY a), a DESC;
@@ -5672,7 +5672,7 @@ ORDER BY chat_id, message_tstamp;
 
 # Window func with (non-windowed) aggregations
 
-query error db error: ERROR: window functions are not allowed in aggregate function \(function pg_catalog\.lag\)
+query error window functions are not allowed in aggregate function \(function pg_catalog\.lag\)
 EXPLAIN RAW PLAN FOR
 SELECT sum(lag(a) OVER ())
 FROM foo;
@@ -6091,7 +6091,7 @@ INSERT INTO t7 VALUES (1,2), (3,null), (5,6), (7,8), (9, null), (11, null), (13,
 # Test various nestings
 
 # Postgres also doesn't support this.
-query error db error: ERROR: window functions are not allowed in aggregate function \(function pg_catalog\.sum\)
+query error window functions are not allowed in aggregate function \(function pg_catalog\.sum\)
 SELECT sum(sum(x) OVER ()) FROM t7;
 
 # Other way around: grouped aggregate inside a window aggregate.
@@ -6240,7 +6240,7 @@ NULL  9  NULL  {9,11}  {18,22}  22
 NULL  11  NULL  {11}  {22}  NULL
 
 # https://github.com/MaterializeInc/database-issues/issues/6626
-query error db error: ERROR: DISTINCT in window aggregates not yet supported
+query error DISTINCT in window aggregates not yet supported
 SELECT
   x-y,
   x,
@@ -6580,22 +6580,22 @@ ORDER BY CASE WHEN y IS NOT NULL THEN x*y ELSE x END;
 17  18  17  17  17  {17}
 
 # mixed UNBOUNDED - OFFSET frames
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 2 PRECEDING)
 FROM t7;
 
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN UNBOUNDED PRECEDING AND 2 FOLLOWING)
 FROM t7;
 
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN 2 PRECEDING AND UNBOUNDED FOLLOWING)
 FROM t7;
 
-query error db error: ERROR: mixed unbounded \- offset frames not yet supported
+query error mixed unbounded \- offset frames not yet supported
 SELECT
   sum(y) OVER (ORDER BY x ROWS BETWEEN 3 FOLLOWING AND UNBOUNDED FOLLOWING)
 FROM t7;
@@ -7367,7 +7367,7 @@ ORDER BY x5_simple;
 statement ok
 SET cluster_replica = r1
 
-statement error db error: ERROR: Evaluation error: "4294967295 \* 2" uint4 out of range
+statement error Evaluation error: "4294967295 \* 2" uint4 out of range
 select max(1) over (partition by 1 order by 1, 1)
 from
   (select

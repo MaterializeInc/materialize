@@ -825,7 +825,7 @@ SELECT materialize.pg_catalog.abs(1)
 ----
 1
 
-query error db error: ERROR: function "mz_catalog\.abs" does not exist
+query error function "mz_catalog\.abs" does not exist
 SELECT mz_catalog.abs(1)
 
 query error unknown database 'noexist'
@@ -844,7 +844,7 @@ SELECT pg_catalog.mod(7, 4)
 ----
 3
 
-query error db error: ERROR: function "mz_catalog\.mod" does not exist
+query error function "mz_catalog\.mod" does not exist
 SELECT mz_catalog.mod(7, 4)
 
 query error unknown database 'noexist'
@@ -955,7 +955,7 @@ SELECT array_upper(NULL::text[], 1)
 NULL
 
 # TODO(fix)
-query error db error: ERROR: could not determine polymorphic type because input has type unknown
+query error could not determine polymorphic type because input has type unknown
 SELECT array_upper(NULL, 1)
 
 query I
@@ -1023,7 +1023,7 @@ SELECT upper('ALREADYUP')
 ----
 ALREADYUP
 
-query error db error: ERROR: function upper\(numeric\) does not exist
+query error function upper\(numeric\) does not exist
 SELECT upper(2.2)
 
 query T
@@ -1036,7 +1036,7 @@ SELECT lower('alreadylow')
 ----
 alreadylow
 
-query error db error: ERROR: function lower\(interval\) does not exist
+query error function lower\(interval\) does not exist
 SELECT lower('1ms'::interval)
 
 # Test trigonometric functions.

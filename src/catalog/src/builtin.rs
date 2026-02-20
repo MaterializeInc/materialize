@@ -2023,8 +2023,11 @@ pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the sink."),
-        ("namespace", "The namespace of the sink."),
-        ("table", "The table the sink is writing to."),
+        (
+            "namespace",
+            "The namespace of the Iceberg table into which the sink is writing.",
+        ),
+        ("table", "The Iceberg table into which the sink is writing."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -2195,7 +2198,7 @@ pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|
         ),
         (
             "schema_name",
-            "The schema (or, database) of the upstream table being ingested.",
+            "The schema of the upstream table being ingested.",
         ),
         (
             "table_name",
@@ -2228,11 +2231,11 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
         ),
         (
             "key_format",
-            "The format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+            "The format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
         ),
         (
             "value_format",
-            "The format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+            "The format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
         ),
     ]),
     is_retained_metrics_object: true,
@@ -2303,10 +2306,7 @@ pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the database."),
-        (
-            "oid",
-            "A [PostgreSQL-compatible OID][`oid`] for the database.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the database."),
         ("name", "The name of the database."),
         (
             "owner_id",
@@ -2336,10 +2336,7 @@ pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the schema."),
-        (
-            "oid",
-            "A [PostgreSQL-compatible oid][`oid`] for the schema.",
-        ),
+        ("oid", "A PostgreSQL-compatible oid for the schema."),
         (
             "database_id",
             "The ID of the database containing the schema. Corresponds to `mz_databases.id`.",
@@ -2408,7 +2405,7 @@ pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the index."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the index."),
+        ("oid", "A PostgreSQL-compatible OID for the index."),
         ("name", "The name of the index."),
         (
             "on_id",
@@ -2489,7 +2486,7 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the table."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the table."),
+        ("oid", "A PostgreSQL-compatible OID for the table."),
         (
             "schema_id",
             "The ID of the schema to which the table belongs. Corresponds to `mz_schemas.id`.",
@@ -2535,10 +2532,7 @@ pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The unique ID of the connection."),
-        (
-            "oid",
-            "A [PostgreSQL-compatible OID][`oid`] for the connection.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the connection."),
         (
             "schema_id",
             "The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`.",
@@ -2616,10 +2610,7 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the source."),
-        (
-            "oid",
-            "A [PostgreSQL-compatible OID][`oid`] for the source.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the source."),
         (
             "schema_id",
             "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.",
@@ -2633,18 +2624,18 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
             "connection_id",
             "The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`.",
         ),
-        ("size", "Deprecated The size of the source."),
+        ("size", "*Deprecated* The size of the source."),
         (
             "envelope_type",
             "For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
         ),
         (
             "key_format",
-            "For Kafka sources, the format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+            "For Kafka sources, the format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
         ),
         (
             "value_format",
-            "For Kafka sources, the format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+            "For Kafka sources, the format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
         ),
         (
             "cluster_id",
@@ -2692,7 +2683,7 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "Materialize's unique ID for the sink."),
-            ("oid", "A [PostgreSQL-compatible OID][`oid`] for the sink."),
+            ("oid", "A PostgreSQL-compatible OID for the sink."),
             (
                 "schema_id",
                 "The ID of the schema to which the sink belongs. Corresponds to `mz_schemas.id`.",
@@ -2710,7 +2701,7 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
             ),
             (
                 "format",
-                "Deprecated The format of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`.",
+                "*Deprecated* The format of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`.",
             ),
             (
                 "key_format",
@@ -2760,7 +2751,7 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the view."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the view."),
+        ("oid", "A PostgreSQL-compatible OID for the view."),
         (
             "schema_id",
             "The ID of the schema to which the view belongs. Corresponds to `mz_schemas.id`.",
@@ -2806,7 +2797,7 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
         ("id", "Materialize's unique ID for the materialized view."),
         (
             "oid",
-            "A [PostgreSQL-compatible OID][`oid`] for the materialized view.",
+            "A PostgreSQL-compatible OID for the materialized view.",
         ),
         (
             "schema_id",
@@ -2910,7 +2901,7 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the type."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the type."),
+        ("oid", "A PostgreSQL-compatible OID for the type."),
         (
             "schema_id",
             "The ID of the schema to which the type belongs. Corresponds to `mz_schemas.id`.",
@@ -2981,10 +2972,7 @@ pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
             "privileges",
             "The privileges belonging to the network policy.",
         ),
-        (
-            "oid",
-            "A [PostgreSQL-compatible OID][`oid`] for the network policy.",
-        ),
+        ("oid", "A PostgreSQL-compatible OID for the network policy."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -3147,16 +3135,13 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the role."),
-        ("oid", "A [PostgreSQL-compatible OID][`oid`] for the role."),
+        ("oid", "A PostgreSQL-compatible OID for the role."),
         ("name", "The name of the role."),
         (
             "inherit",
             "Indicates whether the role has inheritance of privileges.",
         ),
-        (
-            "rolcanlogin",
-            "Indicates whether the role can log in (i.e., is a user).",
-        ),
+        ("rolcanlogin", "Indicates whether the role can log in."),
         ("rolsuper", "Indicates whether the role is a superuser."),
     ]),
     is_retained_metrics_object: false,
@@ -3232,14 +3217,14 @@ pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
             "role_id",
             "The ID of the role. Corresponds to `mz_roles.id`.",
         ),
+        ("role_oid", "A PostgreSQL-compatible OID for the role."),
         (
-            "role_oid",
-            "The OID of the role whose configuration parameter default is set. Corresponds to `mz_roles.oid`.",
+            "password_hash",
+            "The hashed password for the role, if any. Uses the `SCRAM-SHA-256` algorithm.",
         ),
-        ("password_hash", "The hashed password for the role"),
         (
             "updated_at",
-            "The timestamp when the password was last updated.",
+            "The time at which the password was last updated.",
         ),
     ]),
     is_retained_metrics_object: false,
@@ -3280,10 +3265,7 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "Materialize's unique ID for the function."),
-            (
-                "oid",
-                "A [PostgreSQL-compatible OID][`oid`] for the function.",
-            ),
+            ("oid", "A PostgreSQL-compatible OID for the function."),
             (
                 "schema_id",
                 "The ID of the schema to which the function belongs. Corresponds to `mz_schemas.id`.",
@@ -3401,11 +3383,11 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         ),
         (
             "disk",
-            "Unstable If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.",
+            "**Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.",
         ),
         (
             "availability_zones",
-            "Unstable If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.",
+            "**Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.",
         ),
         (
             "introspection_debugging",
@@ -3487,10 +3469,7 @@ pub static MZ_SECRETS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The unique ID of the secret."),
-        (
-            "oid",
-            "A [PostgreSQL-compatible oid][`oid`] for the secret.",
-        ),
+        ("oid", "A PostgreSQL-compatible oid for the secret."),
         (
             "schema_id",
             "The ID of the schema to which the secret belongs. Corresponds to `mz_schemas.id`.",
@@ -3819,8 +3798,8 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY: LazyLock<BuiltinSource>
     },
 );
 
-pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
+pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
+    BuiltinView {
         name: "mz_aws_privatelink_connection_statuses",
         schema: MZ_INTERNAL_SCHEMA,
         oid: oid::VIEW_MZ_AWS_PRIVATELINK_CONNECTION_STATUSES_OID,
@@ -3844,7 +3823,10 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
                 "last_status_change_at",
                 "Wall-clock timestamp of the connection status change.",
             ),
-            ("status", ""),
+            (
+                "status",
+                "The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.",
+            ),
         ]),
         sql: "
     WITH statuses_w_last_status AS (
@@ -3872,7 +3854,8 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> =
     JOIN mz_catalog.mz_connections AS conns
     ON conns.id = latest_events.connection_id",
         access: vec![PUBLIC_SELECT],
-    });
+    }
+});
 
 pub static MZ_STATEMENT_EXECUTION_HISTORY: LazyLock<BuiltinSource> =
     LazyLock::new(|| BuiltinSource {
@@ -4023,7 +4006,24 @@ pub static MZ_SESSION_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Builti
     oid: oid::SOURCE_MZ_SESSION_HISTORY_OID,
     data_source: IntrospectionType::SessionHistory,
     desc: MZ_SESSION_HISTORY_DESC.clone(),
-    column_comments: BTreeMap::new(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "session_id",
+            "The globally unique ID of the session. Corresponds to `mz_sessions.id`.",
+        ),
+        (
+            "connected_at",
+            "The time at which the session was established.",
+        ),
+        (
+            "initial_application_name",
+            "The `application_name` session metadata field.",
+        ),
+        (
+            "authenticated_user",
+            "The name of the user for which the session was established.",
+        ),
+    ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
@@ -4300,11 +4300,11 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         ),
         (
             "statement_type",
-            "The type of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.",
+            "The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.",
         ),
         (
             "throttled_count",
-            "The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team.",
+            "The number of statement executions that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, contact our team.",
         ),
         (
             "connected_at",
@@ -5704,7 +5704,7 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "Materialize's unique ID for the relation."),
-            ("oid", "A [PostgreSQL-compatible OID][`oid`] for the relation."),
+            ("oid", "A PostgreSQL-compatible OID for the relation."),
             ("schema_id", "The ID of the schema to which the relation belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the relation."),
             ("type", "The type of the relation: either `table`, `source`, `view`, or `materialized view`."),
@@ -5794,7 +5794,7 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "Materialize's unique ID for the object."),
-            ("oid", "A [PostgreSQL-compatible OID][`oid`] for the object."),
+            ("oid", "A PostgreSQL-compatible OID for the object."),
             ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the object."),
             ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
@@ -5889,8 +5889,11 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
         .with_column("global_id", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique catalog item ID for the object."),
-        ("global_id", "A global ID for the object."),
+        (
+            "id",
+            "The ID of the object. Corresponds to `mz_objects.id`.",
+        ),
+        ("global_id", "The global ID of the object."),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -6228,7 +6231,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
         ),
         (
             "operator_id_end",
-            "The first dataflow operator ID after this LIR operator (exclusive).",
+            "The first dataflow operator ID _after_ this LIR operator (exclusive).",
         ),
     ]),
     sql: "
@@ -12326,15 +12329,6 @@ JOIN root_times r USING (id)",
     access: vec![PUBLIC_SELECT],
 });
 
-pub const MZ_MATERIALIZATION_LAG_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_materialization_lag_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::INDEX_MZ_MATERIALIZATION_LAG_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.mz_materialization_lag (object_id)",
-    is_retained_metrics_object: false,
-};
-
 /**
  * This view is used to display the cluster utilization over 14 days bucketed by 8 hours.
  * It's specifically for the Console's environment overview page to speed up load times.
@@ -13328,7 +13322,7 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     column_comments: BTreeMap::from_iter([
         (
             "id",
-            "The ID of the sink. Corresponds to `mz_catalog.mz_sources.id`.",
+            "The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.",
         ),
         (
             "replica_id",
@@ -14093,7 +14087,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
-        Builtin::Index(&MZ_MATERIALIZATION_LAG_IND),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS_PER_WORKER),
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),

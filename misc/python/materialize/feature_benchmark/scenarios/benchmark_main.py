@@ -45,9 +45,6 @@ class FastPath(Scenario):
 class FastPathFilterNoIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view and return"""
 
-    SCALE = 7
-    FIXED_SCALE = True  # OOM with 10**8 = 100M records
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
@@ -64,20 +61,31 @@ true
         ]
 
     def benchmark(self) -> MeasurementSource:
+        repeated_selects = "\n".join(
+            "> SELECT * FROM v1 WHERE f2 < 0;" for _ in range(100)
+        )
+
         return Td(
-            """
-> /* A */ SELECT 1;
+            f"""
+> SET auto_route_introspection_queries TO false
+
+> BEGIN
+
+> SELECT 1;
+  /* A */
 1
-> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+
+{repeated_selects}
+
+> SELECT 1
+  /* B */
+1
 """
         )
 
 
 class MFPPushdown(Scenario):
     """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
-
-    SCALE = 7
-    FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
     def init(self) -> list[Action]:
         return [
@@ -93,11 +101,25 @@ true
         ]
 
     def benchmark(self) -> MeasurementSource:
+        repeated_selects = "\n".join(
+            "> SELECT * FROM v1 WHERE f2 < 0;" for _ in range(100)
+        )
+
         return Td(
-            """
-> /* A */ SELECT 1;
+            f"""
+> SET auto_route_introspection_queries TO false
+
+> BEGIN
+
+> SELECT 1;
+  /* A */
 1
-> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+
+{repeated_selects}
+
+> SELECT 1
+  /* B */
+1
 """
         )
 
@@ -239,8 +261,8 @@ ALTER SYSTEM SET max_result_size = 17179869184;
 class ManySmallInserts(DML):
     """Measure the time it takes for several small INSERT statements to return."""
 
-    # Sometimes goes OoM
-    SCALE = 3
+    # Pretty slow
+    SCALE = 2
 
     def init(self) -> Action:
         return self.table_ten()
@@ -270,7 +292,7 @@ class ManySmallInserts(DML):
 class InsertBatch(DML):
     """Measure the time it takes for a batch of INSERT statements to return."""
 
-    SCALE = 4
+    SCALE = 3
 
     def benchmark(self) -> MeasurementSource:
         inserts = "\n".join(
@@ -682,12 +704,12 @@ class AccumulateReductions(Dataflow):
 
     def before(self) -> Action:
         return TdAction(
-            """
+            f"""
 > DROP TABLE IF EXISTS t CASCADE;
 > CREATE TABLE t (a int, b int, c int, d int);
 
 > CREATE MATERIALIZED VIEW data AS
-  SELECT a, a AS b FROM generate_series(1, 10000000) AS a
+  SELECT a, a AS b FROM generate_series(1, {self.n()}) AS a
   UNION ALL
   SELECT a, b FROM t;
 
@@ -708,7 +730,7 @@ class AccumulateReductions(Dataflow):
         )
 
     def benchmark(self) -> MeasurementSource:
-        sql = """
+        sql = f"""
 > SELECT 1
   /* A */
 1
@@ -721,18 +743,18 @@ class AccumulateReductions(Dataflow):
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[count(*)] // { arity: 1 }
-        Project () // { arity: 0 }
-          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Get l0 // { arity: 1 }
-      Map (0) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
+      Reduce aggregates=[count(*)] // {{ arity: 1 }}
+        Project () // {{ arity: 0 }}
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // {{ arity: 5 }}
+  Return // {{ arity: 1 }}
+    Union // {{ arity: 1 }}
+      Get l0 // {{ arity: 1 }}
+      Map (0) // {{ arity: 1 }}
+        Union // {{ arity: 0 }}
+          Negate // {{ arity: 0 }}
+            Project () // {{ arity: 0 }}
+              Get l0 // {{ arity: 1 }}
+          Constant // {{ arity: 0 }}
             - ()
 
 Used Indexes:
@@ -744,18 +766,18 @@ Target cluster: idx_cluster
 Explained Query:
   With
     cte l0 =
-      Reduce aggregates=[count(*)] // { arity: 1 }
-        Project () // { arity: 0 }
-          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // { arity: 5 }
-  Return // { arity: 1 }
-    Union // { arity: 1 }
-      Get l0 // { arity: 1 }
-      Map (0) // { arity: 1 }
-        Union // { arity: 0 }
-          Negate // { arity: 0 }
-            Project () // { arity: 0 }
-              Get l0 // { arity: 1 }
-          Constant // { arity: 0 }
+      Reduce aggregates=[count(*)] // {{ arity: 1 }}
+        Project () // {{ arity: 0 }}
+          ReadIndex on=accumulable i_accumulable=[*** full scan ***] // {{ arity: 5 }}
+  Return // {{ arity: 1 }}
+    Union // {{ arity: 1 }}
+      Get l0 // {{ arity: 1 }}
+      Map (0) // {{ arity: 1 }}
+        Union // {{ arity: 0 }}
+          Negate // {{ arity: 0 }}
+            Project () // {{ arity: 0 }}
+              Get l0 // {{ arity: 1 }}
+          Constant // {{ arity: 0 }}
             - ()
 
 Used Indexes:
@@ -765,7 +787,7 @@ Target cluster: idx_cluster
 
 > SELECT count(*) FROM accumulable;
   /* B */
-10000001
+{self.n() + 1}
 
 > SET CLUSTER = default;
 """
@@ -1564,7 +1586,7 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
     """Measure the time it takes to ingest data from many Kafka sources"""
 
     # Runs ~2 hours with 300 sources
-    SCALE = 1.7  # 50 sources
+    SCALE = 1.4  # 25 sources
     FIXED_SCALE = True
 
     COUNT_SOURCE_ENTRIES = 100000
@@ -2152,10 +2174,7 @@ class StartupEmpty(Startup):
 class StartupLoaded(Scenario):
     """Measure the time it takes to restart a populated Mz instance and have all the dataflows be ready to return something"""
 
-    SCALE = 1.2  # 25 objects of each kind
-    FIXED_SCALE = (
-        True  # Can not scale to 100s of objects, so --size=+N will have no effect
-    )
+    SCALE = 1  # 10 objects of each kind
 
     def shared(self) -> Action:
         return TdAction(
@@ -2369,6 +2388,8 @@ ALTER SYSTEM SET max_tables = {self.n() * 100};
 
 class HydrateIndex(Scenario):
     """Measure the time it takes for an index to hydrate when a cluster comes online."""
+
+    SCALE = 5
 
     def init(self) -> list[Action]:
         return [

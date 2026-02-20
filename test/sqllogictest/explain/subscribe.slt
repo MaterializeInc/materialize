@@ -204,13 +204,13 @@ EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
 # Test unsupported stages - SUBSCRIBE doesn't support RAW, DECORRELATED, or LOCAL
 # because it takes MIR directly rather than going through HIR lowering.
 
-statement error db error: ERROR: cannot EXPLAIN RAW PLAN FOR SUBSCRIBE
+statement error cannot EXPLAIN RAW PLAN FOR SUBSCRIBE
 EXPLAIN RAW PLAN FOR SUBSCRIBE t
 
-statement error db error: ERROR: cannot EXPLAIN DECORRELATED PLAN FOR SUBSCRIBE
+statement error cannot EXPLAIN DECORRELATED PLAN FOR SUBSCRIBE
 EXPLAIN DECORRELATED PLAN FOR SUBSCRIBE t
 
-statement error db error: ERROR: cannot EXPLAIN LOCALLY OPTIMIZED PLAN FOR SUBSCRIBE
+statement error cannot EXPLAIN LOCALLY OPTIMIZED PLAN FOR SUBSCRIBE
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR SUBSCRIBE t
 
 # Test error case: SUBSCRIBE on non-existent table

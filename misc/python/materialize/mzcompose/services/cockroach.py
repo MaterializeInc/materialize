@@ -7,7 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from materialize import MZ_ROOT
 from materialize.mzcompose import (
@@ -18,6 +21,10 @@ from materialize.mzcompose.service import (
     Service,
     ServiceHealthcheck,
 )
+from materialize.mzcompose.services.minio import minio_blob_uri
+
+if TYPE_CHECKING:
+    from materialize.mzcompose.composition import Composition
 
 
 class Cockroach(Service):
@@ -78,3 +85,58 @@ class Cockroach(Service):
                 "stop_grace_period": stop_grace_period,
             },
         )
+
+    @staticmethod
+    def backup(c: Composition) -> None:
+        from materialize.mzcompose.composition import Service as ServiceName
+
+        c.up(ServiceName("mc", idle=True))
+        c.exec("mc", "mc", "mb", "--ignore-existing", "persist/crdb-backup")
+        c.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                BACKUP INTO 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+
+    @staticmethod
+    def restore(
+        c: Composition, mz_service: str = "materialized", restart_mz: bool = True
+    ) -> None:
+        c.kill(mz_service)
+        c.exec(
+            "cockroach",
+            "cockroach",
+            "sql",
+            "--insecure",
+            "-e",
+            """
+                DROP DATABASE defaultdb;
+                CREATE EXTERNAL CONNECTION backup_bucket
+                AS 's3://persist/crdb-backup?AWS_ENDPOINT=http://minio:9000/&AWS_REGION=minio&AWS_ACCESS_KEY_ID=minioadmin&AWS_SECRET_ACCESS_KEY=minioadmin';
+                RESTORE DATABASE defaultdb
+                FROM LATEST IN 'external://backup_bucket';
+                DROP EXTERNAL CONNECTION backup_bucket;
+            """,
+        )
+        from materialize.mzcompose.composition import Service as ServiceName
+
+        c.up(ServiceName("persistcli", idle=True))
+        c.exec(
+            "persistcli",
+            "persistcli",
+            "admin",
+            "--commit",
+            "restore-blob",
+            f"--blob-uri={minio_blob_uri()}",
+            "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
+        )
+        if restart_mz:
+            c.up(mz_service)

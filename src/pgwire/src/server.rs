@@ -47,8 +47,8 @@ pub struct Config {
     pub tls: Option<ReloadingTlsConfig>,
     /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
-    /// OIDC JWT authenticator.
-    pub oidc: Option<GenericOidcAuthenticator>,
+    /// OIDC authenticator.
+    pub oidc: GenericOidcAuthenticator,
     /// The authentication method defined by the server's listener
     /// configuration.
     pub authenticator_kind: AuthenticatorKind,
@@ -68,7 +68,7 @@ pub struct Server {
     adapter_client: mz_adapter::Client,
     authenticator_kind: AuthenticatorKind,
     frontegg: Option<FronteggAuthenticator>,
-    oidc: Option<GenericOidcAuthenticator>,
+    oidc: GenericOidcAuthenticator,
     metrics: Metrics,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,

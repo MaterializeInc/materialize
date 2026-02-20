@@ -825,7 +825,7 @@ BEGIN
 statement ok
 CREATE TABLE t (i INT)
 
-statement error db error: ERROR: table "materialize\.public\.t" already exists
+statement error table "materialize\.public\.t" already exists
 COMMIT
 
 statement ok
@@ -835,7 +835,7 @@ BEGIN
 statement ok
 CREATE TABLE t (i INT)
 
-statement error db error: ERROR: this transaction can only execute a single statement
+statement error this transaction can only execute a single statement
 SELECT 1
 
 statement ok
@@ -864,10 +864,10 @@ CREATE DEFAULT INDEX ON s
 statement ok
 BEGIN
 
-statement error db error: ERROR: ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR '1000 hours'\) cannot be run inside a transaction block
+statement error ALTER INDEX s_primary_idx SET \(RETAIN HISTORY = FOR '1000 hours'\) cannot be run inside a transaction block
 ALTER INDEX s_primary_idx SET (RETAIN HISTORY = FOR '1000 hours')
 
-query error db error: ERROR: current transaction is aborted, commands ignored until end of transaction block
+query error current transaction is aborted, commands ignored until end of transaction block
 SELECT 1
 
 statement ok
@@ -1149,7 +1149,7 @@ CREATE TABLE yellow_t1 (x int);
 ----
 COMPLETE 0
 
-statement error db error: ERROR: another session modified the catalog while this DDL transaction was open
+statement error another session modified the catalog while this DDL transaction was open
 ALTER SCHEMA blue RENAME to pink;
 
 statement ok
@@ -1193,7 +1193,7 @@ public  u3
 statement ok
 BEGIN;
 
-statement error db error: ERROR: schema 'green' already exists
+statement error schema 'green' already exists
 ALTER SCHEMA orange RENAME TO green;
 
 statement ok
@@ -1212,7 +1212,7 @@ BEGIN;
 statement ok
 ALTER SCHEMA green RENAME TO red;
 
-statement error db error: ERROR: schema 'red' already exists
+statement error schema 'red' already exists
 ALTER SCHEMA orange RENAME TO red;
 
 statement ok
@@ -1282,7 +1282,7 @@ BEGIN;
 statement ok
 INSERT INTO blue_t1 VALUES (40), (50), (60);
 
-statement error db error: ERROR: transaction in write-only mode
+statement error transaction in write-only mode
 ALTER TABLE blue_t1 RENAME TO red_t1;
 
 statement ok
@@ -1301,7 +1301,7 @@ SELECT * FROM blue_v1;
 ----
 60
 
-statement error db error: ERROR: transaction in read-only mode
+statement error transaction in read-only mode
 ALTER TABLE blue_t1 RENAME TO red_t1;
 
 statement ok
@@ -1318,7 +1318,7 @@ BEGIN;
 statement ok
 ALTER TABLE blue_t1 RENAME TO purple_t1;
 
-statement error db error: ERROR: transactions which modify objects are restricted to just modifying objects
+statement error transactions which modify objects are restricted to just modifying objects
 SELECT * FROM blue_mv1;
 
 statement ok
@@ -1433,7 +1433,7 @@ COMPLETE 0
 COMPLETE 0
 
 # The transaction ended, so the portal is gone.
-query error db error: ERROR: cursor "c1" does not exist
+query error cursor "c1" does not exist
 EXECUTE p2;
 
 # Do the same as above, but commit the transaction. Counter-intuitively, the portal disappears also if you commit the
@@ -1455,7 +1455,7 @@ COMPLETE 0
 COMPLETE 0
 COMPLETE 0
 
-query error db error: ERROR: cursor "c1" does not exist
+query error cursor "c1" does not exist
 EXECUTE p3;
 
 # DECLARE CURSOR FOR FETCH

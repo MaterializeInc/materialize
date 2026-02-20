@@ -202,20 +202,23 @@ impl<'a> Outcome<'a> {
         match self {
             Outcome::Unsupported { error, .. }
             | Outcome::ParseFailure { error, .. }
-            | Outcome::PlanFailure { error, .. } => Some(
+            | Outcome::PlanFailure { error, .. } => {
+                // Take only the first line, which should be sufficient for
+                // meaningfully matching the error.
+                let err_str = error.to_string_with_causes();
+                let err_str = err_str.split('\n').next().unwrap();
+                // Strip the "db error: ERROR: " prefix added by the postgres
+                // client library, as it's noisy and not useful for matching.
+                let err_str = err_str.strip_prefix("db error: ERROR: ").unwrap_or(err_str);
                 // This value gets fed back into regex to check that it matches
-                // `self`, so escape its meta characters.
-                regex::escape(
-                    // Take only the first string in the error message, which should be
-                    // sufficient for meaningfully matching the error.
-                    error.to_string_with_causes().split('\n').next().unwrap(),
-                )
-                // We need to undo the escaping of #. `regex::escape` escapes this because it
-                // expects that we use the `x` flag when building a regex, but this is not the case,
-                // so \# would end up being an invalid escape sequence, which would choke the
-                // parsing of the slt file the next time around.
-                .replace(r"\#", "#"),
-            ),
+                // `self`, so escape its meta characters. We need to undo the
+                // escaping of #. `regex::escape` escapes this because it
+                // expects that we use the `x` flag when building a regex, but
+                // this is not the case, so \# would end up being an invalid
+                // escape sequence, which would choke the parsing of the slt
+                // file the next time around.
+                Some(regex::escape(err_str).replace(r"\#", "#"))
+            }
             _ => None,
         }
     }
@@ -305,8 +308,8 @@ impl fmt::Display for Outcome<'_> {
                 location,
             } => write!(
                 f,
-                "InconsistentViewOutcome:{}{}expected from query: {:?}{}actually from indexed view: {:?}{}",
-                location, INDENT, query_outcome, INDENT, view_outcome, INDENT
+                "InconsistentViewOutcome:{}{}expected from query: {}{}actually from indexed view: {}",
+                location, INDENT, query_outcome, INDENT, view_outcome
             ),
             Bail { cause, location } => write!(f, "Bail:{} {}", location, cause),
             Warning { cause, location } => write!(f, "Warning:{} {}", location, cause),
@@ -443,7 +446,7 @@ pub struct RunnerInner<'a> {
     auto_index_selects: bool,
     auto_transactions: bool,
     enable_table_keys: bool,
-    verbosity: u8,
+    verbose: bool,
     stdout: &'a dyn WriteFmt,
     _shutdown_trigger: trigger::Trigger,
     _server_thread: JoinOnDropHandle<()>,
@@ -1171,7 +1174,6 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             tls: None,
             frontegg: None,
-            oidc: None,
             cors_allowed_origin: AllowOrigin::list([]),
             unsafe_mode: true,
             all_features: false,
@@ -1307,7 +1309,7 @@ impl<'a> RunnerInner<'a> {
             auto_index_selects: config.auto_index_selects,
             auto_transactions: config.auto_transactions,
             enable_table_keys: config.enable_table_keys,
-            verbosity: config.verbosity,
+            verbose: config.verbose,
             stdout: config.stdout,
         };
         inner.ensure_fixed_features().await?;
@@ -1577,7 +1579,11 @@ impl<'a> RunnerInner<'a> {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
-                                error: anyhow!(error),
+                                error: anyhow!(
+                                    "error does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                                    expected_error,
+                                    error_string
+                                ),
                                 location,
                             })
                         }
@@ -1692,7 +1698,7 @@ impl<'a> RunnerInner<'a> {
         output: &'r Result<QueryOutput<'_>, &'r str>,
         location: Location,
     ) -> Result<Option<Outcome<'r>>, anyhow::Error> {
-        print_sql_if(self.stdout, sql, self.verbosity >= 2);
+        print_sql_if(self.stdout, sql, self.verbose);
         let sql_result = self.client.execute(sql, &[]).await;
 
         // Evaluate if we already reached an outcome or not.
@@ -1702,7 +1708,11 @@ impl<'a> RunnerInner<'a> {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
-                        error: view_error.into(),
+                        error: anyhow!(
+                            "error does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                            expected_error,
+                            view_error.to_string_with_causes()
+                        ),
                         location: location.clone(),
                     })
                 }
@@ -1755,14 +1765,14 @@ impl<'a> RunnerInner<'a> {
         if let Some(outcome) = tentative_outcome {
             view_outcome = outcome;
         } else {
-            print_sql_if(self.stdout, view_sql.as_str(), self.verbosity >= 2);
+            print_sql_if(self.stdout, view_sql.as_str(), self.verbose);
             view_outcome = self
                 .execute_query(view_sql.as_str(), output, location.clone())
                 .await?;
         }
 
         // Remember to clean up after ourselves by dropping the view.
-        print_sql_if(self.stdout, drop_view.as_str(), self.verbosity >= 2);
+        print_sql_if(self.stdout, drop_view.as_str(), self.verbose);
         self.client.execute(drop_view.as_str(), &[]).await?;
 
         Ok(view_outcome)
@@ -1978,7 +1988,8 @@ pub trait WriteFmt {
 pub struct RunConfig<'a> {
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
-    pub verbosity: u8,
+    pub verbose: bool,
+    pub quiet: bool,
     pub postgres_url: String,
     pub prefix: String,
     pub no_fail: bool,
@@ -2112,10 +2123,10 @@ pub async fn run_string(
     writeln!(runner.config.stdout, "--- {}", source);
 
     for record in parser.parse_records()? {
-        // In maximal-verbosity mode, print the query before attempting to run
+        // In maximal-verbose mode, print the query before attempting to run
         // it. Running the query might panic, so it is important to print out
         // what query we are trying to run *before* we panic.
-        if runner.config.verbosity >= 2 {
+        if runner.config.verbose {
             print_record(runner.config, &record);
         }
 
@@ -2126,9 +2137,9 @@ pub async fn run_string(
             .unwrap();
 
         // Print warnings and failures in verbose mode.
-        if runner.config.verbosity >= 1 && !outcome.success() {
-            if runner.config.verbosity < 2 {
-                // If `verbosity >= 2`, we'll already have printed the record,
+        if !runner.config.quiet && !outcome.success() {
+            if !runner.config.verbose {
+                // If `verbose` is enabled, we'll already have printed the record,
                 // so don't print it again. Yes, this is an ugly bit of logic.
                 // Please don't try to consolidate it with the `print_record`
                 // call above, as it's important to have a mode in which records
@@ -2143,7 +2154,7 @@ pub async fn run_string(
                 }
                 print_record(runner.config, &record);
             }
-            if runner.config.verbosity >= 2 || outcome.failure() {
+            if runner.config.verbose || outcome.failure() {
                 writeln!(
                     runner.config.stdout,
                     "{}",

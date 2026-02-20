@@ -30,11 +30,12 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::operator::{CollectionExt, StreamExt};
+use mz_timely_util::operator::CollectionExt;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::generic::OutputBuilderSession;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
@@ -824,14 +825,16 @@ where
 
                 let (oks, errs) = self
                     .collection
-                    .clone()
+                    .take()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed) =
+                let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
-                let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
-                    &format!("{}-errors", name),
-                );
+                let errs_concat: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
+                self.collection = Some((passthrough, errs));
+                let errs =
+                    errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                        &format!("{}-errors", name),
+                    );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -845,6 +848,10 @@ where
     /// the `thinning` applied to it. It selects which of the input columns are included in the
     /// value of the arrangement. The thinning is in support of permuting arrangements such that
     /// columns in the key are not included in the value.
+    ///
+    /// In addition to the ok and err streams, we produce a passthrough stream that forwards
+    /// the input as-is, which allows downstream consumers to reuse the collection without
+    /// teeing the stream.
     fn arrange_collection(
         name: &String,
         oks: VecCollection<S, Row, Diff>,
@@ -853,45 +860,55 @@ where
     ) -> (
         Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
         VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, Row, Diff>,
     ) {
-        // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
-        // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
-        // return references, which is what we need to push into columnar streams. Instead, we use
-        // a bespoke operator that also optimizes reuse of allocations across individual updates.
-        let (oks, errs) = oks
-            .inner
-            .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, Diff)>, _, _, _>(
-                Pipeline,
-                "FormArrangementKey",
-                move |_, _| {
-                    Box::new(move |input, ok, err| {
-                        let mut key_buf = Row::default();
-                        let mut val_buf = Row::default();
-                        let mut datums = DatumVec::new();
-                        let mut temp_storage = RowArena::new();
-                        input.for_each(|time, data| {
-                            let mut ok_session = ok.session_with_builder(&time);
-                            let mut err_session = err.session(&time);
-                            for (row, time, diff) in data.iter() {
-                                temp_storage.clear();
-                                let datums = datums.borrow_with(row);
-                                let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                                match key_buf.packer().try_extend(key_iter) {
-                                    Ok(()) => {
-                                        let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                        val_buf.packer().extend(val_datum_iter);
-                                        ok_session.give(((&*key_buf, &*val_buf), time, diff));
-                                    }
-                                    Err(e) => {
-                                        err_session.give((e.into(), time.clone(), *diff));
-                                    }
-                                }
+        // This operator implements a `map_fallible`, but produces columnar updates for the ok
+        // stream. The `map_fallible` cannot be used here because the closure cannot return
+        // references, which is what we need to push into columnar streams. Instead, we use a
+        // bespoke operator that also optimizes reuse of allocations across individual updates.
+        let mut builder = OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output =
+            OutputBuilder::<_, ColumnBuilder<((Row, Row), S::Timestamp, Diff)>>::from(ok_output);
+        let (err_output, err_stream) = builder.new_output();
+        let mut err_output = OutputBuilder::from(err_output);
+        let (passthrough_output, passthrough_stream) = builder.new_output();
+        let mut passthrough_output = OutputBuilder::from(passthrough_output);
+        let mut input = builder.new_input(&oks.inner, Pipeline);
+        builder.set_notify(false);
+        builder.build(move |_capabilities| {
+            let mut key_buf = Row::default();
+            let mut val_buf = Row::default();
+            let mut datums = DatumVec::new();
+            let mut temp_storage = RowArena::new();
+            move |_frontiers| {
+                let mut ok_output = ok_output.activate();
+                let mut err_output = err_output.activate();
+                let mut passthrough_output = passthrough_output.activate();
+                input.for_each(|time, data| {
+                    let mut ok_session = ok_output.session_with_builder(&time);
+                    let mut err_session = err_output.session(&time);
+                    for (row, time, diff) in data.iter() {
+                        temp_storage.clear();
+                        let datums = datums.borrow_with(row);
+                        let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                        match key_buf.packer().try_extend(key_iter) {
+                            Ok(()) => {
+                                let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                val_buf.packer().extend(val_datum_iter);
+                                ok_session.give(((&*key_buf, &*val_buf), time, diff));
                             }
-                        });
-                    })
-                },
-            );
-        let oks = oks
+                            Err(e) => {
+                                err_session.give((e.into(), time.clone(), *diff));
+                            }
+                        }
+                    }
+                    passthrough_output.session(&time).give_container(data);
+                });
+            }
+        });
+
+        let oks = ok_stream
             .mz_arrange_core::<
                 _,
                 Col2ValBatcher<_, _, _, _>,
@@ -903,7 +920,11 @@ where
                 ),
                 name
             );
-        (oks, errs.as_collection())
+        (
+            oks,
+            err_stream.as_collection(),
+            passthrough_stream.as_collection(),
+        )
     }
 }
 

@@ -13,7 +13,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_ore::cast::CastInto;
 use mz_persist_client::batch::ProtoBatch;
 use mz_pgcopy::CopyFormatParams;
-use mz_repr::{CatalogItemId, Datum, RowArena};
+use mz_repr::{CatalogItemId, Datum, NotNullViolation, RowArena};
 use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;
@@ -86,7 +86,7 @@ impl Coordinator {
             CopyFormatParams::Parquet => mz_storage_types::oneshot_sources::ContentFormat::Parquet,
             CopyFormatParams::Text(_) | CopyFormatParams::Binary => {
                 mz_ore::soft_panic_or_log!("unsupported formats should be rejected in planning");
-                ctx.retire(Err(AdapterError::Unsupported("COPY FROM URL format")));
+                ctx.retire(Err(AdapterError::Unsupported("COPY FROM URL/S3 format")));
                 return;
             }
         };
@@ -160,6 +160,42 @@ impl Coordinator {
                 })
             });
         let source_mfp = return_if_err!(source_mfp, ctx);
+
+        // Validate that all non-nullable columns in the target table will be populated.
+        let target_desc = dest_table.desc.latest();
+        for (col_idx, col_type) in target_desc.iter_types().enumerate() {
+            if !col_type.nullable {
+                // Check what value the MFP will produce for this column position.
+                if let Some(&projection_idx) = source_mfp.projection.get(col_idx) {
+                    // If the projection index is beyond the input arity, it references an expression.
+                    let input_arity = source_mfp.input_arity;
+                    if projection_idx >= input_arity {
+                        let expr_idx = projection_idx - input_arity;
+                        if let Some(expr) = source_mfp.expressions.get(expr_idx) {
+                            // Check if the expression is a NULL literal.
+                            // A NULL literal is represented as Literal(Ok(empty_row), _)
+                            if matches!(
+                                expr,
+                                mz_expr::MirScalarExpr::Literal(Ok(row), _)
+                                    if row.iter().next().map(|d| d.is_null()).unwrap_or(false)
+                            ) {
+                                let col_name = target_desc.get_name(col_idx);
+                                return ctx.retire(Err(AdapterError::ConstraintViolation(
+                                    NotNullViolation(col_name.clone()),
+                                )));
+                            }
+                        }
+                    }
+                } else {
+                    // If there's no projection for this column, that's a validation error
+                    let col_name = target_desc.get_name(col_idx);
+                    return ctx.retire(Err(AdapterError::ConstraintViolation(NotNullViolation(
+                        col_name.clone(),
+                    ))));
+                }
+            }
+        }
+
         let shape = ContentShape {
             source_desc,
             source_mfp,

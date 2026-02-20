@@ -2214,7 +2214,7 @@ feature_flags!(
     {
         name: enable_iceberg_sink,
         desc: "Whether to enable the Iceberg sink.",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {

@@ -23,7 +23,7 @@ SELECT 'a'::character = 'a'::"char";
 ----
 true
 
-query error db error: ERROR: coalesce could not convert type char\(1\) to "char"
+query error coalesce could not convert type char\(1\) to "char"
 SELECT pg_typeof(coalesce('1'::"char", '1'::char));
 
 # Fixes database-issues#5191
@@ -90,14 +90,14 @@ SELECT pg_typeof('abc'::text::"char");
 
 # Fixes database-issues#5222
 
-query error db error: ERROR: coalesce could not convert type "char" to char
+query error coalesce could not convert type "char" to char
 SELECT COALESCE('a'::char, 'a'::"char");
 
-query error db error: ERROR: coalesce could not convert type "char" to varchar
+query error coalesce could not convert type "char" to varchar
 SELECT COALESCE('a'::varchar, 'a'::"char");
 
-query error db error: ERROR: coalesce could not convert type char\(1\) to "char"
+query error coalesce could not convert type char\(1\) to "char"
 SELECT COALESCE('a'::"char", 'a'::char);
 
-query error db error: ERROR: coalesce could not convert type varchar to "char"
+query error coalesce could not convert type varchar to "char"
 SELECT COALESCE('a'::"char", 'a'::varchar);

@@ -826,7 +826,7 @@ Target cluster: quickstart
 
 EOF
 
-query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
+query error Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
 EXPLAIN RAW PLAN AS TEXT FOR
 SELECT a+b
 FROM t

@@ -54,9 +54,40 @@ contains:failed to decode Row
 ! COPY INTO t1_single_col FROM '${1_csv_url}' (FORMAT CSV);
 contains:wrong number of columns
 
-# disabled as MZ panics database-issues#9886
-# ! COPY INTO t1_not_null FROM '${1_csv_url}' (FORMAT CSV);
-# contains:some error that's not a panic
+# Cannot perform this COPY because column c is NOT NULL, has no default value, and is not being copied into.
+! COPY INTO t1_not_null (a, b) FROM '${1_csv_url}' (FORMAT CSV);
+contains:violates not-null constraint
+
+# The last row of this csv contains a NULL value in the third column
+$ s3-file-upload bucket=copytos3 key=csv2/nulls.csv repeat=1
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,1.0
+foo,100,
+
+$ s3-set-presigned-url bucket=copytos3 key=csv2/nulls.csv var-name=nulls_csv_url
+
+# The final row with the null value in "column c" should cause an error as c is NOT NULL
+! COPY INTO t1_not_null (a, b, c) FROM '${nulls_csv_url}' (FORMAT CSV);
+contains:did not match desc
+
+# Make sure that the entire transaction is rejected
+> SELECT COUNT(*) FROM t1_not_null;
+0
 
 > COPY INTO t1_fun_house (z, y) FROM '${1_csv_url}' (FORMAT CSV);
 > SELECT * from t1_fun_house;

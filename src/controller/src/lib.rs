@@ -32,7 +32,7 @@ use futures::future::BoxFuture;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
-use mz_compute_client::controller::error::CollectionLookupError;
+use mz_compute_client::controller::error::{CollectionLookupError, CollectionMissing};
 use mz_compute_client::controller::{
     ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
 };
@@ -425,7 +425,7 @@ where
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
-    ) -> Result<WatchSetId, CollectionLookupError> {
+    ) -> Result<WatchSetId, CollectionMissing> {
         let ws_id = self.watch_set_id_gen.allocate_id();
 
         let uppers = self

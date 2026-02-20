@@ -38,7 +38,6 @@ use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_auth::password::Password;
-use mz_authenticator::{GenericOidcAuthenticator, OidcConfig};
 use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
@@ -1317,12 +1316,6 @@ async fn test_auth_base_require_tls_oidc() {
     .await
     .unwrap();
 
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: None,
-    })
-    .unwrap();
-
     let oidc_user = "user@example.com";
     let jwt_token = oidc_server.generate_jwt(
         oidc_user,
@@ -1357,7 +1350,7 @@ async fn test_auth_base_require_tls_oidc() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(Some(oidc_server.issuer), None)
         .start()
         .await;
 
@@ -1520,11 +1513,6 @@ async fn test_auth_oidc_audience_validation() {
     .unwrap();
 
     let expected_audience = "my-app-client-id";
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: Some(expected_audience.to_string()),
-    })
-    .unwrap();
 
     let oidc_user = "user@example.com";
     // Token with correct audience
@@ -1561,7 +1549,10 @@ async fn test_auth_oidc_audience_validation() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(
+            Some(oidc_server.issuer),
+            Some(expected_audience.to_string()),
+        )
         .start()
         .await;
 
@@ -1642,12 +1633,6 @@ async fn test_auth_oidc_audience_optional() {
     .await
     .unwrap();
 
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: None,
-    })
-    .unwrap();
-
     let oidc_user = "user@example.com";
     // Token with no audience
     let no_aud_token = oidc_server.generate_jwt(
@@ -1668,7 +1653,7 @@ async fn test_auth_oidc_audience_optional() {
 
     let server = test_util::TestHarness::default()
         .with_tls(server_cert, server_key)
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(Some(oidc_server.issuer), None)
         .start()
         .await;
 
@@ -1721,17 +1706,11 @@ async fn test_auth_oidc_password_fallback() {
     .await
     .unwrap();
 
-    let oidc_auth = GenericOidcAuthenticator::new(OidcConfig {
-        oidc_issuer: oidc_server.issuer.clone(),
-        oidc_audience: None,
-    })
-    .unwrap();
-
     let oidc_user = "user@example.com";
     let user_password = "secure_password";
 
     let server = test_util::TestHarness::default()
-        .with_oidc_auth(&oidc_auth)
+        .with_oidc_auth(Some(oidc_server.issuer), None)
         .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
         .with_password_auth(Password("mz_system_password".to_owned()))
         .start()
@@ -1783,6 +1762,214 @@ async fn test_auth_oidc_password_fallback() {
                 password: Some(Cow::Borrowed("wrong_password")),
                 ssl_mode: SslMode::Prefer,
                 options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::DbErr(Box::new(|err| {
+                    assert_eq!(err.message(), "invalid password");
+                    assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
+                })),
+            },
+        ],
+    )
+    .await;
+}
+
+/// This test verifies that OIDC authentication correctly respects
+/// runtime changes to the oidc_issuer and oidc_audience system parameters.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_config_switch() {
+    let ca1 = Ca::new_root("test ca 1").unwrap();
+    let (server_cert, server_key) = ca1
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    // Start first OIDC server
+    let encoding_key1 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server1 = OidcMockServer::start(
+        None,
+        encoding_key1,
+        "key-1".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    // Start second OIDC server
+    let encoding_key2 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let oidc_server2 = OidcMockServer::start(
+        None,
+        encoding_key2,
+        "key-2".to_string(),
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+    let audience1 = "app-client-1";
+    let audience2 = "app-client-2";
+
+    // Generate tokens from each server
+    let token1 = oidc_server1.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec![audience1.to_string()]),
+            ..Default::default()
+        },
+    );
+    let token2 = oidc_server2.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            aud: Some(vec![audience2.to_string()]),
+            ..Default::default()
+        },
+    );
+
+    // Start test server configured with first OIDC server
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(
+            Some(oidc_server1.issuer.clone()),
+            Some(audience1.to_string()),
+        )
+        .start()
+        .await;
+
+    let admin_client = server.connect().internal().await.unwrap();
+
+    let make_tls = || {
+        make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        }))
+    };
+
+    // Verify authentication works with first OIDC server's token
+    println!("Testing: first OIDC server token should succeed");
+    let client1 = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token1)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client1.is_ok(),
+        "Should authenticate with first OIDC server: {:?}",
+        client1.err()
+    );
+
+    // Verify authentication fails with second OIDC server's token (wrong issuer)
+    println!("Testing: second OIDC server token should fail before switch");
+    let client2_before = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token2)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client2_before.is_err(),
+        "Should fail with second OIDC server before switch"
+    );
+
+    // Switch to second OIDC server
+    println!("Switching OIDC configuration to second server");
+    admin_client
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET oidc_issuer = '{}'",
+            oidc_server2.issuer
+        ))
+        .await
+        .unwrap();
+    admin_client
+        .batch_execute(&format!("ALTER SYSTEM SET oidc_audience = '{}'", audience2))
+        .await
+        .unwrap();
+
+    // Verify authentication now works with second OIDC server's token
+    println!("Testing: second OIDC server token should succeed after switch");
+    let client2_after = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token2)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client2_after.is_ok(),
+        "Should authenticate with second OIDC server after switch: {:?}",
+        client2_after.err()
+    );
+
+    // Verify authentication now fails with first OIDC server's token
+    println!("Testing: first OIDC server token should fail after switch");
+    let client1_after = server
+        .connect()
+        .ssl_mode(SslMode::Require)
+        .user(oidc_user)
+        .password(&token1)
+        .options("--oidc_auth_enabled=true")
+        .with_tls(make_tls())
+        .await;
+    assert!(
+        client1_after.is_err(),
+        "Should fail with first OIDC server after switch"
+    );
+}
+
+/// This test verifies that we return an error when the OIDC issuer is not set.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)]
+async fn test_auth_oidc_issuer_validation() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+
+    let kid = "test-key-1".to_string();
+    let oidc_server = OidcMockServer::start(
+        None,
+        encoding_key,
+        kid,
+        SYSTEM_TIME.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let oidc_user = "user@example.com";
+
+    let token = oidc_server.generate_jwt(
+        oidc_user,
+        GenerateJwtOptions {
+            ..Default::default()
+        },
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_oidc_auth(None, None)
+        .start()
+        .await;
+
+    run_tests(
+        "OIDC Issuer Validation",
+        &server,
+        &[
+            // JWT with no issuer should fail.
+            TestCase::Pgwire {
+                user_to_auth_as: oidc_user,
+                user_reported_by_system: oidc_user,
+                password: Some(Cow::Borrowed(&token)),
+                ssl_mode: SslMode::Require,
+                options: Some("--oidc_auth_enabled=true"),
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");

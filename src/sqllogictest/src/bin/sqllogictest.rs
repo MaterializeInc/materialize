@@ -32,13 +32,13 @@ use walkdir::WalkDir;
 /// Runs sqllogictest scripts to verify database engine correctness.
 #[derive(clap::Parser)]
 struct Args {
-    /// Increase verbosity.
-    ///
-    /// If specified once, print summary for each source file.
-    /// If specified twice, also show descriptions of each error.
-    /// If specified thrice, also print each query before it is executed.
-    #[clap(short = 'v', long = "verbose", action = ArgAction::Count)]
-    verbosity: u8,
+    /// By default, prints summary for each source file and shows descriptions of each error.
+    /// If specified, also print each query before it is executed.
+    #[clap(short = 'v', long = "verbose", action = ArgAction::SetTrue, conflicts_with = "quiet")]
+    verbose: bool,
+    /// Suppress summary output unless a file has failures.
+    #[clap(short = 'q', long = "quiet", action = ArgAction::SetTrue, conflicts_with = "verbose")]
+    quiet: bool,
     /// Don't exit with a failing code if not all queries are successful.
     #[clap(long)]
     no_fail: bool,
@@ -170,7 +170,8 @@ async fn main() -> ExitCode {
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
-        verbosity: args.verbosity,
+        verbose: args.verbose,
+        quiet: args.quiet,
         postgres_url: args.postgres_url.clone(),
         prefix: args.prefix.clone(),
         no_fail: args.no_fail,
@@ -230,7 +231,7 @@ async fn main() -> ExitCode {
                     let start_time = Instant::now();
                     match runner::run_file(&mut runner, entry.path()).await {
                         Ok(o) => {
-                            if o.any_failed() || config.verbosity >= 1 {
+                            if o.any_failed() || !config.quiet {
                                 writeln!(
                                     config.stdout,
                                     "{}",

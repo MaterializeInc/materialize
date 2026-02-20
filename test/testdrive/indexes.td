@@ -331,7 +331,6 @@ mz_frontiers_ind                                            mz_frontiers        
 mz_hydration_statuses_ind                                   mz_hydration_statuses                        mz_catalog_server    {object_id,replica_id}                      ""
 mz_indexes_ind                                              mz_indexes                                   mz_catalog_server    {id}                                        ""
 mz_kafka_sources_ind                                        mz_kafka_sources                             mz_catalog_server    {id}                                        ""
-mz_materialization_lag_ind                                  mz_materialization_lag                       mz_catalog_server    {object_id}                                ""
 mz_materialized_views_ind                                   mz_materialized_views                        mz_catalog_server    {id}                                        ""
 mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_counts_received_raw         mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
 mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""

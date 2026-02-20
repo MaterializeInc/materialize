@@ -55,7 +55,7 @@ def workflow_default(c: Composition) -> None:
         )
     )
 
-    c.backup_postgres()
+    PostgresMetadata.backup(c)
 
     # Make further updates to Materialize's state
     for i in range(0, 100):
@@ -73,7 +73,7 @@ def workflow_default(c: Composition) -> None:
         )
 
     # Restore CRDB from backup, run persistcli restore-blob and restart Mz
-    c.restore_postgres()
+    PostgresMetadata.restore(c)
 
     # Confirm that the database is readable / has shard data
     c.exec(

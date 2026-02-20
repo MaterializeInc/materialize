@@ -29,6 +29,7 @@ from materialize.mzcompose.services.foundationdb import (
 )
 
 if TYPE_CHECKING:
+    from materialize.mzcompose.services.alloydb import AlloyDB
     from materialize.mzcompose.services.postgres import PostgresMetadata
 
 
@@ -46,12 +47,13 @@ def metadata_store_name() -> str:
 
 def metadata_store_service(
     metadata_store: str,
-) -> type[Cockroach | FoundationDB | PostgresMetadata] | None:
+) -> type[Cockroach | FoundationDB | PostgresMetadata | AlloyDB] | None:
     """
     Returns the service class corresponding to the specified metadata store, or None if an internal store is used.
     :param metadata_store: The name of the metadata store.
     """
     # Import here to avoid circular imports
+    from materialize.mzcompose.services.alloydb import AlloyDB
     from materialize.mzcompose.services.postgres import PostgresMetadata
 
     match metadata_store:
@@ -61,6 +63,8 @@ def metadata_store_service(
             return FoundationDB
         case "postgres-metadata":
             return PostgresMetadata
+        case "alloydb":
+            return AlloyDB
         case "postgres-internal":
             return None
         case _:
@@ -74,7 +78,7 @@ def is_external_metadata_store(metadata_store: str) -> bool:
     :param metadata_store: The name of the metadata store.
     """
     match metadata_store:
-        case "cockroach" | "foundationdb" | "postgres-metadata":
+        case "cockroach" | "foundationdb" | "postgres-metadata" | "alloydb":
             return True
         case "postgres-internal":
             return False
@@ -111,6 +115,8 @@ def external_metadata_store() -> str | bool:
         case "foundationdb":
             return fdb_coordinator_addresses()
         case "postgres-metadata":
+            return True
+        case "alloydb":
             return True
         case _:
             raise ValueError(f"Unknown METADATA_STORE: {METADATA_STORE}")

@@ -16,5 +16,5 @@ COMPLETE 0
 statement ok
 SET statement_timeout = '1s';
 
-query error db error: ERROR: canceling statement due to statement timeout
+query error canceling statement due to statement timeout
 SELECT mz_unsafe.mz_sleep(2);

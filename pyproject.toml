@@ -10,7 +10,7 @@
 [tool.black]
 target_version = ["py310"]
 # DEFAULT_EXCLUDES from https://github.com/psf/black/blob/main/src/black/const.py but without "build" directory since we use it in our source code. Instead exclude target and target-xcompile
-exclude = "(\\.direnv|\\.eggs|\\.git|\\.hg|\\.ipynb_checkpoints|\\.mypy_cache|\\.nox|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.svn|\\.venv|\\.vscode|__pypackages__|_build|buck-out|dist|venv|target|target-xcompile|\\.terraform|misc/fivetran-sdk)"
+exclude = "(\\.direnv|\\.eggs|\\.git|\\.hg|\\.ipynb_checkpoints|\\.mypy_cache|\\.nox|\\.pytest_cache|\\.ruff_cache|\\.tox|\\.svn|\\.venv|\\.vscode|__pypackages__|_build|buck-out|dist|venv|target|target-xcompile|\\.terraform)"
 
 [tool.ruff]
 target-version = "py310"
@@ -24,8 +24,6 @@ extend-exclude = [
     "venv", "target",
     # This dbt adapter may be published elsewhere, so doesn't follow the same compatibility rules as our internal code.
     "misc/dbt-materialize",
-    # The fivetran-sdk is a submodule that we don't control.
-    "misc/fivetran-sdk",
 ]
 
 [tool.ruff.isort]

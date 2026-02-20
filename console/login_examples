@@ -1,0 +1,46 @@
+## SQL Request
+
+curl -i 'http://localhost:6876/api/sql' \
+ -H 'Content-Type: application/json' \
+ --data-raw '{"queries":[{"query":"SELECT mz_version()","params":[]}]}'
+
+### Output
+
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 170
+vary: origin, access-control-request-method, access-control-request-headers
+access-control-expose-headers: \*
+date: Wed, 09 Apr 2025 20:04:14 GMT
+
+{"results":[{"tag":"SELECT 1","rows":[["v0.141.0-dev.0 (ecaaefe5a)"]],"desc":{"columns":[{"name":"mz_version","type_oid":25,"type_len":-1,"type_mod":-1}]},"notices":[]}]}%
+
+## Login Request
+
+curl -i 'http://localhost:6876/api/login' \
+ -H 'Content-Type: application/json' \
+ --data-raw '{"username":"authteser","password":"testpassword"}'
+
+### Output
+
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 20
+set-cookie: mz_session=LmgcqAPreAyRwJNu4MM4rQ; HttpOnly; SameSite=Strict; Path=/
+date: Wed, 09 Apr 2025 20:05:01 GMT
+
+{"status":"success"}%
+
+## Logout Request
+
+curl -i 'http://localhost:6876/api/logout' -X \
+POST -H 'Cookie: mz_session=LmgcqAPreAyRwJNu4MM4rQ'
+
+### Output
+
+HTTP/1.1 200 OK
+content-type: application/json
+content-length: 20
+date: Wed, 09 Apr 2025 20:06:18 GMT
+
+{"status":"success"}%

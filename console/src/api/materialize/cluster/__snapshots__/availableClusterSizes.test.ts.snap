@@ -1,0 +1,10 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`queries > buildAvailableClusterReplicaSizesQuery produces the expected query 1`] = `
+{
+  "parameters": [
+    "mz_%",
+  ],
+  "sql": "select "size" from "mz_cluster_replica_sizes" where "size" not like $1",
+}
+`;

@@ -74,6 +74,7 @@ use mz_ore::cast::CastFrom;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::cache::PersistClientCache;
+use mz_persist_types::Codec;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_types::StorageDiff;
@@ -521,7 +522,7 @@ where
 {
     let persist_location = collection_meta.persist_location.clone();
     let shard_id = collection_meta.data_shard;
-    let collection_desc = collection_meta.relation_desc.clone();
+    let collection_desc = Arc::new(collection_meta.relation_desc.clone());
 
     let mut builder =
         AsyncOperatorBuilder::new("CopyFrom-stage_batches".to_string(), scope.clone());
@@ -545,7 +546,7 @@ where
         let write_handle = persist_client
             .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
                 shard_id,
-                Arc::new(collection_desc),
+                Arc::clone(&collection_desc),
                 Arc::new(UnitSchema),
                 persist_diagnostics,
             )
@@ -567,6 +568,12 @@ where
 
             // Pull Rows off our stream and stage them into a Batch.
             for maybe_row in row_batch {
+                let maybe_row = maybe_row.and_then(|row| {
+                    Row::validate(&row, &*collection_desc).map_err(|e| {
+                        StorageErrorXKind::invalid_record_batch(e).with_context("stage_batches")
+                    })?;
+                    Ok(row)
+                });
                 match maybe_row {
                     // Happy path, add the Row to our batch!
                     Ok(row) => {

@@ -380,7 +380,7 @@ ALTER SOURCE js RENAME TO cool
 statement error must be owner of SOURCE materialize.public.js
 ALTER SOURCE js OWNER TO group_materialize
 
-statement error db error: ERROR: Expected one of TIMESTAMP or RETAIN, found SIZE
+statement error Expected one of TIMESTAMP or RETAIN, found SIZE
 ALTER SOURCE js SET (SIZE = 'scale=1,workers=4')
 
 ## Views
@@ -2360,7 +2360,7 @@ SELECT mz_cluster_replicas.name, mz_roles.name
 ----
 
 
-statement error db error: ERROR: unknown cluster 'materialize_public_s'
+statement error unknown cluster 'materialize_public_s'
 ALTER CLUSTER materialize_public_s OWNER TO joe
 
 statement error altering the owner of a cluster replica is not supported
@@ -2376,7 +2376,7 @@ ALTER TABLE accounts OWNER TO joe
 ----
 COMPLETE 0
 
-statement error db error: ERROR: must be a member of "joe"
+statement error must be a member of "joe"
 ALTER SOURCE s OWNER TO joe
 
 query TT

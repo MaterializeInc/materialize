@@ -614,6 +614,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "kafka_retry_backoff_max",
     "kafka_reconnect_backoff",
     "kafka_reconnect_backoff_max",
+    "oidc_issuer",
+    "oidc_audience",
 ]
 
 

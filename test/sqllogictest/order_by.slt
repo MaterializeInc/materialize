@@ -60,7 +60,7 @@ ORDER BY -2*a;
 # This looks a bit weird if we compare it with the previous two tests, but Postgres does the same
 # See https://www.postgresql.org/docs/current/queries-order.html
 # "Note that an output column name has to stand alone, that is, it cannot be used in an expression"
-query error db error: ERROR: column "d" does not exist
+query error column "d" does not exist
 SELECT 2*a as d
 FROM foo
 ORDER BY -d;
@@ -70,16 +70,16 @@ SELECT sum(a) FROM foo ORDER BY sum(a)
 ----
 3
 
-query error db error: ERROR: column "foo\.a" must appear in the GROUP BY clause or be used in an aggregate function
+query error column "foo\.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM foo ORDER BY sum(a);
 
-query error db error: ERROR: column "foo\.a" must appear in the GROUP BY clause or be used in an aggregate function
+query error column "foo\.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT sum(a) FROM foo ORDER BY a;
 
-query error db error: ERROR: column "foo\.b" must appear in the GROUP BY clause or be used in an aggregate function
+query error column "foo\.b" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT sum(a) FROM foo ORDER BY sum(a), b;
 
-query error db error: ERROR: column "foo\.b" must appear in the GROUP BY clause or be used in an aggregate function
+query error column "foo\.b" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT sum(a), b FROM foo ORDER BY sum(a), b;
 
 query I nosort
@@ -152,7 +152,7 @@ ORDER BY 1;
 9
 10
 
-query error db error: ERROR: column reference 2 in ORDER BY clause is out of range \(1 \- 1\)
+query error column reference 2 in ORDER BY clause is out of range \(1 \- 1\)
 SELECT 10-sum(a)
 FROM foo
 GROUP BY b
@@ -168,7 +168,7 @@ ORDER BY 2;
 8  1
 10  NULL
 
-query error db error: ERROR: column reference 3 in ORDER BY clause is out of range \(1 \- 2\)
+query error column reference 3 in ORDER BY clause is out of range \(1 \- 2\)
 SELECT 10-sum(a), lag(sum(a)) OVER (ORDER BY sum(a))
 FROM foo
 GROUP BY b
@@ -185,12 +185,12 @@ ORDER BY d;
 
 # When an ORDER BY refers to an output column name, the column name can't be part of a bigger expression.
 # (This is the same in Postgres.)
-query error db error: ERROR: column "d" does not exist
+query error column "d" does not exist
 SELECT a, lag(a) OVER (ORDER BY a) as d
 FROM foo
 ORDER BY -d;
 
-query error db error: ERROR: column "d" does not exist
+query error column "d" does not exist
 SELECT a, 2*a as d
 FROM foo
 ORDER BY lag(d) OVER (ORDER BY d);
@@ -282,14 +282,14 @@ ORDER BY -2*a+3;
 -3
 
 # But we don't support aggregations in the ORDER BY of a set expression (same in Postgres)
-query error db error: ERROR: aggregate functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.sum\)
+query error aggregate functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.sum\)
 (SELECT a FROM foo)
 UNION
 (SELECT a-3 FROM foo)
 ORDER BY sum(a);
 
 # ... or window functions (same in Postgres).
-query error db error: ERROR: window functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.lag\)
+query error window functions are not allowed in ORDER BY clause of a set expression \(function pg_catalog\.lag\)
 (SELECT a FROM foo)
 UNION
 (SELECT a-3 FROM foo)
@@ -1210,13 +1210,13 @@ EXECUTE p1(1+1);
 ----
 2  two
 
-query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+query error Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
 EXECUTE p1(null::bigint);
 
-query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got integer_to_bigint\(null\)
+query error Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got integer_to_bigint\(null\)
 EXECUTE p1(coalesce(null + 5, 7 + null));
 
-query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+query error Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
 PREPARE p_error AS
 SELECT *
 FROM foo
@@ -1269,7 +1269,7 @@ FROM foo
 ORDER BY a, b
 OFFSET $1 - 2;
 
-query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-2
+query error Invalid OFFSET clause: must not be negative, got \-2
 EXECUTE p3(0);
 
 query II
@@ -1307,38 +1307,38 @@ EXECUTE p1(0.6);
 2  two
 
 # But text -> bigint is not allowed even in CastContext::Assignment.
-query error db error: ERROR: unable to cast given parameter \$1: expected bigint, got text
+query error unable to cast given parameter \$1: expected bigint, got text
 EXECUTE p1('aaa');
 
-query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-7
+query error Invalid OFFSET clause: must not be negative, got \-7
 PREPARE p_error AS
 SELECT *
 FROM foo
 ORDER BY a, b
 OFFSET -7;
 
-query error db error: ERROR: Invalid OFFSET clause: must not be negative, got \-2
+query error Invalid OFFSET clause: must not be negative, got \-2
 PREPARE p_error AS
 SELECT *
 FROM foo
 ORDER BY a, b
 OFFSET 5-7;
 
-query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
+query error Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaa"
 PREPARE p_error AS
 SELECT *
 FROM foo
 ORDER BY a, b
 OFFSET 'aaa';
 
-query error db error: ERROR: column "a" does not exist
+query error column "a" does not exist
 PREPARE p_error AS
 SELECT *
 FROM foo
 ORDER BY a, b
 OFFSET a;
 
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got integer_to_bigint\(#\^0\{a\}\)
+query error Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got integer_to_bigint\(#\^0\{a\}\)
 PREPARE p_error AS
 SELECT
   (
@@ -1349,7 +1349,7 @@ SELECT
   )
 FROM foo AS outer_foo;
 
-query error db error: ERROR: Expected subselect to return 1 column, got 2 columns
+query error Expected subselect to return 1 column, got 2 columns
 PREPARE p_error AS
 SELECT
   (
@@ -1373,24 +1373,24 @@ SELECT
 FROM foo AS outer_foo;
 
 # This tests the `plan_select_inner`'s `try_visit_mut_pre` just after binding the parameters of `expr`.
-query error db error: ERROR: Invalid OFFSET clause: Expected a constant expression, got integer_to_bigint\(\(#\^0\{a\} \+ 7\)\)
+query error Invalid OFFSET clause: Expected a constant expression, got integer_to_bigint\(\(#\^0\{a\} \+ 7\)\)
 EXECUTE p_error_1(7);
 
-query error db error: ERROR: OFFSET does not allow subqueries
+query error OFFSET does not allow subqueries
 PREPARE p_error AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET (SELECT 2);
 
-query error db error: ERROR: window functions are not allowed in OFFSET \(function pg_catalog\.lag\)
+query error window functions are not allowed in OFFSET \(function pg_catalog\.lag\)
 PREPARE p_error AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET lag(5) OVER ();
 
-query error db error: ERROR: window functions are not allowed in OFFSET \(function pg_catalog\.lag\)
+query error window functions are not allowed in OFFSET \(function pg_catalog\.lag\)
 PREPARE p_error AS
 SELECT
   (
@@ -1403,7 +1403,7 @@ FROM foo AS outer_foo;
 
 # Unmaterializable function calls are not allowed (not deemed a constant by `HirScalarExpr::is_constant`, and then
 # not simplified by `MirScalarExpr::reduce`).
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
+query error Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
 PREPARE p_error AS
 SELECT *
 FROM foo
@@ -1440,28 +1440,28 @@ OFFSET 2 - 1
 ----
 zero0
 
-query error db error: ERROR: column "a" does not exist
+query error column "a" does not exist
 CREATE VIEW err AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET a;
 
-query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaaaa"
+query error Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaaaa"
 CREATE VIEW err AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET 'aaaaa';
 
-query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+query error Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
 CREATE VIEW err AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET null;
 
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
+query error Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
 CREATE VIEW err AS
 SELECT *
 FROM foo
@@ -1518,28 +1518,28 @@ OFFSET 2 - 1
 ----
 zero0
 
-query error db error: ERROR: column "a" does not exist
+query error column "a" does not exist
 CREATE MATERIALIZED VIEW err AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET a;
 
-query error db error: ERROR: Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaaaa"
+query error Invalid OFFSET clause: invalid input syntax for type bigint: invalid digit found in string: "aaaaa"
 CREATE MATERIALIZED VIEW err AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET 'aaaaa';
 
-query error db error: ERROR: Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
+query error Invalid OFFSET clause: Expected an expression that evaluates to a non\-null value, got null
 CREATE MATERIALIZED VIEW err AS
 SELECT *
 FROM foo
 ORDER BY b, a
 OFFSET null;
 
-query error db error: ERROR: Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
+query error Invalid OFFSET clause: must be simplifiable to a constant, possibly after parameter binding, got text_to_bigint\(mz_timestamp_to_text\(mz_now\(\)\)\)
 CREATE MATERIALIZED VIEW err AS
 SELECT *
 FROM foo
@@ -1634,5 +1634,5 @@ EXECUTE fizz_paginated(4::bigint, 2*4);
 
 # TODO: LIMIT currently just tries to match a literal after parameter binding. It should also do constant folding,
 # similarly to OFFSET.
-query error db error: ERROR: Top\-level LIMIT must be a constant expression, got integer_to_bigint\(4\)
+query error Top\-level LIMIT must be a constant expression, got integer_to_bigint\(4\)
 EXECUTE fizz_paginated(4, 2*4);

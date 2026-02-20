@@ -35,7 +35,7 @@ CREATE TABLE green.t2 (y int);
 statement ok
 INSERT INTO green.t2 VALUES (4), (5), (6);
 
-statement error db error: ERROR: unknown catalog item 'blue\.t2'
+statement error unknown catalog item 'blue\.t2'
 SELECT * FROM blue.t2;
 
 statement ok
@@ -77,10 +77,10 @@ SELECT * FROM blue.t2;
 8
 9
 
-statement error db error: ERROR: unknown schema 'null'
+statement error unknown schema 'null'
 ALTER SCHEMA blue SWAP WITH NULL;
 
-statement error db error: ERROR: unknown schema 'null'
+statement error unknown schema 'null'
 ALTER SCHEMA NULL SWAP WITH green;
 
 statement ok
@@ -96,17 +96,17 @@ SELECT * FROM this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_
 8
 9
 
-statement error db error: ERROR: cannot swap schemas that are in the ambient database
+statement error cannot swap schemas that are in the ambient database
 ALTER SCHEMA mz_internal SWAP WITH mz_catalog;
 
 # Temporary schema swap should fail with correct error message.
 # With lazy temporary schema creation, the temp schema may not exist yet,
 # but we still need to return the correct error (not "unknown schema").
 
-statement error db error: ERROR: cannot swap schemas that are in the ambient database
+statement error cannot swap schemas that are in the ambient database
 ALTER SCHEMA mz_temp SWAP WITH blue;
 
-statement error db error: ERROR: cannot swap schemas that are in the ambient database
+statement error cannot swap schemas that are in the ambient database
 ALTER SCHEMA blue SWAP WITH mz_temp;
 
 simple conn=mz_system,user=mz_system
@@ -126,10 +126,10 @@ CREATE DATABASE b;
 statement ok
 CREATE SCHEMA b.blue;
 
-statement error db error: ERROR: Expected end of statement, found dot
+statement error Expected end of statement, found dot
 ALTER SCHEMA a.green SWAP WITH b.blue;
 
-statement error db error: ERROR: unacceptable schema name 'mz_swap'
+statement error unacceptable schema name 'mz_swap'
 CREATE SCHEMA mz_swap;
 
 statement ok
@@ -182,7 +182,7 @@ ALTER SYSTEM SET enable_alter_swap TO false;
 ----
 COMPLETE 0
 
-statement error db error: ERROR: the ALTER SWAP feature for objects is not available
+statement error the ALTER SWAP feature for objects is not available
 ALTER CLUSTER bar SWAP WITH foo;
 
 # Cleanup.

@@ -12,6 +12,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
 statement ok
 CREATE VIEW objects AS
   SELECT
@@ -19,683 +24,684 @@ CREATE VIEW objects AS
     objects.name AS object,
     columns.position,
     columns.name,
-    columns.type
+    columns.type,
+    comments.comment
   FROM
-    mz_catalog.mz_columns AS columns,
-    mz_catalog.mz_objects AS objects,
-    mz_catalog.mz_schemas AS schema
-  WHERE columns.id = objects.id AND objects.schema_id = schema.id
+    mz_catalog.mz_columns AS columns
+    JOIN mz_catalog.mz_objects AS objects ON columns.id = objects.id
+    JOIN mz_catalog.mz_schemas AS schema ON objects.schema_id = schema.id
+    LEFT JOIN mz_internal.mz_comments AS comments ON columns.id = comments.id AND columns.position = comments.object_sub_id
 
 statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_global_ids' ORDER BY position
-----
-1  id  text
-2  global_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_recent_activity_log' ORDER BY position
-----
-1  execution_id  uuid
-2  sample_rate  double␠precision
-3  cluster_id  text
-4  application_name  text
-5  cluster_name  text
-6  database_name  text
-7  search_path  list
-8  transaction_isolation  text
-9  execution_timestamp  uint8
-10  transient_index_id  text
-11  params  text[]
-12  mz_version  text
-13  began_at  timestamp␠with␠time␠zone
-14  finished_at  timestamp␠with␠time␠zone
-15  finished_status  text
-16  error_message  text
-17  result_size  bigint
-18  rows_returned  bigint
-19  execution_strategy  text
-20  transaction_id  uint8
-21  prepared_statement_id  uuid
-22  sql_hash  bytea
-23  prepared_statement_name  text
-24  session_id  uuid
-25  prepared_at  timestamp␠with␠time␠zone
-26  statement_type  text
-27  throttled_count  uint8
-28  connected_at  timestamp␠with␠time␠zone
-29  initial_application_name  text
-30  authenticated_user  text
-31  sql  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_connections' ORDER BY position
-----
-1  id  text
-2  endpoint  text
-3  region  text
-4  access_key_id  text
-5  access_key_id_secret_id  text
-6  secret_access_key_secret_id  text
-7  session_token  text
-8  session_token_secret_id  text
-9  assume_role_arn  text
-10  assume_role_session_name  text
-11  principal  text
-12  external_id  text
-13  example_trust_policy  jsonb
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
-----
-1  occurred_at  timestamp␠with␠time␠zone
-2  connection_id  text
-3  status  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_statuses' ORDER BY position
-----
-1  id  text
-2  name  text
-3  last_status_change_at  timestamp␠with␠time␠zone
-4  status  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_deployment_lineage' ORDER BY position
-----
-1  cluster_id  text
-2  current_deployment_cluster_id  text
-3  cluster_name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_schedules' ORDER BY position
-----
-1  cluster_id  text
-2  type  text
-3  refresh_hydration_time_estimate  interval
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
-----
-1  replica_id  text
-2  process_id  uint8
-3  cpu_nano_cores  uint8
-4  memory_bytes  uint8
-5  disk_bytes  uint8
-6  heap_bytes  uint8
-7  heap_limit  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics_history' ORDER BY position
-----
-1  replica_id  text
-2  process_id  uint8
-3  cpu_nano_cores  uint8
-4  memory_bytes  uint8
-5  disk_bytes  uint8
-6  occurred_at  timestamp␠with␠time␠zone
-7  heap_bytes  uint8
-8  heap_limit  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
-----
-1  replica_id  text
-2  process_id  uint8
-3  status  text
-4  reason  text
-5  updated_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_status_history' ORDER BY position
-----
-1  replica_id  text
-2  process_id  uint8
-3  status  text
-4  reason  text
-5  occurred_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization' ORDER BY position
-----
-1  replica_id  text
-2  process_id  uint8
-3  cpu_percent  double␠precision
-4  memory_percent  double␠precision
-5  disk_percent  double␠precision
-6  heap_percent  double␠precision
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization_history' ORDER BY position
-----
-1  replica_id  text
-2  process_id  uint8
-3  cpu_percent  double␠precision
-4  memory_percent  double␠precision
-5  disk_percent  double␠precision
-6  heap_percent  double␠precision
-7  occurred_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
-----
-1  replica_id  text
-2  size  text
-3  cluster_id  text
-4  cluster_name  text
-5  replica_name  text
-6  created_at  timestamp␠with␠time␠zone
-7  dropped_at  timestamp␠with␠time␠zone
-8  credits_per_hour  numeric
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_name_history' ORDER BY position
-----
-1  occurred_at  timestamp␠with␠time␠zone
-2  id  text
-3  previous_name  text
-4  new_name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_internal_cluster_replicas' ORDER BY position
-----
-1  id           text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_pending_cluster_replicas' ORDER BY position
-----
-1  id           text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
-----
-1  id  text
-2  object_type  text
-3  object_sub_id  integer
-4  comment  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
-----
-1  object_id  text
-2  dependency_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_hydration_statuses' ORDER BY position
-----
-1  object_id  text
-2  replica_id  text
-3  hydrated  boolean
-4  hydration_time  interval
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
-----
-1  replica_id  text
-2  object_id  text
-3  physical_plan_node_id  uint8
-4  hydrated  boolean
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
-----
-1  object_id  text
-2  read_frontier  mz_timestamp
-3  write_frontier  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_history_retention_strategies' ORDER BY position
-----
-1  id  text
-2  strategy  text
-3  value  jsonb
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_hydration_statuses' ORDER BY position
-----
-1  object_id  text
-2  replica_id  text
-3  hydrated  boolean
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_license_keys' ORDER BY position
-----
-1  id  text
-2  organization  text
-3  environment_id  text
-4  expiration  timestamp␠with␠time␠zone
-5  not_before  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_index_advice' ORDER BY position
-----
-1  object_id  text
-2  hint  text
-3  details  text
-4  referenced_object_ids  list
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_dependencies' ORDER BY position
-----
-1  object_id  text
-2  dependency_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position
-----
-1  object_id  text
-2  local_lag  interval
-3  global_lag  interval
-4  slowest_local_input_id  text
-5  slowest_global_input_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refresh_strategies' ORDER BY position
-----
-1  materialized_view_id  text
-2  type  text
-3  interval  interval
-4  aligned_to  timestamp␠with␠time␠zone
-5  at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
-----
-1  materialized_view_id  text
-2  last_completed_refresh  mz_timestamp
-3  next_refresh  mz_timestamp
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
-----
-1  object_id  text
-2  referenced_object_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_fully_qualified_names' ORDER BY position
-----
-1  id  text
-2  name  text
-3  object_type  text
-4  schema_id  text
-5  schema_name  text
-6  database_id  text
-7  database_name  text
-8  cluster_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
-----
-1  id  text
-2  previous_id  text
-3  object_type  text
-4  event_type  text
-5  occurred_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_history' ORDER BY position
-----
-1  id  text
-2  cluster_id  text
-3  object_type  text
-4  created_at  timestamp␠with␠time␠zone
-5  dropped_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
-----
-1  object_id  text
-2  referenced_object_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices' ORDER BY position
-----
-1  id  text
-2  notice_type  text
-3  message  text
-4  hint  text
-5  action  text
-6  redacted_message  text
-7  redacted_hint  text
-8  redacted_action  text
-9  action_type  text
-10  object_id  text
-11  created_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices_redacted' ORDER BY position
-----
-1  id  text
-2  notice_type  text
-3  message  text
-4  hint  text
-5  action  text
-6  action_type  text
-7  object_id  text
-8  created_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
-----
-1  id  text
-2  replication_slot  text
-3  timeline_id  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_source_tables' ORDER BY position
-----
-1  id  text
-2  schema_name  text
-3  table_name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mysql_source_tables' ORDER BY position
-----
-1  id  text
-2  schema_name  text
-3  table_name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sql_server_source_tables' ORDER BY position
-----
-1  id  text
-2  schema_name  text
-3  table_name  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_source_tables' ORDER BY position
-----
-1  id  text
-2  topic  text
-3  envelope_type  text
-4  key_format  text
-5  value_format  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_session_history' ORDER BY position
-----
-1  session_id  uuid
-2  connected_at  timestamp␠with␠time␠zone
-3  initial_application_name  text
-4  authenticated_user  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
-----
-1  id  uuid
-2  connection_id  uint4
-3  role_id  text
-4  client_ip  text
-5  connected_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policies' ORDER BY position
-----
-1  id  text
-2  name  text
-3  owner_id  text
-4  privileges  mz_aclitem[]
-5  oid  oid
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policy_rules' ORDER BY position
-----
-1  name  text
-2  policy_id  text
-3  action  text
-4  address  text
-5  direction  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  database  text
-4  schema  text
-5  name  text
-6  object_type  text
-7  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_cluster_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  name  text
-4  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_database_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  name  text
-4  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_default_privileges' ORDER BY position
-----
-1  object_owner  text
-2  database  text
-3  schema  text
-4  object_type  text
-5  grantee  text
-6  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_object_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  database  text
-4  schema  text
-5  name  text
-6  object_type  text
-7  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_role_members' ORDER BY position
-----
-1  role  text
-2  member  text
-3  grantor  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_schema_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  database  text
-4  name  text
-5  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_system_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_my_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  database  text
-4  schema  text
-5  name  text
-6  object_type  text
-7  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_cluster_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  name  text
-4  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_database_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  name  text
-4  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_default_privileges' ORDER BY position
-----
-1  object_owner  text
-2  database  text
-3  schema  text
-4  object_type  text
-5  grantee  text
-6  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_object_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  database  text
-4  schema  text
-5  name  text
-6  object_type  text
-7  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_role_members' ORDER BY position
-----
-1  role  text
-2  member  text
-3  grantor  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_schema_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  database  text
-4  name  text
-5  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_system_privileges' ORDER BY position
-----
-1  grantor  text
-2  grantee  text
-3  privilege_type  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
-----
-1  id  text
-2  replica_id  text
-3  messages_staged  uint8
-4  messages_committed  uint8
-5  bytes_staged  uint8
-6  bytes_committed  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statuses' ORDER BY position
-----
-1  id  text
-2  name  text
-3  type  text
-4  last_status_change_at  timestamp␠with␠time␠zone
-5  status  text
-6  error  text
-7  details  jsonb
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_status_history' ORDER BY position
-----
-1  occurred_at  timestamp␠with␠time␠zone
-2  sink_id  text
-3  status  text
-4  error  text
-5  details  jsonb
-6  replica_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
-----
-1  id  text
-2  replica_id  text
-3  messages_received  uint8
-4  bytes_received  uint8
-5  updates_staged  uint8
-6  updates_committed  uint8
-7  records_indexed  uint8
-8  bytes_indexed  uint8
-9  rehydration_latency  interval
-10  snapshot_records_known  uint8
-11  snapshot_records_staged  uint8
-12  snapshot_committed  boolean
-13  offset_known  uint8
-14  offset_committed  uint8
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position
-----
-1  id  text
-2  name  text
-3  type  text
-4  last_status_change_at  timestamp␠with␠time␠zone
-5  status  text
-6  error  text
-7  details  jsonb
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_status_history' ORDER BY position
-----
-1  occurred_at  timestamp␠with␠time␠zone
-2  source_id  text
-3  status  text
-4  error  text
-5  details  jsonb
-6  replica_id  text
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_statement_lifecycle_history' ORDER BY position
-----
-1  statement_id  uuid
-2  event_type  text
-3  occurred_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
-----
-1  id  text
-2  session_id  uuid
-3  cluster_id  text
-4  created_at  timestamp␠with␠time␠zone
-5  referenced_object_ids  list
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_global_lag' ORDER BY position
-----
-1  object_id  text
-2  lag  interval
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_lag_history' ORDER BY position
-----
-1  object_id  text
-2  replica_id  text
-3  lag  interval
-4  occurred_at  timestamp␠with␠time␠zone
-
-query ITT
-SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
-----
-1  id  text
-2  name  text
-3  url  text
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_global_ids' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠object.␠Corresponds␠to␠`mz_objects.id`.
+global_id  text  The␠global␠ID␠of␠the␠object.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_recent_activity_log' ORDER BY position
+----
+execution_id  uuid  An␠ID␠that␠is␠unique␠for␠each␠executed␠statement.
+sample_rate  double␠precision  The␠actual␠rate␠at␠which␠the␠statement␠was␠sampled.
+cluster_id  text  The␠ID␠of␠the␠cluster␠the␠statement␠execution␠was␠directed␠to.␠Corresponds␠to␠mz_clusters.id.
+application_name  text  The␠value␠of␠the␠`application_name`␠configuration␠parameter␠at␠execution␠time.
+cluster_name  text  The␠name␠of␠the␠cluster␠with␠ID␠`cluster_id`␠at␠execution␠time.
+database_name  text  The␠value␠of␠the␠`database`␠configuration␠parameter␠at␠execution␠time.
+search_path  list  The␠value␠of␠the␠`search_path`␠configuration␠parameter␠at␠execution␠time.
+transaction_isolation  text  The␠value␠of␠the␠`transaction_isolation`␠configuration␠parameter␠at␠execution␠time.
+execution_timestamp  uint8  The␠logical␠timestamp␠at␠which␠execution␠was␠scheduled.
+transient_index_id  text  The␠internal␠index␠of␠the␠compute␠dataflow␠created␠for␠the␠query,␠if␠any.
+params  text[]  The␠parameters␠with␠which␠the␠statement␠was␠executed.
+mz_version  text  The␠version␠of␠Materialize␠that␠was␠running␠when␠the␠statement␠was␠executed.
+began_at  timestamp␠with␠time␠zone  The␠wall-clock␠time␠at␠which␠the␠statement␠began␠executing.
+finished_at  timestamp␠with␠time␠zone  The␠wall-clock␠time␠at␠which␠the␠statement␠finished␠executing.
+finished_status  text  The␠final␠status␠of␠the␠statement␠(e.g.,␠`success`,␠`canceled`,␠`error`,␠or␠`aborted`).␠`aborted`␠means␠that␠Materialize␠exited␠before␠the␠statement␠finished␠executing.
+error_message  text  The␠error␠message,␠if␠the␠statement␠failed.
+result_size  bigint  The␠size␠in␠bytes␠of␠the␠result,␠for␠statements␠that␠return␠rows.
+rows_returned  bigint  The␠number␠of␠rows␠returned,␠for␠statements␠that␠return␠rows.
+execution_strategy  text  For␠`SELECT`␠queries,␠the␠strategy␠for␠executing␠the␠query.␠`constant`␠means␠computed␠in␠the␠control␠plane␠without␠the␠involvement␠of␠a␠cluster,␠`fast-path`␠means␠read␠by␠a␠cluster␠directly␠from␠an␠in-memory␠index,␠and␠`standard`␠means␠computed␠by␠a␠temporary␠dataflow.
+transaction_id  uint8  The␠ID␠of␠the␠transaction␠that␠the␠statement␠was␠part␠of.␠Note␠that␠transaction␠IDs␠are␠only␠unique␠per␠session.
+prepared_statement_id  uuid  An␠ID␠that␠is␠unique␠for␠each␠prepared␠statement.␠For␠example,␠if␠a␠statement␠is␠prepared␠once␠and␠then␠executed␠multiple␠times,␠all␠executions␠will␠have␠the␠same␠value␠for␠this␠column␠(but␠different␠values␠for␠`execution_id`).
+sql_hash  bytea  An␠opaque␠value␠uniquely␠identifying␠the␠text␠of␠the␠query.
+prepared_statement_name  text  The␠name␠given␠by␠the␠client␠library␠to␠the␠prepared␠statement.
+session_id  uuid  An␠ID␠that␠is␠unique␠for␠each␠session.␠Corresponds␠to␠mz_sessions.id.
+prepared_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠statement␠was␠prepared.
+statement_type  text  The␠_type_␠of␠the␠statement,␠e.g.␠`select`␠for␠a␠`SELECT`␠query,␠or␠`NULL`␠if␠the␠statement␠was␠empty.
+throttled_count  uint8  The␠number␠of␠statement␠executions␠that␠were␠dropped␠due␠to␠throttling␠before␠the␠current␠one␠was␠seen.␠If␠you␠have␠a␠very␠high␠volume␠of␠queries␠and␠need␠to␠log␠them␠without␠throttling,␠contact␠our␠team.
+connected_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠session␠was␠established.
+initial_application_name  text  The␠initial␠value␠of␠`application_name`␠at␠the␠beginning␠of␠the␠session.
+authenticated_user  text  The␠name␠of␠the␠user␠for␠which␠the␠session␠was␠established.
+sql  text  The␠SQL␠text␠of␠the␠statement.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_connections' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠connection.
+endpoint  text  The␠value␠of␠the␠`ENDPOINT`␠option,␠if␠set.
+region  text  The␠value␠of␠the␠`REGION`␠option,␠if␠set.
+access_key_id  text  The␠value␠of␠the␠`ACCESS␠KEY␠ID`␠option,␠if␠provided␠in␠line.
+access_key_id_secret_id  text  The␠ID␠of␠the␠secret␠referenced␠by␠the␠`ACCESS␠KEY␠ID`␠option,␠if␠provided␠via␠a␠secret.
+secret_access_key_secret_id  text  The␠ID␠of␠the␠secret␠referenced␠by␠the␠`SECRET␠ACCESS␠KEY`␠option,␠if␠set.
+session_token  text  The␠value␠of␠the␠`SESSION␠TOKEN`␠option,␠if␠provided␠in␠line.
+session_token_secret_id  text  The␠ID␠of␠the␠secret␠referenced␠by␠the␠`SESSION␠TOKEN`␠option,␠if␠provided␠via␠a␠secret.
+assume_role_arn  text  The␠value␠of␠the␠`ASSUME␠ROLE␠ARN`␠option,␠if␠set.
+assume_role_session_name  text  The␠value␠of␠the␠`ASSUME␠ROLE␠SESSION␠NAME`␠option,␠if␠set.
+principal  text  The␠ARN␠of␠the␠AWS␠principal␠Materialize␠will␠use␠when␠assuming␠the␠provided␠role,␠if␠the␠connection␠is␠configured␠to␠use␠role␠assumption.
+external_id  text  The␠external␠ID␠Materialize␠will␠use␠when␠assuming␠the␠provided␠role,␠if␠the␠connection␠is␠configured␠to␠use␠role␠assumption.
+example_trust_policy  jsonb  An␠example␠of␠an␠IAM␠role␠trust␠policy␠that␠allows␠this␠connection's␠principal␠and␠external␠ID␠to␠assume␠the␠role.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_status_history' ORDER BY position
+----
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠the␠status␠change.
+connection_id  text  The␠unique␠identifier␠of␠the␠AWS␠PrivateLink␠connection.␠Corresponds␠to␠`mz_catalog.mz_connections.id`.
+status  text  The␠status␠of␠the␠connection:␠one␠of␠`pending-service-discovery`,␠`creating-endpoint`,␠`recreating-endpoint`,␠`updating-endpoint`,␠`available`,␠`deleted`,␠`deleting`,␠`expired`,␠`failed`,␠`pending`,␠`pending-acceptance`,␠`rejected`,␠or␠`unknown`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_aws_privatelink_connection_statuses' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠connection.␠Corresponds␠to␠`mz_catalog.mz_connections.id`.
+name  text  The␠name␠of␠the␠connection.
+last_status_change_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠the␠connection␠status␠change.
+status  text  The␠status␠of␠the␠connection:␠one␠of␠`pending-service-discovery`,␠`creating-endpoint`,␠`recreating-endpoint`,␠`updating-endpoint`,␠`available`,␠`deleted`,␠`deleting`,␠`expired`,␠`failed`,␠`pending`,␠`pending-acceptance`,␠`rejected`,␠or␠`unknown`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_deployment_lineage' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`␠(though␠the␠cluster␠may␠no␠longer␠exist).
+current_deployment_cluster_id  text  The␠cluster␠ID␠of␠the␠last␠cluster␠in␠`cluster_id`'s␠blue/green␠lineage␠(the␠cluster␠is␠guaranteed␠to␠exist).
+cluster_name  text  The␠name␠of␠the␠cluster
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_schedules' ORDER BY position
+----
+cluster_id  text  The␠ID␠of␠the␠cluster.␠Corresponds␠to␠`mz_clusters.id`.
+type  text  `on-refresh`,␠or␠`manual`.␠Default:␠`manual`
+refresh_hydration_time_estimate  interval  The␠interval␠given␠in␠the␠`HYDRATION␠TIME␠ESTIMATE`␠option.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
+cpu_nano_cores  uint8  Approximate␠CPU␠usage,␠in␠billionths␠of␠a␠vCPU␠core.
+memory_bytes  uint8  Approximate␠RAM␠usage,␠in␠bytes.
+disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.
+heap_bytes  uint8  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠bytes.
+heap_limit  uint8  Available␠heap␠(RAM␠+␠swap)␠space,␠in␠bytes.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_metrics_history' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
+cpu_nano_cores  uint8  Approximate␠CPU␠usage,␠in␠billionths␠of␠a␠vCPU␠core.
+memory_bytes  uint8  Approximate␠memory␠usage,␠in␠bytes.
+disk_bytes  uint8  Approximate␠disk␠usage,␠in␠bytes.
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
+heap_bytes  uint8  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠bytes.
+heap_limit  uint8  Available␠heap␠(RAM␠+␠swap)␠space,␠in␠bytes.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_statuses' ORDER BY position
+----
+replica_id  text  Materialize's␠unique␠ID␠for␠the␠cluster␠replica.
+process_id  uint8  The␠ID␠of␠the␠process␠within␠the␠cluster␠replica.
+status  text  The␠status␠of␠the␠cluster␠replica:␠`online`␠or␠`offline`.
+reason  text  If␠the␠cluster␠replica␠is␠in␠a␠`offline`␠state,␠the␠reason␠(if␠available).␠For␠example,␠`oom-killed`.
+updated_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠status␠was␠last␠updated.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_status_history' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
+status  text  The␠status␠of␠the␠cluster␠replica:␠`online`␠or␠`offline`.
+reason  text  If␠the␠cluster␠replica␠is␠in␠an␠`offline`␠state,␠the␠reason␠(if␠available).␠For␠example,␠`oom-killed`.
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
+cpu_percent  double␠precision  Approximate␠CPU␠usage,␠in␠percent␠of␠the␠total␠allocation.
+memory_percent  double␠precision  Approximate␠RAM␠usage,␠in␠percent␠of␠the␠total␠allocation.
+disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.
+heap_percent  double␠precision  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠percent␠of␠the␠total␠allocation.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_utilization_history' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+process_id  uint8  The␠ID␠of␠a␠process␠within␠the␠replica.
+cpu_percent  double␠precision  Approximate␠CPU␠usage,␠in␠percent␠of␠the␠total␠allocation.
+memory_percent  double␠precision  Approximate␠RAM␠usage,␠in␠percent␠of␠the␠total␠allocation.
+disk_percent  double␠precision  Approximate␠disk␠usage,␠in␠percent␠of␠the␠total␠allocation.
+heap_percent  double␠precision  Approximate␠heap␠(RAM␠+␠swap)␠usage,␠in␠percent␠of␠the␠total␠allocation.
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_history' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+size  text  The␠size␠of␠the␠cluster␠replica.␠Corresponds␠to␠`mz_cluster_replica_sizes.size`.
+cluster_id  text  The␠ID␠of␠the␠cluster␠associated␠with␠the␠replica.
+cluster_name  text  The␠name␠of␠the␠cluster␠associated␠with␠the␠replica.
+replica_name  text  The␠name␠of␠the␠replica.
+created_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠replica␠was␠created.
+dropped_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠replica␠was␠dropped,␠or␠`NULL`␠if␠it␠still␠exists.
+credits_per_hour  numeric  The␠number␠of␠compute␠credits␠consumed␠per␠hour.␠Corresponds␠to␠`mz_cluster_replica_sizes.credits_per_hour`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_cluster_replica_name_history' ORDER BY position
+----
+occurred_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠cluster␠replica␠was␠created␠or␠renamed.␠`NULL`␠if␠it's␠a␠built␠in␠system␠cluster␠replica.
+id  text  The␠ID␠of␠the␠cluster␠replica.
+previous_name  text  The␠previous␠name␠of␠the␠cluster␠replica.␠`NULL`␠if␠there␠was␠no␠previous␠name.
+new_name  text  The␠new␠name␠of␠the␠cluster␠replica.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_internal_cluster_replicas' ORDER BY position
+----
+id  text  The␠ID␠of␠a␠cluster␠replica.␠Corresponds␠to␠`mz_cluster_replicas.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_pending_cluster_replicas' ORDER BY position
+----
+id  text  The␠ID␠of␠a␠cluster␠replica.␠Corresponds␠to␠`mz_cluster_replicas.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_comments' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠object.␠Corresponds␠to␠`mz_objects.id`.
+object_type  text  The␠type␠of␠object␠the␠comment␠is␠associated␠with.
+object_sub_id  integer  For␠a␠comment␠on␠a␠column␠of␠a␠relation,␠the␠column␠number.␠`NULL`␠for␠other␠object␠types.
+comment  text  The␠comment␠itself.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_dependencies' ORDER BY position
+----
+object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_internal.mz_subscriptions`.
+dependency_id  text  The␠ID␠of␠a␠compute␠dependency.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_tables.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_hydration_statuses' ORDER BY position
+----
+object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`␠or␠`mz_catalog.mz_materialized_views.id`
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+hydrated  boolean  Whether␠the␠compute␠object␠is␠hydrated␠on␠the␠replica.
+hydration_time  interval  The␠amount␠of␠time␠it␠took␠for␠the␠replica␠to␠hydrate␠the␠compute␠object.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_compute_operator_hydration_statuses' ORDER BY position
+----
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+object_id  text  The␠ID␠of␠a␠compute␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`␠or␠`mz_catalog.mz_materialized_views.id`.
+physical_plan_node_id  uint8  The␠ID␠of␠a␠node␠in␠the␠physical␠plan␠of␠the␠compute␠object.␠Corresponds␠to␠a␠`node_id`␠displayed␠in␠the␠output␠of␠`EXPLAIN␠PHYSICAL␠PLAN␠WITH␠(node␠identifiers)`.
+hydrated  boolean  Whether␠the␠node␠is␠hydrated␠on␠the␠replica.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_frontiers' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠source,␠sink,␠table,␠index,␠materialized␠view,␠or␠subscription.
+read_frontier  mz_timestamp  The␠earliest␠timestamp␠at␠which␠the␠output␠is␠still␠readable.
+write_frontier  mz_timestamp  The␠next␠timestamp␠at␠which␠the␠output␠may␠change.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_history_retention_strategies' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠object.
+strategy  text  The␠strategy.␠`FOR`␠is␠the␠only␠strategy,␠and␠means␠the␠object's␠compaction␠window␠is␠the␠duration␠of␠the␠`value`␠field.
+value  jsonb  The␠value␠of␠the␠strategy.␠For␠`FOR`,␠is␠a␠number␠of␠milliseconds.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_hydration_statuses' ORDER BY position
+----
+object_id  text  The␠ID␠of␠a␠dataflow-powered␠object.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_internal.mz_subscriptions`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_sinks.id`.
+replica_id  text  The␠ID␠of␠a␠cluster␠replica.
+hydrated  boolean  Whether␠the␠object␠is␠hydrated␠on␠the␠replica.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_license_keys' ORDER BY position
+----
+id  text  The␠identifier␠of␠the␠license␠key.
+organization  text  The␠name␠of␠the␠organization␠that␠this␠license␠key␠was␠issued␠to.
+environment_id  text  The␠environment␠ID␠that␠this␠license␠key␠was␠issued␠for.
+expiration  timestamp␠with␠time␠zone  The␠date␠and␠time␠when␠this␠license␠key␠expires.
+not_before  timestamp␠with␠time␠zone  The␠start␠of␠the␠validity␠period␠for␠this␠license␠key.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_index_advice' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠object.␠Corresponds␠to␠mz_objects.id.
+hint  text  A␠suggestion␠to␠either␠change␠the␠object␠(e.g.␠create␠an␠index,␠turn␠a␠materialized␠view␠into␠an␠indexed␠view)␠or␠keep␠the␠object␠unchanged.
+details  text  Additional␠details␠on␠why␠the␠`hint`␠was␠proposed␠based␠on␠the␠dependencies␠of␠the␠object.
+referenced_object_ids  list  The␠IDs␠of␠objects␠referenced␠by␠`details`.␠Corresponds␠to␠mz_objects.id.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_dependencies' ORDER BY position
+----
+object_id  text  The␠ID␠of␠a␠materialization.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠or␠`mz_catalog.mz_sinks.id`.
+dependency_id  text  The␠ID␠of␠a␠dataflow␠dependency.␠Corresponds␠to␠`mz_catalog.mz_indexes.id`,␠`mz_catalog.mz_materialized_views.id`,␠`mz_catalog.mz_sources.id`,␠or␠`mz_catalog.mz_tables.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialization_lag' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠materialized␠view,␠index,␠or␠sink.
+local_lag  interval  The␠amount␠of␠time␠the␠materialization␠lags␠behind␠its␠direct␠inputs.
+global_lag  interval  The␠amount␠of␠time␠the␠materialization␠lags␠behind␠its␠root␠inputs␠(sources␠and␠tables).
+slowest_local_input_id  text  The␠ID␠of␠the␠slowest␠direct␠input.
+slowest_global_input_id  text  The␠ID␠of␠the␠slowest␠root␠input.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refresh_strategies' ORDER BY position
+----
+materialized_view_id  text  The␠ID␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_catalog.mz_materialized_views.id`
+type  text  `at`,␠`every`,␠or␠`on-commit`.␠Default:␠`on-commit`
+interval  interval  The␠refresh␠interval␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
+aligned_to  timestamp␠with␠time␠zone  The␠`ALIGNED␠TO`␠option␠of␠a␠`REFRESH␠EVERY`␠option,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`every`.
+at  timestamp␠with␠time␠zone  The␠time␠of␠a␠`REFRESH␠AT`,␠or␠`NULL`␠if␠the␠`type`␠is␠not␠`at`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_materialized_view_refreshes' ORDER BY position
+----
+materialized_view_id  text  The␠ID␠of␠the␠materialized␠view.␠Corresponds␠to␠`mz_catalog.mz_materialized_views.id`
+last_completed_refresh  mz_timestamp  The␠time␠of␠the␠last␠successfully␠completed␠refresh.␠`NULL`␠if␠the␠materialized␠view␠hasn't␠completed␠any␠refreshes␠yet.
+next_refresh  mz_timestamp  The␠time␠of␠the␠next␠scheduled␠refresh.␠`NULL`␠if␠the␠materialized␠view␠has␠no␠future␠scheduled␠refreshes.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
+referenced_object_id  text  The␠ID␠of␠the␠referenced␠object.␠Corresponds␠to␠`mz_objects.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_fully_qualified_names' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠the␠object.
+name  text  The␠name␠of␠the␠object.
+object_type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized␠view`,␠`sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
+schema_id  text  The␠ID␠of␠the␠schema␠to␠which␠the␠object␠belongs.␠Corresponds␠to␠`mz_schemas.id`.
+schema_name  text  The␠name␠of␠the␠schema␠to␠which␠the␠object␠belongs.␠Corresponds␠to␠`mz_schemas.name`.
+database_id  text  The␠ID␠of␠the␠database␠to␠which␠the␠object␠belongs.␠Corresponds␠to␠`mz_databases.id`.
+database_name  text  The␠name␠of␠the␠database␠to␠which␠the␠object␠belongs.␠Corresponds␠to␠`mz_databases.name`.
+cluster_id  text  The␠ID␠of␠the␠cluster␠maintaining␠the␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_clusters.id`.␠`NULL`␠for␠other␠object␠types.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_lifetimes' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠the␠object.
+previous_id  text  The␠object's␠previous␠ID,␠if␠one␠exists.
+object_type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized␠view`,␠`sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
+event_type  text  The␠lifetime␠event,␠either␠`create`␠or␠`drop`.
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when␠the␠event␠occurred.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_history' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠the␠object.
+cluster_id  text  The␠object's␠cluster␠ID.␠`NULL`␠if␠the␠object␠has␠no␠associated␠cluster.
+object_type  text  The␠type␠of␠the␠object:␠one␠of␠`table`,␠`source`,␠`view`,␠`materialized␠view`,␠`sink`,␠`index`,␠`connection`,␠`secret`,␠`type`,␠or␠`function`.
+created_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when␠the␠object␠was␠created.␠`NULL`␠for␠built␠in␠system␠objects.
+dropped_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when␠the␠object␠was␠dropped.␠`NULL`␠for␠built␠in␠system␠objects␠or␠if␠the␠object␠hasn't␠been␠dropped.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
+referenced_object_id  text  The␠ID␠of␠the␠(possibly␠transitively)␠referenced␠object.␠Corresponds␠to␠`mz_objects.id`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠this␠notice.
+notice_type  text  The␠notice␠type.
+message  text  A␠brief␠description␠of␠the␠issue␠highlighted␠by␠this␠notice.
+hint  text  A␠high-level␠hint␠that␠tells␠the␠user␠what␠can␠be␠improved.
+action  text  A␠concrete␠action␠that␠will␠resolve␠the␠notice.
+redacted_message  text  A␠redacted␠version␠of␠the␠`message`␠column.␠`NULL`␠if␠no␠redaction␠is␠needed.
+redacted_hint  text  A␠redacted␠version␠of␠the␠`hint`␠column.␠`NULL`␠if␠no␠redaction␠is␠needed.
+redacted_action  text  A␠redacted␠version␠of␠the␠`action`␠column.␠`NULL`␠if␠no␠redaction␠is␠needed.
+action_type  text  The␠type␠of␠the␠`action`␠string␠(`sql_statements`␠for␠a␠valid␠SQL␠string␠or␠`plain_text`␠for␠plain␠text).
+object_id  text  The␠ID␠of␠the␠materialized␠view␠or␠index.␠Corresponds␠to␠`mz_objects.id`.␠For␠global␠notices,␠this␠column␠is␠`NULL`.
+created_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠notice␠was␠created.␠Note␠that␠some␠notices␠are␠re-created␠on␠`environmentd`␠restart.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_notices_redacted' ORDER BY position
+----
+id  text  Materialize's␠unique␠ID␠for␠this␠notice.
+notice_type  text  The␠notice␠type.
+message  text  A␠redacted␠brief␠description␠of␠the␠issue␠highlighted␠by␠this␠notice.
+hint  text  A␠redacted␠high-level␠hint␠that␠tells␠the␠user␠what␠can␠be␠improved.
+action  text  A␠redacted␠concrete␠action␠that␠will␠resolve␠the␠notice.
+action_type  text  The␠type␠of␠the␠`action`␠string␠(`sql_statements`␠for␠a␠valid␠SQL␠string␠or␠`plain_text`␠for␠plain␠text).
+object_id  text  The␠ID␠of␠the␠materialized␠view␠or␠index.␠Corresponds␠to␠`mz_objects.id`.␠For␠global␠notices,␠this␠column␠is␠`NULL`.
+created_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠notice␠was␠created.␠Note␠that␠some␠notices␠are␠re-created␠on␠`environmentd`␠restart.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_sources' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_sources.id`.
+replication_slot  text  The␠name␠of␠the␠replication␠slot␠in␠the␠PostgreSQL␠database␠that␠Materialize␠will␠create␠and␠stream␠data␠from.
+timeline_id  uint8  The␠PostgreSQL␠timeline␠ID␠determined␠on␠source␠creation.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_postgres_source_tables' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠subsource␠or␠table.␠Corresponds␠to␠`mz_catalog.mz_sources.id`␠or␠`mz_catalog.mz_tables.id`.
+schema_name  text  The␠schema␠of␠the␠upstream␠table␠being␠ingested.
+table_name  text  The␠name␠of␠the␠upstream␠table␠being␠ingested.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mysql_source_tables' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠subsource␠or␠table.␠Corresponds␠to␠`mz_catalog.mz_sources.id`␠or␠`mz_catalog.mz_tables.id`.
+schema_name  text  The␠schema␠(or,␠database)␠of␠the␠upstream␠table␠being␠ingested.
+table_name  text  The␠name␠of␠the␠upstream␠table␠being␠ingested.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sql_server_source_tables' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠subsource␠or␠table.␠Corresponds␠to␠`mz_catalog.mz_sources.id`␠or␠`mz_catalog.mz_tables.id`.
+schema_name  text  The␠schema␠of␠the␠upstream␠table␠being␠ingested.
+table_name  text  The␠name␠of␠the␠upstream␠table␠being␠ingested.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_kafka_source_tables' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠table.␠Corresponds␠to␠`mz_catalog.mz_tables.id`.
+topic  text  The␠topic␠being␠ingested.
+envelope_type  text  The␠envelope␠type:␠`none`,␠`upsert`,␠or␠`debezium`.␠`NULL`␠for␠other␠source␠types.
+key_format  text  The␠format␠of␠the␠Kafka␠message␠key:␠`avro`,␠`csv`,␠`regex`,␠`bytes`,␠`json`,␠`text`,␠or␠`NULL`.
+value_format  text  The␠format␠of␠the␠Kafka␠message␠value:␠`avro`,␠`csv`,␠`regex`,␠`bytes`,␠`json`,␠`text`.␠`NULL`␠for␠other␠source␠types.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_session_history' ORDER BY position
+----
+session_id  uuid  The␠globally␠unique␠ID␠of␠the␠session.␠Corresponds␠to␠`mz_sessions.id`.
+connected_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠session␠was␠established.
+initial_application_name  text  The␠`application_name`␠session␠metadata␠field.
+authenticated_user  text  The␠name␠of␠the␠user␠for␠which␠the␠session␠was␠established.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
+----
+id  uuid  The␠globally␠unique␠ID␠of␠the␠session.
+connection_id  uint4  The␠connection␠ID␠of␠the␠session.␠Unique␠only␠for␠active␠sessions␠and␠can␠be␠recycled.␠Corresponds␠to␠`pg_backend_pid()`.
+role_id  text  The␠role␠ID␠of␠the␠role␠that␠the␠session␠is␠logged␠in␠as.␠Corresponds␠to␠`mz_catalog.mz_roles`.
+client_ip  text  The␠IP␠address␠of␠the␠client␠that␠initiated␠the␠session.
+connected_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠session␠connected␠to␠the␠system.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policies' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠network␠policy.
+name  text  The␠name␠of␠the␠network␠policy.
+owner_id  text  The␠role␠ID␠of␠the␠owner␠of␠the␠network␠policy.␠Corresponds␠to␠`mz_catalog.mz_roles.id`.
+privileges  mz_aclitem[]  The␠privileges␠belonging␠to␠the␠network␠policy.
+oid  oid  A␠PostgreSQL-compatible␠OID␠for␠the␠network␠policy.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_network_policy_rules' ORDER BY position
+----
+name  text  The␠name␠of␠the␠network␠policy␠rule.␠Can␠be␠combined␠with␠`policy_id`␠to␠form␠a␠unique␠identifier.
+policy_id  text  The␠ID␠the␠network␠policy␠the␠rule␠is␠part␠of.␠Corresponds␠to␠`mz_network_policy_rules.id`.
+action  text  The␠action␠of␠the␠rule.␠`allow`␠is␠the␠only␠supported␠action.
+address  text  The␠address␠the␠rule␠will␠take␠action␠on.
+direction  text  The␠direction␠of␠traffic␠the␠rule␠applies␠to.␠`ingress`␠is␠the␠only␠supported␠direction.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠object.
+schema  text  The␠name␠of␠the␠schema␠containing␠the␠object.
+name  text  The␠name␠of␠the␠privilege␠target.
+object_type  text  The␠type␠of␠object␠the␠privilege␠is␠granted␠on.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_cluster_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+name  text  The␠name␠of␠the␠cluster.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_database_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+name  text  The␠name␠of␠the␠database.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_default_privileges' ORDER BY position
+----
+object_owner  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠on␠objects␠created␠by␠`object_owner`.
+database  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠created␠in␠`database`␠if␠non-null.
+schema  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠created␠in␠`schema`␠if␠non-null.
+object_type  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠of␠type␠`object_type`.
+grantee  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠to␠`grantee`.
+privilege_type  text  They␠type␠of␠privilege␠to␠be␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_object_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠object.
+schema  text  The␠name␠of␠the␠schema␠containing␠the␠object.
+name  text  The␠name␠of␠the␠object.
+object_type  text  The␠type␠of␠object␠the␠privilege␠is␠granted␠on.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_role_members' ORDER BY position
+----
+role  text  The␠role␠that␠`member`␠is␠a␠member␠of.
+member  text  The␠role␠that␠is␠a␠member␠of␠`role`.
+grantor  text  The␠role␠that␠granted␠membership␠of␠`member`␠to␠`role`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_schema_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠schema.
+name  text  The␠name␠of␠the␠schema.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_system_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_all_my_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠object.
+schema  text  The␠name␠of␠the␠schema␠containing␠the␠object.
+name  text  The␠name␠of␠the␠privilege␠target.
+object_type  text  The␠type␠of␠object␠the␠privilege␠is␠granted␠on.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_cluster_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+name  text  The␠name␠of␠the␠cluster.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_database_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+name  text  The␠name␠of␠the␠cluster.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_default_privileges' ORDER BY position
+----
+object_owner  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠on␠objects␠created␠by␠`object_owner`.
+database  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠created␠in␠`database`␠if␠non-null.
+schema  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠created␠in␠`schema`␠if␠non-null.
+object_type  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠only␠on␠objects␠of␠type␠`object_type`.
+grantee  text  Privileges␠described␠in␠this␠row␠will␠be␠granted␠to␠`grantee`.
+privilege_type  text  They␠type␠of␠privilege␠to␠be␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_object_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠object.
+schema  text  The␠name␠of␠the␠schema␠containing␠the␠object.
+name  text  The␠name␠of␠the␠object.
+object_type  text  The␠type␠of␠object␠the␠privilege␠is␠granted␠on.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_role_members' ORDER BY position
+----
+role  text  The␠role␠that␠`member`␠is␠a␠member␠of.
+member  text  The␠role␠that␠is␠a␠member␠of␠`role`.
+grantor  text  The␠role␠that␠granted␠membership␠of␠`member`␠to␠`role`.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_schema_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+database  text  The␠name␠of␠the␠database␠containing␠the␠schema.
+name  text  The␠name␠of␠the␠schema.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_show_my_system_privileges' ORDER BY position
+----
+grantor  text  The␠role␠that␠granted␠the␠privilege.
+grantee  text  The␠role␠that␠the␠privilege␠was␠granted␠to.
+privilege_type  text  They␠type␠of␠privilege␠granted.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statistics' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠sink.␠Corresponds␠to␠`mz_catalog.mz_sinks.id`.
+replica_id  text  The␠ID␠of␠a␠replica␠running␠the␠sink.␠Corresponds␠to␠`mz_catalog.mz_cluster_replicas.id`.
+messages_staged  uint8  The␠number␠of␠messages␠staged␠but␠possibly␠not␠committed␠to␠the␠sink.
+messages_committed  uint8  The␠number␠of␠messages␠committed␠to␠the␠sink.
+bytes_staged  uint8  The␠number␠of␠bytes␠staged␠but␠possibly␠not␠committed␠to␠the␠sink.␠This␠counts␠both␠keys␠and␠values,␠if␠applicable.
+bytes_committed  uint8  The␠number␠of␠bytes␠committed␠to␠the␠sink.␠This␠counts␠both␠keys␠and␠values,␠if␠applicable.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_statuses' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠sink.␠Corresponds␠to␠`mz_catalog.mz_sinks.id`.
+name  text  The␠name␠of␠the␠sink.
+type  text  The␠type␠of␠the␠sink.
+last_status_change_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠the␠sink␠status␠change.
+status  text  The␠status␠of␠the␠sink:␠one␠of␠`created`,␠`starting`,␠`running`,␠`stalled`,␠`failed`,␠or␠`dropped`.
+error  text  If␠the␠sink␠is␠in␠an␠error␠state,␠the␠error␠message.
+details  jsonb  Additional␠metadata␠provided␠by␠the␠sink.␠In␠case␠of␠error,␠may␠contain␠a␠`hint`␠field␠with␠helpful␠suggestions.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sink_status_history' ORDER BY position
+----
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠the␠sink␠status␠change.
+sink_id  text  The␠ID␠of␠the␠sink.␠Corresponds␠to␠`mz_catalog.mz_sinks.id`.
+status  text  The␠status␠of␠the␠sink:␠one␠of␠`created`,␠`starting`,␠`running`,␠`stalled`,␠`failed`,␠or␠`dropped`.
+error  text  If␠the␠sink␠is␠in␠an␠error␠state,␠the␠error␠message.
+details  jsonb  Additional␠metadata␠provided␠by␠the␠sink.␠In␠case␠of␠error,␠may␠contain␠a␠`hint`␠field␠with␠helpful␠suggestions.
+replica_id  text  The␠ID␠of␠the␠replica␠that␠an␠instance␠of␠a␠sink␠is␠running␠on.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statistics' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_sources.id`.
+replica_id  text  The␠ID␠of␠a␠replica␠running␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_cluster_replicas.id`.
+messages_received  uint8  The␠number␠of␠messages␠the␠source␠has␠received␠from␠the␠external␠system.␠Messages␠are␠counted␠in␠a␠source␠type-specific␠manner.␠Messages␠do␠not␠correspond␠directly␠to␠updates:␠some␠messages␠produce␠multiple␠updates,␠while␠other␠messages␠may␠be␠coalesced␠into␠a␠single␠update.
+bytes_received  uint8  The␠number␠of␠bytes␠the␠source␠has␠read␠from␠the␠external␠system.␠Bytes␠are␠counted␠in␠a␠source␠type-specific␠manner␠and␠may␠or␠may␠not␠include␠protocol␠overhead.
+updates_staged  uint8  The␠number␠of␠updates␠(insertions␠plus␠deletions)␠the␠source␠has␠written␠but␠not␠yet␠committed␠to␠the␠storage␠layer.
+updates_committed  uint8  The␠number␠of␠updates␠(insertions␠plus␠deletions)␠the␠source␠has␠committed␠to␠the␠storage␠layer.
+records_indexed  uint8  The␠number␠of␠individual␠records␠indexed␠in␠the␠source␠envelope␠state.
+bytes_indexed  uint8  The␠number␠of␠bytes␠stored␠in␠the␠source's␠internal␠index,␠if␠any.
+rehydration_latency  interval  The␠amount␠of␠time␠it␠took␠for␠the␠source␠to␠rehydrate␠its␠internal␠index,␠if␠any,␠after␠the␠source␠last␠restarted.
+snapshot_records_known  uint8  The␠size␠of␠the␠source's␠snapshot,␠measured␠in␠number␠of␠records.␠See␠below␠to␠learn␠what␠constitutes␠a␠record.
+snapshot_records_staged  uint8  The␠number␠of␠records␠in␠the␠source's␠snapshot␠that␠Materialize␠has␠read.␠See␠below␠to␠learn␠what␠constitutes␠a␠record.
+snapshot_committed  boolean  Whether␠the␠source␠has␠committed␠the␠initial␠snapshot␠for␠a␠source.
+offset_known  uint8  The␠offset␠of␠the␠most␠recent␠data␠in␠the␠source's␠upstream␠service␠that␠Materialize␠knows␠about.␠See␠below␠to␠learn␠what␠constitutes␠an␠offset.
+offset_committed  uint8  The␠offset␠of␠the␠the␠data␠that␠Materialize␠has␠durably␠ingested.␠See␠below␠to␠learn␠what␠constitutes␠an␠offset.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_statuses' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_sources.id`.
+name  text  The␠name␠of␠the␠source.
+type  text  The␠type␠of␠the␠source.
+last_status_change_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠the␠source␠status␠change.
+status  text  The␠status␠of␠the␠source:␠one␠of␠`created`,␠`starting`,␠`running`,␠`paused`,␠`stalled`,␠`failed`,␠or␠`dropped`.
+error  text  If␠the␠source␠is␠in␠an␠error␠state,␠the␠error␠message.
+details  jsonb  Additional␠metadata␠provided␠by␠the␠source.␠In␠case␠of␠error,␠may␠contain␠a␠`hint`␠field␠with␠helpful␠suggestions.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_source_status_history' ORDER BY position
+----
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠the␠source␠status␠change.
+source_id  text  The␠ID␠of␠the␠source.␠Corresponds␠to␠`mz_catalog.mz_sources.id`.
+status  text  The␠status␠of␠the␠source:␠one␠of␠`created`,␠`starting`,␠`running`,␠`paused`,␠`stalled`,␠`failed`,␠or␠`dropped`.
+error  text  If␠the␠source␠is␠in␠an␠error␠state,␠the␠error␠message.
+details  jsonb  Additional␠metadata␠provided␠by␠the␠source.␠In␠case␠of␠error,␠may␠contain␠a␠`hint`␠field␠with␠helpful␠suggestions.
+replica_id  text  The␠ID␠of␠the␠replica␠that␠an␠instance␠of␠a␠source␠is␠running␠on.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_statement_lifecycle_history' ORDER BY position
+----
+statement_id  uuid  The␠ID␠of␠the␠execution␠event.␠Corresponds␠to␠`mz_recent_activity_log.execution_id`
+event_type  text  The␠type␠of␠lifecycle␠event,␠e.g.␠`'execution-began'`,␠`'storage-dependencies-finished'`,␠`'compute-dependencies-finished'`,␠or␠`'execution-finished'`
+occurred_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠event␠took␠place.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_subscriptions' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠subscription.
+session_id  uuid  The␠ID␠of␠the␠session␠that␠runs␠the␠subscription.␠Corresponds␠to␠`mz_sessions.id`.
+cluster_id  text  The␠ID␠of␠the␠cluster␠on␠which␠the␠subscription␠is␠running.␠Corresponds␠to␠`mz_clusters.id`.
+created_at  timestamp␠with␠time␠zone  The␠time␠at␠which␠the␠subscription␠was␠created.
+referenced_object_ids  list  The␠IDs␠of␠objects␠referenced␠by␠the␠subscription.␠Corresponds␠to␠`mz_objects.id`
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_global_lag' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠table,␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_objects.id`.
+lag  interval  The␠amount␠of␠time␠the␠object's␠write␠frontier␠lags␠behind␠wallclock␠time.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_lag_history' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠table,␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_objects.id`.
+replica_id  text  The␠ID␠of␠a␠replica␠computing␠the␠object,␠or␠`NULL`␠for␠persistent␠objects.␠Corresponds␠to␠`mz_cluster_replicas.id`.
+lag  interval  The␠amount␠of␠time␠the␠object's␠write␠frontier␠lags␠behind␠wallclock␠time.
+occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
+----
+id  text  The␠ID␠of␠the␠webhook␠source.␠Corresponds␠to␠`mz_sources.id`.
+name  text  The␠name␠of␠the␠webhook␠source.
+url  text  The␠URL␠which␠can␠be␠used␠to␠send␠events␠to␠the␠source.
 
 query T
 SELECT DISTINCT object FROM objects WHERE schema IN ('mz_internal') ORDER BY object

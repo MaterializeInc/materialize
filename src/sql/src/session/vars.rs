@@ -1232,6 +1232,9 @@ impl SystemVars {
                 ConfigVal::String(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
+                ConfigVal::OptString(default) => {
+                    VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
+                }
                 ConfigVal::Duration(default) => {
                     VarDefinition::new_runtime(cfg.name(), default.clone(), cfg.desc(), false)
                 }
@@ -1935,6 +1938,9 @@ impl SystemVars {
                 ConfigVal::F64(_) => ConfigVal::from(*self.expect_config_value::<f64>(name)),
                 ConfigVal::String(_) => {
                     ConfigVal::from(self.expect_config_value::<String>(name).clone())
+                }
+                ConfigVal::OptString(_) => {
+                    ConfigVal::from(self.expect_config_value::<Option<String>>(name).clone())
                 }
                 ConfigVal::Duration(_) => {
                     ConfigVal::from(*self.expect_config_value::<Duration>(name))

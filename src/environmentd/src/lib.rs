@@ -106,8 +106,6 @@ pub struct Config {
     pub external_login_password_mz_system: Option<Password>,
     /// Frontegg JWT authenticator.
     pub frontegg: Option<FronteggAuthenticator>,
-    /// OIDC authenticator.
-    pub oidc: Option<GenericOidcAuthenticator>,
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
@@ -263,8 +261,8 @@ impl Listener<SqlListenerConfig> {
         active_connection_counter: ConnectionCounter,
         tls_reloading_context: Option<ReloadingSslContext>,
         frontegg: Option<FronteggAuthenticator>,
-        oidc: Option<GenericOidcAuthenticator>,
         adapter_client: AdapterClient,
+        oidc: GenericOidcAuthenticator,
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
     ) -> ListenerHandle {
@@ -383,7 +381,7 @@ impl Listeners {
         let authenticator_none_rx = authenticator_none_rx.shared();
 
         // We can only send the Frontegg and None variants immediately.
-        // The Password variant requires an adapter client.
+        // The Password and OIDC variants require an adapter client.
         if let Some(frontegg) = &config.frontegg {
             authenticator_frontegg_tx
                 .send(Arc::new(Authenticator::Frontegg(frontegg.clone())))
@@ -798,6 +796,9 @@ impl Listeners {
         .instrument(info_span!("adapter::serve"))
         .await?;
 
+        // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.
+        let oidc = GenericOidcAuthenticator::new(adapter_client.clone());
+
         info!(
             "startup: envd serve: coordinator init complete in {:?}",
             coord_init_start.elapsed()
@@ -810,11 +811,10 @@ impl Listeners {
         authenticator_password_tx
             .send(Arc::new(Authenticator::Password(adapter_client.clone())))
             .expect("rx known to be live");
-        if let Some(oidc) = &config.oidc {
-            authenticator_oidc_tx
-                .send(Arc::new(Authenticator::Oidc(oidc.clone())))
-                .expect("rx known to be live");
-        }
+
+        authenticator_oidc_tx
+            .send(Arc::new(Authenticator::Oidc(oidc.clone())))
+            .expect("rx known to be live");
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");
@@ -832,8 +832,8 @@ impl Listeners {
                         active_connection_counter.clone(),
                         tls_reloading_context.clone(),
                         config.frontegg.clone(),
-                        config.oidc.clone(),
                         adapter_client.clone(),
+                        oidc.clone(),
                         metrics.clone(),
                         config.helm_chart_version.clone(),
                     )

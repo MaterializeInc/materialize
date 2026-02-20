@@ -48,32 +48,7 @@ if ! run git diff HEAD --compact-summary --exit-code; then
 fi
 
 if $console_bump; then
-    console_dir=console
-    rm -rf $console_dir
-    if is_truthy "${CI:-0}"; then
-        GIT_TERMINAL_PROMPT=0 git clone "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/console" $console_dir
-    else
-        GIT_TERMINAL_PROMPT=0 git clone git@github.com:MaterializeInc/console $console_dir
-    fi
-    echo "Bumping console version to v$version"
-    (
-        cd "$console_dir"
-        if [ -z "$(git tag -l "v$version")" ]; then
-            git tag -a "v$version" -m "v$version"
-            git push origin "v$version"
-        fi
-    )
-
-    echo "Waiting for console version to be released on DockerHub (~15 min)"
     console_image="materialize/console:$version"
-    while true; do
-        if docker manifest inspect "$console_image" >/dev/null 2>&1; then
-            break
-        fi
-        echo "$console_image not yet on DockerHub, sleeping 1 min"
-        sleep 60
-    done
-    echo "$console_image found on DockerHub"
     sed -i.bak \
         "s#FROM materialize/console:.* AS console#FROM $console_image AS console#" \
         misc/images/materialized-base/Dockerfile

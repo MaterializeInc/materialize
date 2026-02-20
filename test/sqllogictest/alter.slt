@@ -62,13 +62,13 @@ d   kafka   (empty)
 statement ok
 CREATE CLUSTER other_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
+query error ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER MATERIALIZED VIEW does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
+query error ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SOURCE does_not_exist SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER \.\.\. SET CLUSTER syntax is not available
+query error ALTER \.\.\. SET CLUSTER syntax is not available
 ALTER SINK does_not_exist SET CLUSTER quickstart
 
 simple conn=mz_system,user=mz_system
@@ -85,19 +85,19 @@ CREATE MATERIALIZED VIEW mv AS SELECT 1
 statement ok
 ALTER MATERIALIZED VIEW mv SET CLUSTER quickstart
 
-query error db error: ERROR: unknown cluster 'does_not_exist'
+query error unknown cluster 'does_not_exist'
 ALTER MATERIALIZED VIEW mv SET CLUSTER does_not_exist
 
-query error db error: ERROR: ALTER SET CLUSTER are not supported
+query error ALTER SET CLUSTER are not supported
 ALTER MATERIALIZED VIEW mv SET CLUSTER other_cluster
 
-query error db error: ERROR: ALTER VIEW SET CLUSTER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/alter\-set\-cluster/
+query error ALTER VIEW SET CLUSTER is not supported, for more information consult the documentation at https://materialize\.com/docs/sql/alter\-set\-cluster/
 ALTER VIEW mv SET CLUSTER quickstart
 
-query error db error: ERROR: v is a view not a materialized view
+query error v is a view not a materialized view
 ALTER MATERIALIZED VIEW v SET CLUSTER quickstart
 
-query error db error: ERROR: ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/discussions/29606 for more details
+query error ALTER SINK SET CLUSTER not yet supported, see https://github\.com/MaterializeInc/materialize/discussions/29606 for more details
 ALTER SINK v SET CLUSTER quickstart
 
 statement ok

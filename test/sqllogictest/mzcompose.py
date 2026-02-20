@@ -238,7 +238,6 @@ class SltRunStepConfig:
         ]
         command = [
             "sqllogictest",
-            "-v",
             *([] if rewrite_results else self.flags),
             *sqllogictest_config,
             file,
