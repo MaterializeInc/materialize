@@ -452,6 +452,11 @@ mod bytes_container {
 
         #[inline]
         fn index(&self, mut index: usize) -> Self::ReadItem<'_> {
+            // Fast path: single batch (common after compaction/merge).
+            // Avoids iterator setup and loop overhead.
+            if self.batches.len() == 1 {
+                return self.batches[0].index(index);
+            }
             for batch in self.batches.iter() {
                 if index < batch.len() {
                     return batch.index(index);
@@ -509,8 +514,7 @@ mod bytes_container {
         }
         #[inline]
         fn index(&self, index: usize) -> &[u8] {
-            let lower = self.offsets.index(index);
-            let upper = self.offsets.index(index + 1);
+            let (lower, upper) = self.offsets.index_pair(index);
             &self.storage[lower..upper]
         }
         #[inline(always)]
@@ -601,6 +605,35 @@ mod offset_opt {
             }
         }
 
+        /// Returns `(index(i), index(i+1))` in a single enum dispatch.
+        #[inline]
+        fn index_pair(&self, index: usize) -> (usize, usize) {
+            match self {
+                OffsetStride::Empty => {
+                    panic!("Empty OffsetStride")
+                }
+                OffsetStride::Zero => (0, 0),
+                OffsetStride::Striding(stride, _steps) => {
+                    let base = *stride * index;
+                    (base, base + *stride)
+                }
+                OffsetStride::Saturated(stride, steps, _reps) => {
+                    let max_val = *stride * (*steps - 1);
+                    let lower = if index < *steps {
+                        *stride * index
+                    } else {
+                        max_val
+                    };
+                    let upper = if index + 1 < *steps {
+                        *stride * (index + 1)
+                    } else {
+                        max_val
+                    };
+                    (lower, upper)
+                }
+            }
+        }
+
         #[inline]
         fn len(&self) -> usize {
             match self {
@@ -614,6 +647,8 @@ mod offset_opt {
 
     pub struct OffsetOptimized {
         strided: OffsetStride,
+        /// Cached `strided.len()` to avoid repeated enum dispatch on every `index()` call.
+        strided_len: usize,
         spilled: OffsetList,
     }
 
@@ -638,12 +673,14 @@ mod offset_opt {
 
         fn clear(&mut self) {
             self.strided = OffsetStride::Empty;
+            self.strided_len = 0;
             self.spilled.clear();
         }
 
         fn with_capacity(_size: usize) -> Self {
             Self {
                 strided: OffsetStride::Empty,
+                strided_len: 0,
                 spilled: OffsetList::with_capacity(0),
             }
         }
@@ -651,6 +688,7 @@ mod offset_opt {
         fn merge_capacity(_cont1: &Self, _cont2: &Self) -> Self {
             Self {
                 strided: OffsetStride::Empty,
+                strided_len: 0,
                 spilled: OffsetList::with_capacity(0),
             }
         }
@@ -662,16 +700,40 @@ mod offset_opt {
 
         #[inline]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            if index < self.strided.len() {
+            if index < self.strided_len {
                 self.strided.index(index)
             } else {
-                self.spilled.index(index - self.strided.len())
+                self.spilled.index(index - self.strided_len)
             }
         }
 
         #[inline]
         fn len(&self) -> usize {
-            self.strided.len() + self.spilled.len()
+            self.strided_len + self.spilled.len()
+        }
+    }
+
+    impl OffsetOptimized {
+        /// Returns `(index(i), index(i+1))` with a single enum dispatch.
+        ///
+        /// This is used by `BytesBatch::index` to get both the lower and upper
+        /// byte boundaries of an item in one call, avoiding two separate
+        /// `OffsetOptimized::index` calls (which each involve an enum match on
+        /// `OffsetStride` plus a comparison against `strided_len`).
+        #[inline]
+        pub fn index_pair(&self, index: usize) -> (usize, usize) {
+            let sl = self.strided_len;
+            if index + 1 <= sl {
+                // Both indices in strided range — single enum dispatch
+                self.strided.index_pair(index)
+            } else if index >= sl {
+                // Both indices in spilled range
+                let adj = index - sl;
+                (self.spilled.index(adj), self.spilled.index(adj + 1))
+            } else {
+                // Straddles boundary: index in strided, index+1 in spilled
+                (self.strided.index(index), self.spilled.index(0))
+            }
         }
     }
 
@@ -682,7 +744,9 @@ mod offset_opt {
                 self.spilled.push(item);
             } else {
                 let inserted = self.strided.push(item);
-                if !inserted {
+                if inserted {
+                    self.strided_len = self.strided.len();
+                } else {
                     self.spilled.push(item);
                 }
             }
