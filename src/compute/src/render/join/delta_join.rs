@@ -458,20 +458,34 @@ where
                 }
 
                 let mut row_builder = SharedRow::get();
-                let temp_storage = RowArena::new();
 
-                let mut datums_local = datums.borrow();
-                datums_local.extend(key.iter());
-                datums_local.extend(stream_row.iter());
-                datums_local.extend(lookup_row.to_datum_iter());
-
-                if let Some(row) = closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                    .expect("Closure claimed to never error")
-                {
+                if closure.is_identity() {
+                    // Fast path: skip datum decode, copy raw bytes directly.
+                    let mut packer = row_builder.packer();
+                    key.copy_into(&mut packer);
+                    stream_row.copy_into(&mut packer);
+                    lookup_row.copy_into(&mut packer);
+                    let row = &*row_builder;
                     for (time, diff2) in output.drain(..) {
                         let diff = diff1.clone() * diff2.clone();
                         session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                    }
+                } else {
+                    let temp_storage = RowArena::new();
+
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key.iter());
+                    datums_local.extend(stream_row.iter());
+                    datums_local.extend(lookup_row.to_datum_iter());
+
+                    if let Some(row) = closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .expect("Closure claimed to never error")
+                    {
+                        for (time, diff2) in output.drain(..) {
+                            let diff = diff1.clone() * diff2.clone();
+                            session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                        }
                     }
                 }
             },
@@ -533,11 +547,20 @@ where
                                             let time = Tr::owned_time(time);
                                             let temp_storage = RowArena::new();
 
-                                            let mut datums_local = datums.borrow();
-                                            datums_local.extend(key.to_datum_iter());
-                                            datums_local.extend(val.to_datum_iter());
-
-                                            if !initial_closure.is_identity() {
+                                            if initial_closure.is_identity() {
+                                                // Fast path: skip datum decode entirely,
+                                                // copy raw bytes from key + val.
+                                                let row = {
+                                                    let mut packer = row_builder.packer();
+                                                    key.copy_into(&mut packer);
+                                                    val.copy_into(&mut packer);
+                                                    row_builder.clone()
+                                                };
+                                                ok_session.give((row, time, Tr::owned_diff(diff)));
+                                            } else {
+                                                let mut datums_local = datums.borrow();
+                                                datums_local.extend(key.to_datum_iter());
+                                                datums_local.extend(val.to_datum_iter());
                                                 match initial_closure
                                                     .apply(
                                                         &mut datums_local,
@@ -559,12 +582,6 @@ where
                                                     )),
                                                     None => {}
                                                 }
-                                            } else {
-                                                let row = {
-                                                    row_builder.packer().extend(&*datums_local);
-                                                    row_builder.clone()
-                                                };
-                                                ok_session.give((row, time, Tr::owned_diff(diff)));
                                             }
                                         }
                                     });

@@ -2248,6 +2248,8 @@ maintenance, join processing, and aggregation for all queries that use indexed a
   allocation or reference-counted rows could reduce this.
 - `RowColumnarDecoder::decode()` at 61B calls processes columns sequentially per row.
   Batched column-at-a-time decoding could improve cache utilization and enable SIMD.
+- Join identity closure byte-level concat: when the join closure is identity (no filter/project/map),
+  skip datum decode+re-encode and use byte-level `copy_into` instead. See Session 26.
 
 ---
 
@@ -2350,3 +2352,66 @@ Since every join input passes through this key preparation step, this directly s
   allocation or reference-counted rows could reduce this.
 - `RowColumnarDecoder::decode()` at 61B calls processes columns sequentially per row.
   Batched column-at-a-time decoding could improve cache utilization and enable SIMD.
+
+---
+
+## Session 26: Join identity byte-level concat (2026-02-20)
+
+**Target**: When join closures are identity (no filter, no project, no map), the compute layer
+decodes ALL datums from key + val1 + val2 and immediately re-encodes them into a result row.
+This decode→re-encode is completely wasteful — we can just memcpy the raw bytes directly.
+
+**Changes**:
+- Added `copy_into(&self, packer: &mut RowPacker)` method to `ToDatumIter` trait in
+  `src/repr/src/fixed_length.rs` with default decode+re-encode implementation
+- Added specialized `copy_into` override for `Row` (single `extend_by_slice_unchecked` memcpy)
+- Added specialized `copy_into` override for `DatumSeq` in `src/compute/src/row_spine.rs`
+  (single `extend_by_slice_unchecked` memcpy from the zero-copy byte slice)
+- Added identity fast path in delta join `build_update_stream` (initial arrangement scan)
+- Added identity fast path in delta join `build_halfjoin` (per-stage half-join callback)
+- Added identity fast path in linear join `differential_join_inner`
+- All three paths check `closure.is_identity()` first and use `copy_into` instead of datum iteration
+
+**Benchmark** (`cargo bench -p mz-repr --bench join_concat`):
+
+Single row construction (key + val1 + val2 → result row):
+
+| Scenario                    | datum_decode | byte_concat | Speedup |
+|-----------------------------|-------------|-------------|---------|
+| int_key2_val3_val3 (8 cols) | 107.3 ns    | 23.3 ns     | **4.6x** |
+| mixed_key1_val5_val5 (11 cols)| 93.5 ns   | 8.5 ns      | **11.0x** |
+| string_key1_val5_val5 (11 cols)| 105.5 ns | 7.8 ns      | **13.5x** |
+| wide_key2_val10_val10 (22 cols)| 282.4 ns | 8.7 ns      | **32.5x** |
+
+Batch (10k rows, mixed 12-column):
+
+| Approach       | Time     | Speedup |
+|----------------|----------|---------|
+| datum_decode   | 1.23 ms  |         |
+| byte_concat    | 83.0 µs  | **14.8x** |
+
+**Analysis**: The speedup scales with column count because datum decode+re-encode is O(columns)
+while byte concat is O(1) — just 3 memcpy operations regardless of width. For wide tables with
+22 columns, we see a 32.5x speedup. Even for narrow 8-column integer-only rows, the speedup
+is 4.6x. The mixed-type and string scenarios show 11-14x improvements because string datum
+decode involves length prefix parsing and re-encoding overhead.
+
+**Impact**: This optimization applies to all joins where the closure is identity — i.e., no
+filtering, projection, or computed columns are applied to the join result. This is common for
+simple equi-joins like `SELECT * FROM a JOIN b ON a.id = b.id`. The delta join path
+(`build_update_stream` and `build_halfjoin`) and linear join path (`differential_join_inner`)
+are both optimized.
+
+**Files modified**:
+- `src/repr/src/fixed_length.rs` — `copy_into` on `ToDatumIter` trait + Row impl
+- `src/compute/src/row_spine.rs` — `copy_into` on `DatumSeq`
+- `src/compute/src/render/join/delta_join.rs` — identity fast paths
+- `src/compute/src/render/join/linear_join.rs` — identity fast path
+- `src/repr/benches/join_concat.rs` — new benchmark
+- `src/repr/Cargo.toml` — benchmark registration
+
+**Future ideas**:
+- Selective decode in join closure: when the closure IS NOT identity but only references a
+  subset of columns, we could use byte-level projection to extract only needed columns instead
+  of decoding all datums. This combines the Session 19-22 byte projection work with join closures.
+- Byte-level concat could also apply to UNION ALL operations and other row concatenation sites.
