@@ -107,7 +107,7 @@ async def ingest_webhook(
                 progress += 1
                 if progress % 10000 == 0 or progress == num_rows:
                     print(
-                        f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                        f"{progress}/{num_rows} ({progress / num_rows:.1%})\033[K",
                         end="\r",
                         flush=True,
                     )
@@ -1061,6 +1061,8 @@ def _kafka_ingest_worker(
     progress_value: Any,
     total_rows: int,
     batch_size: int,
+    factor: float = 1.0,
+    seed: int = 0,
 ) -> None:
     """Worker that ingests assigned parquet row groups to Kafka.
 
@@ -1130,7 +1132,9 @@ def _kafka_ingest_worker(
             needs_conversion[i] = True
     any_need_conversion = any(needs_conversion)
 
-    rows_done = 0
+    rng = random.Random(seed) if factor < 1.0 else None
+    rows_sent = 0
+    last_reported = 0
     producer.poll(0)
     for rg_idx in row_group_indices:
         table = pf.read_row_group(rg_idx)
@@ -1138,6 +1142,8 @@ def _kafka_ingest_worker(
             py_columns = [batch.column(i).to_pylist() for i in range(batch.num_columns)]
 
             for row_idx in range(batch.num_rows):
+                if rng is not None and rng.random() >= factor:
+                    continue
                 after_value: dict[str, Any] = {}
                 if any_need_conversion:
                     for col_idx in range(num_cols):
@@ -1149,6 +1155,7 @@ def _kafka_ingest_worker(
                     for col_idx in range(num_cols):
                         after_value[col_names[col_idx]] = py_columns[col_idx][row_idx]
 
+                rows_sent += 1
                 while True:
                     try:
                         if debezium:
@@ -1172,13 +1179,14 @@ def _kafka_ingest_worker(
                     except BufferError:
                         producer.poll(0.01)
 
-            rows_done += batch.num_rows
             if progress_value is not None:
+                delta = rows_sent - last_reported
+                last_reported = rows_sent
                 with progress_value.get_lock():
-                    progress_value.value += batch.num_rows
-            else:
+                    progress_value.value += delta
+            elif total_rows > 0:
                 print(
-                    f"    {rows_done}/{total_rows} ({rows_done / total_rows:.1%})",
+                    f"    {rows_sent}/{total_rows} ({rows_sent / total_rows:.1%})\033[K",
                     end="\r",
                     flush=True,
                 )
@@ -1196,6 +1204,8 @@ def ingest_captured_parquet_kafka(
     child_obj: dict[str, Any],
     parquet_path: str,
     batch_size: int = 10000,
+    factor: float = 1.0,
+    seed: int = 0,
 ) -> None:
     """Stream Parquet data directly to Kafka, skipping string conversion.
 
@@ -1215,35 +1225,51 @@ def ingest_captured_parquet_kafka(
     columns_meta = meta["columns"]
 
     pf = pq.ParquetFile(parquet_path)
-    total_rows = pf.metadata.num_rows
+    file_total_rows = pf.metadata.num_rows
     num_row_groups = pf.metadata.num_row_groups
 
     sr_port = c.default_port("schema-registry")
     kafka_port = c.default_port("kafka")
 
-    num_workers = min(os.cpu_count() or 1, num_row_groups)
+    # When sampling, only read a subset of row groups to avoid parsing
+    # the entire file.  Pick enough row groups to cover the target with
+    # some headroom, then fine-tune with per-row sampling inside the worker.
+    target_rows = int(file_total_rows * factor) if factor < 1.0 else file_total_rows
+    if factor < 1.0:
+        rg_rng = random.Random(seed)
+        num_rgs_to_read = max(1, int(num_row_groups * min(factor * 5, 1.0)))
+        selected_rgs = sorted(rg_rng.sample(range(num_row_groups), min(num_rgs_to_read, num_row_groups)))
+        rows_in_selected = sum(pf.metadata.row_group(rg).num_rows for rg in selected_rgs)
+        row_factor = min(1.0, target_rows / rows_in_selected) if rows_in_selected > 0 else 1.0
+    else:
+        selected_rgs = list(range(num_row_groups))
+        row_factor = 1.0
+
+    num_workers = min(os.cpu_count() or 1, len(selected_rgs))
 
     if num_workers <= 1:
         # Single-process fast path.
         _kafka_ingest_worker(
             parquet_path,
-            list(range(num_row_groups)),
+            selected_rgs,
             topic,
             debezium,
             columns_meta,
             sr_port,
             kafka_port,
             None,
-            total_rows,
+            target_rows,
             batch_size,
+            row_factor,
+            seed,
         )
         print()
         return
 
     # Distribute row groups round-robin across workers.
     worker_row_groups: list[list[int]] = [[] for _ in range(num_workers)]
-    for i in range(num_row_groups):
-        worker_row_groups[i % num_workers].append(i)
+    for i, rg in enumerate(selected_rgs):
+        worker_row_groups[i % num_workers].append(rg)
 
     # Use 'spawn' to avoid inheriting the parent's @cache'd Kafka
     # producers whose background threads don't survive fork.
@@ -1251,7 +1277,7 @@ def ingest_captured_parquet_kafka(
     progress = ctx.Value("l", 0)
 
     processes: list[multiprocessing.process.BaseProcess] = []
-    for worker_rgs in worker_row_groups:
+    for i, worker_rgs in enumerate(worker_row_groups):
         if not worker_rgs:
             continue
         p = ctx.Process(
@@ -1265,8 +1291,10 @@ def ingest_captured_parquet_kafka(
                 sr_port,
                 kafka_port,
                 progress,
-                total_rows,
+                target_rows,
                 batch_size,
+                row_factor,
+                seed + i,
             ),
         )
         p.start()
@@ -1275,11 +1303,12 @@ def ingest_captured_parquet_kafka(
     # Monitor progress until all workers finish.
     while any(p.is_alive() for p in processes):
         done = progress.value
-        print(
-            f"    {done}/{total_rows} ({done / total_rows:.1%})",
-            end="\r",
-            flush=True,
-        )
+        if target_rows > 0:
+            print(
+                f"    {done}/{target_rows} ({done / target_rows:.1%})\033[K",
+                end="\r",
+                flush=True,
+            )
         time.sleep(0.5)
 
     for p in processes:
@@ -1289,8 +1318,8 @@ def ingest_captured_parquet_kafka(
                 f"Kafka ingestion worker failed with exit code {p.exitcode}"
             )
 
-    print(f"    {total_rows}/{total_rows} (100.0%)")
-    print()
+    done = progress.value
+    print(f"    {done}/{target_rows} (100.0%)\033[K")
 
 
 def ingest_captured_rows_sql_server(

@@ -52,9 +52,9 @@ Captures the current state and activity of a live Materialize instance.
 - Optionally sampled column size statistics (expensive to fetch, `--avg-column-size`)
 
 **What it captures (with `--capture-data`):**
-- Initial data snapshot via `COPY (SELECT * FROM ...) TO STDOUT` for each source/subsource/table
-- Continuous data changes via `SUBSCRIBE ... WITH (SNAPSHOT = false, PROGRESS = true)` for the `--time` duration
-- Data is stored as TSV files (PostgreSQL COPY text format) with accompanying `.meta.json` metadata
+- Initial data snapshot from persist shards as Parquet files for each source/subsource/table
+- Continuous data changes from persist shards for the `--time` duration
+- System settings from `SHOW ALL`
 
 **Usage:**
 ```bash
@@ -93,46 +93,17 @@ When `--capture-data` is used, the output is a directory:
 
 ```
 workload_<timestamp>/
-├── objects.yml          # Schema metadata, cluster configs, source statistics
+├── objects.yml          # Schema metadata, cluster configs, source statistics, settings
 ├── queries.yml          # Captured query history
-├── initial_data/        # Snapshot data (COPY TO STDOUT output)
-│   ├── materialize.public.my_table.tsv
-│   ├── materialize.public.my_table.meta.json
-│   ├── materialize.public.orders.tsv
-│   └── materialize.public.orders.meta.json
-└── continuous_data/     # SUBSCRIBE output (with timestamps)
-    ├── materialize.public.my_table.tsv
-    ├── materialize.public.my_table.meta.json
+├── initial_data/        # Snapshot data from persist (Parquet files)
+│   ├── materialize.public.my_table.parquet
+│   └── materialize.public.orders.parquet
+└── continuous_data/     # Changes during capture period (Parquet files)
+    ├── materialize.public.my_table.parquet
     └── ...
 ```
 
-**TSV Format:**
-- Initial data: Standard PostgreSQL COPY text format (tab-delimited, `\N` for NULLs)
-- Continuous data: Same format with three prepended columns: `mz_timestamp`, `mz_progressed`, `mz_diff`
-
-**meta.json Format:**
-```json
-{
-  "database": "materialize",
-  "schema": "public",
-  "name": "orders",
-  "source_type": "postgres",
-  "parent_source_fqn": "materialize.public.pg_source",
-  "columns": [
-    {"name": "id", "type": "integer", "nullable": false},
-    {"name": "amount", "type": "numeric", "nullable": true}
-  ],
-  "row_count": 12345
-}
-```
-
-The `source_type` field determines how data is routed during replay:
-- `table` → `COPY FROM STDIN` into Materialize table
-- `postgres` → `COPY FROM STDIN` into upstream Postgres DB
-- `mysql` → batch `INSERT` into upstream MySQL DB
-- `sql-server` → `INSERT` via testdrive into upstream SQL Server DB
-- `kafka` → produce Avro messages to Kafka topic
-- `webhook` → HTTP POST to webhook endpoint
+Parquet file names encode the fully-qualified object name (`db.schema.name.parquet`). During replay, column metadata is looked up from `objects.yml` and all data is loaded directly into Materialize tables via `COPY FROM STDIN`.
 
 ### Workload Anonymization
 
@@ -147,6 +118,7 @@ Anonymizes identifiers and literals in workload captures for sharing without exp
 - Column names → `column_1`, `column_2`, ...
 - View, materialized view, source, sink, connection names
 - All identifiers in `create_sql` definitions and queries
+- Settings values that match anonymized identifiers
 
 *Literals (`--literals`, enabled by default):*
 - String literals in SQL → `'literal_1'`, `'literal_2'`, ...
@@ -223,6 +195,7 @@ bin/mzcompose --find workload-replay run stats [files]
 | `--early-initial-data` | Create initial data before sources | false |
 | `--run-ingestions` | Run continuous ingestions | true |
 | `--run-queries` | Run continuous queries | true |
+| `--settings` | Apply captured settings via `ALTER SYSTEM SET` | false |
 | `--compare-against` | Materialize version to compare against (benchmark only) | none |
 | `--skip-without-data-scale` | Skip workloads that have `scale_data: false` in their settings (benchmark only) | false |
 
@@ -261,16 +234,17 @@ The replay executes in four phases:
 1. Initialization
    - Start Docker services (materialized, kafka, postgres, etc.)
    - Set up Materialize system parameters
+   - Optionally apply captured settings via ALTER SYSTEM SET (--settings)
    - Create clusters, databases, schemas
    - Create types, connections, sources, sinks, tables, views, indexes
 
 2. Initial data
-   - If SQL-captured: import TSV data into external systems and Materialize tables
+   - If captured: import Parquet data into external systems and Materialize tables (sampled by --factor-initial-data)
    - If synthetic: generate random data matching captured schemas and statistics
    - Wait for hydration of all objects
 
 3. Continuous Phase (runs in parallel)
-   - If SQL-captured: replay SUBSCRIBE data at original cadence (scaled by --factor-ingestions)
+   - If captured: replay data at original cadence (scaled by --factor-ingestions)
    - If synthetic: generate data at original ingestion rates (scaled by --factor-ingestions)
    - Replay queries at original timing (scaled by --factor-queries)
    - Collect Docker stats (CPU, memory, disk)
@@ -329,7 +303,7 @@ queries:
 
 ### Directory format (with captured data)
 
-When `--capture-data` is used, the workload is split into `objects.yml` (same as above minus queries, plus `capture_method: sql`) and `queries.yml`, alongside `initial_data/` and `continuous_data/` directories containing TSV and meta.json files.
+When `--capture-data` is used, the workload is split into `objects.yml` (same as above minus queries, plus `capture_method: persist`) and `queries.yml`, alongside `initial_data/` and `continuous_data/` directories containing Parquet files.
 
 ## Data Generation
 
@@ -342,15 +316,14 @@ The framework generates realistic random data based on captured schema informati
 - **Configurable seed** for reproducibility
 - **Column-level statistics** from capture inform data shape
 
-### SQL-captured (with `--capture-data`)
+### Captured data (with `--capture-data`)
 
-Real data is captured from the live instance and replayed verbatim:
+Real data is captured from persist shards and replayed:
 
 - **Initial data** is loaded into external systems (Postgres, MySQL, Kafka, SQL Server) or Materialize tables before the continuous phase
 - **Continuous data** is replayed at the original timestamps, scaled by `--factor-ingestions`
-- Only inserts (`mz_diff=1`) from SUBSCRIBE output are replayed
 
 Scaling factors control the workload intensity:
-- `--factor-initial-data` scales the number of rows generated (synthetic only)
-- `--factor-ingestions` scales ingestion rates / replay speed
+- `--factor-initial-data` scales the number of rows (random sample for captured data, row count for synthetic)
+- `--factor-ingestions` scales ingestion rates / replay speed and samples rows for captured data
 - `--factor-queries` scales query frequency

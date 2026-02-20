@@ -270,13 +270,11 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                     anyhow::bail!("ok field is NullArray — no data columns to export");
                 }
                 let schema = Arc::new(ok_column_schema(ok_column.as_ref())?);
-                let err_idx =
-                    key_struct.fields().iter().position(|f| f.name() == "err");
+                let err_idx = key_struct.fields().iter().position(|f| f.name() == "err");
 
                 // Cross-part consolidation: advance all timestamps to as_of,
                 // then consolidate across all parts.
-                let part_ords: Vec<_> =
-                    all_parts.iter().map(|p| p.as_ord()).collect();
+                let part_ords: Vec<_> = all_parts.iter().map(|p| p.as_ord()).collect();
                 let as_of_frontier = Antichain::from_elem(as_of);
 
                 let mut updates = Vec::new();
@@ -294,9 +292,7 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                     updates.len(),
                     all_parts.len()
                 );
-                differential_dataflow::consolidation::consolidate_updates(
-                    &mut updates,
-                );
+                differential_dataflow::consolidation::consolidate_updates(&mut updates);
                 eprintln!("After consolidation: {} updates", updates.len());
 
                 // Map ArrayIdx back to source part via pointer comparison.
@@ -313,8 +309,7 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                     .collect();
 
                 // Group surviving rows by source part for efficient take.
-                let mut part_take: Vec<Vec<u32>> =
-                    vec![vec![]; all_parts.len()];
+                let mut part_take: Vec<Vec<u32>> = vec![vec![]; all_parts.len()];
                 let mut total_rows = 0usize;
 
                 for ((k, _v), _t, d) in &updates {
@@ -339,9 +334,8 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                         }
                     }
 
-                    let idx = u32::try_from(k.idx).map_err(|_| {
-                        anyhow!("row index {} exceeds u32::MAX", k.idx)
-                    })?;
+                    let idx = u32::try_from(k.idx)
+                        .map_err(|_| anyhow!("row index {} exceeds u32::MAX", k.idx))?;
                     for _ in 0..*d {
                         part_take[part_idx].push(idx);
                         total_rows += 1;
@@ -361,27 +355,18 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                 let props = WriterProperties::builder()
                     .set_compression(Compression::SNAPPY)
                     .build();
-                let mut writer =
-                    ArrowWriter::try_new(output, Arc::clone(&schema), Some(props))?;
+                let mut writer = ArrowWriter::try_new(output, Arc::clone(&schema), Some(props))?;
 
                 for (pi, indices) in part_take.iter().enumerate() {
                     if indices.is_empty() {
                         continue;
                     }
-                    let ok_col =
-                        all_parts[pi].key.as_struct().column(ok_idx);
-                    write_snapshot_chunks(
-                        ok_col.as_ref(),
-                        indices,
-                        &mut writer,
-                    )?;
+                    let ok_col = all_parts[pi].key.as_struct().column(ok_idx);
+                    write_snapshot_chunks(ok_col.as_ref(), indices, &mut writer)?;
                     writer.flush()?;
                 }
 
-                eprintln!(
-                    "Wrote {} total rows from {} parts",
-                    total_rows, total_parts
-                );
+                eprintln!("Wrote {} total rows from {} parts", total_rows, total_parts);
                 writer.close()?;
                 eprintln!("Export complete.");
             }
@@ -389,8 +374,7 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
             ExportMode::Subscribe => {
                 // Subscribe mode: stream parts and write per-part.
                 // No cross-part consolidation needed since we preserve diffs.
-                let mut writer: Option<ArrowWriter<Box<dyn Write + Send>>> =
-                    None;
+                let mut writer: Option<ArrowWriter<Box<dyn Write + Send>>> = None;
                 let mut parquet_schema: Option<Arc<Schema>> = None;
                 let mut total_rows = 0usize;
                 let mut compacted = false;
@@ -419,44 +403,27 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                             .fields()
                             .iter()
                             .position(|f| f.name() == "ok")
-                            .ok_or_else(|| {
-                                anyhow!("key struct missing 'ok' field")
-                            })?;
+                            .ok_or_else(|| anyhow!("key struct missing 'ok' field"))?;
                         let ok_column = key_struct.column(ok_idx);
                         if ok_column.data_type().is_null() {
-                            anyhow::bail!(
-                                "ok field is NullArray — no data columns to export"
-                            );
+                            anyhow::bail!("ok field is NullArray — no data columns to export");
                         }
-                        let ok_schema =
-                            ok_column_schema(ok_column.as_ref())?;
-                        let output: Box<dyn Write + Send> =
-                            match &args.output {
-                                Some(path) => {
-                                    Box::new(std::fs::File::create(path)?)
-                                }
-                                None => Box::new(io::stdout()),
-                            };
-                        let schema =
-                            Arc::new(subscribe_schema(&ok_schema));
+                        let ok_schema = ok_column_schema(ok_column.as_ref())?;
+                        let output: Box<dyn Write + Send> = match &args.output {
+                            Some(path) => Box::new(std::fs::File::create(path)?),
+                            None => Box::new(io::stdout()),
+                        };
+                        let schema = Arc::new(subscribe_schema(&ok_schema));
                         let props = WriterProperties::builder()
                             .set_compression(Compression::SNAPPY)
                             .build();
                         parquet_schema = Some(Arc::clone(&schema));
-                        writer = Some(ArrowWriter::try_new(
-                            output,
-                            schema,
-                            Some(props),
-                        )?);
+                        writer = Some(ArrowWriter::try_new(output, schema, Some(props))?);
                     }
 
                     let w = writer.as_mut().unwrap();
-                    total_rows += process_subscribe_part(
-                        &part,
-                        as_of,
-                        parquet_schema.as_ref().unwrap(),
-                        w,
-                    )?;
+                    total_rows +=
+                        process_subscribe_part(&part, as_of, parquet_schema.as_ref().unwrap(), w)?;
                     w.flush()?;
                 }
 
@@ -473,10 +440,7 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
                 }
 
                 if let Some(w) = writer {
-                    eprintln!(
-                        "Wrote {} total rows from {} parts",
-                        total_rows, total_parts
-                    );
+                    eprintln!("Wrote {} total rows from {} parts", total_rows, total_parts);
                     w.close()?;
                     eprintln!("Export complete.");
                 } else {

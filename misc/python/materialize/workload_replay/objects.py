@@ -39,8 +39,8 @@ from materialize.workload_replay.util import (
     to_sql_server_data_type,
 )
 
-# Configuration parameters that are read-only and cannot be SET.
-READONLY_CONFIGURATION = {
+# Settings that are read-only and cannot be SET.
+READONLY_SETTINGS = {
     "client_encoding",
     "integer_datetimes",
     "is_superuser",
@@ -52,17 +52,15 @@ READONLY_CONFIGURATION = {
 }
 
 
-def apply_configuration(
-    c: Composition, workload: dict[str, Any], verbose: bool
-) -> None:
-    """Apply captured configuration defaults via ALTER SYSTEM SET."""
-    configuration = workload.get("configuration", {})
-    if not configuration:
+def apply_settings(c: Composition, workload: dict[str, Any], verbose: bool) -> None:
+    """Apply captured settings via ALTER SYSTEM SET."""
+    settings = workload.get("settings", {})
+    if not settings:
         return
 
-    print("Applying configuration")
-    for name, value in sorted(configuration.items()):
-        if name in READONLY_CONFIGURATION:
+    print("Applying settings")
+    for name, value in sorted(settings.items()):
+        if name in READONLY_SETTINGS:
             continue
         try:
             c.sql(
@@ -77,7 +75,11 @@ def apply_configuration(
 
 
 def run_create_objects_part_1(
-    c: Composition, services: set[str], workload: dict[str, Any], verbose: bool
+    c: Composition,
+    services: set[str],
+    workload: dict[str, Any],
+    verbose: bool,
+    run_apply_settings: bool = True,
 ) -> None:
     """Create clusters, databases, schemas, types, connections, and prepare sources."""
     c.sql(
@@ -589,7 +591,8 @@ def run_create_objects_part_1(
                         flags=re.DOTALL | re.IGNORECASE,
                     )
 
-    apply_configuration(c, workload, verbose)
+    if run_apply_settings:
+        apply_settings(c, workload, verbose)
 
 
 def run_create_objects_part_2(

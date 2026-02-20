@@ -266,25 +266,6 @@ def _build_capturable_objects(workload: dict[str, Any]) -> list[dict[str, Any]]:
     return objects
 
 
-def _build_object_meta(obj: dict[str, Any]) -> dict[str, Any]:
-    """Build the metadata dict for one capturable object."""
-    return {
-        "database": obj["database"],
-        "schema": obj["schema"],
-        "name": obj["name"],
-        "source_type": obj["source_type"],
-        "parent_source_fqn": obj["parent_source_fqn"],
-        "columns": [
-            {
-                "name": c["name"],
-                "type": c["type"],
-                "nullable": c.get("nullable", True),
-            }
-            for c in obj["columns"]
-        ],
-    }
-
-
 def _acquire_persistcli_image() -> str:
     """Use mzbuild to resolve and acquire the jobs image (contains persistcli).
 
@@ -583,11 +564,11 @@ def main() -> int:
         "mz_workload_version": "1.0.0",
     }
 
-    with timed("Fetching configuration"):
-        configuration = {}
+    with timed("Fetching settings"):
+        settings = {}
         for row in query(conn, "SHOW ALL"):
-            configuration[row[0]] = row[1]
-        workload["configuration"] = configuration
+            settings[row[0]] = row[1]
+        workload["settings"] = settings
 
     with timed("Fetching clusters"):
         for cluster, managed in query(
@@ -1061,21 +1042,7 @@ def main() -> int:
 
         # Build capturable objects (tables + source children).
         capturable_objects = _build_capturable_objects(workload)
-        # Data comes from persist, so replay loads directly into MZ tables.
-        for obj in capturable_objects:
-            obj["source_type"] = "table"
         print(f"Found {len(capturable_objects)} capturable objects", file=sys.stderr)
-
-        # Build capture_meta.yml keyed by FQN.
-        capture_meta: dict[str, Any] = {}
-        for obj in capturable_objects:
-            fqn = obj["fqn"]
-            meta = _build_object_meta(obj)
-            capture_meta[fqn] = meta
-
-        with timed(f"Writing {output_dir}/capture_meta.yml"):
-            with open(os.path.join(output_dir, "capture_meta.yml"), "w") as f:
-                yaml.dump(capture_meta, f, Dumper=yaml.CSafeDumper)
 
         # Write objects.yml early so it's available while data capture runs.
         # Pop queries temporarily — they'll be fetched after capture.

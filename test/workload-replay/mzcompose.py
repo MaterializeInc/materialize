@@ -130,7 +130,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.yml"],
         help="run against the specified files",
     )
-    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     parser.add_argument(
         "--create-objects", action=argparse.BooleanOptionalAction, default=True
     )
@@ -148,6 +148,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument(
         "--run-queries", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--settings",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Apply captured settings via ALTER SYSTEM SET before replay",
     )
     args = parser.parse_args()
 
@@ -186,6 +192,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.run_ingestions,
             args.run_queries,
             args.max_concurrent_queries,
+            args.settings,
+            args.seed,
         )
 
     c.test_parts(files, run)
@@ -235,7 +243,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.yml"],
         help="run against the specified files",
     )
-    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    parser.add_argument("-v", "--verbose", action=argparse.BooleanOptionalAction)
     parser.add_argument(
         "--compare-against",
         type=str,
@@ -253,6 +261,12 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
         action="store_true",
         default=False,
         help="Skip workloads that have scale_data: false in their settings",
+    )
+    parser.add_argument(
+        "--settings",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Apply captured settings via ALTER SYSTEM SET before replay",
     )
     args = parser.parse_args()
 
@@ -291,6 +305,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.seed,
             args.early_initial_data,
             args.max_concurrent_queries,
+            args.settings,
         ),
     )
 

@@ -45,8 +45,8 @@ def p(label: str, value: Any) -> None:
 def load_workload(path: pathlib.Path) -> dict[str, Any]:
     """Load a workload from a YAML file or a directory with objects.yml + queries.yml.
 
-    For directory-based workloads (created with --capture-data), also loads
-    capture_meta.yml and detects initial_data/ and continuous_data/ subdirectories.
+    For directory-based workloads (created with --capture-data), also detects
+    initial_data/ and continuous_data/ subdirectories.
     """
     if path.is_dir():
         objects_path = path / "objects.yml"
@@ -61,24 +61,19 @@ def load_workload(path: pathlib.Path) -> dict[str, Any]:
         else:
             workload.setdefault("queries", [])
 
-        capture_meta_path = path / "capture_meta.yml"
-        if capture_meta_path.exists():
-            with open(capture_meta_path) as f:
-                workload["capture_meta"] = yaml.load(f, Loader=yaml.CSafeLoader)
-
         initial_data_dir = path / "initial_data"
         if initial_data_dir.is_dir() and (
             list(initial_data_dir.glob("*.tsv"))
             or list(initial_data_dir.glob("*.parquet"))
         ):
-            workload["sql_initial_data_dir"] = str(initial_data_dir)
+            workload["captured_initial_data_dir"] = str(initial_data_dir)
 
         continuous_data_dir = path / "continuous_data"
         if continuous_data_dir.is_dir() and (
             list(continuous_data_dir.glob("*.tsv"))
             or list(continuous_data_dir.glob("*.parquet"))
         ):
-            workload["sql_continuous_data_dir"] = str(continuous_data_dir)
+            workload["captured_continuous_data_dir"] = str(continuous_data_dir)
     else:
         with open(path) as f:
             workload = yaml.load(f, Loader=yaml.CSafeLoader)

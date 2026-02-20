@@ -38,8 +38,8 @@ from materialize.workload_replay.data import (
     create_ingestions,
     create_initial_data_external,
     create_initial_data_requiring_mz,
-    import_sql_captured_data_initial,
-    import_sql_captured_data_streaming,
+    import_captured_data_initial,
+    import_captured_data_streaming,
 )
 from materialize.workload_replay.objects import (
     run_create_objects_part_1,
@@ -70,6 +70,8 @@ def test(
     run_ingestions: bool,
     run_queries: bool,
     max_concurrent_queries: int,
+    apply_settings: bool = True,
+    seed: str | int = 0,
 ) -> dict[str, Any]:
     """Run a single workload test."""
     print(f"--- {posixpath.relpath(file, LOCATION)}")
@@ -114,12 +116,12 @@ def test(
     }
     if create_objects:
         start_time = time.time()
-        run_create_objects_part_1(c, services, workload, verbose)
+        run_create_objects_part_1(c, services, workload, verbose, apply_settings)
         if not early_initial_data:
             run_create_objects_part_2(c, services, workload, verbose)
         stats["object_creation"] = time.time() - start_time
-    sql_initial_data_dir = workload.get("sql_initial_data_dir")
-    sql_continuous_data_dir = workload.get("sql_continuous_data_dir")
+    captured_initial_data_dir = workload.get("captured_initial_data_dir")
+    captured_continuous_data_dir = workload.get("captured_continuous_data_dir")
     created_data = False
     if initial_data:
         print("Creating initial data")
@@ -132,10 +134,10 @@ def test(
         stats_thread.start()
         try:
             start_time = time.time()
-            if sql_initial_data_dir:
-                print("Using SQL-captured initial data")
-                created_data = import_sql_captured_data_initial(
-                    c, workload, sql_initial_data_dir
+            if captured_initial_data_dir:
+                print("Using captured initial data")
+                created_data = import_captured_data_initial(
+                    c, workload, captured_initial_data_dir, factor_initial_data, seed
                 )
             else:
                 created_data = create_initial_data_external(
@@ -148,7 +150,7 @@ def test(
                 obj_start = time.time()
                 run_create_objects_part_2(c, services, workload, verbose)
                 stats["object_creation"] += time.time() - obj_start
-            if not sql_initial_data_dir:
+            if not captured_initial_data_dir:
                 created_data_requiring_mz = create_initial_data_requiring_mz(
                     c,
                     workload,
@@ -170,6 +172,7 @@ def test(
 
     # Wait for all user objects to hydrate before starting queries.
     print("Waiting for hydration")
+    prev_not_hydrated: list[str] = []
     while True:
         not_hydrated: list[str] = [
             entry[0]
@@ -197,7 +200,9 @@ def test(
             )
         ]
         if not_hydrated:
-            print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
+            if not_hydrated != prev_not_hydrated:
+                print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
+                prev_not_hydrated = not_hydrated
             time.sleep(1)
         else:
             break
@@ -231,11 +236,17 @@ def test(
     print("Freshness complete")
     if run_ingestions:
         print("Starting continuous ingestions")
-        if sql_continuous_data_dir:
-            print("Using SQL-captured continuous data")
+        if captured_continuous_data_dir:
+            print("Using captured continuous data")
             threads.extend(
-                import_sql_captured_data_streaming(
-                    c, workload, sql_continuous_data_dir, factor_ingestions, stop_event
+                import_captured_data_streaming(
+                    c,
+                    workload,
+                    captured_continuous_data_dir,
+                    factor_ingestions,
+                    factor_ingestions,
+                    seed,
+                    stop_event,
                 )
             )
         else:
@@ -309,6 +320,7 @@ def benchmark(
     seed: str,
     early_initial_data: bool,
     max_concurrent_queries: int,
+    apply_settings: bool = True,
 ) -> None:
     """Run a benchmark comparing two versions of Materialize."""
     import random
@@ -359,6 +371,8 @@ def benchmark(
             True,
             True,
             max_concurrent_queries,
+            apply_settings,
+            seed,
         )
         old_version = c.query_mz_version()
     try:
@@ -393,6 +407,8 @@ def benchmark(
             True,
             True,
             max_concurrent_queries,
+            apply_settings,
+            seed,
         )
         new_version = c.query_mz_version()
     try:

@@ -301,6 +301,17 @@ def main() -> int:
                 replace_identifiers(index, "create_sql")
             for sink in schema["sinks"].values():
                 replace_identifiers(sink, "create_sql")
+    # Anonymize configuration/settings values that match mapped identifiers.
+    configuration = workload.get("settings", {})
+    if configuration:
+        new_configuration = {}
+        for name, value in configuration.items():
+            if args.identifiers and isinstance(value, str) and value in mapping:
+                new_configuration[name] = mapping[value]
+            else:
+                new_configuration[name] = value
+        new["settings"] = new_configuration
+
     for query in workload["queries"]:
         if args.identifiers:
             query["cluster"] = mapping.get(query["cluster"], query["cluster"])
