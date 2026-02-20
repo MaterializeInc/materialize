@@ -2717,3 +2717,131 @@ unchanged.
   Batched column-at-a-time decoding could improve cache utilization and enable SIMD.
 - `first_datum_is_null()` could be extended to `first_datum_tag()` returning the raw tag byte,
   enabling other fast-path patterns (e.g., type checking without full decode).
+
+---
+
+## Session 30: Zero-allocation parse_bool + direct COPY FROM text decoding (2026-02-20)
+
+**Problem:** Two parsing inefficiencies in the COPY FROM text ingestion path:
+
+1. **`parse_bool` heap allocation**: Every call to `parse_bool(s)` in `strconv.rs` called
+   `s.trim().to_lowercase().as_str()` which heap-allocates a `String` on every call. All
+   accepted values ("true", "false", "yes", "no", "on", "off", "1", "0" and prefixes) are
+   pure ASCII, so case-insensitive comparison can be done directly on the bytes without any
+   allocation.
+
+2. **COPY FROM text decode intermediate allocations**: `decode_copy_format_text` in
+   `pgcopy/copy.rs` used a three-step pipeline for each row:
+   - `Value::decode_text(typ, raw_value)` → constructs `Value` enum (for `Type::Text`, this
+     calls `s.to_owned()` → heap-allocates a `String` per text column!)
+   - `value.into_datum(&buf, typ)` → converts `Value` to `Datum`
+   - Collects into `Vec<Datum>` → heap-allocates per row
+   - `Row::pack(row)` → iterates all datums and packs into final Row
+
+   The intermediate `Value` enum and `Vec<Datum>` were entirely unnecessary — there was already
+   a `Value::decode_text_into_row()` method that pushes directly into a `RowPacker`, bypassing
+   all intermediate allocations. The CSV decode path (`decode_copy_format_csv`) already used
+   this method; only the text format path had the old inefficient approach.
+
+**Fix:**
+
+1. **`parse_bool` zero-allocation**: Replaced `s.trim().to_lowercase().as_str()` match with
+   a length-dispatched `match buf.len()` that uses:
+   - Direct byte matching (`b't' | b'T'`) for 1-char values
+   - `eq_ignore_ascii_case(b"true")` for multi-char values
+   Each `eq_ignore_ascii_case` does a length check + memcmp with ASCII case folding — no heap
+   allocation. The length-dispatch ensures at most 2-3 comparisons per input.
+
+2. **COPY FROM direct Row construction**: Replaced the old
+   `Value::decode_text` → `into_datum` → `Vec<Datum>` → `Row::pack` pipeline with:
+   - `std::str::from_utf8(raw_value)?` → validates UTF-8 (was already done inside `decode_text`)
+   - `Value::decode_text_into_row(typ, s, &mut packer)` → pushes directly into RowPacker
+   This eliminates: per-row `Vec<Datum>` allocation, per-field `Value` construction, per-text-column
+   `String` allocation (`s.to_owned()`), and final `Row::pack` datum iteration. Also removed the
+   now-unused `RowArena` import.
+
+**Benchmark results:**
+
+### parse_bool per-value (ns/iter)
+
+| Value         | Old (to_lowercase) | New (byte match) | Speedup |
+|---------------|-------------------:|-----------------:|--------:|
+| true          | 10.3               | 8.0              | 1.29x   |
+| false         | 10.4               | 8.2              | 1.26x   |
+| t             | 9.2                | 7.4              | 1.24x   |
+| f             | 8.8                | 7.3              | 1.20x   |
+| TRUE          | 10.1               | 8.0              | 1.26x   |
+| FALSE         | 10.3               | 8.2              | 1.25x   |
+| yes           | 9.7                | 7.9              | 1.23x   |
+| no            | 9.3                | 7.9              | 1.17x   |
+| on            | 9.2                | 7.9              | 1.16x   |
+| off           | 10.2               | 8.0              | 1.27x   |
+| 1             | 8.7                | 7.4              | 1.18x   |
+| 0             | 8.8                | 7.3              | 1.20x   |
+| "  true  "    | 11.2               | 9.0              | 1.24x   |
+
+### parse_bool batch (10k values)
+
+| Approach          | Time (µs) | Speedup   |
+|-------------------|-----------|-----------|
+| Old 10k mixed     | 112       | -         |
+| New 10k mixed     | 78        | **1.43x** |
+| Old 10k "true"    | 112       | -         |
+| New 10k "true"    | 82        | **1.37x** |
+| Old 10k "t"       | 92        | -         |
+| New 10k "t"       | 75        | **1.23x** |
+
+### COPY FROM text decode per-row (ns/iter)
+
+| Scenario              | Old (Value path) | New (direct Row) | Speedup |
+|-----------------------|-----------------:|-----------------:|--------:|
+| int5 (5 int cols)     | 176              | 83               | **2.1x** |
+| str5 (5 text cols)    | 313              | 72               | **4.3x** |
+| mixed5 (int+str+bool+ts+f64) | 559      | 417              | **1.3x** |
+| bool5 (5 bool cols)   | 144              | 54               | **2.6x** |
+
+### COPY FROM text decode batch (10k rows)
+
+| Scenario              | Old       | New       | Speedup   |
+|-----------------------|-----------|-----------|-----------|
+| int5 (10k rows)       | 1.80 ms   | 816 µs    | **2.2x**  |
+| str5 (10k rows)       | 3.20 ms   | 696 µs    | **4.6x**  |
+| mixed5 (10k rows)     | 5.26 ms   | 4.09 ms   | **1.3x**  |
+
+**Summary:** The `parse_bool` optimization gives 1.16-1.43x improvement by eliminating the
+`to_lowercase()` heap allocation. The COPY FROM text decode optimization gives **2.1-4.6x
+improvement** depending on column types. String-heavy rows benefit the most (**4.3-4.6x**)
+because the old path allocated a `String` per text column via `Value::Text(s.to_owned())`,
+while the new path copies directly from the parser buffer into the Row's internal buffer.
+Integer-only rows see 2.1-2.2x from eliminating the `Vec<Datum>` and `Value` intermediates.
+Mixed-type rows show 1.3x because the timestamp parsing (chrono DateTime construction)
+dominates the time regardless of the intermediate representation.
+
+The bool5 scenario benefits from both optimizations combined: the parse_bool change
+eliminates the `to_lowercase()` allocation, and the direct decode eliminates the `Value::Bool`
+construction + `Vec<Datum>` allocation.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Rewrote `parse_bool()` to use length-dispatched ASCII
+  case-insensitive byte matching instead of `to_lowercase()`.
+- `src/pgcopy/src/copy.rs` - Rewrote `decode_copy_format_text()` to use
+  `Value::decode_text_into_row()` and RowPacker instead of `Value::decode_text()` →
+  `into_datum()` → `Vec<Datum>` → `Row::pack()`. Removed unused `RowArena` import.
+- `src/repr/benches/parse_bool.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered parse_bool benchmark
+- `src/pgcopy/benches/copy_decode.rs` - Added benchmark (new file)
+- `src/pgcopy/Cargo.toml` - Registered copy_decode benchmark
+
+**Future optimization ideas identified during research:**
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row during accumulable
+  reductions. A newtype wrapper around SmallVec with Semigroup/Multiply implementations could
+  avoid heap allocation for the common case (1-4 aggregations). The orphan rule is NOT actually
+  a blocker — a newtype around SmallVec owned by Materialize can implement DD's foreign traits.
+- `Row::clone()` at 527B executions in coverage data remains the largest source of allocation
+  pressure, but is fundamental to DD's operational model.
+- `RowColumnarDecoder::decode()` at 61B inner loop iterations processes columns sequentially.
+  Batched column-at-a-time decoding could improve cache utilization and enable SIMD.
+- The COPY FROM CSV path already uses `decode_text_into_row` and doesn't need optimization.
+- The mixed5 result (1.3x) is limited by timestamp parsing (chrono DateTime construction
+  ~550ns for the timestamp field alone). A faster timestamp parser that avoids chrono's
+  internal validation overhead could help, but is complex to implement correctly.

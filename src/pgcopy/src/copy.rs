@@ -14,7 +14,7 @@ use bytes::BytesMut;
 use csv::{ByteRecord, ReaderBuilder};
 use itertools::Itertools;
 use mz_repr::{
-    Datum, RelationDesc, Row, RowArena, RowRef, SharedRow, SqlColumnType, SqlRelationType,
+    Datum, RelationDesc, Row, RowRef, SharedRow, SqlColumnType, SqlRelationType,
     SqlScalarType,
 };
 use proptest::prelude::{Arbitrary, any};
@@ -581,31 +581,39 @@ pub fn decode_copy_format_text(
     CopyTextFormatParams { null, delimiter }: CopyTextFormatParams,
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
+    let mut row_buf = Row::default();
 
     // TODO: pass the `CopyTextFormatParams` to the `new` method
     let mut parser = CopyTextFormatParser::new(data, delimiter, &null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
-        let mut row = Vec::new();
-        let buf = RowArena::new();
-        for (col, typ) in column_types.iter().enumerate() {
-            if col > 0 {
-                parser.expect_column_delimiter()?;
-            }
-            let raw_value = parser.consume_raw_value()?;
-            if let Some(raw_value) = raw_value {
-                match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
-                    Err(err) => {
-                        let msg = format!("unable to decode column: {}", err);
-                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
-                    }
+        // Push datums directly into a RowPacker via decode_text_into_row,
+        // bypassing the intermediate Value enum + Vec<Datum> + RowArena.
+        // This eliminates per-field Value construction and per-text-column
+        // String allocation (s.to_owned() in Value::Text).
+        {
+            let mut packer = row_buf.packer();
+            for (col, typ) in column_types.iter().enumerate() {
+                if col > 0 {
+                    parser.expect_column_delimiter()?;
                 }
-            } else {
-                row.push(Datum::Null);
+                let raw_value = parser.consume_raw_value()?;
+                if let Some(raw_value) = raw_value {
+                    let s = std::str::from_utf8(raw_value).map_err(|e| {
+                        io::Error::new(io::ErrorKind::InvalidData, e)
+                    })?;
+                    mz_pgrepr::Value::decode_text_into_row(typ, s, &mut packer).map_err(
+                        |err| {
+                            let msg = format!("unable to decode column: {}", err);
+                            io::Error::new(io::ErrorKind::InvalidData, msg)
+                        },
+                    )?;
+                } else {
+                    packer.push(Datum::Null);
+                }
             }
         }
         parser.expect_end_of_line()?;
-        rows.push(Row::pack(row));
+        rows.push(row_buf.clone());
     }
     // Note that if there is any junk data after the end of copy marker, we drop
     // it on the floor as PG does.

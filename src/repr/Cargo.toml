@@ -101,6 +101,10 @@ harness = false
 name = "reduction_monoid"
 harness = false
 
+[[bench]]
+name = "parse_bool"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
