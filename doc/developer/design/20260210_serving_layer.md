@@ -7,6 +7,7 @@
 Selects are slow.
 In the best case, we can support around 5'000 queries per second.
 The reason is that Materialize hasn't been optimized for fast selects, but rather for efficient incremental view maintenance.
+This design focuses exclusively on read transactions---the serving layer does not support writes.
 We optimize each query, select its timestamp, send it to a replica, wait for compute to gather results, merge the results and send it back to the client.
 Several steps along this path incur latency, and this design shows alternatives that have the potential to avoid the latency.
 
@@ -200,6 +201,21 @@ What we need:
  * A parallel data structure mapping `(key, time) -> (value, diff)`.
    The diff would always be positive.
 
+### Transaction isolation
+
+Materialize by default provides strict serializable isolation, which guarantees the freshest results and no regressions in time for subsequent reads.
+This comes at a cost: we need to establish what the freshest timestamp is by interacting with the timestamp oracle, and then wait until all objects in the query domain are up-to-date at that timestamp.
+This means we potentially need to wait for the processing delay induced by Materialize's incremental view maintenance pipeline.
+
+Some of the oracle interaction can be amortized (e.g., batching timestamp requests), but the fundamental constraint remains: strict serializability requires waiting for data to catch up to the chosen timestamp.
+
+For a serving layer targeting high throughput and low latency, there is a tension:
+ * **Strict serializable:** Preserves one of Materialize's core differentiators. Each read sees the freshest consistent state. However, reads may block waiting for data to arrive at the selected timestamp, which adds latency and limits throughput.
+ * **Serializable (not strict):** We can serve reads at any consistent timestamp, including older ones where data is already available. This avoids waiting for the processing pipeline but loses the freshness guarantee---consecutive reads from the same client could see data go "backwards" in time.
+
+It is unclear what isolation level a serving layer should provide.
+Degrading to serializable loses one of Materialize's key values, but it is not obvious how to achieve high query throughput under strict serializability without significant amortization or relaxation of the freshness requirement.
+
 ### Considerations for parallel data structures
 
 Whatever data structure we select, we must generate it from a stream of updates, and must be able to read it in constant or logarithmic time.
@@ -303,6 +319,8 @@ We'll treat this as orthogonal for the purpose of this design as we're designing
 * For Option 3: what is the API surface? REST, gRPC, Rust SDK, WASM SDK, or some combination?
 * How does the serving layer interact with the catalog?
   Direct connections to a serving layer need a mechanism for syncing catalog changes and verifying strict serializability (cf. database-issues#9738).
-* Do we need to handle transactions in the serving layer?
+* What isolation level does the serving layer provide?
+  Strict serializable preserves Materialize's differentiator but requires waiting for data freshness.
+  Serializable or causal consistency enables higher throughput but sacrifices freshness guarantees.
 * What are the constraints on parameter usage in queries?
   Each parameter likely must appear in an equality constraint (or range constraint) with a column, and cannot be free-standing (e.g., `SELECT :param` is not a meaningful serving layer query).
