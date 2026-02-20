@@ -1855,7 +1855,7 @@ where
             // insignificant zeroes trimmed. This compresses the number further
             // than `Numeric::trim` by removing all zeroes, and not only those in
             // the fractional component.
-            numeric::cx_datum().reduce(&mut n.0);
+            numeric::fast_numeric_reduce(&mut n.0);
             let (digits, exponent, bits, lsu) = n.0.to_raw_parts();
             data.push(Tag::Numeric.into());
             data.push(u8::try_from(digits).expect("digits to fit within u8; should not exceed 39"));
@@ -2004,12 +2004,11 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::MzTimestamp(_) => 1 + size_of::<Timestamp>(),
         Datum::Dummy => 1,
         Datum::Numeric(d) => {
-            let mut d = d.0.clone();
-            // Values must be reduced to determine appropriate number of
-            // coefficient units.
-            numeric::cx_datum().reduce(&mut d);
-            // 4 = 1 bit each for tag, digits, exponent, bits
-            4 + (d.coefficient_units().len() * 2)
+            // Compute the reduced digit count directly in Rust — avoids
+            // cloning the Decimal and the C FFI reduce() call.
+            let digits = numeric::reduced_numeric_digit_count(&d.0);
+            // 4 = 1 byte each for tag, digits, exponent, bits
+            4 + (Numeric::digits_to_lsu_elements_len(digits) * 2)
         }
         Datum::Range(Range { inner }) => {
             // Tag + flags
