@@ -173,7 +173,7 @@
     "p-retry": "^4.6.1",
     "pg": "^8.13.1",
     "picocolors": "^1.1.1",
-    "prettier": "^3.3.3",
+    "prettier": "^3.8.1",
     "react-refresh": "^0.14.2",
     "terser": "^5.36.0",
     "typescript-eslint-language-service": "^5.0.5",
