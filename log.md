@@ -2615,3 +2615,105 @@ speedup on these operations directly reduces the per-row overhead in the reducti
 - Byte-level concat could apply to UNION ALL operations and other row concatenation sites.
 - `tail_bytes` could be used in other patterns where a known prefix needs to be stripped or
   replaced in Row data (e.g., range key manipulation in window functions).
+
+---
+
+## Session 29: ReductionMonoid::plus_equals tag byte peek - skip datum decode for Null identity
+
+**Date:** 2026-02-20
+
+**Problem:** `ReductionMonoid::plus_equals()` in `src/compute/src/render/reduce.rs` is the
+Semigroup implementation for hierarchical Min/Max reductions. It's called ~3 billion times
+(coverage data) during differential dataflow consolidation. On every call, it:
+1. Calls `lhs.unpack_first()` → full datum decode (`read_datum` with tag dispatch, type
+   matching, value construction — including chrono `DateTime` for timestamps, `Decimal` for
+   numerics, etc.)
+2. Calls `rhs.unpack_first()` → same for the other side
+3. Pattern matches on `(lhs_val, rhs_val)` to check for Null identity
+
+Coverage data showed that ~95% of calls have `rhs` as `Datum::Null` (the identity element for
+Min/Max in DD's semigroup model). In these cases, `plus_equals` does nothing — both values are
+decoded only to discover that one of them is Null.
+
+The cost breakdown for the old approach on the dominant (rhs Null) case:
+- `unpack_first()` for lhs: 7-16ns depending on type (Int64: ~7ns, Timestamp: ~11ns,
+  Numeric: ~8ns, String: ~5ns)
+- `unpack_first()` for rhs (Null): ~4ns (tag read + Datum::Null construction)
+- Pattern match: ~1ns
+- Total: 12-21ns per call, 95% of which is wasted on decoding values that aren't used
+
+**Fix:** Added `RowRef::first_datum_is_null()` method that checks the first byte of the row
+data against `Tag::Null` (value 0, since Tag is `#[repr(u8)]` and Null is the first variant).
+This is a single byte comparison (~1 instruction) instead of the full `unpack_first()` path
+(tag dispatch → type matching → value construction → Datum enum creation).
+
+Updated `plus_equals` for both Min and Max to use a three-tier fast path:
+1. **rhs Null check** (tag byte peek): If `rhs.first_datum_is_null()`, return immediately
+   (no swap needed). This handles ~95% of calls at ~1.7ns instead of 12-21ns.
+2. **lhs Null check** (tag byte peek): If `lhs.first_datum_is_null()`, clone rhs into lhs
+   (swap needed). This handles the next ~4% at ~9ns instead of 20-22ns.
+3. **Full comparison**: Only for the ~1% where both values are non-null, do full
+   `unpack_first()` + `Datum::cmp()`. No overhead vs the old path.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench reduction_monoid`):
+
+### Per-call performance (ns/iter)
+
+| Scenario                   | Old (unpack_first) | New (tag peek) | Speedup |
+|----------------------------|-------------------:|---------------:|--------:|
+| rhs_null Int64             | 12.1               | 1.7            | **7.1x** |
+| rhs_null Timestamp         | 15.7               | 1.7            | **9.0x** |
+| rhs_null String            | 8.8                | 1.7            | **5.2x** |
+| rhs_null Numeric           | 12.8               | 1.7            | **7.4x** |
+| lhs_null Int64             | 20.4               | 8.9            | **2.3x** |
+| lhs_null Timestamp         | 21.6               | 9.8            | **2.2x** |
+| both_null                  | 7.8                | 1.7            | **4.5x** |
+| no_swap Int64 (both non-null) | 25.4            | 25.1           | ~1.0x   |
+| no_swap Timestamp          | 29.0               | 28.2           | ~1.0x   |
+| swap Int64 (both non-null) | 32.3               | 32.5           | ~1.0x   |
+
+### Batch performance (10k calls)
+
+| Scenario                   | Old       | New       | Speedup     |
+|----------------------------|-----------|-----------|-------------|
+| 95% Null rhs Int64         | 120 µs    | 24 µs     | **5.0x**    |
+| 95% Null rhs Timestamp     | 147 µs    | 29 µs     | **5.1x**    |
+| 95% Null rhs Numeric       | 135 µs    | 35 µs     | **3.8x**    |
+| 100% Null rhs Int64        | 119 µs    | 13 µs     | **8.9x**    |
+| 0% Null rhs Int64 (worst)  | 214 µs    | 216 µs    | ~1.0x       |
+
+**Summary:** **5-9x faster per call for the dominant Null-identity case (~95% of real calls),
+3.8-8.9x faster in batch simulations**. The optimization saves 10-20ns per call by replacing
+full datum decoding with a single byte comparison. For timestamps (the most expensive type to
+decode due to chrono DateTime construction), the per-call speedup is 9x. For the rare non-null
+comparison case (~5% of real calls), there is zero overhead — the tag byte check costs <1ns.
+
+At 3 billion `plus_equals` calls in the coverage trace, with 95% being the Null-identity case,
+this saves approximately 2.85B × 12ns = ~34 seconds of pure datum decoding overhead that was
+previously wasted on discovering Null values. The remaining 150M non-null comparisons are
+unchanged.
+
+**Files changed:**
+- `src/repr/src/row.rs` - Added `RowRef::first_datum_is_null()` method: checks first byte
+  against `Tag::Null` (0u8) without datum construction. Marked `#[inline]`.
+- `src/compute/src/render/reduce.rs` - Rewrote `Semigroup::plus_equals` for
+  `ReductionMonoid::Min` and `ReductionMonoid::Max` to use three-tier fast path with tag byte
+  peek. Removed now-unused `Datum` import from the monoids module.
+- `src/repr/benches/reduction_monoid.rs` - Added benchmark (new file) with per-call tests
+  (rhs_null, lhs_null, both_null, no_swap, swap across Int64/Timestamp/String/Numeric) and
+  batch tests (95% null, 100% null, 0% null workloads).
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas identified during research:**
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row during accumulable
+  reductions (264M calls). SmallVec<[Accum; 4]> would avoid heap allocation for the common
+  case, but is blocked by DD orphan rule constraints on Semigroup/Multiply trait impls.
+- `Row::clone()` at 527B executions is a massive source of allocation pressure. Arena
+  allocation or reference-counted rows could reduce this, but Row cloning is fundamental
+  to differential dataflow's operational model.
+- `parse_int32`/`parse_int64` at 560M calls could benefit from a hand-rolled ASCII parser
+  that avoids the generic `FromStr` dispatch overhead (~1.2-1.5x potential speedup).
+- `RowColumnarDecoder::decode()` at 61B inner loop iterations processes columns sequentially.
+  Batched column-at-a-time decoding could improve cache utilization and enable SIMD.
+- `first_datum_is_null()` could be extended to `first_datum_tag()` returning the raw tag byte,
+  enabling other fast-path patterns (e.g., type checking without full decode).

@@ -668,6 +668,19 @@ impl RowRef {
         self.iter().next().unwrap()
     }
 
+    /// Returns true if the first datum in this row is `Datum::Null`.
+    ///
+    /// This is much cheaper than `unpack_first()` because it only reads the tag byte
+    /// (a single byte comparison) without constructing a `Datum` value. For types like
+    /// timestamps, numerics, and intervals, `unpack_first()` involves expensive decoding
+    /// (chrono DateTime construction, Decimal parsing, etc.) that this method avoids entirely.
+    ///
+    /// Returns `false` for empty rows.
+    #[inline]
+    pub fn first_datum_is_null(&self) -> bool {
+        self.0.first() == Some(&(Tag::Null as u8))
+    }
+
     /// Iterate the [`Datum`] elements of the [`RowRef`].
     pub fn iter(&self) -> DatumListIter<'_> {
         DatumListIter { data: &self.0 }

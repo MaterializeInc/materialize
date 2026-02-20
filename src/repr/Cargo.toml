@@ -97,6 +97,10 @@ harness = false
 name = "hash_key_reconstruct"
 harness = false
 
+[[bench]]
+name = "reduction_monoid"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
