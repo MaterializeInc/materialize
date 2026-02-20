@@ -46,8 +46,7 @@ You can navigate to the Roles and Users page directly from the Materialize conso
   parallel snapshots, by using `SELECT current_setting()` instead of `SHOW` for
   version retrieval.
 - Fixed version comparison in the Materialize Kubernetes operator to correctly
-  follow semver precedence rules, preventing valid upgrades from being
-  incorrectly rejected when only the build metadata changes.
+  follow semver precedence rules, no longer rejecting upgrades that differ only in build metadata.
 
 ## v26.11.0
 *Released to Materialize Cloud: 2026-02-19* <br>
