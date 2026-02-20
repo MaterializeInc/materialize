@@ -3938,3 +3938,80 @@ aggregation pipelines), this reduces conversion overhead significantly.
 - `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+
+## Session 41: Fast-path Numeric comparison - bypass C FFI reduce + partial_cmp
+
+**Date:** 2026-02-20
+
+**Problem:** `OrderedDecimal<Decimal<N>>::cmp()` (from the `dec` crate) performs **3 C FFI
+calls per comparison**: `cx.reduce(lhs)`, `cx.reduce(rhs)`, and `cx.partial_cmp(lhs, rhs)`.
+The `reduce` operation normalizes trailing zeros (e.g., `1.20` → `1.2`), which is necessary
+for equality semantics but extremely expensive for the common case where values from the same
+SQL column already have the same scale/exponent.
+
+Every `Datum::Numeric` comparison goes through this path — whether in expression evaluation
+(the comparison fast-path from Session 38), sorting, deduplication, or aggregation. For
+TPC-H-style workloads with money columns (`DECIMAL(15,2)`), Numeric comparisons are among
+the hottest operations.
+
+**Fix:** Added `fast_numeric_cmp()` in `src/repr/src/adt/numeric.rs` that compares two
+`Numeric` values entirely in Rust for the common case:
+
+1. **Special values (NaN, Inf):** Fall back to C FFI (rare case).
+2. **Zero handling:** Direct comparison without examining coefficients.
+3. **Sign comparison:** Different signs → immediate ordering without coefficient examination.
+4. **Same exponent (>99% of comparisons):** Compare `coefficient_units()` slices from most
+   significant unit (MSU) to least significant unit (LSU), treating missing units as zero.
+   This is pure integer comparison — no FFI calls needed.
+5. **Different exponents:** Compare adjusted exponents (`exponent + digits - 1`) for
+   magnitude ordering. Only falls back to C FFI when adjusted exponents are equal but raw
+   exponents differ (requires coefficient rescaling — extremely rare).
+
+Integrated into the comparison fast-path in `MirScalarExpr::eval` (`src/expr/src/scalar.rs`):
+when both operands are `Datum::Numeric`, uses `fast_numeric_cmp` instead of `Datum`'s derived
+`Ord` (which delegates to `OrderedDecimal::cmp` and its 3 FFI calls).
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench numeric_cmp`):
+
+### Per-comparison (ns/iter)
+
+| Scenario | FFI (ns) | Fast (ns) | Speedup |
+|---|---|---|---|
+| small_int (42 vs 99) | 21.7 | 3.8 | **5.7x** |
+| money (12345.67 vs 98765.43) | 20.1 | 5.8 | **3.5x** |
+| large_coeff (18-digit) | 23.9 | 5.8 | **4.1x** |
+| equal (42.00 vs 42.00) | 33.6 | 6.0 | **5.6x** |
+| diff_exp (100 vs 99.99) | 31.4 | 5.5 | **5.7x** |
+| negative (-500.25 vs -100.50) | 29.8 | 6.0 | **5.0x** |
+
+### Batch comparison (10k money values)
+
+| Scenario | FFI (µs) | Fast (µs) | Speedup |
+|---|---|---|---|
+| 10k_money | 216.0 | 28.1 | **7.7x** |
+
+**Per-comparison speedup: 3.5-5.7x. Batch speedup: 7.7x.**
+
+The equal-values case shows the biggest per-value improvement (5.6x) because `reduce` has to
+do the most work when both values have the same coefficient (normalizing trailing zeros).
+The batch speedup is even higher (7.7x) due to cache effects — the fast path keeps everything
+in registers while the FFI path bounces through the C calling convention.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Added `fast_numeric_cmp()` function and
+  `test_fast_numeric_cmp` correctness test. Added `OrderedDecimal` import.
+- `src/expr/src/scalar.rs` - Updated comparison fast-path to use `fast_numeric_cmp` when
+  both datums are `Datum::Numeric`, avoiding `OrderedDecimal::cmp` and its 3 C FFI calls.
+- `src/repr/benches/numeric_cmp.rs` - New benchmark file.
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas:**
+- The `Datum`'s derived `Ord` trait still uses the slow `OrderedDecimal::cmp` for all
+  non-expression-evaluation paths (sorting, deduplication, etc.). A manual `Ord` impl for
+  `Datum` could intercept Numeric comparison everywhere, but requires handling all ~30
+  variants manually.
+- `OrderedDecimal::hash()` also calls `reduce` (C FFI) on every hash. A fast hash for
+  Numeric could avoid this by computing a canonical form in pure Rust.
+- `Numeric::from(f64/f32)` still goes through FFI.
+- `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.

@@ -2057,13 +2057,31 @@ impl MirScalarExpr {
                         if a.is_null() || b.is_null() {
                             return Ok(Datum::Null);
                         }
-                        let result = match func {
-                            BinaryFunc::Eq(_) => a == b,
-                            BinaryFunc::NotEq(_) => a != b,
-                            BinaryFunc::Lt(_) => a < b,
-                            BinaryFunc::Lte(_) => a <= b,
-                            BinaryFunc::Gt(_) => a > b,
-                            _ => a >= b, // Gte is the only remaining case
+                        // Fast-path for Numeric: bypass OrderedDecimal's
+                        // 2×reduce + partial_cmp (3 C FFI calls per comparison)
+                        // by comparing coefficient units directly in Rust.
+                        let result = if let (Datum::Numeric(a_num), Datum::Numeric(b_num)) =
+                            (a, b)
+                        {
+                            let ord =
+                                mz_repr::adt::numeric::fast_numeric_cmp(&a_num.0, &b_num.0);
+                            match func {
+                                BinaryFunc::Eq(_) => ord == std::cmp::Ordering::Equal,
+                                BinaryFunc::NotEq(_) => ord != std::cmp::Ordering::Equal,
+                                BinaryFunc::Lt(_) => ord == std::cmp::Ordering::Less,
+                                BinaryFunc::Lte(_) => ord != std::cmp::Ordering::Greater,
+                                BinaryFunc::Gt(_) => ord == std::cmp::Ordering::Greater,
+                                _ => ord != std::cmp::Ordering::Less, // Gte
+                            }
+                        } else {
+                            match func {
+                                BinaryFunc::Eq(_) => a == b,
+                                BinaryFunc::NotEq(_) => a != b,
+                                BinaryFunc::Lt(_) => a < b,
+                                BinaryFunc::Lte(_) => a <= b,
+                                BinaryFunc::Gt(_) => a > b,
+                                _ => a >= b, // Gte is the only remaining case
+                            }
                         };
                         Ok(if result { Datum::True } else { Datum::False })
                     }
