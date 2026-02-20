@@ -84,6 +84,10 @@ harness = false
 [[bench]]
 name = "row_encode"
 harness = false
+
+[[bench]]
+name = "arrange_kv"
+harness = false
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }

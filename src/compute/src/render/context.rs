@@ -862,6 +862,28 @@ where
         VecCollection<S, DataflowError, Diff>,
         VecCollection<S, Row, Diff>,
     ) {
+        // Pre-compute which columns key expressions need for selective decoding.
+        // Only these columns will be fully decoded; value columns are byte-projected.
+        let key_needed_columns: Vec<bool> = {
+            let mut cols = Vec::new();
+            for expr in &key {
+                expr.visit_pre(|e| {
+                    if let MirScalarExpr::Column(c, _) = e {
+                        cols.push(*c);
+                    }
+                });
+            }
+            if let Some(&max_col) = cols.iter().max() {
+                let mut needed = vec![false; max_col + 1];
+                for c in cols {
+                    needed[c] = true;
+                }
+                needed
+            } else {
+                Vec::new()
+            }
+        };
+
         // This operator implements a `map_fallible`, but produces columnar updates for the ok
         // stream. The `map_fallible` cannot be used here because the closure cannot return
         // references, which is what we need to push into columnar streams. Instead, we use a
@@ -890,12 +912,16 @@ where
                     let mut err_session = err_output.session(&time);
                     for (row, time, diff) in data.iter() {
                         temp_storage.clear();
-                        let datums = datums.borrow_with(row);
-                        let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                        match key_buf.packer().try_extend(key_iter) {
+                        // Phase 1: selectively decode only key-needed columns.
+                        let key_result = {
+                            let datums = datums.borrow_with_selective(row, &key_needed_columns);
+                            let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                            key_buf.packer().try_extend(key_iter)
+                        }; // DatumVecBorrow dropped here, releasing borrow on row
+                        match key_result {
                             Ok(()) => {
-                                let val_datum_iter = thinning.iter().map(|c| datums[*c]);
-                                val_buf.packer().extend(val_datum_iter);
+                                // Phase 2: byte-project value columns directly from the source row.
+                                row.project_onto(&thinning, &mut val_buf);
                                 ok_session.give(((&*key_buf, &*val_buf), time, diff));
                             }
                             Err(e) => {
