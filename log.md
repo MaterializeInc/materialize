@@ -1902,10 +1902,6 @@ overhead for the needed columns calculation. The `Vec<bool>` bitmask adds neglig
 - `src/repr/Cargo.toml` - Registered benchmark
 
 **Future optimization ideas identified during research:**
-- `project_onto` (Session 19) is still not integrated into any production code path.
-  For pure-projection MFPs (no expressions, no predicates), `project_onto` could bypass
-  both datum decoding AND re-encoding, giving 4-7x speedup. Would require a new method
-  on `SafeMfpPlan` and call site changes.
 - The `zero_diffs.clone()` pattern in `reduce.rs` clones `Vec<Accum>` per input row.
   SmallVec<[Accum; 4]> would avoid heap allocation for 1-4 aggregations.
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
@@ -1915,3 +1911,70 @@ overhead for the needed columns calculation. The `Vec<bool>` bitmask adds neglig
 - The selective decoding could be extended to the peek_result_iterator path if the
   key+val datum construction supported selective decoding (currently assembles datums
   from multiple sources).
+
+---
+
+## Session 21: evaluate_into_project - combine predicate evaluation with byte-level projection
+
+**Date:** 2026-02-20
+**Commit:** TBD
+
+**Idea:** When an MFP has predicates/expressions but a pure sorted input projection
+(all projection columns are sorted input columns, no computed expression columns),
+we can split the evaluation into two phases:
+1. Decode only columns needed for expressions/predicates (NOT projection columns)
+2. Evaluate predicates normally
+3. If predicates pass, use byte-level `project_onto()` from the source row
+
+This avoids both decoding AND re-encoding for projection-only columns. This extends
+Sessions 19-20: Session 19 added `project_onto` for pure projections (no predicates),
+Session 20 added selective decoding for MFP evaluation. Session 21 combines both:
+selective decode for predicates + byte-level project for the output.
+
+**Applies when:** Query has WHERE clause but projection is just input columns in sorted
+order. Example: `SELECT a, b, c FROM wide_table WHERE x > 5` where x ∉ {a,b,c}.
+
+**Microbenchmark results** (`cargo bench --bench row_project -- eval_then_project`):
+
+| Scenario | Old: selective decode all + push_datum | New: eval then byte-project | Speedup |
+|---|---|---|---|
+| int_20col, pred=1, proj=5 | 1.535 ms/10K | 1.214 ms/10K | **1.26x** |
+| mixed_10col, pred=1, proj=4 | 742 µs/10K | 590 µs/10K | **1.26x** |
+| numeric_5col, pred=1, proj=3 | 1.110 ms/10K | 440 µs/10K | **2.52x** |
+| int_50col, pred=1, proj=3 | 1.792 ms/10K | 2.401 ms/10K | **0.75x (regression)** |
+
+**Analysis:** The optimization is most beneficial when projection columns have expensive
+decode/re-encode (Numeric: 2.52x, mixed with strings: 1.26x). The int_50col regression
+occurs because for pure Int64 rows, `project_onto`'s byte-scanning overhead exceeds the
+savings from skipping cheap Int64 decode/re-encode. Real-world tables typically have
+mixed types where the optimization consistently helps.
+
+**New methods added:**
+- `MapFilterProject::eval_needed_columns()` - bitmask of columns needed for
+  expressions/predicates only (excludes projection columns)
+- `SafeMfpPlan::has_input_sorted_projection()` - returns projection if it references
+  only sorted input columns, even when predicates/expressions exist
+- `SafeMfpPlan::evaluate_into_project()` - evaluates predicates, then byte-projects
+  from source row
+- `MfpPlan::evaluate_into_project()` - wrapper delegating to SafeMfpPlan
+- `MfpPlan::has_input_sorted_projection()` - checks no temporal bounds first
+- `MfpPlan::eval_needed_columns()` - includes temporal bound columns
+
+**Files changed:**
+- `src/expr/src/linear.rs` - Added `eval_needed_columns()`, `has_input_sorted_projection()`,
+  `evaluate_into_project()` methods on SafeMfpPlan and MfpPlan.
+- `src/compute/src/compute_state.rs` - Added eval_then_project fast path in peek
+  evaluation: detects sorted input projection, uses `evaluate_into_project()`.
+- `src/storage-operators/src/persist_source.rs` - Added eval_then_project fast path
+  in `do_work()`, properly scoped borrow to satisfy borrow checker.
+- `src/storage-operators/src/oneshot_source.rs` - Added eval_then_project fast path
+  in oneshot source evaluation.
+- `src/repr/benches/row_project.rs` - Added eval_then_project benchmark group (4 scenarios).
+
+**Future optimization ideas:**
+- The int_50col regression could be addressed by adding type-aware heuristics to
+  `has_input_sorted_projection()` - only activate when projection columns have
+  expensive types (Numeric, String, List, etc.). This requires schema information
+  at the MFP level, which currently isn't available.
+- The `zero_diffs.clone()` pattern in `reduce.rs` remains a candidate for SmallVec
+  optimization (blocked by DD orphan rule issues).

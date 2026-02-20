@@ -453,7 +453,17 @@ where
         let mut datum_vec = DatumVec::default();
         let row_arena = RowArena::default();
         let mut row_buf = Row::default();
-        let mfp_needed = mfp.needed_input_columns();
+        let pure_project = mfp.is_pure_sorted_project();
+        let eval_then_project = if pure_project.is_none() {
+            mfp.has_input_sorted_projection()
+        } else {
+            None
+        };
+        let mfp_needed = if eval_then_project.is_some() {
+            mfp.eval_needed_columns()
+        } else {
+            mfp.needed_input_columns()
+        };
 
         while let Some(event) = record_chunk_handle.next().await {
             let (capability, maybe_chunks) = match event {
@@ -477,11 +487,31 @@ where
                     // For each row of source data, we pass it through an MFP to re-arrange column
                     // orders and/or fill in default values for missing columns.
                     for row in rows {
-                        let mut datums =
-                            datum_vec.borrow_with_selective(&row, &mfp_needed);
-                        let result = mfp
-                            .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
-                            .map(|row| row.cloned());
+                        // Fast path for pure sorted projections: byte-level row
+                        // projection avoids datum decoding and re-encoding.
+                        let result = if let Some(projection) = pure_project {
+                            row.project_onto(projection, &mut row_buf);
+                            Ok(Some(row_buf.clone()))
+                        } else if let Some(projection) = eval_then_project {
+                            // Evaluate predicates with minimal decode, then byte-project.
+                            let mut datums =
+                                datum_vec.borrow_with_selective(&row, &mfp_needed);
+                            mfp
+                                .evaluate_into_project(
+                                    &mut *datums,
+                                    &row_arena,
+                                    row.as_ref(),
+                                    projection,
+                                    &mut row_buf,
+                                )
+                                .map(|row| row.cloned())
+                        } else {
+                            let mut datums =
+                                datum_vec.borrow_with_selective(&row, &mfp_needed);
+                            mfp
+                                .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
+                                .map(|row| row.cloned())
+                        };
 
                         match result {
                             Ok(Some(row)) => row_handle.give(&capability, Ok(row)),
