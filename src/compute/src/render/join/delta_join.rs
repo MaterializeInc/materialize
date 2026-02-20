@@ -335,22 +335,49 @@ where
 {
     let name = "DeltaJoinKeyPreparation";
     type CB<C> = CapacityContainerBuilder<C>;
+
+    // Pre-compute which columns key expressions need for selective decoding.
+    // Only these columns will be fully decoded; value columns are byte-projected.
+    let key_needed_columns: Vec<bool> = {
+        let mut cols = Vec::new();
+        for expr in &prev_key {
+            expr.visit_pre(|e| {
+                if let MirScalarExpr::Column(c, _) = e {
+                    cols.push(*c);
+                }
+            });
+        }
+        if let Some(&max_col) = cols.iter().max() {
+            let mut needed = vec![false; max_col + 1];
+            for c in cols {
+                needed[c] = true;
+            }
+            needed
+        } else {
+            Vec::new()
+        }
+    };
+
     let (updates, errs) = updates.map_fallible::<CB<_>, CB<_>, _, _, _>(name, {
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
         move |(row, time)| {
             let temp_storage = RowArena::new();
-            let datums_local = datums.borrow_with(&row);
             let mut row_builder = SharedRow::get();
-            row_builder.packer().try_extend(
-                prev_key
-                    .iter()
-                    .map(|e| e.eval(&datums_local, &temp_storage)),
-            )?;
+            // Phase 1: selectively decode only key-needed columns,
+            // evaluate key expressions.
+            {
+                let datums_local = datums.borrow_with_selective(&row, &key_needed_columns);
+                row_builder.packer().try_extend(
+                    prev_key
+                        .iter()
+                        .map(|e| e.eval(&datums_local, &temp_storage)),
+                )?;
+            } // DatumVecBorrow dropped here, releasing borrow on row
             let key = row_builder.clone();
-            row_builder
-                .packer()
-                .extend(prev_thinning.iter().map(|&c| datums_local[c]));
+            // Phase 2: byte-project value columns directly from
+            // the source row, avoiding datum decode + re-encode.
+            row.project_onto(&prev_thinning, &mut *row_builder);
             let row_value = row_builder.clone();
 
             Ok((key, row_value, time))
