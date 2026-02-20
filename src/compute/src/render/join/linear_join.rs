@@ -23,6 +23,7 @@ use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
+use mz_expr::MirScalarExpr;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -361,7 +362,29 @@ where
                     Pipeline,
                     name,
                     |_, _| {
-                        Box::new(move |input, ok, errs| {
+                        // Pre-compute which columns key expressions need for selective decoding.
+                    // Only these columns will be fully decoded; value columns are byte-projected.
+                    let key_needed_columns: Vec<bool> = {
+                        let mut cols = Vec::new();
+                        for expr in &stream_key {
+                            expr.visit_pre(|e| {
+                                if let MirScalarExpr::Column(c, _) = e {
+                                    cols.push(*c);
+                                }
+                            });
+                        }
+                        if let Some(&max_col) = cols.iter().max() {
+                            let mut needed = vec![false; max_col + 1];
+                            for c in cols {
+                                needed[c] = true;
+                            }
+                            needed
+                        } else {
+                            Vec::new()
+                        }
+                    };
+
+                    Box::new(move |input, ok, errs| {
                             let mut temp_storage = RowArena::new();
                             let mut key_buf = Row::default();
                             let mut val_buf = Row::default();
@@ -371,16 +394,18 @@ where
                                 let mut err_session = errs.session(&time);
                                 for (row, time, diff) in data.iter() {
                                     temp_storage.clear();
-                                    let datums_local = datums.borrow_with(row);
-                                    let datums = stream_key
-                                        .iter()
-                                        .map(|e| e.eval(&datums_local, &temp_storage));
-                                    let result = key_buf.packer().try_extend(datums);
-                                    match result {
+                                    // Phase 1: selectively decode only key-needed columns,
+                                    // evaluate key expressions.
+                                    let key_result = {
+                                        let datums_local = datums.borrow_with_selective(row, &key_needed_columns);
+                                        let key_iter = stream_key.iter().map(|k| k.eval(&datums_local, &temp_storage));
+                                        key_buf.packer().try_extend(key_iter)
+                                    }; // DatumVecBorrow dropped here, releasing borrow on row
+                                    match key_result {
                                         Ok(()) => {
-                                            val_buf.packer().extend(
-                                                stream_thinning.iter().map(|e| datums_local[*e]),
-                                            );
+                                            // Phase 2: byte-project value columns directly from
+                                            // the source row, avoiding datum decode + re-encode.
+                                            row.project_onto(&stream_thinning, &mut val_buf);
                                             ok_session.give(((&key_buf, &val_buf), time, diff));
                                         }
                                         Err(e) => {
