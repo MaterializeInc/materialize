@@ -1912,41 +1912,8 @@ where
     data.extend_from_slice(bytes);
 }
 
-fn push_lengthed_bytes<D>(data: &mut D, bytes: &[u8], tag: Tag)
-where
-    D: Vector<u8>,
-{
-    match tag {
-        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => {
-            let len = bytes.len().to_le_bytes();
-            data.push(len[0]);
-        }
-        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
-            let len = bytes.len().to_le_bytes();
-            data.extend_from_slice(&len[0..2]);
-        }
-        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
-            let len = bytes.len().to_le_bytes();
-            data.extend_from_slice(&len[0..4]);
-        }
-        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
-            let len = bytes.len().to_le_bytes();
-            data.extend_from_slice(&len);
-        }
-        _ => unreachable!(),
-    }
-    data.extend_from_slice(bytes);
-}
-
 pub(super) fn date_to_array(date: Date) -> [u8; size_of::<i32>()] {
     i32::to_le_bytes(date.pg_epoch_days())
-}
-
-fn push_date<D>(data: &mut D, date: Date)
-where
-    D: Vector<u8>,
-{
-    data.extend_from_slice(&date_to_array(date));
 }
 
 pub(super) fn naive_date_to_arrays(
@@ -2050,6 +2017,79 @@ const TINY: usize = 1 << 8;
 const SHORT: usize = 1 << 16;
 const LONG: usize = 1 << 32;
 
+/// Writes a signed integer datum using combined sign check + single buffer write.
+/// Eliminates the double `is_negative()` check from the old `min_bytes_signed` + tag
+/// selection pattern, and combines tag + value bytes into a single `extend_from_slice`.
+#[inline(always)]
+#[allow(clippy::as_conversions)]
+fn push_signed_int<D, const N: usize>(
+    data: &mut D,
+    i: i64,
+    le_bytes: [u8; N],
+    neg_tag: Tag,
+    pos_tag: Tag,
+) where
+    D: Vector<u8>,
+{
+    let (n_sign_bits, base_tag) = if i < 0 {
+        (i.leading_ones() as u8, u8::from(neg_tag))
+    } else {
+        (i.leading_zeros() as u8, u8::from(pos_tag))
+    };
+    let mbs = ((64 - n_sign_bits + 7) / 8) as usize;
+    // Single write: tag byte + value bytes
+    let mut buf = [0u8; 9]; // 1 tag + max 8 value bytes
+    buf[0] = base_tag + mbs as u8;
+    // Copy value bytes into buf[1..]. For N < 8, the leading zeros in the
+    // i64 le_bytes beyond position N are always zero (for positive) or 0xFF
+    // (for negative), which matches the sign extension. So we can safely
+    // copy from the i64 le_bytes.
+    buf[1..1 + mbs].copy_from_slice(&le_bytes[..mbs]);
+    data.extend_from_slice(&buf[..1 + mbs]);
+}
+
+/// Writes an unsigned integer datum with combined tag + value in a single write.
+#[inline(always)]
+#[allow(clippy::as_conversions)]
+fn push_unsigned_int<D, const N: usize>(
+    data: &mut D,
+    i: u64,
+    le_bytes: [u8; N],
+    base_tag: Tag,
+) where
+    D: Vector<u8>,
+{
+    let n_leading = i.leading_zeros() as u8;
+    let mbu = ((64 - n_leading + 7) / 8) as usize;
+    let mut buf = [0u8; 9];
+    buf[0] = u8::from(base_tag) + mbu as u8;
+    buf[1..1 + mbu].copy_from_slice(&le_bytes[..mbu]);
+    data.extend_from_slice(&buf[..1 + mbu]);
+}
+
+/// Push a length prefix followed by data bytes for a length-prefixed type.
+/// The tag must already have been pushed by the caller. The length encoding
+/// depends on `tag` to determine the size class.
+#[inline(always)]
+#[allow(clippy::as_conversions)]
+fn push_lengthed_bytes<D: Vector<u8>>(data: &mut D, bytes: &[u8], _tag: Tag) {
+    match bytes.len() {
+        0..TINY => {
+            data.push(bytes.len() as u8);
+        }
+        TINY..SHORT => {
+            data.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        }
+        SHORT..LONG => {
+            data.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        }
+        _ => {
+            data.extend_from_slice(&bytes.len().to_le_bytes());
+        }
+    }
+    data.extend_from_slice(bytes);
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -2059,73 +2099,43 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt16_0
-            } else {
-                Tag::NonNegativeInt16_0
-            }) + mbs;
-
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_signed_int(data, i64::from(i), i64::from(i).to_le_bytes(), Tag::NegativeInt16_0, Tag::NonNegativeInt16_0);
         }
         Datum::Int32(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt32_0
-            } else {
-                Tag::NonNegativeInt32_0
-            }) + mbs;
-
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_signed_int(data, i64::from(i), i64::from(i).to_le_bytes(), Tag::NegativeInt32_0, Tag::NonNegativeInt32_0);
         }
         Datum::Int64(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt64_0
-            } else {
-                Tag::NonNegativeInt64_0
-            }) + mbs;
-
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_signed_int(data, i, i.to_le_bytes(), Tag::NegativeInt64_0, Tag::NonNegativeInt64_0);
         }
         Datum::UInt8(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt8_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt8_0);
         }
         Datum::UInt16(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt16_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt16_0);
         }
         Datum::UInt32(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt32_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt32_0);
         }
         Datum::UInt64(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt64_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(data, i, i.to_le_bytes(), Tag::UInt64_0);
         }
         Datum::Float32(f) => {
-            data.push(Tag::Float32.into());
-            data.extend_from_slice(&f.to_bits().to_le_bytes());
+            let mut buf = [0u8; 5];
+            buf[0] = Tag::Float32.into();
+            buf[1..5].copy_from_slice(&f.to_bits().to_le_bytes());
+            data.extend_from_slice(&buf);
         }
         Datum::Float64(f) => {
-            data.push(Tag::Float64.into());
-            data.extend_from_slice(&f.to_bits().to_le_bytes());
+            let mut buf = [0u8; 9];
+            buf[0] = Tag::Float64.into();
+            buf[1..9].copy_from_slice(&f.to_bits().to_le_bytes());
+            data.extend_from_slice(&buf);
         }
         Datum::Date(d) => {
-            data.push(Tag::Date.into());
-            push_date(data, d);
+            let mut buf = [0u8; 5];
+            buf[0] = Tag::Date.into();
+            buf[1..5].copy_from_slice(&date_to_array(d));
+            data.extend_from_slice(&buf);
         }
         Datum::Time(t) => {
             data.push(Tag::Time.into());
@@ -2134,8 +2144,10 @@ where
         Datum::Timestamp(t) => {
             let datetime = t.to_naive();
             if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::CheapTimestamp.into());
-                data.extend_from_slice(&nanos.to_le_bytes());
+                let mut buf = [0u8; 9];
+                buf[0] = Tag::CheapTimestamp.into();
+                buf[1..9].copy_from_slice(&nanos.to_le_bytes());
+                data.extend_from_slice(&buf);
             } else {
                 data.push(Tag::Timestamp.into());
                 push_naive_date(data, datetime.date());
@@ -2145,19 +2157,23 @@ where
         Datum::TimestampTz(t) => {
             let datetime = t.to_naive();
             if let Some(nanos) = checked_timestamp_nanos(datetime) {
-                data.push(Tag::CheapTimestampTz.into());
-                data.extend_from_slice(&nanos.to_le_bytes());
+                let mut buf = [0u8; 9];
+                buf[0] = Tag::CheapTimestampTz.into();
+                buf[1..9].copy_from_slice(&nanos.to_le_bytes());
+                data.extend_from_slice(&buf);
             } else {
                 data.push(Tag::TimestampTz.into());
                 push_naive_date(data, datetime.date());
                 push_time(data, datetime.time());
             }
         }
-        Datum::Interval(i) => {
-            data.push(Tag::Interval.into());
-            data.extend_from_slice(&i.months.to_le_bytes());
-            data.extend_from_slice(&i.days.to_le_bytes());
-            data.extend_from_slice(&i.micros.to_le_bytes());
+        Datum::Interval(iv) => {
+            let mut buf = [0u8; 21]; // 1 tag + 4 months + 4 days + 8 micros = 17, padded to 21
+            buf[0] = Tag::Interval.into();
+            buf[1..5].copy_from_slice(&iv.months.to_le_bytes());
+            buf[5..9].copy_from_slice(&iv.days.to_le_bytes());
+            buf[9..17].copy_from_slice(&iv.micros.to_le_bytes());
+            data.extend_from_slice(&buf[..17]);
         }
         Datum::Bytes(bytes) => {
             let tag = match bytes.len() {
@@ -2166,7 +2182,7 @@ where
                 SHORT..LONG => Tag::BytesLong,
                 _ => Tag::BytesHuge,
             };
-            data.push(tag.into());
+            data.push(u8::from(tag));
             push_lengthed_bytes(data, bytes, tag);
         }
         Datum::String(string) => {
@@ -2176,7 +2192,7 @@ where
                 SHORT..LONG => Tag::StringLong,
                 _ => Tag::StringHuge,
             };
-            data.push(tag.into());
+            data.push(u8::from(tag));
             push_lengthed_bytes(data, string.as_bytes(), tag);
         }
         Datum::List(list) => {
@@ -2186,7 +2202,7 @@ where
                 SHORT..LONG => Tag::ListLong,
                 _ => Tag::ListHuge,
             };
-            data.push(tag.into());
+            data.push(u8::from(tag));
             push_lengthed_bytes(data, list.data, tag);
         }
         Datum::Uuid(u) => {

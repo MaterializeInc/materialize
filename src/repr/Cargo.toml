@@ -81,6 +81,10 @@ harness = false
 name = "row_decode_selective"
 harness = false
 
+[[bench]]
+name = "row_encode"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
