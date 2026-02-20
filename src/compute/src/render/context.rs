@@ -825,15 +825,16 @@ where
 
                 let (oks, errs) = self
                     .collection
-                    .clone()
+                    .take()
                     .expect("Collection constructed above");
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
-                self.collection = Some((passthrough, errs.clone()));
-                let errs: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
-                let errs = errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
-                    &format!("{}-errors", name),
-                );
+                let errs_concat: KeyCollection<_, _, _> = errs.concat(&errs_keyed).into();
+                self.collection = Some((passthrough, errs));
+                let errs =
+                    errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+                        &format!("{}-errors", name),
+                    );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
             }
@@ -847,6 +848,10 @@ where
     /// the `thinning` applied to it. It selects which of the input columns are included in the
     /// value of the arrangement. The thinning is in support of permuting arrangements such that
     /// columns in the key are not included in the value.
+    ///
+    /// In addition to the ok and err streams, we produce a passthrough stream that forwards
+    /// the input as-is, which allows downstream consumers to reuse the collection without
+    /// teeing the stream.
     fn arrange_collection(
         name: &String,
         oks: VecCollection<S, Row, Diff>,
@@ -861,10 +866,6 @@ where
         // stream. The `map_fallible` cannot be used here because the closure cannot return
         // references, which is what we need to push into columnar streams. Instead, we use a
         // bespoke operator that also optimizes reuse of allocations across individual updates.
-        //
-        // In addition to the ok and err streams, we produce a passthrough stream that forwards
-        // the input as-is, which allows downstream consumers to reuse the collection without
-        // teeing the stream.
         let mut builder = OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output =
