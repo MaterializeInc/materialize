@@ -6,7 +6,9 @@ menu:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role, which is a user account in Materialize.[^1]
+Use `CREATE ROLE` [^1] to:
+- Create functional roles (*Both Cloud and Self-Managed*).
+- Create roles with login/password/superuser privileges (*Self-Managed only*).
 
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
