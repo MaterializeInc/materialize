@@ -179,7 +179,18 @@ impl<T> DataflowDescription<OptimizedMirRelationExpr, (), T> {
     ///
     /// Future uses of `import_index` in other dataflow descriptions may use `id`,
     /// as long as this dataflow has not been terminated in the meantime.
-    pub fn export_index(&mut self, id: GlobalId, description: IndexDesc, on_type: SqlRelationType) {
+    pub fn export_index(
+        &mut self,
+        id: GlobalId,
+        mut description: IndexDesc,
+        mut on_type: SqlRelationType,
+    ) {
+        // Ensure the index keys and type are repr-canonicalized so that
+        // they match the canonicalized ArrangeBy plan after optimization.
+        for key in description.key.iter_mut() {
+            key.repr_canonicalize();
+        }
+        on_type.repr_canonicalize();
         // We first create a "view" named `id` that ensures that the
         // data are correctly arranged and available for export.
         self.insert_plan(
