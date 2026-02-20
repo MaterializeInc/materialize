@@ -2950,3 +2950,157 @@ lookup (used in joins, aggregations, top-k, indexed views) flows through this pa
   Direct packer methods (bypassing Datum construction) could save ~2-4ns per datum.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row. SmallVec newtype
   wrapper could avoid heap allocation for 1-4 aggregations.
+
+---
+
+## Session 32: Fast-path ISO 8601 timestamp/date/time parsing - 15-22x speedup
+
+**Date:** 2026-02-20
+
+**Problem:** Every time a timestamp, timestamptz, date, or time value is parsed from text—via
+COPY FROM, pgwire text decode, or SQL string→type casts—the code went through a
+general-purpose `ParsedDateTime` pipeline that:
+1. **`split_timestamp_string()`** — 2-3 `find()` calls to locate timezone boundaries
+2. **`tokenize_time_str()`** — allocates a `VecDeque<TimeStrToken>`, two `String` buffers
+   (num_buf, char_buf), scans character-by-character with 6+ match arms per character,
+   creates ~13 tokens for a standard ISO timestamp via `push_back()` calls
+3. **`fill_pdt_date()` + `fill_pdt_time()`** — pattern-matches token sequences against
+   multiple format templates using peekable iterators, fills a 264-byte `ParsedDateTime`
+   struct with 11 `Option<DateTimeFieldValue>` fields
+4. **`check_datelike_bounds()`** — 5 range checks
+5. **`compute_date()` + `compute_time()`** — extracts 6 fields from the struct, converts
+   to chrono `NaiveDate`/`NaiveTime`
+
+This general pipeline handles every PostgreSQL timestamp format (flexible separators, named
+timezones, BC/AD eras, partial dates, etc.), but ~99% of real-world data is simple ISO 8601:
+`"2024-06-15 14:30:25.123456"`. The tokenizer alone does ~600 operations (26 chars × ~23
+operations per character) when 13 byte-level comparisons + 6 two-digit parses suffice.
+
+This is the *parsing* counterpart to Session 3's *formatting* optimization (which replaced
+chrono's `ts.format("%m-%d %H:%M:%S")` with direct field extraction for 10-22x speedup).
+
+**Fix:** Added fast-path ISO 8601 parsers that do direct byte-level extraction with zero
+heap allocations, falling back to the general `ParsedDateTime` pipeline only for non-standard
+formats:
+
+1. **Helper functions:**
+   - `parse_2digit(buf, off)` — parse 2 ASCII digits via `wrapping_sub(b'0')`, ~2ns
+   - `parse_4digit(buf, off)` — parse 4 ASCII digits via arithmetic, ~3ns
+   - `parse_frac_nanos(buf, start, end)` — parse 1-9 fractional digits → nanoseconds with
+     static scale table, ~3-5ns
+   - `try_parse_date_bytes(buf)` — parse "YYYY-MM-DD" → `NaiveDate` + offset
+   - `try_parse_time_bytes(buf, off)` — parse "HH:MM:SS[.fff...]" → `NaiveTime` + offset
+   - `try_parse_tz_offset(buf, off)` — parse "+HH[:MM]" or "-HH[:MM]" → `FixedOffset`
+
+2. **Fast-path entry points:**
+   - `try_parse_timestamp_fast(s)` — "YYYY-MM-DD{' '|'T'}HH:MM:SS[.fff...]" → NaiveDateTime
+   - `try_parse_timestamptz_fast(s)` — same + "{+|-}HH[:MM]" → DateTime<Utc>
+   - `try_parse_date_fast(s)` — "YYYY-MM-DD" (exactly 10 chars) → NaiveDate
+   - `try_parse_time_fast(s)` — "HH:MM:SS[.fff...]" → NaiveTime
+
+3. **Integration:** `parse_timestamp`, `parse_timestamptz`, `parse_date`, and `parse_time`
+   all try the fast path first, falling back to the general parser on `None`.
+
+All fast paths return `None` (triggering fallback) if:
+- String length doesn't match expected patterns
+- Any separator byte is wrong (not '-', ':', ' ', 'T', '.', '+', '-')
+- Any digit byte is not in '0'-'9'
+- chrono `from_ymd_opt` / `from_hms_nano_opt` returns `None` (invalid date/time values)
+
+This ensures exact compatibility with the general parser for all valid inputs.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench timestamp_parse`):
+
+### Per-value timestamp parsing (ns/iter)
+
+| Value                    | Old (ParsedDateTime) | New (fast path) | Speedup    |
+|--------------------------|---------------------:|----------------:|-----------:|
+| no_frac                  | 319                  | 14.3            | **22.3x**  |
+| micros                   | 374                  | 16.9            | **22.1x**  |
+| millis                   | 348                  | 16.0            | **21.8x**  |
+| nanos                    | 385                  | 18.6            | **20.7x**  |
+| epoch (1970-01-01)       | 321                  | 14.3            | **22.4x**  |
+| y2k (2000-01-01)         | 313                  | 14.3            | **21.9x**  |
+| t_separator              | 364                  | 16.7            | **21.8x**  |
+
+### Per-value timestamptz parsing (ns/iter)
+
+| Value                    | Old (ParsedDateTime) | New (fast path) | Speedup    |
+|--------------------------|---------------------:|----------------:|-----------:|
+| utc_short (+00)          | 364                  | 22.6            | **16.1x**  |
+| utc_full (+00:00)        | 393                  | 22.6            | **17.4x**  |
+| neg_offset (-05:30)      | 413                  | 22.6            | **18.3x**  |
+| micros_utc               | 413                  | 25.2            | **16.4x**  |
+| micros_offset (-05:30)   | 437                  | 25.4            | **17.2x**  |
+
+### Per-value date parsing (ns/iter)
+
+| Value                    | Old (ParsedDateTime) | New (fast path) | Speedup    |
+|--------------------------|---------------------:|----------------:|-----------:|
+| typical (2024-06-15)     | 191                  | 9.8             | **19.5x**  |
+| epoch (1970-01-01)       | 190                  | 9.7             | **19.6x**  |
+| year_end (2024-12-31)    | 188                  | 9.7             | **19.4x**  |
+
+### Per-value time parsing (ns/iter)
+
+| Value                    | Old (ParsedDateTime) | New (fast path) | Speedup    |
+|--------------------------|---------------------:|----------------:|-----------:|
+| no_frac (14:30:25)       | 152                  | 7.7             | **19.7x**  |
+| micros (14:30:25.123456) | 192                  | 9.9             | **19.4x**  |
+| midnight (00:00:00)      | 152                  | 7.5             | **20.2x**  |
+
+### Batch parsing (10k values)
+
+| Scenario                 | Old         | New        | Speedup     |
+|--------------------------|-------------|------------|-------------|
+| 10k timestamps (micros)  | 3.55 ms     | 198 µs     | **17.9x**   |
+| 10k timestamptz (offset) | 4.42 ms     | 257 µs     | **17.2x**   |
+| 10k dates                | 2.06 ms     | 122 µs     | **16.9x**   |
+| 10k times (micros)       | 1.89 ms     | 126 µs     | **15.0x**   |
+
+**Summary:** **15-22x faster per value, 15-18x faster in batch** for standard ISO 8601
+format inputs. The enormous speedup comes from eliminating:
+1. **VecDeque heap allocation** (~30-50ns) for token storage
+2. **Character-by-character tokenization** (~100-150ns for 26 chars × 6+ match arms)
+3. **Token pattern matching** (~50-80ns for peekable iterator + format template matching)
+4. **ParsedDateTime struct initialization** (~20ns for 264 bytes of Options)
+5. **Redundant range checks** (~10ns for 5 bounds validations after chrono already validates)
+
+The fast path replaces all of this with 7 byte comparisons (separators) + 6 two-digit parses
+(~2ns each) + 1 four-digit parse (~3ns) + 1 fractional parse (~5ns) + chrono construction
+(~8ns) = ~25ns total. The fast path adds <1ns overhead for non-standard formats (a single
+length check returns `None` immediately).
+
+For COPY FROM workloads with timestamp columns (common in data migration, ETL pipelines,
+CDC replication), this 15-18x batch speedup translates directly to faster data ingestion.
+Combined with Session 16's memchr-accelerated COPY text parsing and Session 30's direct
+Row construction, the COPY FROM pipeline is now dramatically faster for timestamp-heavy data.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Added fast-path ISO 8601 parsers: `parse_2digit()`,
+  `parse_4digit()`, `parse_frac_nanos()`, `try_parse_date_bytes()`,
+  `try_parse_time_bytes()`, `try_parse_tz_offset()`, `try_parse_timestamp_fast()`,
+  `try_parse_timestamptz_fast()`, `try_parse_date_fast()`, `try_parse_time_fast()`.
+  Updated `parse_timestamp()`, `parse_timestamptz()`, `parse_date()`, `parse_time()` to
+  try fast path first. Added `parse_timestamp_general()`, `parse_timestamptz_general()`,
+  `parse_date_general()`, `parse_time_general()` for benchmark comparison. Added
+  comprehensive correctness tests comparing fast path against general parser.
+- `src/repr/benches/timestamp_parse.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `MirScalarExpr::eval()` dispatch chain: for simple predicates like `WHERE x > 5`, there
+  are 3 dispatch points (MirScalarExpr match → BinaryFunc 100+ variant match →
+  EagerBinaryFunc trait call). A specialized evaluator for common predicate patterns could
+  reduce this.
+- `DatumColumnDecoder::get()` at 61B calls in persist decode: Option chain
+  (`is_valid().then(|| value()).map(Datum::Type)`) could be replaced with direct if/else
+  for non-nullable columns.
+- `ArrayOrd::cmp()` at 327B calls in persist merge: double enum dispatch could be
+  specialized for common column types (Int64, String, Bool).
+- `sink/correction_v2.rs` Chain::iter() at 588B coverage — the `d.clone()` pattern was
+  found to have 0 executions at the specific clone line (the hot path uses Cursor references
+  instead); not a good optimization target.
+- `zero_diffs.clone()` in `reduce.rs` — SmallVec newtype wrapper remains viable.
+- Integer parsing (`parse_int32/parse_int64`) at 560M calls could potentially benefit from
+  a hand-rolled ASCII parser, though Rust's `FromStr` is already well-optimized.
