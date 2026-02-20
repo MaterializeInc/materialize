@@ -163,7 +163,7 @@
     "intersection-observer": "^0.12.2",
     "jotai-devtools": "^0.10.1",
     "jsdom": "^25.0.1",
-    "jsonwebtoken": "^9.0.2",
+    "jsonwebtoken": "^9.0.3",
     "kysely-codegen": "^0.17.0",
     "lint-staged": "^16.2.7",
     "miragejs": "^0.1.48",
