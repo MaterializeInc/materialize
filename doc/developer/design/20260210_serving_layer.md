@@ -122,13 +122,13 @@ Most databases (PostgreSQL, MySQL, CockroachDB, SQL Server, Trino, DuckDB) scope
 A serving layer needs something longer-lived.
 Three systems have catalog-scoped parameterized queries, and one has a proven cross-session caching model:
 
- * **ClickHouse parameterized views** are DDL objects with typed parameters, queried as table functions.
+ * **[ClickHouse parameterized views](https://clickhouse.com/docs/sql-reference/statements/create/view)** are DDL objects with typed parameters, queried as table functions.
    They are persistent catalog objects, but each invocation is re-planned from scratch.
- * **Amazon Athena** supports persistent prepared statements scoped to a workgroup (not a session), with positional parameters.
+ * **[Amazon Athena](https://docs.aws.amazon.com/athena/latest/ug/querying-with-prepared-statements.html)** supports persistent prepared statements scoped to a workgroup (not a session), with positional parameters.
    Like ClickHouse, each execution is re-planned.
- * **Hasura Native Queries** store parameterized SQL in Hasura's metadata (outside the database catalog) and expose them as GraphQL fields.
+ * **[Hasura Native Queries](https://hasura.io/docs/3.0/reference/connectors/postgresql/native-operations/native-queries/)** store parameterized SQL in Hasura's metadata (outside the database catalog) and expose them as GraphQL fields.
    Again, re-planned on each execution.
- * **Cassandra/ScyllaDB** takes a different approach: prepared statement IDs are content hashes of the query text, cached per-node.
+ * **[Cassandra/ScyllaDB](https://java-driver.docs.scylladb.com/stable/manual/core/statements/prepared/)** takes a different approach: prepared statement IDs are content hashes of the query text, cached per-node.
    Any connection can execute by ID.
    This is operationally proven at scale but ephemeral---cached entries are evictable and not named catalog objects.
 
@@ -225,13 +225,14 @@ The following subsections cover their query serving model, SQL API, application 
 
 Snowflake has no dedicated low-latency serving layer.
 All query paths---SQL API, ODBC/JDBC, Snowpark---go through warehouse-based execution with job-queue scheduling.
-Their closest analog to a serving layer is *Interactive Tables* combined with *Interactive Warehouses*, which are optimized for fast, simple queries (selective `WHERE` clauses, optional `GROUP BY`) at high concurrency.
+Their closest analog to a serving layer is [*Interactive Tables*](https://docs.snowflake.com/en/user-guide/interactive) combined with *Interactive Warehouses*, which are optimized for fast, simple queries (selective `WHERE` clauses, optional `GROUP BY`) at high concurrency.
 However, these still go through the warehouse execution path and do not bypass query optimization or scheduling overhead.
 
 This means a Materialize serving layer with pre-materialized data in an optimized lookup structure, served directly without query optimization or warehouse scheduling, would be a differentiating capability.
 
 ### Snowflake SQL API
 
+[Documentation](https://docs.snowflake.com/en/developer-guide/sql-api/index).
 Snowflake exposes a REST API (`POST /api/v2/statements`) for executing SQL statements.
 Queries that complete within 45 seconds return results synchronously; longer queries use async polling.
 Results come back as JSON arrays, paginated for large result sets.
@@ -239,6 +240,7 @@ This is a general-purpose query API, not a serving API---it has the same latency
 
 ### Snowflake Native Apps Framework
 
+[Documentation](https://docs.snowflake.com/en/developer-guide/native-apps/native-apps-about).
 Snowflake's Native Apps Framework uses a provider-consumer model: a provider creates an *application package* containing logic (stored procedures, UDFs, Streamlit apps), data shares, and a setup script.
 Consumers install the app into their own account, where it runs as a database object with its own namespace.
 
@@ -249,6 +251,7 @@ This model is relevant to Option 3: if we build an application platform API, we 
 
 ### Snowpark Container Services
 
+[Documentation](https://docs.snowflake.com/en/developer-guide/snowpark-container-services/overview).
 Snowpark Container Services (SPCS) is a managed container platform built into Snowflake.
 Users push OCI-compliant Docker images, allocate compute pools, and deploy long-running services.
 Containers access Snowflake data via an injected OAuth token and standard connectors.
@@ -266,6 +269,7 @@ If we built an application platform, external applications (including a referenc
 
 ### Snowflake Open Catalog (Polaris)
 
+[Documentation](https://docs.snowflake.com/en/user-guide/opencatalog/overview).
 Snowflake Open Catalog exposes an Apache Iceberg REST Catalog API, allowing any compatible engine (Spark, Flink, Trino) to discover and read Iceberg tables in Snowflake-managed storage.
 This is a catalog API, not a query serving API, but it demonstrates the pattern of exposing catalog metadata to external consumers---which is exactly what we would need for Option 3.
 
