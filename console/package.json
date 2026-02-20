@@ -181,7 +181,7 @@
     "vite-bundle-analyzer": "^0.12.1",
     "vite-plugin-html": "^3.2.2",
     "vite-plugin-svgr": "^4.3.0",
-    "vite-plugin-wasm": "^3.3.0",
+    "vite-plugin-wasm": "^3.5.0",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.0.5"
   },
