@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, LiteralString
 
 import psycopg
@@ -901,49 +901,62 @@ def main() -> int:
     end_time = time.time()
     start_time = end_time - args.time
 
-    with timed("Fetching queries"):
-        for (
-            sql,
-            cluster,
-            database,
-            search_path,
-            statement_type,
-            finished_status,
-            params,
-            transaction_isolation,
-            session_id,
-            transaction_id,
-            began_at,
-            duration,
-            result_size,
-        ) in query(
-            conn,
-            SQL(
-                "SELECT sql, cluster_name, database_name, search_path, statement_type, finished_status, params, transaction_isolation, session_id, transaction_id, began_at, finished_at - began_at, result_size FROM mz_internal.mz_recent_activity_log WHERE began_at > {} ORDER BY began_at ASC"
-            ).format(Literal(datetime.fromtimestamp(start_time, tz=timezone.utc))),
-        ):
-            assert (
-                search_path[0] == "{" and search_path[-1] == "}"
-            ), f"Unexpected search path: {search_path}"
-            workload["queries"].append(
-                {
-                    "sql": sql,
-                    "cluster": cluster,
-                    "database": database,
-                    "search_path": search_path[1:-1].split(","),
-                    "statement_type": statement_type,
-                    "finished_status": finished_status,
-                    "params": params,
-                    "transaction_isolation": transaction_isolation,
-                    "session_id": str(session_id),
-                    "transaction_id": int(transaction_id),
-                    "began_at": began_at,
-                    "duration": (
-                        duration.total_seconds() if duration is not None else None
-                    ),
-                    "result_size": result_size,
-                }
-            )
+    def fetch_queries() -> None:
+        """Fetch queries from mz_recent_activity_log into workload["queries"]."""
+        # Use the server's own clock to avoid timezone/clock-skew issues between
+        # the capture machine and the Materialize server.
+        server_now = query(conn, "SELECT now()")[0][0]
+        query_cutoff = server_now - timedelta(seconds=args.time)
+
+        with timed("Fetching queries"):
+            for (
+                sql,
+                cluster,
+                database,
+                search_path,
+                statement_type,
+                finished_status,
+                params,
+                transaction_isolation,
+                session_id,
+                transaction_id,
+                began_at,
+                duration,
+                result_size,
+            ) in query(
+                conn,
+                SQL(
+                    "SELECT sql, cluster_name, database_name, search_path, statement_type, finished_status, params, transaction_isolation, session_id, transaction_id, began_at, finished_at - began_at, result_size FROM mz_internal.mz_recent_activity_log WHERE began_at > {} ORDER BY began_at ASC"
+                ).format(Literal(query_cutoff)),
+            ):
+                assert (
+                    search_path[0] == "{" and search_path[-1] == "}"
+                ), f"Unexpected search path: {search_path}"
+                workload["queries"].append(
+                    {
+                        "sql": sql,
+                        "cluster": cluster,
+                        "database": database,
+                        "search_path": search_path[1:-1].split(","),
+                        "statement_type": statement_type,
+                        "finished_status": finished_status,
+                        "params": params,
+                        "transaction_isolation": transaction_isolation,
+                        "session_id": str(session_id),
+                        "transaction_id": int(transaction_id),
+                        "began_at": began_at,
+                        "duration": (
+                            duration.total_seconds() if duration is not None else None
+                        ),
+                        "result_size": result_size,
+                    }
+                )
+
+    # In non-capture-data mode, fetch queries now (before writing output).
+    # In capture-data mode, we fetch queries after the data capture completes
+    # so that queries executed during the capture window are also recorded.
+    if not args.capture_data:
+        fetch_queries()
 
     if args.avg_column_size:
         with timed("Fetching average column sizes"):
@@ -1053,6 +1066,26 @@ def main() -> int:
             obj["source_type"] = "table"
         print(f"Found {len(capturable_objects)} capturable objects", file=sys.stderr)
 
+        # Build capture_meta.yml keyed by FQN.
+        capture_meta: dict[str, Any] = {}
+        for obj in capturable_objects:
+            fqn = obj["fqn"]
+            meta = _build_object_meta(obj)
+            capture_meta[fqn] = meta
+
+        with timed(f"Writing {output_dir}/capture_meta.yml"):
+            with open(os.path.join(output_dir, "capture_meta.yml"), "w") as f:
+                yaml.dump(capture_meta, f, Dumper=yaml.CSafeDumper)
+
+        # Write objects.yml early so it's available while data capture runs.
+        # Pop queries temporarily — they'll be fetched after capture.
+        workload["capture_method"] = "persist"
+        saved_queries = workload.pop("queries")
+        with timed(f"Writing {output_dir}/objects.yml"):
+            with open(os.path.join(output_dir, "objects.yml"), "w") as f:
+                yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
+        workload["queries"] = saved_queries
+
         with timed("Capturing initial data from persist"):
             initial_data_dir = os.path.join(output_dir, "initial_data")
             as_of_map = _capture_initial_data_persist(
@@ -1086,23 +1119,15 @@ def main() -> int:
 
         capture_end_ts = time.time()
 
-        workload["capture_method"] = "persist"
+        # Fetch queries after data capture so queries from the capture window
+        # are included.
+        fetch_queries()
+
+        # Update objects.yml with capture timestamps.
         workload["capture_start_ts"] = capture_start_ts
         workload["capture_end_ts"] = capture_end_ts
-
-        # Build capture_meta.yml keyed by FQN.
-        capture_meta: dict[str, Any] = {}
-        for obj in capturable_objects:
-            fqn = obj["fqn"]
-            meta = _build_object_meta(obj)
-            capture_meta[fqn] = meta
-
-        with timed(f"Writing {output_dir}/capture_meta.yml"):
-            with open(os.path.join(output_dir, "capture_meta.yml"), "w") as f:
-                yaml.dump(capture_meta, f, Dumper=yaml.CSafeDumper)
-
         queries = workload.pop("queries")
-        with timed(f"Writing {output_dir}/objects.yml"):
+        with timed(f"Updating {output_dir}/objects.yml"):
             with open(os.path.join(output_dir, "objects.yml"), "w") as f:
                 yaml.dump(workload, f, Dumper=yaml.CSafeDumper)
 

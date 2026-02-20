@@ -121,16 +121,16 @@ def test(
     sql_initial_data_dir = workload.get("sql_initial_data_dir")
     sql_continuous_data_dir = workload.get("sql_continuous_data_dir")
     created_data = False
-    try:
-        if initial_data:
-            print("Creating initial data")
-            stats["initial_data"] = {"docker": [], "time": 0.0}
-            stats_thread = PropagatingThread(
-                target=docker_stats,
-                name="docker-stats",
-                args=(stats["initial_data"]["docker"], stop_event),
-            )
-            stats_thread.start()
+    if initial_data:
+        print("Creating initial data")
+        stats["initial_data"] = {"docker": [], "time": 0.0}
+        stats_thread = PropagatingThread(
+            target=docker_stats,
+            name="docker-stats",
+            args=(stats["initial_data"]["docker"], stop_event),
+        )
+        stats_thread.start()
+        try:
             start_time = time.time()
             if sql_initial_data_dir:
                 print("Using SQL-captured initial data")
@@ -144,11 +144,10 @@ def test(
                     factor_initial_data,
                     random.Random(random.randrange(SEED_RANGE)),
                 )
-        if early_initial_data:
-            start_time = time.time()
-            run_create_objects_part_2(c, services, workload, verbose)
-            stats["object_creation"] += time.time() - start_time
-        if initial_data:
+            if early_initial_data:
+                obj_start = time.time()
+                run_create_objects_part_2(c, services, workload, verbose)
+                stats["object_creation"] += time.time() - obj_start
             if not sql_initial_data_dir:
                 created_data_requiring_mz = create_initial_data_requiring_mz(
                     c,
@@ -160,40 +159,76 @@ def test(
             stats["initial_data"]["time"] = time.time() - start_time
             if not created_data:
                 del stats["initial_data"]
-            while True:
-                not_hydrated: list[str] = [
-                    entry[0]
-                    for entry in c.sql_query(
-                        """
-                    SELECT DISTINCT name
-                        FROM (
-                          SELECT o.name
-                          FROM mz_objects o
-                          JOIN mz_internal.mz_hydration_statuses h
-                            ON o.id = h.object_id
-                          WHERE NOT h.hydrated
+        finally:
+            stop_event.set()
+            stats_thread.join()
+            stop_event.clear()
+    elif early_initial_data:
+        start_time = time.time()
+        run_create_objects_part_2(c, services, workload, verbose)
+        stats["object_creation"] += time.time() - start_time
 
-                          UNION ALL
+    # Wait for all user objects to hydrate before starting queries.
+    print("Waiting for hydration")
+    while True:
+        not_hydrated: list[str] = [
+            entry[0]
+            for entry in c.sql_query(
+                """
+            SELECT DISTINCT name
+                FROM (
+                  SELECT o.name
+                  FROM mz_objects o
+                  JOIN mz_internal.mz_hydration_statuses h
+                    ON o.id = h.object_id
+                  WHERE NOT h.hydrated
+                    AND o.name NOT LIKE 'mz_%'
 
-                          SELECT o.name
-                          FROM mz_objects o
-                          JOIN mz_internal.mz_compute_hydration_statuses h
-                            ON o.id = h.object_id
-                          WHERE NOT h.hydrated
-                        ) x
-                        ORDER BY 1;"""
-                    )
-                    if not entry[0].startswith("mz_")
-                ]
-                if not_hydrated:
-                    print(f"Waiting to hydrate: {', '.join(not_hydrated)}")
-                    time.sleep(1)
-                else:
-                    break
-    finally:
-        stop_event.set()
-        stats_thread.join()
-        stop_event.clear()
+                  UNION ALL
+
+                  SELECT o.name
+                  FROM mz_objects o
+                  JOIN mz_internal.mz_compute_hydration_statuses h
+                    ON o.id = h.object_id
+                  WHERE NOT h.hydrated
+                    AND o.name NOT LIKE 'mz_%'
+                ) x
+                ORDER BY 1;"""
+            )
+        ]
+        if not_hydrated:
+            print(f"  Not yet hydrated: {', '.join(not_hydrated)}")
+            time.sleep(1)
+        else:
+            break
+    print("Hydration complete")
+
+    # Wait for all user materializations to be caught up (fresh).
+    # Sleep first so the system has time to start processing imported data;
+    # otherwise frontiers haven't advanced yet and everything looks fresh.
+    print("Waiting for freshness")
+    time.sleep(10)
+    while True:
+        lagging: list[tuple[str, str]] = [
+            (entry[0], entry[1])
+            for entry in c.sql_query(
+                """
+            SELECT o.name, COALESCE(l.global_lag, INTERVAL '999 hours')::text
+            FROM mz_internal.mz_materialization_lag l
+            JOIN mz_objects o ON o.id = l.object_id
+            WHERE o.name NOT LIKE 'mz_%'
+              AND (l.global_lag IS NULL OR l.global_lag > INTERVAL '10 seconds')
+            ORDER BY l.global_lag DESC NULLS FIRST
+            LIMIT 5;"""
+            )
+        ]
+        if lagging:
+            summary = ", ".join(f"{name} ({lag})" for name, lag in lagging)
+            print(f"  Lagging: {summary}")
+            time.sleep(5)
+        else:
+            break
+    print("Freshness complete")
     if run_ingestions:
         print("Starting continuous ingestions")
         if sql_continuous_data_dir:
@@ -218,6 +253,8 @@ def test(
         print("Starting continuous queries")
         stats["queries"]["timings"] = []
         stats["queries"]["errors"] = defaultdict(list)
+        stats["queries"]["query_errors"] = 0
+        stats["queries"]["unexpected_query_errors"] = defaultdict(list)
         threads.append(
             PropagatingThread(
                 target=continuous_queries,
@@ -394,6 +431,27 @@ def benchmark(
                     test_class_name_override=filename,
                 )
             )
+
+    # Flag unexpected failures: queries that succeeded in production but
+    # failed during replay.  Only report for the new version since both
+    # runs replay against the same captured workload.
+    new_unexpected = stats_new["queries"].get("query_errors", 0)
+    old_unexpected = stats_old["queries"].get("query_errors", 0)
+    if new_unexpected > old_unexpected:
+        unexpected_errors = stats_new["queries"].get("unexpected_query_errors", {})
+        details_lines = [
+            f"Old: {old_unexpected} unexpected failures, New: {new_unexpected} unexpected failures",
+        ]
+        for error, sqls in unexpected_errors.items():
+            if error not in stats_old["queries"].get("unexpected_query_errors", {}):
+                details_lines.append(f"{error} ({len(sqls)}x)")
+        failures.append(
+            TestFailureDetails(
+                message=f"Workload {filename} has more unexpected query failures",
+                details="\n".join(details_lines),
+                test_class_name_override=filename,
+            )
+        )
 
     if failures:
         raise FailedTestExecutionError(errors=failures)

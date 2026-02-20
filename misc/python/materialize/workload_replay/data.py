@@ -544,7 +544,8 @@ def import_sql_captured_data_initial(
             else None
         )
         if source_type == "kafka":
-            child_obj = source_obj
+            assert source_obj is not None
+            child_obj: dict[str, Any] = source_obj
             children = source_obj.get("children", {})
             if children and meta["name"] in children:
                 child_obj = children[meta["name"]]

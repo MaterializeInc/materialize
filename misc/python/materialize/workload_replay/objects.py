@@ -30,6 +30,7 @@ from materialize.mzcompose.helpers.iceberg import (
     setup_polaris_for_iceberg,
 )
 from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.workload_replay.config import cluster_replica_sizes
 from materialize.workload_replay.util import (
     get_kafka_topic,
     get_mysql_reference_db_table,
@@ -37,7 +38,6 @@ from materialize.workload_replay.util import (
     get_sql_server_reference_db_schema_table,
     to_sql_server_data_type,
 )
-
 
 # Configuration parameters that are read-only and cannot be SET.
 READONLY_CONFIGURATION = {
@@ -164,13 +164,15 @@ def run_create_objects_part_1(
         create_sql = cluster["create_sql"].replace(
             "REPLICATION FACTOR = 0", "REPLICATION FACTOR = 1"
         )
-        # Remap cluster sizes that don't exist in the local dev environment
+        # Remap cluster sizes that don't exist in the replay environment
         # to the smallest available size.
-        create_sql = re.sub(
-            r"SIZE\s*=\s*'[^']*'",
-            "SIZE = 'scale=1,workers=1'",
-            create_sql,
-        )
+        size_match = re.search(r"SIZE\s*=\s*'([^']*)'", create_sql)
+        if size_match and size_match.group(1) not in cluster_replica_sizes:
+            create_sql = (
+                create_sql[: size_match.start()]
+                + "SIZE = 'scale=1,workers=1'"
+                + create_sql[size_match.end() :]
+            )
         c.sql(create_sql, user="mz_system", port=6877, print_statement=verbose)
 
     print("Creating databases")

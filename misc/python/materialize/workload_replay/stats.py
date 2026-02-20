@@ -118,12 +118,13 @@ def print_replay_stats(stats: dict[str, Any]) -> None:
     """Print a summary of replay statistics."""
     print("Queries:")
     print(f"   Total: {stats['queries']['total']}")
-    failed = (
-        100.0 * stats["queries"]["failed"] / stats["queries"]["total"]
+    query_errors = stats["queries"].get("query_errors", 0)
+    query_errors_pct = (
+        100.0 * query_errors / stats["queries"]["total"]
         if stats["queries"]["total"]
         else 0
     )
-    print(f"  Failed: {stats['queries']['failed']} ({failed:.0f}%)")
+    print(f"  Failed: {query_errors} ({query_errors_pct:.0f}%)")
     slow = (
         100.0 * stats["queries"]["slow"] / stats["queries"]["total"]
         if stats["queries"]["total"]

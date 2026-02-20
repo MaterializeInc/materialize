@@ -112,9 +112,10 @@ def run_query(
             stats["errors"][f"{e.sqlstate}: {e}"].append(sql)
 
             if query["finished_status"] == "success":
-                if "unknown catalog item" not in str(e):
-                    print(f"Failed: {sql} (params: {params})")
-                    print(f"{e.sqlstate}: {e}")
+                stats["query_errors"] += 1
+                stats["unexpected_query_errors"][f"{e.sqlstate}: {e}"].append(sql)
+                print(f"Failed: {sql}")
+                print(f"  {e.sqlstate}: {e}")
             elif verbose:
                 print(f"Failed expectedly: {sql} (params: {params})")
                 print(f"{e.sqlstate}: {e}")

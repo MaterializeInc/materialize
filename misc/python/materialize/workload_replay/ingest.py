@@ -1087,7 +1087,7 @@ def _kafka_ingest_worker(
     )
 
     now_ms = int(time.time() * 1000)
-    envelope_value = None
+    envelope_value: dict[str, Any] | None = None
     if debezium:
         source_struct = {
             "version": "0",
@@ -1135,9 +1135,7 @@ def _kafka_ingest_worker(
     for rg_idx in row_group_indices:
         table = pf.read_row_group(rg_idx)
         for batch in table.to_batches(max_chunksize=batch_size):
-            py_columns = [
-                batch.column(i).to_pylist() for i in range(batch.num_columns)
-            ]
+            py_columns = [batch.column(i).to_pylist() for i in range(batch.num_columns)]
 
             for row_idx in range(batch.num_rows):
                 after_value: dict[str, Any] = {}
@@ -1154,6 +1152,7 @@ def _kafka_ingest_worker(
                 while True:
                     try:
                         if debezium:
+                            assert envelope_value is not None
                             envelope_value["after"] = after_value
                             producer.produce(
                                 topic=topic,
@@ -1206,6 +1205,7 @@ def ingest_captured_parquet_kafka(
     groups.
     """
     import multiprocessing
+    import multiprocessing.process
     import os
 
     import pyarrow.parquet as pq

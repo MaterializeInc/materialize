@@ -145,186 +145,350 @@ pub async fn run(args: ExportArgs) -> Result<(), anyhow::Error> {
         }
     }
 
-    let batches: Vec<_> = state.collections.trace.batches().collect();
-    eprintln!(
-        "Reading shard {} at as_of={} ({} batches)",
-        shard_id,
-        as_of,
-        batches.len()
-    );
+    // Drop the initial state — we'll re-read it in the loop below.
+    drop(state);
+    drop(shard_metrics);
 
-    // Phase 1: Collect lightweight part references (metadata only, no row data).
-    // RunPart::Many refs involve a blob fetch to resolve the run, but the refs
-    // themselves are small (~100 bytes each).
     let fetch_config = FetchConfig::from_persist_config(&cfg);
-    let mut part_refs = Vec::new();
-    for batch in &batches {
-        let mut stream =
-            pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
-        while let Some(part) = stream.try_next().await? {
-            let name = part.printable_name().to_string();
-            part_refs.push((batch.desc.clone(), part.into_owned(), name));
-        }
-    }
-    let total_parts = part_refs.len();
-    eprintln!("Found {} parts to fetch", total_parts);
 
-    if part_refs.is_empty() {
-        eprintln!("No data in shard.");
+    // Retry loop: if a part was compacted away between reading state and
+    // fetching blob data, re-read the shard state and start over.
+    const MAX_RETRIES: usize = 3;
+    for attempt in 0..=MAX_RETRIES {
+        if attempt > 0 {
+            eprintln!("Re-reading shard state (attempt {})...", attempt + 1);
+        }
+        let versions = state_versions
+            .fetch_recent_live_diffs::<u64>(&shard_id)
+            .await;
+        let state = tokio::time::timeout(
+            Duration::from_secs(30),
+            state_versions.fetch_current_state::<u64>(&shard_id, versions.0.clone()),
+        )
+        .await
+        .map_err(|_| anyhow!("timed out fetching state for shard {}", shard_id))?;
+        let state = state.check_ts_codec(&shard_id)?;
+        let shard_metrics = metrics.shards.shard(&shard_id, "unknown");
+
+        let batches: Vec<_> = state.collections.trace.batches().collect();
+        eprintln!(
+            "Reading shard {} at as_of={} ({} batches)",
+            shard_id,
+            as_of,
+            batches.len()
+        );
+
+        // Phase 1: Collect lightweight part references (metadata only, no row data).
+        let mut part_refs = Vec::new();
+        for batch in &batches {
+            let mut stream =
+                pin!(batch.part_stream(shard_id, &*state_versions.blob, &*state_versions.metrics));
+            while let Some(part) = stream.try_next().await? {
+                let name = part.printable_name().to_string();
+                part_refs.push((batch.desc.clone(), part.into_owned(), name));
+            }
+        }
+        let total_parts = part_refs.len();
+        eprintln!("Found {} parts to fetch", total_parts);
+
+        if part_refs.is_empty() {
+            eprintln!("No data in shard.");
+            return Ok(());
+        }
+
+        // Phase 2: Fetch parts with bounded concurrency.
+        let blob = &*state_versions.blob;
+        let sv_metrics = &state_versions.metrics;
+        let sm = &shard_metrics;
+        let rm = &metrics.read.snapshot;
+
+        let mut part_stream = futures_util::stream::iter(part_refs.iter().enumerate())
+            .map(|(i, (desc, part_ref, name))| {
+                let fc = fetch_config.clone();
+                async move {
+                    eprintln!("  Fetching part {}/{} ({})", i + 1, total_parts, name);
+                    EncodedPart::fetch(&fc, &shard_id, blob, sv_metrics, sm, rm, desc, part_ref)
+                        .await
+                }
+            })
+            .buffered(8);
+
+        match args.mode {
+            ExportMode::Snapshot => {
+                // Collect all parts for cross-part consolidation.
+                // Parts from different batches can have overlapping keys with
+                // positive and negative diffs that must cancel across parts.
+                let mut all_parts: Vec<Part> = Vec::new();
+                let mut compacted = false;
+
+                while let Some(fetch_result) = part_stream.next().await {
+                    match fetch_result {
+                        Ok(enc) => {
+                            let part = enc
+                                .updates()
+                                .as_part()
+                                .ok_or_else(|| anyhow!("expected structured data"))?;
+                            all_parts.push(part);
+                        }
+                        Err(key) => {
+                            eprintln!(
+                                "    Part {} no longer exists (compacted away), \
+                                 will retry with fresh state",
+                                key,
+                            );
+                            compacted = true;
+                            break;
+                        }
+                    }
+                }
+
+                if compacted {
+                    if attempt == MAX_RETRIES {
+                        anyhow::bail!(
+                            "Parts keep getting compacted away after {} retries — \
+                             shard is changing too fast to export",
+                            MAX_RETRIES + 1,
+                        );
+                    }
+                    continue;
+                }
+
+                if all_parts.is_empty() {
+                    eprintln!("No data in shard.");
+                    return Ok(());
+                }
+
+                // Extract schema from first part.
+                let key_struct = all_parts[0].key.as_struct();
+                let ok_idx = key_struct
+                    .fields()
+                    .iter()
+                    .position(|f| f.name() == "ok")
+                    .ok_or_else(|| anyhow!("key struct missing 'ok' field"))?;
+                let ok_column = key_struct.column(ok_idx);
+                if ok_column.data_type().is_null() {
+                    anyhow::bail!("ok field is NullArray — no data columns to export");
+                }
+                let schema = Arc::new(ok_column_schema(ok_column.as_ref())?);
+                let err_idx =
+                    key_struct.fields().iter().position(|f| f.name() == "err");
+
+                // Cross-part consolidation: advance all timestamps to as_of,
+                // then consolidate across all parts.
+                let part_ords: Vec<_> =
+                    all_parts.iter().map(|p| p.as_ord()).collect();
+                let as_of_frontier = Antichain::from_elem(as_of);
+
+                let mut updates = Vec::new();
+                for po in &part_ords {
+                    for (k, v, t, d) in po.iter() {
+                        let mut t = <u64 as Codec64>::decode(t);
+                        t.advance_by(as_of_frontier.borrow());
+                        let d = <i64 as Codec64>::decode(d);
+                        updates.push(((k, v), t, d));
+                    }
+                }
+
+                eprintln!(
+                    "Consolidating {} updates across {} parts",
+                    updates.len(),
+                    all_parts.len()
+                );
+                differential_dataflow::consolidation::consolidate_updates(
+                    &mut updates,
+                );
+                eprintln!("After consolidation: {} updates", updates.len());
+
+                // Map ArrayIdx back to source part via pointer comparison.
+                // ArrayIdx.array points to the PartOrd's key ArrayOrd field,
+                // which has a unique address per PartOrd.
+                let part_key_ptrs: Vec<*const ()> = part_ords
+                    .iter()
+                    .map(|po| {
+                        po.iter()
+                            .next()
+                            .map(|(k, _, _, _)| k.array as *const _ as *const ())
+                            .unwrap_or(std::ptr::null())
+                    })
+                    .collect();
+
+                // Group surviving rows by source part for efficient take.
+                let mut part_take: Vec<Vec<u32>> =
+                    vec![vec![]; all_parts.len()];
+                let mut total_rows = 0usize;
+
+                for ((k, _v), _t, d) in &updates {
+                    if *d <= 0 {
+                        continue;
+                    }
+                    let ptr = k.array as *const _ as *const ();
+                    let part_idx = part_key_ptrs
+                        .iter()
+                        .position(|&p| p == ptr)
+                        .expect("ArrayIdx should map to a known part");
+
+                    // Skip error rows.
+                    if let Some(ei) = err_idx {
+                        if !all_parts[part_idx]
+                            .key
+                            .as_struct()
+                            .column(ei)
+                            .is_null(k.idx)
+                        {
+                            continue;
+                        }
+                    }
+
+                    let idx = u32::try_from(k.idx).map_err(|_| {
+                        anyhow!("row index {} exceeds u32::MAX", k.idx)
+                    })?;
+                    for _ in 0..*d {
+                        part_take[part_idx].push(idx);
+                        total_rows += 1;
+                    }
+                }
+
+                // Free consolidation memory before writing.
+                drop(updates);
+                drop(part_key_ptrs);
+                drop(part_ords);
+
+                // Write output.
+                let output: Box<dyn Write + Send> = match &args.output {
+                    Some(path) => Box::new(std::fs::File::create(path)?),
+                    None => Box::new(io::stdout()),
+                };
+                let props = WriterProperties::builder()
+                    .set_compression(Compression::SNAPPY)
+                    .build();
+                let mut writer =
+                    ArrowWriter::try_new(output, Arc::clone(&schema), Some(props))?;
+
+                for (pi, indices) in part_take.iter().enumerate() {
+                    if indices.is_empty() {
+                        continue;
+                    }
+                    let ok_col =
+                        all_parts[pi].key.as_struct().column(ok_idx);
+                    write_snapshot_chunks(
+                        ok_col.as_ref(),
+                        indices,
+                        &mut writer,
+                    )?;
+                    writer.flush()?;
+                }
+
+                eprintln!(
+                    "Wrote {} total rows from {} parts",
+                    total_rows, total_parts
+                );
+                writer.close()?;
+                eprintln!("Export complete.");
+            }
+
+            ExportMode::Subscribe => {
+                // Subscribe mode: stream parts and write per-part.
+                // No cross-part consolidation needed since we preserve diffs.
+                let mut writer: Option<ArrowWriter<Box<dyn Write + Send>>> =
+                    None;
+                let mut parquet_schema: Option<Arc<Schema>> = None;
+                let mut total_rows = 0usize;
+                let mut compacted = false;
+
+                while let Some(fetch_result) = part_stream.next().await {
+                    let encoded = match fetch_result {
+                        Ok(enc) => enc,
+                        Err(key) => {
+                            eprintln!(
+                                "    Part {} no longer exists (compacted away), \
+                                 will retry with fresh state",
+                                key,
+                            );
+                            compacted = true;
+                            break;
+                        }
+                    };
+                    let part = encoded
+                        .updates()
+                        .as_part()
+                        .ok_or_else(|| anyhow!("expected structured data"))?;
+
+                    if writer.is_none() {
+                        let key_struct = part.key.as_struct();
+                        let ok_idx = key_struct
+                            .fields()
+                            .iter()
+                            .position(|f| f.name() == "ok")
+                            .ok_or_else(|| {
+                                anyhow!("key struct missing 'ok' field")
+                            })?;
+                        let ok_column = key_struct.column(ok_idx);
+                        if ok_column.data_type().is_null() {
+                            anyhow::bail!(
+                                "ok field is NullArray — no data columns to export"
+                            );
+                        }
+                        let ok_schema =
+                            ok_column_schema(ok_column.as_ref())?;
+                        let output: Box<dyn Write + Send> =
+                            match &args.output {
+                                Some(path) => {
+                                    Box::new(std::fs::File::create(path)?)
+                                }
+                                None => Box::new(io::stdout()),
+                            };
+                        let schema =
+                            Arc::new(subscribe_schema(&ok_schema));
+                        let props = WriterProperties::builder()
+                            .set_compression(Compression::SNAPPY)
+                            .build();
+                        parquet_schema = Some(Arc::clone(&schema));
+                        writer = Some(ArrowWriter::try_new(
+                            output,
+                            schema,
+                            Some(props),
+                        )?);
+                    }
+
+                    let w = writer.as_mut().unwrap();
+                    total_rows += process_subscribe_part(
+                        &part,
+                        as_of,
+                        parquet_schema.as_ref().unwrap(),
+                        w,
+                    )?;
+                    w.flush()?;
+                }
+
+                if compacted {
+                    if attempt == MAX_RETRIES {
+                        anyhow::bail!(
+                            "Parts keep getting compacted away after {} retries — \
+                             shard is changing too fast to export",
+                            MAX_RETRIES + 1,
+                        );
+                    }
+                    drop(writer);
+                    continue;
+                }
+
+                if let Some(w) = writer {
+                    eprintln!(
+                        "Wrote {} total rows from {} parts",
+                        total_rows, total_parts
+                    );
+                    w.close()?;
+                    eprintln!("Export complete.");
+                } else {
+                    eprintln!("No data in shard.");
+                }
+            }
+        }
+
         return Ok(());
     }
 
-    // Phase 2: Fetch parts with bounded concurrency (overlap blob I/O with processing).
-    // buffered(2) keeps at most 2 decoded parts in memory (~256MB) while ensuring the
-    // next part is being fetched while the current one is processed+written.
-    let blob = &*state_versions.blob;
-    let sv_metrics = &state_versions.metrics;
-    let sm = &shard_metrics;
-    let rm = &metrics.read.snapshot;
-
-    let mut part_stream = futures_util::stream::iter(part_refs.iter().enumerate())
-        .map(|(i, (desc, part_ref, name))| {
-            let fc = fetch_config.clone();
-            async move {
-                eprintln!("  Fetching part {}/{} ({})", i + 1, total_parts, name);
-                let encoded =
-                    EncodedPart::fetch(&fc, &shard_id, blob, sv_metrics, sm, rm, desc, part_ref)
-                        .await
-                        .expect("part exists");
-                encoded
-                    .updates()
-                    .as_part()
-                    .ok_or_else(|| anyhow!("expected structured data"))
-            }
-        })
-        .buffered(2);
-
-    let mut writer: Option<ArrowWriter<Box<dyn Write + Send>>> = None;
-    let mut parquet_schema: Option<Arc<Schema>> = None;
-    let mut total_rows = 0usize;
-
-    while let Some(part_result) = part_stream.next().await {
-        let part = part_result?;
-
-        // First part: extract schema, create writer.
-        if writer.is_none() {
-            let key_struct = part.key.as_struct();
-            let ok_idx = key_struct
-                .fields()
-                .iter()
-                .position(|f| f.name() == "ok")
-                .ok_or_else(|| anyhow!("key struct missing 'ok' field"))?;
-            let ok_column = key_struct.column(ok_idx);
-            if ok_column.data_type().is_null() {
-                anyhow::bail!("ok field is NullArray — no data columns to export");
-            }
-            let ok_schema = ok_column_schema(ok_column.as_ref())?;
-
-            let output: Box<dyn Write + Send> = match &args.output {
-                Some(path) => Box::new(std::fs::File::create(path)?),
-                None => Box::new(io::stdout()),
-            };
-
-            let schema = Arc::new(match &args.mode {
-                ExportMode::Snapshot => ok_schema,
-                ExportMode::Subscribe => subscribe_schema(&ok_schema),
-            });
-            let props = WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build();
-            parquet_schema = Some(Arc::clone(&schema));
-            writer = Some(ArrowWriter::try_new(output, schema, Some(props))?);
-        }
-
-        let w = writer.as_mut().unwrap();
-        total_rows += match &args.mode {
-            ExportMode::Snapshot => process_snapshot_part(&part, as_of, w)?,
-            ExportMode::Subscribe => {
-                process_subscribe_part(&part, as_of, parquet_schema.as_ref().unwrap(), w)?
-            }
-        };
-
-        w.flush()?; // Finalize row group, free writer buffers.
-        // `part` dropped here — memory freed before consuming next from stream.
-    }
-
-    if let Some(w) = writer {
-        eprintln!("Wrote {} total rows from {} parts", total_rows, total_parts);
-        w.close()?;
-        eprintln!("Export complete.");
-    } else {
-        eprintln!("No data in shard.");
-    }
-
-    Ok(())
-}
-
-/// Process a single part in snapshot mode: advance timestamps to as_of,
-/// consolidate within the part, write surviving data rows.
-///
-/// Correct for fully compacted shards where each key appears in exactly one part.
-/// Emits a warning if negative diffs remain after within-part consolidation
-/// (which indicates cross-part consolidation would be needed).
-fn process_snapshot_part(
-    part: &Part,
-    as_of: u64,
-    writer: &mut ArrowWriter<Box<dyn Write + Send>>,
-) -> Result<usize, anyhow::Error> {
-    let part_ord = part.as_ord();
-    let as_of_frontier = Antichain::from_elem(as_of);
-
-    let mut updates = Vec::new();
-    for (k, v, t, d) in part_ord.iter() {
-        let mut t = <u64 as Codec64>::decode(t);
-        t.advance_by(as_of_frontier.borrow());
-        let d = <i64 as Codec64>::decode(d);
-        updates.push(((k, v), t, d));
-    }
-
-    differential_dataflow::consolidation::consolidate_updates(&mut updates);
-
-    let key_struct = part.key.as_struct();
-    let ok_idx = key_struct
-        .fields()
-        .iter()
-        .position(|f| f.name() == "ok")
-        .ok_or_else(|| anyhow!("key struct missing 'ok' field"))?;
-    let err_idx = key_struct.fields().iter().position(|f| f.name() == "err");
-    let ok_column = key_struct.column(ok_idx);
-    let err_column = err_idx.map(|i| key_struct.column(i));
-
-    let mut take_indices: Vec<u32> = Vec::new();
-    let mut has_negative_diffs = false;
-    for ((k, _v), _t, d) in &updates {
-        if *d < 0 {
-            has_negative_diffs = true;
-            continue;
-        }
-        if *d == 0 {
-            continue;
-        }
-        // Skip error rows (err column is non-null).
-        if let Some(ec) = &err_column {
-            if !ec.is_null(k.idx) {
-                continue;
-            }
-        }
-        let idx =
-            u32::try_from(k.idx).map_err(|_| anyhow!("row index {} exceeds u32::MAX", k.idx))?;
-        for _ in 0..*d {
-            take_indices.push(idx);
-        }
-    }
-
-    if has_negative_diffs {
-        eprintln!("    Warning: negative diffs remain after within-part consolidation");
-    }
-
-    if !take_indices.is_empty() {
-        write_snapshot_chunks(ok_column.as_ref(), &take_indices, writer)?;
-    }
-
-    Ok(take_indices.len())
+    unreachable!()
 }
 
 /// Process a single part in subscribe mode: write all non-error rows with
