@@ -87,6 +87,9 @@ class StartMz(MzcomposeAction):
         mz = Materialized(
             name=self.mz_service,
             image=image,
+            # TODO: Switch to default (CockroachOrPostgresMetadata) when
+            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            metadata_store="postgres-metadata",
             external_metadata_store=True,
             external_blob_store=True,
             blob_store_is_azure=self.scenario.features.azurite_enabled(),

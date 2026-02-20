@@ -64,6 +64,54 @@ def mz_image_tag_exists_cmdline(image_name: str) -> bool:
         return False
 
 
+# Cache for the GHCR anonymous token to avoid re-fetching it for every image check.
+_ghcr_token: str | None = None
+
+
+def _get_ghcr_token() -> str:
+    """Get an anonymous token for pulling from GHCR."""
+    global _ghcr_token
+    if _ghcr_token is None:
+        response = requests.get(
+            "https://ghcr.io/token?scope=repository:materializeinc/materialize/materialized:pull"
+        )
+        response.raise_for_status()
+        _ghcr_token = response.json()["token"]
+    assert _ghcr_token is not None
+    return _ghcr_token
+
+
+def mz_image_tag_exists_ghcr(image_name: str, image_tag: str) -> bool:
+    """Check if an image tag exists on GHCR using the OCI distribution API."""
+    try:
+        token = _get_ghcr_token()
+        response = requests.head(
+            f"https://ghcr.io/v2/materializeinc/materialize/materialized/manifests/{image_tag}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json",
+            },
+        )
+        if response.status_code == 200:
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+            return True
+        elif response.status_code == 404:
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
+            return False
+        elif response.status_code == 401:
+            # Token may have expired, clear it and fall back to cmdline
+            global _ghcr_token
+            _ghcr_token = None
+            return mz_image_tag_exists_cmdline(image_name)
+        else:
+            print(
+                f"GHCR API returned unexpected status {response.status_code} for {image_name}"
+            )
+            return mz_image_tag_exists_cmdline(image_name)
+    except requests.exceptions.RequestException:
+        return mz_image_tag_exists_cmdline(image_name)
+
+
 def mz_image_tag_exists(image_tag: str, quiet: bool = False) -> bool:
     image_name = f"{image_registry()}/materialized:{image_tag}"
 
@@ -86,13 +134,20 @@ def mz_image_tag_exists(image_tag: str, quiet: bool = False) -> bool:
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
         return True
 
+    registry = image_registry()
+
+    # Use registry-specific APIs to avoid slow `docker manifest inspect` calls
+    # and Docker Hub rate limits.
+
+    if registry.startswith("ghcr.io/"):
+        return mz_image_tag_exists_ghcr(image_name, image_tag)
+
+    if registry != "materialize":
+        return mz_image_tag_exists_cmdline(image_name)
+
     # docker manifest inspect counts against the Docker Hub rate limits, even
     # when the image doesn't exist, see https://www.docker.com/increase-rate-limits/,
     # so use the API instead.
-
-    if image_registry() != "materialize":
-        return mz_image_tag_exists_cmdline(image_name)
-
     try:
         response = requests.get(
             f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"

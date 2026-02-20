@@ -37,11 +37,10 @@ from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.debezium import Debezium
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.persistcli import Persistcli
-from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
@@ -63,6 +62,9 @@ def create_mzs(
     return [
         Materialized(
             name=mz_name,
+            # TODO: Switch to default (CockroachOrPostgresMetadata) when
+            # https://github.com/MaterializeInc/database-issues/issues/10047 is solved
+            metadata_store="postgres-metadata",
             external_metadata_store=external_metadata_store,
             external_blob_store=external_blob_store,
             blob_store_is_azure=azurite,
@@ -93,7 +95,7 @@ def create_mzs(
 
 SERVICES = [
     TestCerts(),
-    CockroachOrPostgresMetadata(
+    PostgresMetadata(
         # Workaround for database-issues#5899
         restart="on-failure:5",
     ),
