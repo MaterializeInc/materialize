@@ -232,6 +232,101 @@ pub fn cx_agg() -> Context<NumericAgg> {
     CX_AGG.clone()
 }
 
+/// Extract the coefficient of a finite `Numeric` as an `i64`, if it fits.
+///
+/// Returns `None` for special values (NaN/Inf) or values with more than
+/// 18 significant digits (which might overflow i64).
+#[inline]
+fn coeff_to_i64(d: &Numeric) -> Option<i64> {
+    if d.is_special() {
+        return None;
+    }
+    let units = d.coefficient_units();
+    // Each unit holds 0-999. 6 units = up to 18 digits, which fits in i64
+    // (i64::MAX = 9_223_372_036_854_775_807, 19 digits).
+    if units.len() > 6 {
+        return None;
+    }
+    let mut val: i64 = 0;
+    for &u in units.iter().rev() {
+        val = val * 1000 + u as i64;
+    }
+    if d.is_negative() {
+        val = -val;
+    }
+    Some(val)
+}
+
+/// Build a `Numeric` from an i64 coefficient and exponent.
+///
+/// The caller must ensure the value is representable (≤ 18 significant digits).
+#[inline]
+fn numeric_from_i64_coeff(mut val: i64, exponent: i32) -> Numeric {
+    if val == 0 {
+        let lsu = [0u16; 13];
+        return Numeric::from_raw_parts(1, exponent, 0, lsu);
+    }
+    let bits = if val < 0 {
+        val = -val;
+        0x80u8 // DECNEG
+    } else {
+        0u8
+    };
+    let mut lsu = [0u16; 13];
+    let mut remaining = val as u64;
+    let mut n_units = 0usize;
+    while remaining > 0 {
+        lsu[n_units] = (remaining % 1000) as u16;
+        remaining /= 1000;
+        n_units += 1;
+    }
+    let top_unit = lsu[n_units - 1];
+    let top_digits = if top_unit >= 100 {
+        3
+    } else if top_unit >= 10 {
+        2
+    } else {
+        1
+    };
+    let sig_digits = (n_units as u32 - 1) * 3 + top_digits;
+    Numeric::from_raw_parts(sig_digits, exponent, bits, lsu)
+}
+
+/// Fast-path addition of two `Numeric` values, bypassing the C FFI.
+///
+/// Returns `Some(result)` if both operands are finite, have the same exponent
+/// (scale), and their coefficients and result all fit in i64 (≤18 digits).
+/// Returns `None` to fall back to the general FFI path.
+#[inline]
+pub fn try_add_fast(a: &Numeric, b: &Numeric) -> Option<Numeric> {
+    if a.exponent() != b.exponent() {
+        return None;
+    }
+    let ca = coeff_to_i64(a)?;
+    let cb = coeff_to_i64(b)?;
+    let result = ca.checked_add(cb)?;
+    // 18 significant digits is the limit for our i64 reconstruction.
+    // i64::MAX = 9_223_372_036_854_775_807 (19 digits), so any value
+    // that fits in checked_add also fits in our reconstruction path
+    // (max 18+18 digit inputs, result could be 19 digits from carry,
+    // but checked_add already guards against i64 overflow).
+    Some(numeric_from_i64_coeff(result, a.exponent()))
+}
+
+/// Fast-path subtraction of two `Numeric` values, bypassing the C FFI.
+///
+/// Same constraints as [`try_add_fast`].
+#[inline]
+pub fn try_sub_fast(a: &Numeric, b: &Numeric) -> Option<Numeric> {
+    if a.exponent() != b.exponent() {
+        return None;
+    }
+    let ca = coeff_to_i64(a)?;
+    let cb = coeff_to_i64(b)?;
+    let result = ca.checked_sub(cb)?;
+    Some(numeric_from_i64_coeff(result, a.exponent()))
+}
+
 fn twos_complement_be_to_u128(input: &[u8]) -> u128 {
     assert!(input.len() <= 16);
     let mut buf = [0; 16];
@@ -921,5 +1016,72 @@ mod tests {
         }
 
         insta::assert_debug_snapshot!(all_numerics);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_try_add_sub_fast() {
+        let mut cx = cx_datum();
+
+        // Helper: parse, add via fast path, compare with FFI result
+        fn check_add(a_str: &str, b_str: &str) {
+            let mut cx = cx_datum();
+            let a: Numeric = cx.parse(a_str).unwrap();
+            let b: Numeric = cx.parse(b_str).unwrap();
+            // FFI reference
+            let mut expected = a.clone();
+            cx.add(&mut expected, &b);
+            // Fast path
+            if let Some(fast) = try_add_fast(&a, &b) {
+                assert_eq!(
+                    fast, expected,
+                    "add mismatch for {a_str} + {b_str}: fast={fast}, expected={expected}"
+                );
+            }
+            // Also check subtraction: a - b
+            let mut expected_sub = a.clone();
+            cx.sub(&mut expected_sub, &b);
+            if let Some(fast_sub) = try_sub_fast(&a, &b) {
+                assert_eq!(
+                    fast_sub, expected_sub,
+                    "sub mismatch for {a_str} - {b_str}: fast={fast_sub}, expected={expected_sub}"
+                );
+            }
+        }
+
+        // Same scale integers
+        check_add("0", "0");
+        check_add("1", "2");
+        check_add("100", "200");
+        check_add("-1", "1");
+        check_add("-50", "-50");
+        check_add("999999999999999999", "1"); // 18 digits + 1
+        check_add("-999999999999999999", "-1");
+
+        // Same scale decimals
+        check_add("1.5", "2.5");
+        check_add("123.456", "789.012");
+        check_add("-1.5", "2.5");
+        check_add("0.001", "0.002");
+        check_add("999999999999.999999", "0.000001");
+
+        // Different scales should return None (fall through)
+        let a: Numeric = cx.parse("1.5").unwrap(); // exponent -1
+        let b: Numeric = cx.parse("2.50").unwrap(); // exponent -2
+        // These have different exponents, so fast path should return None
+        if a.exponent() != b.exponent() {
+            assert!(try_add_fast(&a, &b).is_none());
+        }
+
+        // Large values (>18 digits) should return None
+        let big: Numeric = cx.parse("1234567890123456789").unwrap(); // 19 digits
+        let one: Numeric = cx.parse("1").unwrap();
+        assert!(try_add_fast(&big, &one).is_none());
+
+        // Zero edge cases
+        check_add("0", "5");
+        check_add("5", "0");
+        check_add("0", "0");
+        check_add("-0", "0");
     }
 }

@@ -457,6 +457,9 @@ fn add_numeric(
     a: OrderedDecimal<Numeric>,
     b: OrderedDecimal<Numeric>,
 ) -> Result<Numeric, EvalError> {
+    if let Some(result) = numeric::try_add_fast(&a.0, &b.0) {
+        return Ok(result);
+    }
     let mut cx = numeric::cx_datum();
     let mut a = a.0;
     cx.add(&mut a, &b.0);
@@ -775,6 +778,9 @@ fn sub_numeric(
     a: OrderedDecimal<Numeric>,
     b: OrderedDecimal<Numeric>,
 ) -> Result<Numeric, EvalError> {
+    if let Some(result) = numeric::try_sub_fast(&a.0, &b.0) {
+        return Ok(result);
+    }
     let mut cx = numeric::cx_datum();
     let mut a = a.0;
     cx.sub(&mut a, &b.0);
