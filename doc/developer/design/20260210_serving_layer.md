@@ -1,7 +1,5 @@
 # Serving layer
 
-- Associated: (Insert list of associated epics, issues, or PRs)
-
 ## The Problem
 
 Selects are slow.
@@ -31,7 +29,7 @@ This document focuses on the architectural direction and trade-offs between opti
 
 ## Solution Proposal
 
-To increase the queries-per-seconds, we need to change the architecture of Materialize, as incremental improvements will not allow us to reach orders-of-magnitude better performance.
+To increase the queries per second, we need to change the architecture of Materialize, as incremental improvements will not allow us to reach orders-of-magnitude better performance.
 The main bottlenecks are per-query work (optimization), serializing points in code (communication with clusters), and inefficient data structures for key lookups (arrangements).
 We tackle all individually, although for some we have a menu of options at our disposal.
 
@@ -106,7 +104,6 @@ Choices:
    To handle complexity, we might not want to rely on SQL, but rather offer a REST API.
    All interfaces need to pre-define the queries the serving layer can handle.
    We can offer an implicit API (observe frequent queries), or an explicit API (declare queries).
-
 
 ### Interface considerations
 
@@ -321,6 +318,6 @@ We'll treat this as orthogonal for the purpose of this design as we're designing
   Direct connections to a serving layer need a mechanism for syncing catalog changes and verifying strict serializability (cf. database-issues#9738).
 * What isolation level does the serving layer provide?
   Strict serializable preserves Materialize's differentiator but requires waiting for data freshness.
-  Serializable or causal consistency enables higher throughput but sacrifices freshness guarantees.
+  Serializable enables higher throughput but sacrifices freshness guarantees.
 * What are the constraints on parameter usage in queries?
   Each parameter likely must appear in an equality constraint (or range constraint) with a column, and cannot be free-standing (e.g., `SELECT :param` is not a meaningful serving layer query).
