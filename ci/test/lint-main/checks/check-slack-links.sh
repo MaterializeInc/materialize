@@ -20,7 +20,7 @@ cd "$(dirname "$0")/../../../.."
 
 CURRENT_GIT_BRANCH=$(git branch --show-current)
 
-if [[ "$CURRENT_GIT_BRANCH" == "main" ]]; then
+if [[ "${BUILDKITE_BRANCH:-}" == "main" || "$CURRENT_GIT_BRANCH" == "main" ]]; then
   echo "On main branch, skipping Slack link check."
   exit 0
 fi
@@ -29,8 +29,6 @@ if [[ "${1:-}" == --offline ]]; then
   echo "Skipping Slack link check in offline mode."
   exit 0
 fi
-
-run git fetch "$MZ_REPO_REF" "$MZ_REPO_PULL_REQUEST_BASE_BRANCH"
 
 COMMON_ANCESTOR=$(git merge-base HEAD FETCH_HEAD)
 
