@@ -92,6 +92,10 @@ harness = false
 [[bench]]
 name = "join_concat"
 harness = false
+
+[[bench]]
+name = "hash_key_reconstruct"
+harness = false
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }

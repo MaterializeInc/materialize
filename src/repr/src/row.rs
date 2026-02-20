@@ -802,6 +802,23 @@ impl RowRef {
         }
     }
 
+    /// Returns the raw encoded bytes for all datums starting from datum index
+    /// `start`, skipping the first `start` datums using fast pointer arithmetic
+    /// (no datum construction). This is useful for byte-level row manipulation
+    /// where a known-size prefix needs to be stripped or replaced.
+    ///
+    /// # Panics
+    /// Panics if `start` is greater than the number of datums in the row.
+    #[inline]
+    pub fn tail_bytes(&self, start: usize) -> &[u8] {
+        let mut data: &[u8] = &self.0;
+        for _ in 0..start {
+            // SAFETY: data points to validly encoded datums from this Row.
+            unsafe { skip_datum(&mut data) };
+        }
+        data
+    }
+
     /// Decode datums from this row selectively: only decode columns marked
     /// `true` in `needed`, and use fast `skip_datum` for the rest.
     ///
@@ -3955,5 +3972,271 @@ mod tests {
 
         assert_eq!(map_1.cmp(&map_null), Ordering::Less);
         assert_eq!(map_null.cmp(&map_1), Ordering::Greater);
+    }
+
+    /// Test that skip_datum correctly advances past every datum type,
+    /// producing the same results as read_datum for nth() and count().
+    #[mz_ore::test]
+    fn test_skip_datum_correctness() {
+        let arena = RowArena::new();
+
+        // Build a row with many different datum types
+        let ts = CheckedTimestamp::from_timestamplike(
+            NaiveDate::from_ymd_opt(2024, 6, 15)
+                .unwrap()
+                .and_hms_micro_opt(14, 30, 45, 123456)
+                .unwrap(),
+        )
+        .unwrap();
+        let tstz = CheckedTimestamp::from_timestamplike(
+            DateTime::from_timestamp(1_700_000_000, 500_000_000).unwrap(),
+        )
+        .unwrap();
+
+        let datums: Vec<Datum> = vec![
+            Datum::Null,
+            Datum::False,
+            Datum::True,
+            Datum::Int16(0),
+            Datum::Int16(42),
+            Datum::Int16(-1),
+            Datum::Int32(0),
+            Datum::Int32(100_000),
+            Datum::Int32(-100_000),
+            Datum::Int64(0),
+            Datum::Int64(1_000_000_000),
+            Datum::Int64(-1_000_000_000),
+            Datum::UInt8(0),
+            Datum::UInt8(255),
+            Datum::UInt16(0),
+            Datum::UInt16(65535),
+            Datum::UInt32(0),
+            Datum::UInt32(u32::MAX),
+            Datum::UInt64(0),
+            Datum::UInt64(u64::MAX),
+            Datum::Float32(OrderedFloat(3.14)),
+            Datum::Float64(OrderedFloat(-2.718)),
+            Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
+            Datum::Timestamp(ts),
+            Datum::TimestampTz(tstz),
+            Datum::Interval(Interval::new(14, 3, 86_400_000_000)),
+            Datum::Bytes(&[]),
+            Datum::Bytes(&[1, 2, 3, 4, 5]),
+            Datum::String(""),
+            Datum::String("hello world"),
+            Datum::String("العَرَبِيَّة"),
+            Datum::Uuid(uuid::Uuid::from_bytes([
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            ])),
+            Datum::JsonNull,
+            Datum::Dummy,
+            Datum::from(arena.make_datum(|packer| {
+                packer
+                    .try_push_array(
+                        &[ArrayDimension {
+                            lower_bound: 1,
+                            length: 3,
+                        }],
+                        vec![Datum::Int32(10), Datum::Int32(20), Datum::Int32(30)],
+                    )
+                    .unwrap();
+            })),
+        ];
+
+        let row = Row::pack_slice(&datums);
+
+        // Test 1: count() should return correct number of datums
+        assert_eq!(row.iter().count(), datums.len());
+
+        // Test 2: nth(i) should return the same datum as sequential iteration
+        let unpacked: Vec<Datum> = row.iter().collect();
+        for i in 0..datums.len() {
+            let nth_result = row.iter().nth(i).unwrap();
+            assert_eq!(
+                nth_result, unpacked[i],
+                "nth({}) returned {:?} but expected {:?}",
+                i, nth_result, unpacked[i]
+            );
+        }
+
+        // Test 3: nth past the end returns None
+        assert!(row.iter().nth(datums.len()).is_none());
+        assert!(row.iter().nth(datums.len() + 10).is_none());
+
+        // Test 4: nth(0) should be the same as next()
+        assert_eq!(row.iter().nth(0), row.iter().next());
+
+        // Test 5: Test with rows containing only one datum type (to exercise
+        // skip_datum for each specific type)
+        for datum in &unpacked {
+            let single_row = Row::pack_slice(&[*datum, *datum, *datum]);
+            assert_eq!(single_row.iter().count(), 3);
+            assert_eq!(single_row.iter().nth(0).unwrap(), *datum);
+            assert_eq!(single_row.iter().nth(1).unwrap(), *datum);
+            assert_eq!(single_row.iter().nth(2).unwrap(), *datum);
+            assert!(single_row.iter().nth(3).is_none());
+        }
+
+        // Test 6: Numeric datums (variable-length encoding)
+        let mut numeric_row = Row::default();
+        {
+            let mut packer = numeric_row.packer();
+            packer.push(Datum::Int32(42)); // prefix
+            packer.push(Datum::from(Numeric::from(0)));
+            packer.push(Datum::from(Numeric::from(123456789)));
+            packer.push(Datum::String("end"));
+        }
+        assert_eq!(numeric_row.iter().count(), 4);
+        assert_eq!(numeric_row.iter().nth(0).unwrap(), Datum::Int32(42));
+        assert_eq!(numeric_row.iter().nth(3).unwrap(), Datum::String("end"));
+
+        // Test 7: Row with List and Dict (variable-length nested structures)
+        let mut nested_row = Row::default();
+        {
+            let mut packer = nested_row.packer();
+            packer.push(Datum::Int64(1));
+            packer.push_list(&[Datum::String("a"), Datum::String("b")]);
+            packer.push(Datum::Int64(2));
+            packer.push_dict_with(|p| {
+                p.push(Datum::String("key1"));
+                p.push(Datum::Int32(100));
+                p.push(Datum::String("key2"));
+                p.push(Datum::Int32(200));
+            });
+            packer.push(Datum::Int64(3));
+        }
+        assert_eq!(nested_row.iter().count(), 5);
+        assert_eq!(nested_row.iter().nth(0).unwrap(), Datum::Int64(1));
+        assert_eq!(nested_row.iter().nth(2).unwrap(), Datum::Int64(2));
+        assert_eq!(nested_row.iter().nth(4).unwrap(), Datum::Int64(3));
+
+        // Test 8: Row with Range (non-empty, with bounds)
+        let mut range_row = Row::default();
+        {
+            let mut packer = range_row.packer();
+            packer.push(Datum::Int64(99));
+            packer
+                .push_range(Range {
+                    inner: Some(RangeInner {
+                        lower: RangeLowerBound {
+                            inclusive: true,
+                            bound: Some(Datum::Int32(10)),
+                        },
+                        upper: RangeUpperBound {
+                            inclusive: false,
+                            bound: Some(Datum::Int32(20)),
+                        },
+                    }),
+                })
+                .unwrap();
+            packer.push(Datum::Int64(100));
+        }
+        assert_eq!(range_row.iter().count(), 3);
+        assert_eq!(range_row.iter().nth(0).unwrap(), Datum::Int64(99));
+        assert_eq!(range_row.iter().nth(2).unwrap(), Datum::Int64(100));
+
+        // Test 9: Row with empty Range
+        let mut empty_range_row = Row::default();
+        {
+            let mut packer = empty_range_row.packer();
+            packer.push(Datum::Int64(1));
+            packer
+                .push_range(Range::<Datum> { inner: None })
+                .unwrap();
+            packer.push(Datum::Int64(2));
+        }
+        assert_eq!(empty_range_row.iter().count(), 3);
+        assert_eq!(empty_range_row.iter().nth(2).unwrap(), Datum::Int64(2));
+    }
+
+    /// Test that tail_bytes correctly returns the byte suffix after skipping N datums,
+    /// and that constructing rows from tail_bytes produces identical results to
+    /// datum-level iteration + repacking.
+    #[mz_ore::test]
+    fn test_tail_bytes() {
+        // Build a row with various datum types
+        let row = Row::pack(&[
+            Datum::UInt64(123456789012345),
+            Datum::Int64(42),
+            Datum::String("hello"),
+            Datum::Float64(ordered_float::OrderedFloat(3.14)),
+            Datum::True,
+        ]);
+
+        // tail_bytes(0) should return the entire row
+        assert_eq!(row.tail_bytes(0), row.data());
+
+        // tail_bytes(1) should skip the first datum
+        {
+            let tail = row.tail_bytes(1);
+            let mut dest = Row::default();
+            let mut packer = dest.packer();
+            unsafe { packer.extend_by_slice_unchecked(tail) };
+            // The result should equal a row packed from datums 1..5
+            let expected = Row::pack(&[
+                Datum::Int64(42),
+                Datum::String("hello"),
+                Datum::Float64(ordered_float::OrderedFloat(3.14)),
+                Datum::True,
+            ]);
+            assert_eq!(dest, expected);
+        }
+
+        // tail_bytes(3) should skip the first 3 datums
+        {
+            let tail = row.tail_bytes(3);
+            let mut dest = Row::default();
+            let mut packer = dest.packer();
+            unsafe { packer.extend_by_slice_unchecked(tail) };
+            let expected = Row::pack(&[
+                Datum::Float64(ordered_float::OrderedFloat(3.14)),
+                Datum::True,
+            ]);
+            assert_eq!(dest, expected);
+        }
+
+        // tail_bytes(5) should return empty bytes
+        assert_eq!(row.tail_bytes(5), &[] as &[u8]);
+
+        // Verify hash key reconstruction equivalence:
+        // Building [new_hash | key_cols] via byte copy should equal datum repacking
+        let hash_key = Row::pack(&[
+            Datum::UInt64(99999),
+            Datum::Int64(1),
+            Datum::Int64(2),
+            Datum::Int64(3),
+        ]);
+        let new_hash = 99999u64 % 256;
+        // Old approach
+        let old_result = {
+            let mut iter = hash_key.iter();
+            let _hash = iter.next();
+            Row::pack(std::iter::once(Datum::UInt64(new_hash)).chain(iter))
+        };
+        // New approach
+        let new_result = {
+            let key_bytes = hash_key.tail_bytes(1);
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.push(Datum::UInt64(new_hash));
+            unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+            row
+        };
+        assert_eq!(old_result, new_result);
+
+        // Verify strip hash equivalence
+        let old_stripped = {
+            let mut iter = hash_key.iter();
+            let _hash = iter.next();
+            Row::pack(iter)
+        };
+        let new_stripped = {
+            let key_bytes = hash_key.tail_bytes(1);
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+            row
+        };
+        assert_eq!(old_stripped, new_stripped);
     }
 }
