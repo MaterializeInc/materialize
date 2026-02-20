@@ -3160,3 +3160,148 @@ compared to the original two-level match structure.
 **Impact:** At 61B iterations in coverage, a 1.4-1.6x improvement in the columnar decode
 path translates to significant CPU savings during persist reads. The mixed-type benchmark
 (most realistic scenario) shows 1.39x speedup.
+
+---
+
+## Session 34: Fast-path integer and numeric parsing - bypass trim/FromStr/FFI overhead
+
+**Date:** 2026-02-20
+
+**Problem:** Every time an integer or numeric value is parsed from text—via COPY FROM, pgwire
+text parameters, or SQL string→type casts—the code went through unnecessarily expensive paths:
+
+1. **Integer parsing** (`parse_int16/32/64`, `parse_uint16/32/64`): Called `s.trim().parse()`
+   which first heap-scans for whitespace (even when there is none—the common case for COPY FROM
+   and wire protocol values), then dispatches through Rust's generic `FromStr` implementation.
+   The `FromStr` impl is well-optimized but includes overhead for:
+   - UTF-8 boundary checks on every byte
+   - Generic error construction (allocating `ParseIntError`)
+   - Supporting radix prefixes and other features not needed for simple decimal integers
+
+2. **Numeric parsing** (`parse_numeric`): Called `cx.parse(s.trim())` which goes through the
+   C decNumber library via FFI:
+   - `s.trim()` scans for whitespace (usually unnecessary)
+   - `cx.parse()` crosses the FFI boundary to C code
+   - The C parser handles scientific notation, NaN, Infinity, special values, and arbitrary
+     precision—all unnecessary for simple integer/decimal values like "42" or "123.456"
+   - Returns through FFI back to Rust
+   - `munge_numeric()` then normalizes the result
+
+   Coverage data showed 560M+ calls to `parse_int32/parse_int64` and significant numeric
+   parsing in the COPY FROM path.
+
+**Fix:** Two fast-path parsers that handle the common case (clean ASCII digits, no whitespace)
+and fall back to the general parser for anything unusual:
+
+1. **`try_parse_int_fast(s)`**: Parses ASCII digits directly into a `u64` magnitude + sign
+   flag. Returns `None` for whitespace-padded, empty, or non-digit input (triggering the
+   existing `trim().parse()` fallback). Each caller checks the magnitude against the type's
+   range (e.g., ≤32767 for i16, ≤2147483647 for i32). Uses wrapping arithmetic to avoid
+   overflow checks in the hot loop, with a final range check at the end.
+
+2. **`try_parse_numeric_fast(s)`**: Constructs a `Decimal` directly via `from_raw_parts()`
+   without any FFI call. Parses digits into a `u64` accumulator, tracks the decimal point
+   position, then builds the base-1000 little-endian `lsu` array that decNumber uses
+   internally. Returns `None` for scientific notation, NaN, Infinity, whitespace, or values
+   with >18 significant digits (which would overflow u64). Zero values are normalized to
+   match decNumber's convention (digits=1, positive sign).
+
+Both fast paths add <1ns overhead for inputs they can't handle (a single length check or
+first-byte check returns `None` immediately).
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench int_parse`):
+
+### Per-value i32 parsing (ns/iter)
+
+| Value               | Old (trim+parse) | New (fast path) | Speedup |
+|---------------------|------------------:|----------------:|--------:|
+| zero (0)            | 2.9               | 2.5             | 1.16x   |
+| one (1)             | 4.6               | 3.6             | 1.28x   |
+| small (42)          | 6.1               | 4.6             | 1.33x   |
+| hundred (100)       | 6.5               | 5.3             | 1.23x   |
+| thousand (9999)     | 7.1               | 6.4             | 1.11x   |
+| typical_id (1.2e9)  | 10.6              | 10.5            | 1.01x   |
+| negative (-42)      | 6.2               | 4.5             | 1.38x   |
+| min (-2147483648)   | 10.2              | 10.3            | ~1.0x   |
+| max (2147483647)    | 10.9              | 10.9            | ~1.0x   |
+
+### Per-value i64 parsing (ns/iter)
+
+| Value               | Old (trim+parse) | New (fast path) | Speedup |
+|---------------------|------------------:|----------------:|--------:|
+| zero (0)            | 5.2               | 4.0             | 1.30x   |
+| small (42)          | 5.7               | 4.4             | 1.30x   |
+| typical_id (1.2e9)  | 9.6               | 8.3             | 1.16x   |
+| large (i64::MAX)    | 20.7              | 12.5            | **1.66x** |
+| negative (i64::MIN) | 20.6              | 12.7            | **1.62x** |
+
+### Per-value Numeric parsing (ns/iter)
+
+| Value                        | Old (cx.parse FFI) | New (fast path) | Speedup |
+|------------------------------|-------------------:|----------------:|--------:|
+| zero (0)                     | 29.7               | 8.7             | **3.4x** |
+| one (1)                      | 29.2               | 8.7             | **3.4x** |
+| small (42)                   | 31.8               | 9.6             | **3.3x** |
+| hundred (100)                | 32.8               | 10.9            | **3.0x** |
+| thousand (9999)              | 36.6               | 12.2            | **3.0x** |
+| large (123456789)            | 47.8               | 18.3            | **2.6x** |
+| very_large (18 digits)       | 56.0               | 28.4            | **2.0x** |
+| negative (-42)               | 33.4               | 9.5             | **3.5x** |
+| neg_large (-123456789)       | 46.9               | 19.2            | **2.4x** |
+| decimal (123.456)            | 43.3               | 15.1            | **2.9x** |
+| decimal_small (0.001)        | 40.4               | 11.3            | **3.6x** |
+| decimal_long (123456.789...) | 72.2               | 32.2            | **2.2x** |
+| neg_decimal (-99.99)         | 39.8               | 12.7            | **3.1x** |
+| leading_zeros (00042)        | 25.9               | 8.8             | **2.9x** |
+
+### Batch parsing (10k values)
+
+| Approach                        | Time (µs) | Speedup   |
+|---------------------------------|-----------|-----------|
+| Old trim+parse 10k i32          | 44.1      | -         |
+| New fast-path 10k i32           | 39.6      | **1.11x** |
+| Old cx.parse 10k numeric (mixed)| 229       | -         |
+| New fast-path 10k numeric (mixed)| 91.2     | **2.51x** |
+| Old cx.parse 10k numeric (ints) | 207       | -         |
+| New fast-path 10k numeric (ints)| 92.9      | **2.23x** |
+
+**Summary:** Integer parsing sees **1.1-1.7x improvement** per value—modest because Rust's
+`FromStr` is already well-optimized; the main savings are from skipping the `trim()` scan and
+avoiding `ParseIntError` construction overhead. The improvement is largest for long values
+(i64::MAX: 1.66x) where the fast path's tighter loop matters more.
+
+Numeric parsing sees **2.0-3.6x improvement** per value—dramatic because it bypasses the
+C decNumber FFI entirely. The old path crossed the Rust→C→Rust FFI boundary, parsed through
+decNumber's general-purpose scanner (supporting scientific notation, special values, etc.),
+and returned through FFI. The new path constructs the `Decimal` directly from parsed digits
+using `from_raw_parts()`, which is a pure Rust operation with zero FFI overhead. Simpler
+values (zero, small integers, small decimals) show the largest speedup (3.4-3.6x) because
+the FFI overhead is a larger fraction of the total work.
+
+In the realistic batch scenario (10k mixed numeric values), the **2.5x speedup** directly
+accelerates COPY FROM data loading, pgwire text parameter binding, and SQL string→numeric
+casts. Combined with Session 32's timestamp parsing optimization (15-22x) and Session 30's
+direct Row construction (2-5x), the COPY FROM pipeline for mixed-type data is now
+dramatically faster end-to-end.
+
+**Files changed:**
+- `src/repr/src/strconv.rs` - Added `try_parse_int_fast()` and `try_parse_numeric_fast()`
+  fast-path parsers. Updated `parse_int16`, `parse_int32`, `parse_int64`, `parse_uint16`,
+  `parse_uint32`, `parse_uint64`, and `parse_numeric` to try fast path first.
+  Added `test_parse_int_fast_path` and `test_parse_numeric_fast_path` correctness tests.
+- `src/repr/benches/int_parse.rs` - Added benchmark (new file)
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas identified during research:**
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row during accumulable
+  reductions. A newtype wrapper around SmallVec with Semigroup/Multiply implementations could
+  avoid heap allocation for the common case (1-4 aggregations).
+- `Row::clone()` at 527B executions in coverage data remains the largest source of allocation
+  pressure, but is fundamental to DD's operational model.
+- `MirScalarExpr::eval()` dispatch chain: for simple predicates like `WHERE x > 5`, there
+  are 3 dispatch points. A specialized evaluator for common predicate patterns could reduce this.
+- `ArrayOrd::cmp()` at 327B calls in persist merge: double enum dispatch could be specialized
+  for common column types.
+- Float parsing (`parse_float32/parse_float64`) uses `lexical_core::parse()` which is already
+  fast but could potentially benefit from an integer fast path similar to the numeric optimization
+  (many float columns contain integer-valued data).

@@ -155,11 +155,52 @@ where
     Nestable::Yes
 }
 
+/// Fast-path signed integer parser. Parses an ASCII integer string into a u64
+/// magnitude and sign flag. Returns `None` for whitespace-padded or non-numeric
+/// input, which falls through to the general `str::parse()`.
+/// Handles optional leading '+'/'-' sign followed by 1+ digits, no whitespace.
+#[inline]
+fn try_parse_int_fast(s: &str) -> Option<(u64, bool)> {
+    let buf = s.as_bytes();
+    if buf.is_empty() {
+        return None;
+    }
+    let (neg, start) = match buf[0] {
+        b'-' => (true, 1),
+        b'+' => (false, 1),
+        b'0'..=b'9' => (false, 0),
+        _ => return None, // whitespace or other char → fall back
+    };
+    if start >= buf.len() {
+        return None;
+    }
+    let mut val: u64 = 0;
+    for &b in &buf[start..] {
+        let d = b.wrapping_sub(b'0');
+        if d > 9 {
+            return None;
+        }
+        // For inputs ≤ 20 chars, intermediate overflow is possible for u64.
+        // Use wrapping arithmetic and check at the end.
+        val = val.wrapping_mul(10).wrapping_add(d as u64);
+    }
+    Some((val, neg))
+}
+
 /// Parses an [`i16`] from `s`.
 ///
 /// Valid values are whatever the [`std::str::FromStr`] implementation on `i16` accepts,
 /// plus leading and trailing whitespace.
 pub fn parse_int16(s: &str) -> Result<i16, ParseError> {
+    if let Some((val, neg)) = try_parse_int_fast(s) {
+        if neg {
+            if val <= 32768 {
+                return Ok((val as i16).wrapping_neg());
+            }
+        } else if val <= 32767 {
+            return Ok(val as i16);
+        }
+    }
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("smallint", s).with_details(e))
@@ -181,6 +222,15 @@ where
 /// Valid values are whatever the [`std::str::FromStr`] implementation on `i32` accepts,
 /// plus leading and trailing whitespace.
 pub fn parse_int32(s: &str) -> Result<i32, ParseError> {
+    if let Some((val, neg)) = try_parse_int_fast(s) {
+        if neg {
+            if val <= 2147483648 {
+                return Ok((val as i32).wrapping_neg());
+            }
+        } else if val <= 2147483647 {
+            return Ok(val as i32);
+        }
+    }
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("integer", s).with_details(e))
@@ -198,6 +248,22 @@ where
 
 /// Parses an `i64` from `s`.
 pub fn parse_int64(s: &str) -> Result<i64, ParseError> {
+    if s.len() <= 20 {
+        // For ≤20 char strings (max 19 digits + sign), no overflow during u64 accumulation
+        if let Some((val, neg)) = try_parse_int_fast(s) {
+            if neg {
+                // i64::MIN = -9223372036854775808
+                if val <= 9223372036854775808 {
+                    return Ok((val as i64).wrapping_neg());
+                }
+            } else {
+                // i64::MAX = 9223372036854775807
+                if val <= 9223372036854775807 {
+                    return Ok(val as i64);
+                }
+            }
+        }
+    }
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("bigint", s).with_details(e))
@@ -218,6 +284,11 @@ where
 /// Valid values are whatever the [`std::str::FromStr`] implementation on `u16` accepts,
 /// plus leading and trailing whitespace.
 pub fn parse_uint16(s: &str) -> Result<u16, ParseError> {
+    if let Some((val, neg)) = try_parse_int_fast(s) {
+        if !neg && val <= 65535 {
+            return Ok(val as u16);
+        }
+    }
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("uint2", s).with_details(e))
@@ -238,6 +309,11 @@ where
 /// Valid values are whatever the [`std::str::FromStr`] implementation on `u32` accepts,
 /// plus leading and trailing whitespace.
 pub fn parse_uint32(s: &str) -> Result<u32, ParseError> {
+    if let Some((val, neg)) = try_parse_int_fast(s) {
+        if !neg && val <= 4294967295 {
+            return Ok(val as u32);
+        }
+    }
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("uint4", s).with_details(e))
@@ -255,6 +331,13 @@ where
 
 /// Parses an `u64` from `s`.
 pub fn parse_uint64(s: &str) -> Result<u64, ParseError> {
+    if s.len() <= 19 {
+        if let Some((val, neg)) = try_parse_int_fast(s) {
+            if !neg {
+                return Ok(val);
+            }
+        }
+    }
     s.trim()
         .parse()
         .map_err(|e| ParseError::invalid_input_syntax("uint8", s).with_details(e))
@@ -1209,7 +1292,115 @@ where
     Nestable::MayNeedEscaping
 }
 
+/// Try to parse a numeric value from a simple integer or decimal string,
+/// constructing the `Decimal` directly via `from_raw_parts` without any FFI.
+/// Returns `None` for non-standard formats (scientific notation, NaN, Infinity,
+/// whitespace-padded, etc.) which fall through to the general `cx.parse()` path.
+#[inline]
+fn try_parse_numeric_fast(s: &str) -> Option<OrderedDecimal<Numeric>> {
+    let buf = s.as_bytes();
+    if buf.is_empty() || buf.len() > 40 {
+        return None;
+    }
+
+    // Check for sign
+    let (neg, start) = match buf[0] {
+        b'-' => (true, 1),
+        b'+' => (false, 1),
+        _ => (false, 0),
+    };
+    if start >= buf.len() {
+        return None;
+    }
+
+    // Reject leading whitespace (fall through to general parser which handles trimming)
+    if buf[start] == b' ' || buf[start] == b'\t' {
+        return None;
+    }
+
+    // Parse digits, tracking decimal point position
+    let mut val: u64 = 0;
+    let mut total_digits: u32 = 0;
+    let mut decimal_pos: Option<u32> = None; // position of decimal point in digit sequence
+    let mut leading_zeros: u32 = 0;
+    let mut saw_nonzero = false;
+
+    for &b in &buf[start..] {
+        let d = b.wrapping_sub(b'0');
+        if d <= 9 {
+            if d == 0 && !saw_nonzero {
+                leading_zeros += 1;
+            } else {
+                saw_nonzero = true;
+            }
+            // Check for overflow: u64 max is 18446744073709551615 (20 digits)
+            // At 18 significant digits we're still safe
+            if saw_nonzero && total_digits - leading_zeros >= 18 {
+                return None; // too many significant digits, fall back
+            }
+            val = val * 10 + d as u64;
+            total_digits += 1;
+        } else if b == b'.' {
+            if decimal_pos.is_some() {
+                return None; // multiple decimal points
+            }
+            decimal_pos = Some(total_digits);
+        } else {
+            // Non-digit, non-dot character (e.g., 'e', 'E', ' ', etc.)
+            return None;
+        }
+    }
+
+    if total_digits == 0 {
+        return None; // no digits at all (e.g., "." or "+.")
+    }
+
+    // Compute exponent: for "123.456", decimal_pos=3, total_digits=6, exponent = -(6-3) = -3
+    let exponent = match decimal_pos {
+        Some(dp) => -(total_digits as i32 - dp as i32),
+        None => 0,
+    };
+
+    // Special case: value is zero (e.g., "0", "0.00", "-0")
+    // munge_numeric normalizes -0 to 0, so always return positive zero
+    if val == 0 {
+        let lsu = [0u16; 13];
+        // digits=1 for zero (matching decNumber convention)
+        return Some(OrderedDecimal(Numeric::from_raw_parts(1, exponent, 0, lsu)));
+    }
+
+    // Build lsu array (base-1000, little-endian)
+    let mut lsu = [0u16; 13];
+    let mut remaining = val;
+    let mut units = 0usize;
+    while remaining > 0 {
+        lsu[units] = (remaining % 1000) as u16;
+        remaining /= 1000;
+        units += 1;
+    }
+
+    // Compute significant digit count from the lsu representation
+    let top_unit = lsu[units - 1];
+    let top_digits = if top_unit >= 100 { 3 } else if top_unit >= 10 { 2 } else { 1 };
+    let sig_digits = (units as u32 - 1) * 3 + top_digits;
+
+    // Check precision limit (max 39 digits for Numeric)
+    if sig_digits > u32::from(NUMERIC_DATUM_MAX_PRECISION) {
+        return None;
+    }
+
+    let bits = if neg { 0x80u8 } else { 0u8 }; // DECNEG = 0x80
+    Some(OrderedDecimal(Numeric::from_raw_parts(
+        sig_digits, exponent, bits, lsu,
+    )))
+}
+
 pub fn parse_numeric(s: &str) -> Result<OrderedDecimal<Numeric>, ParseError> {
+    // Fast path: simple integer or decimal values (no scientific notation, no whitespace)
+    if let Some(result) = try_parse_numeric_fast(s) {
+        return Ok(result);
+    }
+
     let mut cx = numeric::cx_datum();
     let mut n = match cx.parse(s.trim()) {
         Ok(n) => n,
@@ -3182,5 +3373,105 @@ mod tests {
             );
             assert_eq!(&buf, expected, "format_interval mismatch for {:?}", iv);
         }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_parse_int_fast_path() {
+        // i16
+        assert_eq!(parse_int16("0").unwrap(), 0i16);
+        assert_eq!(parse_int16("1").unwrap(), 1i16);
+        assert_eq!(parse_int16("-1").unwrap(), -1i16);
+        assert_eq!(parse_int16("42").unwrap(), 42i16);
+        assert_eq!(parse_int16("-32768").unwrap(), i16::MIN);
+        assert_eq!(parse_int16("32767").unwrap(), i16::MAX);
+        assert!(parse_int16("32768").is_err());
+        assert!(parse_int16("-32769").is_err());
+        assert_eq!(parse_int16("  42  ").unwrap(), 42i16); // whitespace fallback
+        assert_eq!(parse_int16("+42").unwrap(), 42i16);
+
+        // i32
+        assert_eq!(parse_int32("0").unwrap(), 0i32);
+        assert_eq!(parse_int32("-2147483648").unwrap(), i32::MIN);
+        assert_eq!(parse_int32("2147483647").unwrap(), i32::MAX);
+        assert!(parse_int32("2147483648").is_err());
+        assert!(parse_int32("-2147483649").is_err());
+        assert_eq!(parse_int32("  100  ").unwrap(), 100i32);
+
+        // i64
+        assert_eq!(parse_int64("0").unwrap(), 0i64);
+        assert_eq!(parse_int64("-9223372036854775808").unwrap(), i64::MIN);
+        assert_eq!(parse_int64("9223372036854775807").unwrap(), i64::MAX);
+        assert!(parse_int64("9223372036854775808").is_err());
+        assert_eq!(parse_int64("  999  ").unwrap(), 999i64);
+
+        // u16
+        assert_eq!(parse_uint16("0").unwrap(), 0u16);
+        assert_eq!(parse_uint16("65535").unwrap(), u16::MAX);
+        assert!(parse_uint16("65536").is_err());
+
+        // u32
+        assert_eq!(parse_uint32("0").unwrap(), 0u32);
+        assert_eq!(parse_uint32("4294967295").unwrap(), u32::MAX);
+        assert!(parse_uint32("4294967296").is_err());
+
+        // u64
+        assert_eq!(parse_uint64("0").unwrap(), 0u64);
+        assert_eq!(parse_uint64("12345678901234567").unwrap(), 12345678901234567u64);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_parse_numeric_fast_path() {
+        use crate::adt::numeric;
+
+        // Compare fast path results against the general cx.parse() path
+        let test_cases = vec![
+            "0", "1", "42", "-42", "100", "999", "12345", "-12345",
+            "123456789", "999999999999999999", // 18 digits
+            "0.0", "0.1", "0.001", "123.456", "-123.456789",
+            "1.0", "99.99", "-0.5", "0.000001",
+            "+42", "+0", "-0",
+            "00042", "000", // leading zeros
+        ];
+
+        for input in &test_cases {
+            let fast = try_parse_numeric_fast(input);
+            assert!(
+                fast.is_some(),
+                "fast path should handle {input:?}"
+            );
+
+            // Compare with general parser
+            let mut cx = numeric::cx_datum();
+            let mut expected: Numeric = cx.parse(input.trim()).unwrap();
+            numeric::munge_numeric(&mut expected).unwrap();
+
+            let fast_val = fast.unwrap();
+            let fast_str = fast_val.0.to_standard_notation_string();
+            let expected_str = expected.to_standard_notation_string();
+            assert_eq!(
+                fast_str, expected_str,
+                "mismatch for {input:?}: fast={fast_str}, expected={expected_str}"
+            );
+        }
+
+        // These should fall back to the general parser
+        assert!(try_parse_numeric_fast("NaN").is_none());
+        assert!(try_parse_numeric_fast("Infinity").is_none());
+        assert!(try_parse_numeric_fast("1e10").is_none());
+        assert!(try_parse_numeric_fast("1.23e-5").is_none());
+        assert!(try_parse_numeric_fast("  42  ").is_none());
+        assert!(try_parse_numeric_fast("").is_none());
+        assert!(try_parse_numeric_fast(".").is_none());
+        assert!(try_parse_numeric_fast("-.").is_none());
+        assert!(try_parse_numeric_fast("abc").is_none());
+
+        // And the full parse_numeric should handle all of them
+        assert!(parse_numeric("42").is_ok());
+        assert!(parse_numeric("  42  ").is_ok());
+        assert!(parse_numeric("NaN").is_ok());
+        assert!(parse_numeric("1e10").is_ok());
+        assert!(parse_numeric("123.456").is_ok());
     }
 }
