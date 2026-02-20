@@ -112,7 +112,7 @@
     "typescript": "^5.6.3",
     "use-resize-observer": "^9.1.0",
     "uuid": "^11.0.5",
-    "zod": "^3.23.8"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@babel/core": "^7.26.0",
