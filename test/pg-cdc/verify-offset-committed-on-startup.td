@@ -18,6 +18,7 @@
 
 # Load up a table with a lot of data.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION IF EXISTS mz_source;
 DROP TABLE IF EXISTS t0;
 CREATE TABLE t0 (f1 INTEGER, f2 TEXT);
 ALTER TABLE t0 REPLICA IDENTITY FULL;
@@ -27,9 +28,11 @@ INSERT INTO t0 SELECT i, repeat(md5(i::text), 1000) FROM generate_series(1, 1000
 # Configure PostgreSQL
 $ postgres-connect name=pg_source url=postgres://postgres:postgres@postgres
 $ postgres-execute connection=pg_source
+DROP USER IF EXISTS materialize;
 CREATE USER materialize PASSWORD 'materialize';
 ALTER USER materialize REPLICATION;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO materialize;
+GRANT USAGE ON SCHEMA public TO materialize;
 
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
