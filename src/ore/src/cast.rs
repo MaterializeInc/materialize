@@ -45,6 +45,7 @@ impl<T, U> CastInto<U> for T
 where
     U: CastFrom<T>,
 {
+    #[inline]
     fn cast_into(self) -> U {
         U::cast_from(self)
     }
@@ -54,6 +55,7 @@ macro_rules! cast_from {
     ($from:ty, $to:ty) => {
         paste::paste! {
             impl crate::cast::CastFrom<$from> for $to {
+                #[inline]
                 #[allow(clippy::as_conversions)]
                 fn cast_from(from: $from) -> $to {
                     from as $to
@@ -70,6 +72,7 @@ macro_rules! cast_from {
             }
 
             impl crate::cast::CastFrom<std::num::NonZero<$from>> for $to {
+                #[inline]
                 #[allow(clippy::as_conversions)]
                 fn cast_from(from: std::num::NonZero<$from>) -> $to {
                     from.get() as $to
