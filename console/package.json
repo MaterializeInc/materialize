@@ -162,7 +162,7 @@
     "fast-xml-parser": "^4.5.0",
     "intersection-observer": "^0.12.2",
     "jotai-devtools": "^0.10.1",
-    "jsdom": "^25.0.1",
+    "jsdom": "^28.1.0",
     "jsonwebtoken": "^9.0.2",
     "kysely-codegen": "^0.17.0",
     "lint-staged": "^16.2.7",
