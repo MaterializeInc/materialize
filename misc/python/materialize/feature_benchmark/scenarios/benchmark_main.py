@@ -45,9 +45,6 @@ class FastPath(Scenario):
 class FastPathFilterNoIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view and return"""
 
-    SCALE = 7
-    FIXED_SCALE = True  # OOM with 10**8 = 100M records
-
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
@@ -64,20 +61,31 @@ true
         ]
 
     def benchmark(self) -> MeasurementSource:
+        repeated_selects = "\n".join(
+            "> SELECT * FROM v1 WHERE f2 < 0;" for _ in range(100)
+        )
+
         return Td(
-            """
-> /* A */ SELECT 1;
+            f"""
+> SET auto_route_introspection_queries TO false
+
+> BEGIN
+
+> SELECT 1;
+  /* A */
 1
-> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+
+{repeated_selects}
+
+> SELECT 1
+  /* B */
+1
 """
         )
 
 
 class MFPPushdown(Scenario):
     """Test MFP pushdown -- WHERE clause with a suitable condition and no index defined."""
-
-    SCALE = 7
-    FIXED_SCALE = True  # OOM with 10**8 = 100M records
 
     def init(self) -> list[Action]:
         return [
@@ -93,11 +101,25 @@ true
         ]
 
     def benchmark(self) -> MeasurementSource:
+        repeated_selects = "\n".join(
+            "> SELECT * FROM v1 WHERE f2 < 0;" for _ in range(100)
+        )
+
         return Td(
-            """
-> /* A */ SELECT 1;
+            f"""
+> SET auto_route_introspection_queries TO false
+
+> BEGIN
+
+> SELECT 1;
+  /* A */
 1
-> /* B */ SELECT * FROM v1 WHERE f2 < 0;
+
+{repeated_selects}
+
+> SELECT 1
+  /* B */
+1
 """
         )
 
