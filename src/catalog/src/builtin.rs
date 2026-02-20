@@ -4344,7 +4344,6 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
         .with_column("transaction_isolation", SqlScalarType::String.nullable(false))
         .with_column("execution_timestamp", SqlScalarType::UInt64.nullable(true))
         .with_column("transient_index_id", SqlScalarType::String.nullable(true))
-        .with_column("params", SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false))
         .with_column("mz_version", SqlScalarType::String.nullable(false))
         .with_column("began_at", SqlScalarType::TimestampTz { precision: None }.nullable(false))
         .with_column("finished_at", SqlScalarType::TimestampTz { precision: None }.nullable(true))
@@ -4367,7 +4366,7 @@ pub static MZ_RECENT_ACTIVITY_LOG_REDACTED: LazyLock<BuiltinView> = LazyLock::ne
     column_comments: BTreeMap::new(),
     sql: "SELECT mralt.execution_id, mralt.sample_rate, mralt.cluster_id, mralt.application_name,
     mralt.cluster_name, mralt.database_name, mralt.search_path, mralt.transaction_isolation, mralt.execution_timestamp,
-    mralt.transient_index_id, mralt.params, mralt.mz_version, mralt.began_at, mralt.finished_at,
+    mralt.transient_index_id, mralt.mz_version, mralt.began_at, mralt.finished_at,
     mralt.finished_status, mralt.result_size, mralt.rows_returned, mralt.execution_strategy, mralt.transaction_id,
     mralt.prepared_statement_id, mralt.sql_hash, mralt.prepared_statement_name, mralt.session_id,
     mralt.prepared_at, mralt.statement_type, mralt.throttled_count,
