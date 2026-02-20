@@ -2506,7 +2506,112 @@ adds a projection to remove duplicate join key columns. It benefits:
   extends the Session 21 `evaluate_into_project` pattern to join closures.
 - `zero_diffs.clone()` in `reduce.rs` (line 1313) clones a `Vec<Accum>` per input row during
   accumulable reductions. SmallVec<[Accum; 4]> would avoid heap allocation for 1-4 aggregations.
-- The `build_bucketed` function in reduce.rs (line 846) has a TODO to convert `chain(hash_key_iter)`
-  into a memcpy for hash key reconstruction.
 - `Row::clone()` at 527B executions in coverage data remains a massive source of allocation.
 - Byte-level concat could apply to UNION ALL operations and other row concatenation sites.
+
+---
+
+## Session 28: Bucketed reduction byte-level hash key reconstruction (2026-02-20)
+
+**Target:** The `build_bucketed` function in `src/compute/src/render/reduce.rs` had an explicit
+TODO: "Convert the `chain(hash_key_iter...)` into a memcpy." Three operations on `hash_key`
+rows (`[hash_u64, key_col1, key_col2, ...]`) used datum-level iteration + repacking:
+
+1. **Initial creation** (line 832): `pack_using(once(hash).chain(&key))` — iterates all key
+   datums and re-encodes each one via `push_datum`
+2. **Per-stage mod** (line 847): reads hash, computes `hash % b`, then
+   `pack(once(new_hash).chain(hash_key_iter.take(key_arity)))` — decodes and re-encodes all
+   key columns just to change the hash prefix
+3. **Final strip** (line 870): `pack(hash_key_iter.take(key_arity))` — decodes and re-encodes
+   all key columns just to remove the hash prefix
+4. **Error path** (line 1023): same as final strip
+
+Each of these performs `N × read_datum + N × push_datum` (where N = key_arity) for columns that
+don't change. The datum decode involves type matching, value parsing (e.g., chrono DateTime for
+timestamps), and Datum enum construction. The re-encode involves type matching, encoding size
+computation (e.g., `min_bytes_signed`), and separate tag+payload writes.
+
+**Fix:** Three optimizations using `RowRef::tail_bytes()` (new method) and `copy_into()`:
+
+1. **New method: `RowRef::tail_bytes(skip_count)`** — returns `&[u8]` of all encoded datum bytes
+   after skipping `skip_count` datums using `skip_datum` (fast O(1) pointer arithmetic per datum,
+   no value construction). Added to `src/repr/src/row.rs`.
+
+2. **Initial creation**: replaced `pack_using(once(hash).chain(&key))` with
+   `packer.push(UInt64(hash)); key.copy_into(&mut packer)` — the key's raw bytes are copied
+   directly via single `memcpy` (from Session 26's `copy_into` on Row).
+
+3. **Per-stage mod**: replaced datum iteration+repack with
+   `tail_bytes(1)` to get key bytes after hash datum, then
+   `packer.push(UInt64(new_hash)); packer.extend_by_slice_unchecked(key_bytes)`.
+
+4. **Final strip + error path**: replaced datum iteration+repack with
+   `tail_bytes(1)` + `extend_by_slice_unchecked(key_bytes)`.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench hash_key_reconstruct`):
+
+### Per-operation performance (ns/iter)
+
+| Operation             | Scenario | Old (datum repack) | New (byte-level) | Speedup |
+|-----------------------|----------|-------------------:|------------------:|--------:|
+| reconstruct (mod+key) | int5     | 99.5               | 30.9              | **3.2x** |
+| reconstruct (mod+key) | int10    | 161                | 21.8              | **7.4x** |
+| reconstruct (mod+key) | mixed3   | 47.5               | 21.8              | **2.2x** |
+| strip hash prefix     | int5     | 70.3               | 5.0               | **14.1x** |
+| strip hash prefix     | int10    | 134                | 4.8               | **28.0x** |
+| create (hash+key)     | int5     | 80.0               | 9.1               | **8.8x** |
+| create (hash+key)     | int10    | 144                | 9.2               | **15.7x** |
+| create (hash+key)     | mixed3   | 39.4               | 8.7               | **4.5x** |
+
+### Batch performance (10k rows)
+
+| Operation              | Scenario | Old       | New       | Speedup     |
+|------------------------|----------|-----------|-----------|-------------|
+| reconstruct (mod+key)  | int10    | 1.531 ms  | 213 µs    | **7.2x**    |
+| strip hash prefix      | int10    | 1.296 ms  | 39.7 µs   | **32.6x**   |
+| create (hash+key)      | int10    | 1.424 ms  | 83.9 µs   | **17.0x**   |
+
+**Summary:** **2.2-28x faster per operation, 7-33x faster in batch**. The hash strip operation
+shows the largest speedup (28-33x) because it eliminates ALL datum operations — the old path
+decoded and re-encoded every key datum, while the new path does a single `skip_datum` (one tag
+byte read + pointer advance) followed by a single `memcpy`. The reconstruction operation
+(hash mod + key copy) is 3-7x faster because it still needs to decode the hash datum and encode
+the new hash, but avoids all key datum decode/re-encode. The create operation (hash + key copy)
+is 4-16x faster because `copy_into` does a single `memcpy` of all key bytes vs N `push_datum`
+calls.
+
+The speedup scales with key arity: 10 int columns show 7.4x vs 5 columns at 3.2x for
+reconstruction, and 28x vs 14x for strip. This is because the old path's cost is O(key_arity ×
+per_datum_cost) while the new path's cost is O(1) for the memcpy (plus O(key_arity) for the
+skip_datum scan in tail_bytes, which is ~2ns per datum vs ~14ns for read_datum + push_datum).
+
+**Impact:** The `build_bucketed` function is used for hierarchical MIN/MAX reductions. These
+are used when the query planner selects hierarchical aggregation strategy for better parallelism.
+The hash key operations execute on every input row for each hierarchical stage. The 7-33x
+speedup on these operations directly reduces the per-row overhead in the reduction pipeline.
+
+**Files changed:**
+- `src/repr/src/row.rs` - Added `RowRef::tail_bytes(skip_count: usize)` method using
+  `skip_datum` for fast datum skipping. Added `test_tail_bytes` correctness test verifying
+  equivalence with datum-level repacking.
+- `src/compute/src/render/reduce.rs` - Modified `build_bucketed`: initial hash key creation
+  uses `copy_into`, per-stage mod uses `tail_bytes(1)` + `extend_by_slice_unchecked`, final
+  strip and error path use `tail_bytes(1)` + `extend_by_slice_unchecked`. Resolved TODO comment.
+- `src/repr/benches/hash_key_reconstruct.rs` - Added benchmark (new file) with 22 scenarios
+  covering reconstruction, strip, and creation operations across int5/int10/mixed3 types and
+  10k-row batch tests.
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas:**
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row during accumulable
+  reductions. SmallVec<[Accum; 4]> would avoid heap allocation for 1-4 aggregations, but is
+  blocked by DD orphan rule constraints on Semigroup/Multiply trait implementations.
+- `Row::clone()` at 527B executions is a massive source of allocation pressure. Arena
+  allocation or reference-counted rows could reduce this.
+- `parse_bool` in `strconv.rs` calls `s.trim().to_lowercase()` which heap-allocates a String
+  for every boolean parse. Could be replaced with `eq_ignore_ascii_case` byte matching.
+- Join closures with filters/maps + pure-input-column projection could combine selective decode
+  for filter evaluation with byte-level project for the output columns.
+- Byte-level concat could apply to UNION ALL operations and other row concatenation sites.
+- `tail_bytes` could be used in other patterns where a known prefix needs to be stripped or
+  replaced in Row data (e.g., range key manipulation in window functions).

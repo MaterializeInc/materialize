@@ -802,6 +802,23 @@ impl RowRef {
         }
     }
 
+    /// Returns the raw encoded bytes for all datums starting from datum index
+    /// `start`, skipping the first `start` datums using fast pointer arithmetic
+    /// (no datum construction). This is useful for byte-level row manipulation
+    /// where a known-size prefix needs to be stripped or replaced.
+    ///
+    /// # Panics
+    /// Panics if `start` is greater than the number of datums in the row.
+    #[inline]
+    pub fn tail_bytes(&self, start: usize) -> &[u8] {
+        let mut data: &[u8] = &self.0;
+        for _ in 0..start {
+            // SAFETY: data points to validly encoded datums from this Row.
+            unsafe { skip_datum(&mut data) };
+        }
+        data
+    }
+
     /// Decode datums from this row selectively: only decode columns marked
     /// `true` in `needed`, and use fast `skip_datum` for the rest.
     ///
@@ -4369,5 +4386,96 @@ mod tests {
         }
         assert_eq!(empty_range_row.iter().count(), 3);
         assert_eq!(empty_range_row.iter().nth(2).unwrap(), Datum::Int64(2));
+    }
+
+    /// Test that tail_bytes correctly returns the byte suffix after skipping N datums,
+    /// and that constructing rows from tail_bytes produces identical results to
+    /// datum-level iteration + repacking.
+    #[mz_ore::test]
+    fn test_tail_bytes() {
+        // Build a row with various datum types
+        let row = Row::pack(&[
+            Datum::UInt64(123456789012345),
+            Datum::Int64(42),
+            Datum::String("hello"),
+            Datum::Float64(ordered_float::OrderedFloat(3.14)),
+            Datum::True,
+        ]);
+
+        // tail_bytes(0) should return the entire row
+        assert_eq!(row.tail_bytes(0), row.data());
+
+        // tail_bytes(1) should skip the first datum
+        {
+            let tail = row.tail_bytes(1);
+            let mut dest = Row::default();
+            let mut packer = dest.packer();
+            unsafe { packer.extend_by_slice_unchecked(tail) };
+            // The result should equal a row packed from datums 1..5
+            let expected = Row::pack(&[
+                Datum::Int64(42),
+                Datum::String("hello"),
+                Datum::Float64(ordered_float::OrderedFloat(3.14)),
+                Datum::True,
+            ]);
+            assert_eq!(dest, expected);
+        }
+
+        // tail_bytes(3) should skip the first 3 datums
+        {
+            let tail = row.tail_bytes(3);
+            let mut dest = Row::default();
+            let mut packer = dest.packer();
+            unsafe { packer.extend_by_slice_unchecked(tail) };
+            let expected = Row::pack(&[
+                Datum::Float64(ordered_float::OrderedFloat(3.14)),
+                Datum::True,
+            ]);
+            assert_eq!(dest, expected);
+        }
+
+        // tail_bytes(5) should return empty bytes
+        assert_eq!(row.tail_bytes(5), &[] as &[u8]);
+
+        // Verify hash key reconstruction equivalence:
+        // Building [new_hash | key_cols] via byte copy should equal datum repacking
+        let hash_key = Row::pack(&[
+            Datum::UInt64(99999),
+            Datum::Int64(1),
+            Datum::Int64(2),
+            Datum::Int64(3),
+        ]);
+        let new_hash = 99999u64 % 256;
+        // Old approach
+        let old_result = {
+            let mut iter = hash_key.iter();
+            let _hash = iter.next();
+            Row::pack(std::iter::once(Datum::UInt64(new_hash)).chain(iter))
+        };
+        // New approach
+        let new_result = {
+            let key_bytes = hash_key.tail_bytes(1);
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.push(Datum::UInt64(new_hash));
+            unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+            row
+        };
+        assert_eq!(old_result, new_result);
+
+        // Verify strip hash equivalence
+        let old_stripped = {
+            let mut iter = hash_key.iter();
+            let _hash = iter.next();
+            Row::pack(iter)
+        };
+        let new_stripped = {
+            let key_bytes = hash_key.tail_bytes(1);
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+            row
+        };
+        assert_eq!(old_stripped, new_stripped);
     }
 }

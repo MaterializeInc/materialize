@@ -806,7 +806,7 @@ where
             aggr_funcs,
             buckets,
         }: BucketedPlan,
-        key_arity: usize,
+        _key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
@@ -829,8 +829,12 @@ where
 
                 // Apply the initial mod here.
                 let hash = values.hashed() % first_mod;
-                let hash_key =
-                    row_builder.pack_using(std::iter::once(Datum::from(hash)).chain(&key));
+                // Byte-level: push hash datum, then copy key bytes directly
+                // (avoids decoding+re-encoding all key datums).
+                let mut packer = row_builder.packer();
+                packer.push(Datum::UInt64(hash));
+                key.copy_into(&mut packer);
+                let hash_key = row_builder.clone();
                 (hash_key, values)
             });
 
@@ -841,12 +845,17 @@ where
                     stage
                 } else {
                     stage.map(move |(hash_key, values)| {
-                        let mut hash_key_iter = hash_key.iter();
-                        let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
-                        // TODO: Convert the `chain(hash_key_iter...)` into a memcpy.
-                        let hash_key = SharedRow::pack(
-                            std::iter::once(Datum::from(hash)).chain(hash_key_iter.take(key_arity)),
-                        );
+                        // Read hash from first datum, compute new mod.
+                        let hash = hash_key.iter().next().unwrap().unwrap_uint64() % b;
+                        // Byte-level: get key bytes after hash datum, build new row
+                        // with new hash + copied key bytes (no datum decode/re-encode).
+                        let key_bytes = hash_key.tail_bytes(1);
+                        let mut row_builder = SharedRow::get();
+                        let mut packer = row_builder.packer();
+                        packer.push(Datum::UInt64(hash));
+                        // SAFETY: key_bytes are valid encoded datums from hash_key.
+                        unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+                        let hash_key = row_builder.clone();
                         (hash_key, values)
                     })
                 };
@@ -864,10 +873,15 @@ where
             }
 
             // Discard the hash from the key and return to the format of the input data.
+            // Byte-level: copy key bytes after the hash datum directly (no datum decode/re-encode).
             let partial = stage.map(move |(hash_key, values)| {
-                let mut hash_key_iter = hash_key.iter();
-                let _hash = hash_key_iter.next();
-                (SharedRow::pack(hash_key_iter.take(key_arity)), values)
+                let key_bytes = hash_key.tail_bytes(1);
+                let mut row_builder = SharedRow::get();
+                let mut packer = row_builder.packer();
+                // SAFETY: key_bytes are valid encoded datums from hash_key.
+                unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+                let key = row_builder.clone();
+                (key, values)
             });
 
             // Allocations for the two closures.
@@ -1018,9 +1032,13 @@ where
                 "Checked Invalid Accumulations",
                 |(hash_key, result)| match result {
                     Err(hash_key) => {
-                        let mut hash_key_iter = hash_key.iter();
-                        let _hash = hash_key_iter.next();
-                        let key = SharedRow::pack(hash_key_iter);
+                        // Byte-level: strip hash prefix, copy key bytes directly.
+                        let key_bytes = hash_key.tail_bytes(1);
+                        let mut row_builder = SharedRow::get();
+                        let mut packer = row_builder.packer();
+                        // SAFETY: key_bytes are valid encoded datums from hash_key.
+                        unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+                        let key = row_builder.clone();
                         let message = format!(
                             "Invalid data in source, saw non-positive accumulation \
                                          for key {key:?} in hierarchical mins-maxes aggregate"
