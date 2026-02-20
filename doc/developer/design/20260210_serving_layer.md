@@ -3,13 +3,10 @@
 ## The Problem
 
 Selects are slow.
-In the best case, we can support around 5'000 queries per second.
-The reason is that Materialize hasn't been optimized for fast selects, but rather for efficient incremental view maintenance.
-This design focuses exclusively on read transactions---the serving layer does not support writes.
+In the best case, we can support around 5'000 queries per second because Materialize hasn't been optimized for fast selects, but rather for efficient incremental view maintenance.
 We optimize each query, select its timestamp, send it to a replica, wait for compute to gather results, merge the results and send it back to the client.
-Several steps along this path incur latency, and this design shows alternatives that have the potential to avoid the latency.
-
-Specifically, the design outlines a system that should be able to handle 100s of 1000s requests per second, but it remains to be seen if this will turn out true.
+Several steps along this path incur latency, and this design shows alternatives that have the potential to avoid it.
+This design focuses exclusively on read transactions---the serving layer does not support writes---and outlines a system that should be able to handle 100s of 1000s requests per second.
 
 ## Success Criteria
 
@@ -32,15 +29,12 @@ This document focuses on the architectural direction and trade-offs between opti
 To increase the queries per second, we need to change the architecture of Materialize, as incremental improvements will not allow us to reach orders-of-magnitude better performance.
 The main bottlenecks are per-query work (optimization), serializing points in code (communication with clusters), and inefficient data structures for key lookups (arrangements).
 We tackle all individually, although for some we have a menu of options at our disposal.
+The following sections present three broad options, each with different trade-offs around scope, API commitment, and long-term flexibility.
 
 At the moment, the environmentd process optimizes queries, handles communication with the client and cluster replicas.
 Cluster replicas maintain indexes as arrangements, and handle peeks to read information from arrangements.
 Clusters scale horizontally by adding more and bigger replicas, at the expense of causing higher tail latency.
-Environmentd currently does not scale horizontally.
-
-We could scale environmentd as a whole (which is a separate project), or extract behavior from environmentd to handle it elsewhere, which is the main idea we follow in this design.
-
-We see three broad options, each with different trade-offs around scope, API commitment, and long-term flexibility.
+Environmentd currently does not scale horizontally, but we could scale it as a whole (which is a separate project), or extract behavior from environmentd to handle it elsewhere, which is the main idea we follow in this design.
 
 ### Option 1: Build an excellent sink
 
@@ -203,7 +197,6 @@ What we need:
 Materialize by default provides strict serializable isolation, which guarantees the freshest results and no regressions in time for subsequent reads.
 This comes at a cost: we need to establish what the freshest timestamp is by interacting with the timestamp oracle, and then wait until all objects in the query domain are up-to-date at that timestamp.
 This means we potentially need to wait for the processing delay induced by Materialize's incremental view maintenance pipeline.
-
 Some of the oracle interaction can be amortized (e.g., batching timestamp requests), but the fundamental constraint remains: strict serializability requires waiting for data to catch up to the chosen timestamp.
 
 For a serving layer targeting high throughput and low latency, there is a tension:
@@ -212,6 +205,7 @@ For a serving layer targeting high throughput and low latency, there is a tensio
 
 It is unclear what isolation level a serving layer should provide.
 Degrading to serializable loses one of Materialize's key values, but it is not obvious how to achieve high query throughput under strict serializability without significant amortization or relaxation of the freshness requirement.
+The answer may depend on the use case: some applications need the freshness guarantee, while others would happily trade it for lower latency.
 
 ### Considerations for parallel data structures
 
@@ -232,6 +226,7 @@ We need an LSM-like structure that maps keys to values with `(time, diff)` annot
 
 Snowflake is the closest comparable platform in terms of a cloud-native analytical database with an application ecosystem.
 Understanding their approach helps frame what we would and would not be building.
+The following subsections cover their query serving model, SQL API, application framework, and container services, followed by a comparison to the options proposed above.
 
 ### Snowflake's query serving model
 
@@ -294,6 +289,7 @@ This is a catalog API, not a query serving API, but it demonstrates the pattern 
 
 The key insight is that Snowflake has no equivalent to what we are proposing in Option 2.
 Their app platform (relevant to Option 3) is mature but designed for batch and interactive analytics, not for sub-millisecond key-value serving.
+A Materialize serving layer would occupy a distinct niche that no comparable platform currently fills.
 
 ## Alternatives
 
