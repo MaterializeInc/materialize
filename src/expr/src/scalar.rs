@@ -1620,8 +1620,24 @@ impl MirScalarExpr {
                         *self = inner_expr.take();
                         return self.decompose_is_null();
                     } else {
-                        // Different from CallBinary and CallVariadic, because of determinism. See
-                        // https://materializeinc.slack.com/archives/C01BE3RN82F/p1657644478517709
+                        // We can simplify to `false`, because the function simply can't produce
+                        // nulls at all. This is because
+                        // - !propagates_nulls means that the input type of the Rust function is not
+                        //   nullable, so the automatic null propagation won't kick in;
+                        // - !introduces_nulls means that the output type of the Rust function is
+                        //   not nullable, so the Rust function can't produce a null manually either.
+                        //
+                        // Note that we can't do this same optimization for binary and variadic
+                        // functions. This is because for binary and variadic functions the value of
+                        // propagates_nulls and introduces_nulls is not derived solely from the
+                        // input/output type nullabilities, but instead depends on what the Rust
+                        // function does. For example, list concatenation neither introduces nor
+                        // propagates nulls, but it can produce a null:
+                        // - It does not introduce nulls, because if both input lists are not null,
+                        //   then it will produce a list.
+                        // - It does not propagate nulls, because giving a null as just one of the
+                        //   arguments returns the other argument instead of null.
+                        // - It does produce a null if both arguments are null.
                         return Some(MirScalarExpr::literal_false());
                     }
                 }

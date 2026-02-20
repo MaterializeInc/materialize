@@ -830,11 +830,10 @@ fn lag_lead_inner_ignore_nulls<'a>(
             if !datum.is_null() {
                 datum
             } else {
-                // I can imagine returning here either `default_value` or `null`.
-                // (I'm leaning towards `default_value`.)
-                // We used to run into an infinite loop in this case, so panicking is
-                // better. Started a SQL Council thread:
-                // https://materializeinc.slack.com/archives/C063H5S7NKE/p1724962369706729
+                // Not clear what should the semantics be here. See
+                // https://github.com/MaterializeInc/database-issues/issues/8497
+                // (We used to run into an infinite loop in this case, so panicking is
+                // better.)
                 panic!("0 offset in lag/lead IGNORE NULLS");
             }
         };
