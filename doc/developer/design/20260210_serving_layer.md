@@ -26,9 +26,9 @@ This document focuses on the architectural direction and trade-offs between opti
 
 ## Solution Proposal
 
-To increase the queries per second, we need to change the architecture of Materialize, as incremental improvements will not allow us to reach orders-of-magnitude better performance.
+To increase the queries per second, we need to change the architecture of Materialize.
 The main bottlenecks are per-query work (optimization), serializing points in code (communication with clusters), and inefficient data structures for key lookups (arrangements).
-We tackle all individually, although for some we have a menu of options at our disposal.
+Rather than making the current query path more efficient---which is unlikely to yield orders-of-magnitude improvement---this design proposes to bypass it entirely with a dedicated serving layer.
 The following sections present three broad options, each with different trade-offs around scope, API commitment, and long-term flexibility.
 
 At the moment, the environmentd process optimizes queries, handles communication with the client and cluster replicas.
@@ -65,8 +65,6 @@ We build a serving layer as part of Materialize, optimized for the specific acce
  * A first version will likely not be the best long-term design.
  * Expands the surface area of what Materialize must operate and support.
 
-Details on this option follow in the sections below.
-
 ### Option 3: Build an application platform API
 
 Rather than building a specific serving layer, we invest in an API that allows others to deploy applications on Materialize---similar to how Snowflake allows it with Native Apps and Snowpark Container Services (see [Prior art: Snowflake](#prior-art-snowflake) below).
@@ -76,28 +74,28 @@ We would design and expose APIs to interact with the catalog and persist, and bu
 **Advantages:**
  * Fills a gap we have anyway: there is no programmatic API for third parties to build on Materialize.
  * Does not lock us into a specific serving layer design---the API is the product, and serving layers are applications.
- * Enables an ecosystem of applications beyond just serving (dashboards, caches, custom sinks, etc.).
+ * Enables an ecosystem of applications beyond just serving (custom sources and sinks, database extensions like vector or GIS, dashboards, caches).
 
 **Disadvantages:**
  * Requires designing a stable API surface (REST? gRPC? Rust SDK? WASM SDK?), which is a significant commitment.
  * The reference serving layer still needs to be built and maintained.
  * Higher up-front investment before customers see value.
 
-### Serving layer considerations
+### Option 2 details
 
-A serving layer (whether built-in or as a reference application) has to handle requests for data, at a system-determined time, and provide responses to clients at low latency and high throughput.
+Options 1 and 3 offload the serving layer to a downstream system or a custom application, so we do not need to discuss their internals here.
+The remainder of this section focuses on Option 2: a built-in serving layer.
+
+A built-in serving layer has to handle requests for data, at a system-determined time, and provide responses to clients at low latency and high throughput.
 It must scale horizontally and be isolated from other serving layer replicas.
+We introduce the notion of a serving cluster with serving cluster replicas, whose task is to handle specific queries and return results at low latency.
 
 Choices:
  * Fast data structure to lookup values by key.
    We may support range scans, but not arbitrary inequality comparisons.
- * Reading from persist as the only way to get data into a serving layer.
+ * Reading from persist as the only way to get data into the serving layer.
    We can allow map/filter/projects (without temporal filters).
  * Isolation levels must be respected, i.e., we need to maintain multiple timestamped values per key, and their diff.
- * We can offer different interfaces.
-   To handle complexity, we might not want to rely on SQL, but rather offer a REST API.
-   All interfaces need to pre-define the queries the serving layer can handle.
-   We can offer an implicit API (observe frequent queries), or an explicit API (declare queries).
 
 ### Interface considerations
 
@@ -140,12 +138,7 @@ A Materialize serving layer that pre-computes the mapping from parameters to ind
 An alternative to explicit declaration is **implicit derivation from schema objects**, as PostgREST does: it introspects the database schema and generates REST endpoints for all tables and views.
 The serving layer equivalent would be: if an index on `(customer_id)` exists, lookups by `customer_id` are automatically available without a separate declaration step.
 
-### Option 2 details: Built-in serving layer replicas
-
-We introduce the notion of a serving cluster with serving cluster replicas.
-Its task is to handle specific queries, and return results at low latency.
-
-#### Connection model
+### Connection model
 
 There are two main options for how clients reach serving replicas:
 
@@ -166,19 +159,19 @@ For an application platform, external apps may need to accept direct connections
 Alternatively, we define a set of supported protocols (HTTP, pgwire, gRPC) and proxy only those.
 The choice depends on how much we trust the app and how we integrate it into our cloud deployment---a fully trusted app could get direct network exposure, while an untrusted one would need to sit behind our proxy with protocol-level enforcement.
 
-#### Routing and sharding
+### Routing and sharding
 
 For key point lookups, we can take advantage of the existing cluster structure and data hashing.
 Each serving replica (process) handles part of the key space, and a routing layer routes requests to the replica that holds the relevant data based on the key's hash.
-This piggy-backs on the existing cluster replica infrastructure.
+This piggybacks on the existing cluster replica infrastructure.
 
-#### Error distribution
+### Error distribution
 
 Errors taint access to data and must be distributed globally across all serving replicas.
 However, the system can return any error that applies---it is not required to return a specific one.
 This simplifies the error propagation mechanism: a replica that discovers an error broadcasts it, and any replica can surface it to a client requesting affected data.
 
-#### Query support
+### Query support
 
 Supporting SQL prepared statements (or an equivalent):
  * Investigate lateral joins.
