@@ -3104,3 +3104,59 @@ Row construction, the COPY FROM pipeline is now dramatically faster for timestam
 - `zero_diffs.clone()` in `reduce.rs` — SmallVec newtype wrapper remains viable.
 - Integer parsing (`parse_int32/parse_int64`) at 560M calls could potentially benefit from
   a hand-rolled ASCII parser, though Rust's `FromStr` is already well-optimized.
+
+## Session 33: Persist columnar decode direct-push - eliminate double enum dispatch (2026-02-20)
+
+**Target:** `DatumColumnDecoder::get()` in `src/repr/src/row/encode.rs` — 61B iterations in
+coverage data. This is the persist columnar decode path that converts Arrow columnar data
+back into Materialize's Row format.
+
+**Problem:** The decode path had a double enum dispatch for every scalar datum:
+1. `DatumColumnDecoder::get()` matches the column type variant to extract the value from
+   the Arrow array and constructs a `Datum` variant (dispatch #1)
+2. `packer.push(datum)` → `push_datum()` matches on the `Datum` variant again (dispatch #2)
+   to determine the tag byte and encoding format
+
+For scalar types (Bool, Int16/32/64, UInt8/16/32/64, Float32/64, String, Bytes, Date, Time,
+MzTimestamp, Uuid), this second dispatch is completely redundant since we already know the
+type from the column decoder variant.
+
+**Solution:** Two changes:
+1. Added 17 type-specific `push_*` methods to `RowPacker` in `src/repr/src/row.rs`
+   (push_null, push_bool, push_i16/i32/i64, push_u8/u16/u32/u64, push_f32/f64,
+   push_string, push_bytes, push_date, push_time, push_mz_timestamp, push_uuid).
+   These encode directly to the Row byte buffer without constructing a Datum.
+
+2. Rewrote `DatumColumnDecoder::get()` as a single unified match:
+   - Scalar types (16 variants) use direct-push methods, bypassing Datum construction
+   - Complex types (Numeric, Timestamp, TimestampTz, Interval, AclItem, MzAclItem,
+     RecordEmpty) still construct a Datum and push via `push_datum`
+   - Container types (Range, Json, Array, List, Map, Record) push directly to packer
+
+   Important: the single-match structure avoids the overhead of falling through a first
+   match block before reaching the complex type handlers.
+
+**Benchmark results** (`cargo bench --bench columnar_decode`):
+
+| Benchmark | Baseline | Optimized | Speedup |
+|-----------|----------|-----------|---------|
+| int64 (6 cols × 10K rows) | 770.61 µs | 511.25 µs | **1.51x** (−33.3%) |
+| string (4 cols × 10K rows) | 368.35 µs | 264.71 µs | **1.39x** (−28.1%) |
+| float64 (4 cols × 10K rows) | 232.49 µs | 145.70 µs | **1.60x** (−37.3%) |
+| mixed (6 cols × 10K rows) | 543.20 µs | 390.69 µs | **1.39x** (−27.5%) |
+| nullable 50% (4 cols × 10K rows) | 402.97 µs | 319.33 µs | **1.26x** (−20.6%) |
+| timestamp (4 cols × 10K rows) | 567.87 µs | 365.95 µs | **1.55x** (−35.5%) |
+
+The timestamp improvement (1.55x) is surprising since it still goes through the Datum path —
+the unified single-match structure allows the compiler to generate better jump table code
+compared to the original two-level match structure.
+
+**Files changed:**
+- `src/repr/src/row.rs`: Added 17 direct-push methods to RowPacker (~120 lines)
+- `src/repr/src/row/encode.rs`: Rewrote DatumColumnDecoder::get() as single unified match
+- `src/repr/benches/columnar_decode.rs`: New benchmark for persist columnar decode throughput
+- `src/repr/Cargo.toml`: Registered new benchmark
+
+**Impact:** At 61B iterations in coverage, a 1.4-1.6x improvement in the columnar decode
+path translates to significant CPU savings during persist reads. The mixed-type benchmark
+(most realistic scenario) shows 1.39x speedup.

@@ -109,6 +109,14 @@ harness = false
 name = "timestamp_parse"
 harness = false
 
+[[bench]]
+name = "int_parse"
+harness = false
+
+[[bench]]
+name = "columnar_decode"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
