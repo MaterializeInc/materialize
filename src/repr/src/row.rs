@@ -1689,6 +1689,46 @@ const TINY: usize = 1 << 8;
 const SHORT: usize = 1 << 16;
 const LONG: usize = 1 << 32;
 
+/// Writes a signed integer datum with combined tag + value in a single write.
+/// This avoids two `extend_from_slice` calls and improves icache locality.
+#[inline(always)]
+#[allow(clippy::as_conversions)]
+fn push_signed_int<D, const N: usize>(
+    data: &mut D,
+    i: i64,
+    le_bytes: [u8; N],
+    neg_tag: Tag,
+    pos_tag: Tag,
+) where
+    D: Vector<u8>,
+{
+    let (n_sign_bits, base_tag) = if i < 0 {
+        (i.leading_ones() as u8, u8::from(neg_tag))
+    } else {
+        (i.leading_zeros() as u8, u8::from(pos_tag))
+    };
+    let mbs = ((64 - n_sign_bits + 7) / 8) as usize;
+    let mut buf = [0u8; 9];
+    buf[0] = base_tag + mbs as u8;
+    buf[1..1 + mbs].copy_from_slice(&le_bytes[..mbs]);
+    data.extend_from_slice(&buf[..1 + mbs]);
+}
+
+/// Writes an unsigned integer datum with combined tag + value in a single write.
+#[inline(always)]
+#[allow(clippy::as_conversions)]
+fn push_unsigned_int<D, const N: usize>(data: &mut D, i: u64, le_bytes: [u8; N], base_tag: Tag)
+where
+    D: Vector<u8>,
+{
+    let n_leading = i.leading_zeros() as u8;
+    let mbu = ((64 - n_leading + 7) / 8) as usize;
+    let mut buf = [0u8; 9];
+    buf[0] = u8::from(base_tag) + mbu as u8;
+    buf[1..1 + mbu].copy_from_slice(&le_bytes[..mbu]);
+    data.extend_from_slice(&buf[..1 + mbu]);
+}
+
 fn push_datum<D>(data: &mut D, datum: Datum)
 where
     D: Vector<u8>,
@@ -1698,61 +1738,53 @@ where
         Datum::False => data.push(Tag::False.into()),
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt16_0
-            } else {
-                Tag::NonNegativeInt16_0
-            }) + mbs;
-
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_signed_int(
+                data,
+                i64::from(i),
+                i64::from(i).to_le_bytes(),
+                Tag::NegativeInt16_0,
+                Tag::NonNegativeInt16_0,
+            );
         }
         Datum::Int32(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt32_0
-            } else {
-                Tag::NonNegativeInt32_0
-            }) + mbs;
-
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_signed_int(
+                data,
+                i64::from(i),
+                i64::from(i).to_le_bytes(),
+                Tag::NegativeInt32_0,
+                Tag::NonNegativeInt32_0,
+            );
         }
         Datum::Int64(i) => {
-            let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt64_0
-            } else {
-                Tag::NonNegativeInt64_0
-            }) + mbs;
-
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
+            push_signed_int(
+                data,
+                i,
+                i.to_le_bytes(),
+                Tag::NegativeInt64_0,
+                Tag::NonNegativeInt64_0,
+            );
         }
         Datum::UInt8(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt8_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(data, u64::from(i), u64::from(i).to_le_bytes(), Tag::UInt8_0);
         }
         Datum::UInt16(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt16_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(
+                data,
+                u64::from(i),
+                u64::from(i).to_le_bytes(),
+                Tag::UInt16_0,
+            );
         }
         Datum::UInt32(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt32_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(
+                data,
+                u64::from(i),
+                u64::from(i).to_le_bytes(),
+                Tag::UInt32_0,
+            );
         }
         Datum::UInt64(i) => {
-            let mbu = min_bytes_unsigned(i);
-            let tag = u8::from(Tag::UInt64_0) + mbu;
-            data.push(tag);
-            data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbu)]);
+            push_unsigned_int(data, i, i.to_le_bytes(), Tag::UInt64_0);
         }
         Datum::Float32(f) => {
             data.push(Tag::Float32.into());
@@ -2071,6 +2103,169 @@ impl RowPacker<'_> {
         D: Borrow<Datum<'a>>,
     {
         push_datum(&mut self.row.data, *datum.borrow());
+    }
+
+    /// Push a Null datum directly, bypassing Datum construction.
+    #[inline(always)]
+    pub fn push_null(&mut self) {
+        self.row.data.push(Tag::Null.into());
+    }
+
+    /// Push a bool directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_bool(&mut self, val: bool) {
+        self.row
+            .data
+            .push(if val { Tag::True } else { Tag::False }.into());
+    }
+
+    /// Push an i16 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_i16(&mut self, i: i16) {
+        push_signed_int(
+            &mut self.row.data,
+            i64::from(i),
+            i64::from(i).to_le_bytes(),
+            Tag::NegativeInt16_0,
+            Tag::NonNegativeInt16_0,
+        );
+    }
+
+    /// Push an i32 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_i32(&mut self, i: i32) {
+        push_signed_int(
+            &mut self.row.data,
+            i64::from(i),
+            i64::from(i).to_le_bytes(),
+            Tag::NegativeInt32_0,
+            Tag::NonNegativeInt32_0,
+        );
+    }
+
+    /// Push an i64 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_i64(&mut self, i: i64) {
+        push_signed_int(
+            &mut self.row.data,
+            i,
+            i.to_le_bytes(),
+            Tag::NegativeInt64_0,
+            Tag::NonNegativeInt64_0,
+        );
+    }
+
+    /// Push a u8 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_u8(&mut self, i: u8) {
+        push_unsigned_int(
+            &mut self.row.data,
+            u64::from(i),
+            u64::from(i).to_le_bytes(),
+            Tag::UInt8_0,
+        );
+    }
+
+    /// Push a u16 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_u16(&mut self, i: u16) {
+        push_unsigned_int(
+            &mut self.row.data,
+            u64::from(i),
+            u64::from(i).to_le_bytes(),
+            Tag::UInt16_0,
+        );
+    }
+
+    /// Push a u32 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_u32(&mut self, i: u32) {
+        push_unsigned_int(
+            &mut self.row.data,
+            u64::from(i),
+            u64::from(i).to_le_bytes(),
+            Tag::UInt32_0,
+        );
+    }
+
+    /// Push a u64 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_u64(&mut self, i: u64) {
+        push_unsigned_int(&mut self.row.data, i, i.to_le_bytes(), Tag::UInt64_0);
+    }
+
+    /// Push an f32 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_f32(&mut self, f: f32) {
+        let mut buf = [0u8; 5];
+        buf[0] = Tag::Float32.into();
+        buf[1..5].copy_from_slice(&f.to_bits().to_le_bytes());
+        self.row.data.extend_from_slice(&buf);
+    }
+
+    /// Push an f64 directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_f64(&mut self, f: f64) {
+        let mut buf = [0u8; 9];
+        buf[0] = Tag::Float64.into();
+        buf[1..9].copy_from_slice(&f.to_bits().to_le_bytes());
+        self.row.data.extend_from_slice(&buf);
+    }
+
+    /// Push a string directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_string(&mut self, s: &str) {
+        let tag = match s.len() {
+            0..TINY => Tag::StringTiny,
+            TINY..SHORT => Tag::StringShort,
+            SHORT..LONG => Tag::StringLong,
+            _ => Tag::StringHuge,
+        };
+        self.row.data.push(u8::from(tag));
+        push_lengthed_bytes(&mut self.row.data, s.as_bytes(), tag);
+    }
+
+    /// Push bytes directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_bytes(&mut self, bytes: &[u8]) {
+        let tag = match bytes.len() {
+            0..TINY => Tag::BytesTiny,
+            TINY..SHORT => Tag::BytesShort,
+            SHORT..LONG => Tag::BytesLong,
+            _ => Tag::BytesHuge,
+        };
+        self.row.data.push(u8::from(tag));
+        push_lengthed_bytes(&mut self.row.data, bytes, tag);
+    }
+
+    /// Push a Date directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_date(&mut self, d: Date) {
+        let mut buf = [0u8; 5];
+        buf[0] = Tag::Date.into();
+        buf[1..5].copy_from_slice(&date_to_array(d));
+        self.row.data.extend_from_slice(&buf);
+    }
+
+    /// Push a NaiveTime directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_time(&mut self, t: NaiveTime) {
+        self.row.data.push(Tag::Time.into());
+        push_time(&mut self.row.data, t);
+    }
+
+    /// Push a MzTimestamp (u64) directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_mz_timestamp(&mut self, t: crate::Timestamp) {
+        self.row.data.push(Tag::MzTimestamp.into());
+        self.row.data.extend_from_slice(&t.encode());
+    }
+
+    /// Push a Uuid directly, bypassing Datum construction and push_datum match.
+    #[inline(always)]
+    pub fn push_uuid(&mut self, u: uuid::Uuid) {
+        self.row.data.push(Tag::Uuid.into());
+        self.row.data.extend_from_slice(u.as_bytes());
     }
 
     /// Extend an existing `Row` with additional `Datum`s.

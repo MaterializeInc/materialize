@@ -907,123 +907,207 @@ enum DatumColumnDecoder {
 
 impl DatumColumnDecoder {
     fn get<'a>(&'a self, idx: usize, packer: &'a mut RowPacker) {
-        let datum = match self {
-            DatumColumnDecoder::Bool(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(|x| if x { Datum::True } else { Datum::False }),
-            DatumColumnDecoder::U8(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::UInt8),
-            DatumColumnDecoder::U16(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::UInt16),
-            DatumColumnDecoder::U32(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::UInt32),
-            DatumColumnDecoder::U64(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::UInt64),
-            DatumColumnDecoder::I16(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::Int16),
-            DatumColumnDecoder::I32(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::Int32),
-            DatumColumnDecoder::I64(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::Int64),
-            DatumColumnDecoder::F32(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(|x| Datum::Float32(ordered_float::OrderedFloat(x))),
-            DatumColumnDecoder::F64(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(|x| Datum::Float64(ordered_float::OrderedFloat(x))),
-            DatumColumnDecoder::Numeric(array) => array.is_valid(idx).then(|| {
-                let val = array.value(idx);
-                let val = PackedNumeric::from_bytes(val)
-                    .expect("failed to roundtrip Numeric")
-                    .into_value();
-                Datum::Numeric(OrderedDecimal(val))
-            }),
-            DatumColumnDecoder::String(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::String),
-            DatumColumnDecoder::Bytes(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(Datum::Bytes),
+        // For scalar types, push directly to RowPacker's buffer using type-specific
+        // methods. This eliminates the double enum dispatch: previously each datum
+        // was first constructed as a Datum variant (dispatch #1 here), then
+        // push_datum() matched on the Datum variant again (dispatch #2) to encode it.
+        // The direct-push methods bypass both the Datum construction and the
+        // push_datum match, saving ~5-10ns per datum at 61B iterations in persist
+        // columnar decode.
+        //
+        // Complex types (Numeric, Timestamp, etc.) still construct a Datum and push
+        // it through push_datum, since their encoding involves multi-step construction.
+        match self {
+            DatumColumnDecoder::Bool(array) => {
+                if array.is_valid(idx) {
+                    packer.push_bool(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::U8(array) => {
+                if array.is_valid(idx) {
+                    packer.push_u8(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::U16(array) => {
+                if array.is_valid(idx) {
+                    packer.push_u16(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::U32(array) => {
+                if array.is_valid(idx) {
+                    packer.push_u32(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::U64(array) => {
+                if array.is_valid(idx) {
+                    packer.push_u64(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::I16(array) => {
+                if array.is_valid(idx) {
+                    packer.push_i16(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::I32(array) => {
+                if array.is_valid(idx) {
+                    packer.push_i32(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::I64(array) => {
+                if array.is_valid(idx) {
+                    packer.push_i64(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::F32(array) => {
+                if array.is_valid(idx) {
+                    packer.push_f32(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::F64(array) => {
+                if array.is_valid(idx) {
+                    packer.push_f64(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::String(array) => {
+                if array.is_valid(idx) {
+                    packer.push_string(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::Bytes(array) => {
+                if array.is_valid(idx) {
+                    packer.push_bytes(array.value(idx));
+                } else {
+                    packer.push_null();
+                }
+            }
             DatumColumnDecoder::Date(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let date = Date::from_pg_epoch(x).expect("failed to roundtrip");
-                    Datum::Date(date)
-                })
+                if array.is_valid(idx) {
+                    let date = Date::from_pg_epoch(array.value(idx)).expect("failed to roundtrip");
+                    packer.push_date(date);
+                } else {
+                    packer.push_null();
+                }
             }
             DatumColumnDecoder::Time(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let packed = PackedNaiveTime::from_bytes(x).expect("failed to roundtrip time");
-                    Datum::Time(packed.into_value())
-                })
+                if array.is_valid(idx) {
+                    let packed = PackedNaiveTime::from_bytes(array.value(idx))
+                        .expect("failed to roundtrip time");
+                    packer.push_time(packed.into_value());
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::MzTimestamp(array) => {
+                if array.is_valid(idx) {
+                    packer.push_mz_timestamp(Timestamp::from(array.value(idx)));
+                } else {
+                    packer.push_null();
+                }
+            }
+            DatumColumnDecoder::Uuid(array) => {
+                if array.is_valid(idx) {
+                    let uuid =
+                        Uuid::from_slice(array.value(idx)).expect("failed to roundtrip uuid");
+                    packer.push_uuid(uuid);
+                } else {
+                    packer.push_null();
+                }
+            }
+            // Complex types: construct Datum and push via push_datum
+            DatumColumnDecoder::Numeric(array) => {
+                let datum = array.is_valid(idx).then(|| {
+                    let val = array.value(idx);
+                    let val = PackedNumeric::from_bytes(val)
+                        .expect("failed to roundtrip Numeric")
+                        .into_value();
+                    Datum::Numeric(OrderedDecimal(val))
+                });
+                match datum {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
             }
             DatumColumnDecoder::Timestamp(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
+                let datum = array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let packed = PackedNaiveDateTime::from_bytes(x)
                         .expect("failed to roundtrip PackedNaiveDateTime");
                     let timestamp = CheckedTimestamp::from_timestamplike(packed.into_value())
                         .expect("failed to roundtrip timestamp");
                     Datum::Timestamp(timestamp)
-                })
+                });
+                match datum {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
             }
             DatumColumnDecoder::TimestampTz(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
+                let datum = array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let packed = PackedNaiveDateTime::from_bytes(x)
                         .expect("failed to roundtrip PackedNaiveDateTime");
                     let timestamp =
                         CheckedTimestamp::from_timestamplike(packed.into_value().and_utc())
                             .expect("failed to roundtrip timestamp");
                     Datum::TimestampTz(timestamp)
-                })
+                });
+                match datum {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
             }
-            DatumColumnDecoder::MzTimestamp(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(|x| Datum::MzTimestamp(Timestamp::from(x))),
             DatumColumnDecoder::Interval(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
+                let datum = array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let packed =
                         PackedInterval::from_bytes(x).expect("failed to roundtrip interval");
                     Datum::Interval(packed.into_value())
-                })
-            }
-            DatumColumnDecoder::Uuid(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
-                    let uuid = Uuid::from_slice(x).expect("failed to roundtrip uuid");
-                    Datum::Uuid(uuid)
-                })
+                });
+                match datum {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
             }
             DatumColumnDecoder::AclItem(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
+                let datum = array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let packed =
                         PackedAclItem::from_bytes(x).expect("failed to roundtrip MzAclItem");
                     Datum::AclItem(packed.into_value())
-                })
+                });
+                match datum {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
             }
             DatumColumnDecoder::MzAclItem(array) => {
-                array.is_valid(idx).then(|| array.value(idx)).map(|x| {
+                let datum = array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let packed =
                         PackedMzAclItem::from_bytes(x).expect("failed to roundtrip MzAclItem");
                     Datum::MzAclItem(packed.into_value())
-                })
+                });
+                match datum {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
             }
             DatumColumnDecoder::Range(array) => {
                 let Some(val) = array.is_valid(idx).then(|| array.value(idx)) else {
@@ -1035,9 +1119,6 @@ impl DatumColumnDecoder {
                 packer
                     .try_push_proto(&proto)
                     .expect("failed to pack ProtoRange");
-
-                // Return early because we've already packed the necessary Datums.
-                return;
             }
             DatumColumnDecoder::Json(array) => {
                 let Some(val) = array.is_valid(idx).then(|| array.value(idx)) else {
@@ -1047,9 +1128,6 @@ impl DatumColumnDecoder {
                 JsonbPacker::new(packer)
                     .pack_str(val)
                     .expect("failed to roundtrip JSON");
-
-                // Return early because we've already packed the necessary Datums.
-                return;
             }
             DatumColumnDecoder::Array {
                 dim_offsets,
@@ -1091,9 +1169,6 @@ impl DatumColumnDecoder {
                         end - start
                     })
                     .expect("failed to pack Array");
-
-                // Return early because we've already packed the necessary Datums.
-                return;
             }
             DatumColumnDecoder::List {
                 offsets,
@@ -1116,9 +1191,6 @@ impl DatumColumnDecoder {
                         values.get(idx, packer)
                     }
                 });
-
-                // Return early because we've already packed the necessary Datums.
-                return;
             }
             DatumColumnDecoder::Map {
                 offsets,
@@ -1143,11 +1215,13 @@ impl DatumColumnDecoder {
                         vals.get(idx, packer);
                     }
                 });
-
-                // Return early because we've already packed the necessary Datums.
-                return;
             }
-            DatumColumnDecoder::RecordEmpty(array) => array.is_valid(idx).then(Datum::empty_list),
+            DatumColumnDecoder::RecordEmpty(array) => {
+                match array.is_valid(idx).then(Datum::empty_list) {
+                    Some(d) => packer.push(d),
+                    None => packer.push_null(),
+                }
+            }
             DatumColumnDecoder::Record { fields, nulls } => {
                 let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
                 if !is_valid {
@@ -1155,21 +1229,12 @@ impl DatumColumnDecoder {
                     return;
                 }
 
-                // let mut datums = Vec::with_capacity(fields.len());
                 packer.push_list_with(|packer| {
                     for field in fields {
                         field.get(idx, packer);
                     }
                 });
-
-                // Return early because we've already packed the necessary Datums.
-                return;
             }
-        };
-
-        match datum {
-            Some(d) => packer.push(d),
-            None => packer.push(Datum::Null),
         }
     }
 
