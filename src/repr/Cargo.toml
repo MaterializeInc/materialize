@@ -30,6 +30,10 @@ name = "numeric_cast"
 harness = false
 
 [[bench]]
+name = "int_to_numeric"
+harness = false
+
+[[bench]]
 name = "timestamp_format"
 harness = false
 

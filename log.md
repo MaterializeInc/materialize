@@ -3861,3 +3861,80 @@ Fallback overhead: ~1.4ns for the exponent check on different-scale values (negl
 - `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+
+---
+
+## Session 40: Fast-path integer-to-Numeric construction - bypass C FFI
+
+**Date:** 2026-02-20
+
+**Optimization:** All integer-to-Numeric casts (`CastInt16ToNumeric`, `CastInt32ToNumeric`,
+`CastInt64ToNumeric`, `CastUint16ToNumeric`, `CastUint32ToNumeric`, `CastUint64ToNumeric`)
+use C FFI calls to `decNumberFromInt32` / `cx.from_i64()` to construct a `Numeric` value,
+plus an additional FFI call to `rescale()` when a scale is specified. This optimization adds
+a pure Rust fast path using `numeric_from_i64_coeff()` / `numeric_from_u64_coeff()` that
+constructs the `Numeric` directly by populating the `lsu` (least-significant-unit) array in
+base-1000, completely bypassing C FFI. Rescaling is handled by pre-multiplying the integer
+by the appropriate power of 10 before construction.
+
+**Approach:**
+- Made `numeric_from_i64_coeff()` public (from Session 39) and added `numeric_from_u64_coeff()`
+  for unsigned integers.
+- Added `POW10_TABLE` (powers of 10 up to 10^18) for integer rescaling.
+- Added `try_numeric_from_i64(val, scale)` and `try_numeric_from_u64(val, scale)` that handle
+  both construction and rescaling in pure Rust, falling back to `None` for overflow or
+  scale >= 19.
+- Updated all 6 `CastXxxToNumeric::call()` functions to try the fast path first, falling back
+  to FFI only for edge cases.
+- Fixed `numeric_from_i64_coeff` to handle `i64::MIN` correctly (wrapping_neg via u64).
+- Also updated `DecimalLike::lossy_from` for `Numeric` to use the fast path.
+
+**Benchmark results (Rust microbenchmark, per-value):**
+
+| Value | FFI (ns) | Fast-path (ns) | Speedup |
+|---|---|---|---|
+| zero | 33.6 | 4.9 | **6.9x** |
+| small (42) | 34.2 | 2.8 | **12.2x** |
+| medium (123456) | 34.7 | 5.0 | **6.9x** |
+| large (1B) | 35.0 | 4.8 | **7.3x** |
+| max_i32 | 35.3 | 4.8 | **7.4x** |
+| negative (-999999) | 48.6 | 5.0 | **9.7x** |
+| min_i64 | 55.6 | 4.8 | **11.6x** |
+
+**Per-value speedup: 7-12x**
+
+**Batch results (10k values including cx.add accumulation):**
+
+| Benchmark | FFI (µs) | Fast-path (µs) | Speedup |
+|---|---|---|---|
+| i32→numeric (10k) | 164.6 | 125.0 | **1.3x** |
+| i64→numeric (10k) | 473.0 | 152.7 | **3.1x** |
+| i32→numeric scale6 (10k) | 354.4 | 159.7 | **2.2x** |
+| u64→numeric (10k) | 469.2 | 130.3 | **3.6x** |
+
+Batch speedup is lower because `cx.add()` (FFI) dominates after conversion. The conversion
+itself is 7-12x faster. For queries that cast many integer values to numeric (common in
+aggregation pipelines), this reduces conversion overhead significantly.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Made `numeric_from_i64_coeff` public, added
+  `numeric_from_u64_coeff`, `POW10_TABLE`, `try_numeric_from_i64`, `try_numeric_from_u64`.
+  Fixed i64::MIN overflow in `numeric_from_i64_coeff`. Updated `DecimalLike::lossy_from`.
+  Added `test_try_numeric_from_int` test.
+- `src/expr/src/scalar/func/impls/int16.rs` - Fast-path in `CastInt16ToNumeric::call()`
+- `src/expr/src/scalar/func/impls/int32.rs` - Fast-path in `CastInt32ToNumeric::call()`
+- `src/expr/src/scalar/func/impls/int64.rs` - Fast-path in `CastInt64ToNumeric::call()`
+- `src/expr/src/scalar/func/impls/uint16.rs` - Fast-path in `CastUint16ToNumeric::call()`
+- `src/expr/src/scalar/func/impls/uint32.rs` - Fast-path in `CastUint32ToNumeric::call()`
+- `src/expr/src/scalar/func/impls/uint64.rs` - Fast-path in `CastUint64ToNumeric::call()`
+- `src/repr/benches/int_to_numeric.rs` - New benchmark file
+- `src/repr/Cargo.toml` - Registered benchmark
+
+**Future optimization ideas:**
+- `Numeric::from(f64/f32)` also goes through FFI — a direct construction for finite floats
+  could bypass it.
+- The `DecimalLike` trait's `lossy_from(usize)` still uses i64 range which may not cover all
+  usize values on 64-bit; a u64 path might be needed.
+- `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.

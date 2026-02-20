@@ -159,13 +159,18 @@ impl EagerUnaryFunc for CastInt32ToNumeric {
     type Output<'a> = Result<Numeric, EvalError>;
 
     fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+        // Fast path: construct Numeric directly from i64 without C FFI.
+        let scale = self.0.map(|s| s.into_u8());
+        if let Some(result) = numeric::try_numeric_from_i64(i64::from(a), scale) {
+            return Ok(result);
+        }
+        // Fallback: use FFI for edge cases (scale too large, overflow).
         let mut a = Numeric::from(a);
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut a, scale.into_u8()).is_err() {
                 return Err(EvalError::NumericFieldOverflow);
             }
         }
-        // Besides `rescale`, cast is infallible.
         Ok(a)
     }
 
