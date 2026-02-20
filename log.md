@@ -4186,3 +4186,79 @@ multiplication and base-1000 reconstruction are more work for larger values.
 - The `Datum` derived `Ord` still uses `OrderedDecimal::cmp` (3 FFI calls) for all
   non-expression-evaluation Numeric comparisons (sorting, deduplication, DDFlow operations).
   A manual `Ord` for `Datum` could intercept this, but requires handling all ~30 variants.
+
+---
+
+## Session 44: Manual Datum Ord/PartialEq - bypass OrderedDecimal FFI for Datum-level comparisons
+
+**Date:** 2026-02-20
+
+**Idea (from Session 43 future ideas):** The derived `Ord` for `Datum` delegates to
+`OrderedDecimal::cmp` for Numeric variants, which performs 2 clones + 3 C FFI calls
+(reduce, reduce, partial_cmp) per comparison. Similarly, `PartialEq` delegates to `cmp`,
+so equality checks also pay the FFI cost. Replace the derived `Ord`/`PartialOrd`/`PartialEq`/`Eq`
+with manual implementations that use `fast_numeric_cmp()` (from Session 41) for the
+Numeric variant and delegate to field Ord for all other variants.
+
+**Where it helps:** `compare_columns` (used by TopK, sorting), `Top1Monoid::cmp`,
+`DatumList`/`DatumMap` comparisons, and any other code path that calls `Datum::cmp`
+or `Datum::eq` with Numeric values. Note: Row/RowRef use byte-level comparison
+(not Datum::cmp), so this targets datum-level comparison paths.
+
+**Implementation:**
+- Removed `Eq, PartialEq, Ord, PartialOrd` from Datum's `#[derive]`, keeping
+  `Clone, Copy, Hash, EnumKind`
+- Added `Ord, PartialOrd` to the `DatumKind` derive (for discriminant comparison)
+- Added manual `Eq`, `PartialEq` (delegates to `cmp`), `PartialOrd` (delegates to `cmp`),
+  and `Ord` implementations
+- The manual `Ord::cmp` first compares `DatumKind` discriminants (cheap integer compare),
+  then matches on the variant pair: Numeric uses `fast_numeric_cmp()`, all other field
+  variants delegate to their inner type's `Ord`, fieldless variants return `Equal`
+
+**Benchmark results (`cargo bench -p mz-repr --bench datum_cmp`):**
+
+Single comparison (per call):
+| Benchmark | Old (OrderedDecimal FFI) | New (Datum fast_numeric_cmp) | Speedup |
+|-----------|--------------------------|------------------------------|---------|
+| small_int (42 vs 99) | 20.8 ns | 4.9 ns | **4.2x** |
+| money (12345.67 vs 98765.43) | 18.5 ns | 4.9 ns | **3.7x** |
+| equal (42.00 vs 42.00) | 32.7 ns | 5.3 ns | **6.2x** |
+| negative (-500.25 vs -100.50) | 28.8 ns | 5.0 ns | **5.8x** |
+| large_coeff (18-digit) | 22.5 ns | 4.9 ns | **4.6x** |
+| eq (42 != 99) | 20.3 ns | 4.9 ns | **4.1x** |
+| eq_equal (42.00 == 42.00) | 32.3 ns | 5.3 ns | **6.1x** |
+
+Batch comparison (10k pairs):
+| Benchmark | Old (OrderedDecimal FFI) | New (Datum fast_numeric_cmp) | Speedup |
+|-----------|--------------------------|------------------------------|---------|
+| 10k numeric | 224.3 µs | 56.9 µs | **3.9x** |
+
+Non-Numeric baselines (verify no regression):
+| Benchmark | Time |
+|-----------|------|
+| int64 | 1.6 ns (no change) |
+| string | 3.0 ns (no change) |
+| cross_variant | 1.2 ns (improved 14% - DatumKind discriminant compare is cheaper) |
+| 10k int64 batch | 16.3 µs (no change) |
+
+**Analysis:** Equal-value comparisons see the largest speedup (6.2x) because the old FFI
+path calls `reduce` on both operands before comparing - reduce is expensive for values
+that are already reduced. The new path compares coefficient units directly. Negative
+values also get a large speedup (5.8x) because the old path's reduce/partial_cmp sequence
+is particularly expensive when signs differ. The cross-variant comparison improved 14%
+because `DatumKind` integer comparison is cheaper than the derived enum discriminant logic.
+
+**Files changed:**
+- `src/repr/src/scalar.rs` - Replaced derived `Ord`/`PartialOrd`/`PartialEq`/`Eq` with
+  manual implementations using `fast_numeric_cmp()` for the Numeric variant.
+- `src/repr/benches/datum_cmp.rs` - New benchmark file comparing old OrderedDecimal::cmp
+  vs new Datum::cmp paths.
+- `src/repr/Cargo.toml` - Registered datum_cmp benchmark.
+
+**Future optimization ideas:**
+- `OrderedDecimal::hash` still calls `reduce` (FFI) - a manual Hash for Datum could
+  use a fast hash for Numeric, but this requires careful consistency with Eq.
+- `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+- `div_numeric` could use a fast path for simple cases.

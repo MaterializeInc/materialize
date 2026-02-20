@@ -71,8 +71,8 @@ use crate::{CatalogItemId, ColumnName, DatumList, DatumMap, Row, RowArena, SqlCo
 /// the outer `Datum`). The idiom we've devised for this is a series of
 /// functions on `repr::row::RowPacker` prefixed with `push_`.
 ///
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, EnumKind)]
-#[enum_kind(DatumKind, derive(Hash))]
+#[derive(Clone, Copy, Hash, EnumKind)]
+#[enum_kind(DatumKind, derive(Hash, Ord, PartialOrd))]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,
@@ -169,6 +169,90 @@ pub enum Datum<'a> {
     // This order of variants of this enum determines how nulls sort. We
     // have decided that nulls should sort last in Materialize, so all
     // other datum variants should appear before `Null`.
+}
+
+// Manual Ord/PartialOrd/PartialEq/Eq implementations for Datum.
+//
+// The derived Ord for Datum would delegate to OrderedDecimal::cmp for the
+// Numeric variant, which performs 2 clones + 3 C FFI calls (reduce + reduce +
+// partial_cmp) per comparison. Similarly, the derived PartialEq delegates to
+// OrderedDecimal::eq which also calls cmp (3 FFI calls).
+//
+// These manual implementations use fast_numeric_cmp() (from Session 41) for
+// Numeric comparisons, which compares coefficient units directly in Rust for
+// the common case (same exponent, non-special values), completely bypassing
+// the C FFI. For all other Datum variants, the behavior is identical to the
+// derived implementation.
+
+impl Eq for Datum<'_> {}
+
+impl<'a> PartialEq for Datum<'a> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl<'a> PartialOrd for Datum<'a> {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a> Ord for Datum<'a> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        // Compare variant discriminants first (same as derived Ord).
+        // DatumKind preserves the variant declaration order.
+        let self_kind = DatumKind::from(self);
+        let other_kind = DatumKind::from(other);
+        match self_kind.cmp(&other_kind) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+        // Same variant — compare inner values.
+        match (self, other) {
+            // Fieldless variants
+            (Datum::False, Datum::False)
+            | (Datum::True, Datum::True)
+            | (Datum::JsonNull, Datum::JsonNull)
+            | (Datum::Dummy, Datum::Dummy)
+            | (Datum::Null, Datum::Null) => Ordering::Equal,
+            // Numeric: fast-path bypassing 3 C FFI calls
+            (Datum::Numeric(a), Datum::Numeric(b)) => {
+                crate::adt::numeric::fast_numeric_cmp(&a.0, &b.0)
+            }
+            // All other variants with fields
+            (Datum::Int16(a), Datum::Int16(b)) => a.cmp(b),
+            (Datum::Int32(a), Datum::Int32(b)) => a.cmp(b),
+            (Datum::Int64(a), Datum::Int64(b)) => a.cmp(b),
+            (Datum::UInt8(a), Datum::UInt8(b)) => a.cmp(b),
+            (Datum::UInt16(a), Datum::UInt16(b)) => a.cmp(b),
+            (Datum::UInt32(a), Datum::UInt32(b)) => a.cmp(b),
+            (Datum::UInt64(a), Datum::UInt64(b)) => a.cmp(b),
+            (Datum::Float32(a), Datum::Float32(b)) => a.cmp(b),
+            (Datum::Float64(a), Datum::Float64(b)) => a.cmp(b),
+            (Datum::Date(a), Datum::Date(b)) => a.cmp(b),
+            (Datum::Time(a), Datum::Time(b)) => a.cmp(b),
+            (Datum::Timestamp(a), Datum::Timestamp(b)) => a.cmp(b),
+            (Datum::TimestampTz(a), Datum::TimestampTz(b)) => a.cmp(b),
+            (Datum::Interval(a), Datum::Interval(b)) => a.cmp(b),
+            (Datum::Bytes(a), Datum::Bytes(b)) => a.cmp(b),
+            (Datum::String(a), Datum::String(b)) => a.cmp(b),
+            (Datum::Array(a), Datum::Array(b)) => a.cmp(b),
+            (Datum::List(a), Datum::List(b)) => a.cmp(b),
+            (Datum::Map(a), Datum::Map(b)) => a.cmp(b),
+            (Datum::Uuid(a), Datum::Uuid(b)) => a.cmp(b),
+            (Datum::MzTimestamp(a), Datum::MzTimestamp(b)) => a.cmp(b),
+            (Datum::Range(a), Datum::Range(b)) => a.cmp(b),
+            (Datum::MzAclItem(a), Datum::MzAclItem(b)) => a.cmp(b),
+            (Datum::AclItem(a), Datum::AclItem(b)) => a.cmp(b),
+            // Discriminants are equal, so variants must match
+            _ => unreachable!(),
+        }
+    }
 }
 
 impl Debug for Datum<'_> {
