@@ -583,6 +583,12 @@ def main() -> int:
         "mz_workload_version": "1.0.0",
     }
 
+    with timed("Fetching configuration"):
+        configuration = {}
+        for row in query(conn, "SHOW ALL"):
+            configuration[row[0]] = row[1]
+        workload["configuration"] = configuration
+
     with timed("Fetching clusters"):
         for cluster, managed in query(
             conn, "SELECT name, managed FROM mz_clusters WHERE id LIKE 'u%'"

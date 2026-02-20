@@ -39,6 +39,43 @@ from materialize.workload_replay.util import (
 )
 
 
+# Configuration parameters that are read-only and cannot be SET.
+READONLY_CONFIGURATION = {
+    "client_encoding",
+    "integer_datetimes",
+    "is_superuser",
+    "max_identifier_length",
+    "mz_version",
+    "server_version",
+    "server_version_num",
+    "standard_conforming_strings",
+}
+
+
+def apply_configuration(
+    c: Composition, workload: dict[str, Any], verbose: bool
+) -> None:
+    """Apply captured configuration defaults via ALTER SYSTEM SET."""
+    configuration = workload.get("configuration", {})
+    if not configuration:
+        return
+
+    print("Applying configuration")
+    for name, value in sorted(configuration.items()):
+        if name in READONLY_CONFIGURATION:
+            continue
+        try:
+            c.sql(
+                SQL("ALTER SYSTEM SET {} = {}").format(SQL(name), Literal(value)),
+                user="mz_system",
+                port=6877,
+                print_statement=verbose,
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  Warning: could not set {name}: {e}")
+
+
 def run_create_objects_part_1(
     c: Composition, services: set[str], workload: dict[str, Any], verbose: bool
 ) -> None:
@@ -550,6 +587,8 @@ def run_create_objects_part_1(
                         flags=re.DOTALL | re.IGNORECASE,
                     )
 
+    apply_configuration(c, workload, verbose)
+
 
 def run_create_objects_part_2(
     c: Composition, services: set[str], workload: dict[str, Any], verbose: bool
@@ -657,3 +696,4 @@ def run_create_objects_part_2(
                     user="mz_system",
                     port=6877,
                     print_statement=verbose,
+                )
