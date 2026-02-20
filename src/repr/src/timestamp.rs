@@ -437,18 +437,21 @@ impl<'de> Deserialize<'de> for Timestamp {
 }
 
 impl timely::order::PartialOrder for Timestamp {
+    #[inline]
     fn less_equal(&self, other: &Self) -> bool {
         self.internal.less_equal(&other.internal)
     }
 }
 
 impl timely::order::PartialOrder<&Timestamp> for Timestamp {
+    #[inline]
     fn less_equal(&self, other: &&Self) -> bool {
         self.internal.less_equal(&other.internal)
     }
 }
 
 impl timely::order::PartialOrder<Timestamp> for &Timestamp {
+    #[inline]
     fn less_equal(&self, other: &Timestamp) -> bool {
         self.internal.less_equal(&other.internal)
     }
@@ -507,10 +510,12 @@ impl mz_persist_types::Codec64 for Timestamp {
         u64::codec_name()
     }
 
+    #[inline]
     fn encode(&self) -> [u8; 8] {
         self.internal.encode()
     }
 
+    #[inline]
     fn decode(buf: [u8; 8]) -> Self {
         Self {
             internal: u64::decode(buf),

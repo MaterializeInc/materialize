@@ -439,6 +439,7 @@ impl ArrayOrd {
     }
 
     /// Return a struct representing the value at a particular index in this array.
+    #[inline]
     pub fn at(&self, idx: usize) -> ArrayIdx<'_> {
         ArrayIdx { idx, array: self }
     }
@@ -591,6 +592,7 @@ impl<'a> ArrayIdx<'a> {
 }
 
 impl<'a> Ord for ArrayIdx<'a> {
+    #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
         #[inline]
         fn is_null(buffer: &Option<NullBuffer>, idx: usize) -> bool {
@@ -673,12 +675,14 @@ impl<'a> Ord for ArrayIdx<'a> {
 }
 
 impl<'a> PartialOrd for ArrayIdx<'a> {
+    #[inline]
     fn partial_cmp(&self, other: &ArrayIdx) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl<'a> PartialEq for ArrayIdx<'a> {
+    #[inline]
     fn eq(&self, other: &ArrayIdx) -> bool {
         self.cmp(other) == Ordering::Equal
     }

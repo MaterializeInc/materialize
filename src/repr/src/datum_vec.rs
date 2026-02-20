@@ -32,6 +32,7 @@ impl DatumVec {
     /// Borrow an instance with a specific lifetime.
     ///
     /// When the result is dropped, its allocation will be returned to `self`.
+    #[inline]
     pub fn borrow<'a>(&'a mut self) -> DatumVecBorrow<'a> {
         let inner = std::mem::take(&mut self.outer);
         DatumVecBorrow {
@@ -41,6 +42,7 @@ impl DatumVec {
     }
 
     /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
+    #[inline]
     pub fn borrow_with<'a>(&'a mut self, row: &'a RowRef) -> DatumVecBorrow<'a> {
         let mut borrow = self.borrow();
         borrow.extend(row.iter());
@@ -57,6 +59,7 @@ impl DatumVec {
     ///
     /// The caller must ensure that only columns marked `true` in `needed` are subsequently
     /// read from the returned borrow.
+    #[inline]
     pub fn borrow_with_selective<'a>(
         &'a mut self,
         row: &'a RowRef,

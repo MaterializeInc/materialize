@@ -125,6 +125,10 @@ harness = false
 name = "columnar_decode"
 harness = false
 
+[[bench]]
+name = "inline_hot_paths"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }

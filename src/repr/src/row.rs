@@ -106,10 +106,19 @@ include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
 /// It is best to re-use a `Row` across multiple `Row` creation calls, as this
 /// avoids the allocations involved in `Row::new()`.
-#[derive(Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct Row {
     data: CompactBytes,
 }
+
+impl PartialEq for Row {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.data == other.data
+    }
+}
+
+impl Eq for Row {}
 
 impl Row {
     const SIZE: usize = CompactBytes::MAX_INLINE;
@@ -169,6 +178,7 @@ impl Row {
     ///
     /// This method clears the existing contents of the row, but retains the
     /// allocation.
+    #[inline]
     pub fn packer(&mut self) -> RowPacker<'_> {
         self.clear();
         RowPacker { row: self }
@@ -291,12 +301,14 @@ impl Deref for Row {
 static_assertions::const_assert_eq!(std::mem::size_of::<Row>(), 24);
 
 impl Clone for Row {
+    #[inline]
     fn clone(&self) -> Self {
         Row {
             data: self.data.clone(),
         }
     }
 
+    #[inline]
     fn clone_from(&mut self, source: &Self) {
         self.data.clone_from(&source.data);
     }
@@ -304,6 +316,7 @@ impl Clone for Row {
 
 // Row's `Hash` implementation defers to `RowRef` to ensure they hash equivalently.
 impl std::hash::Hash for Row {
+    #[inline]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.as_row_ref().hash(state)
     }
@@ -329,12 +342,14 @@ impl Arbitrary for Row {
 }
 
 impl PartialOrd for Row {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for Row {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_ref().cmp(other.as_ref())
     }
@@ -634,9 +649,24 @@ mod columnar {
 /// A contiguous slice of bytes that are row data.
 ///
 /// A [`RowRef`] is to [`Row`] as [`prim@str`] is to [`String`].
-#[derive(PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct RowRef([u8]);
+
+impl PartialEq for RowRef {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for RowRef {}
+
+impl std::hash::Hash for RowRef {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
 
 impl RowRef {
     /// Create a [`RowRef`] from a slice of data.
@@ -682,16 +712,19 @@ impl RowRef {
     }
 
     /// Iterate the [`Datum`] elements of the [`RowRef`].
+    #[inline]
     pub fn iter(&self) -> DatumListIter<'_> {
         DatumListIter { data: &self.0 }
     }
 
     /// Return the byte length of this [`RowRef`].
+    #[inline]
     pub fn byte_len(&self) -> usize {
         self.0.len()
     }
 
     /// For debugging only.
+    #[inline]
     pub fn data(&self) -> &[u8] {
         &self.0
     }
@@ -888,12 +921,14 @@ impl<'a> IntoIterator for &'a RowRef {
 /// This allows many comparisons to complete without dereferencing memory.
 /// Warning: These order by the u8 array representation, and NOT by Datum::cmp.
 impl PartialOrd for RowRef {
+    #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for RowRef {
+    #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match self.0.len().cmp(&other.0.len()) {
             std::cmp::Ordering::Less => std::cmp::Ordering::Less,
@@ -3257,6 +3292,7 @@ impl<'a> IntoIterator for DatumList<'a> {
 
 impl<'a> Iterator for DatumListIter<'a> {
     type Item = Datum<'a>;
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.data.is_empty() {
             None

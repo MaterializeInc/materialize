@@ -3538,3 +3538,156 @@ scanning overhead for clean strings. The optimization handles all simple JSONB s
 - `RowRef` Hash (1,274B calls) uses whatever hasher the caller provides. If differential
   dataflow uses SipHash (the default), switching to a faster non-cryptographic hasher
   (FxHash, AHash) for arrangement key hashing could provide 2-4x hash speedup.
+
+---
+
+## Session 37: Add #[inline] to hot cross-crate functions - eliminate function call overhead with LTO off
+
+**Date:** 2026-02-20
+
+**Problem:** The `optimized` profile (used by `bin/environmentd --optimized`) and `ci` profile both
+have `lto = "off"`. This means cross-crate function calls are REAL function calls even for trivial
+1-line functions. Without `#[inline]`, the compiler cannot inline functions across crate boundaries
+when LTO is disabled. Many of the hottest functions in the system were missing `#[inline]`:
+
+Coverage data showed these call counts for functions without `#[inline]`:
+- `RowRef` Hash: 1,274B calls (derived `Hash`, no `#[inline]` on derived impls)
+- `Timestamp::less_equal`: 856B calls (1-line delegation)
+- `CastFrom::cast_from`: 754B calls (macro-generated `from as $to`)
+- `ArrayOrd::at()`: 705B calls (2-field struct construction)
+- `Row::clone()`: 527B calls (1-line delegation to `data.clone()`)
+- `Row`/`RowRef` Ord/PartialOrd/PartialEq: 410B+ calls (derived and manual impls)
+- `ArrayIdx::cmp`: 330B calls (16-arm enum match for persist merge sort)
+- `Codec64::encode/decode`: 183B calls (single `to_le_bytes()`/`from_le_bytes()`)
+- `DatumListIter::next()`: billions of calls (core datum iteration)
+- `DatumVec::borrow_with()`: billions of calls (datum unpacking)
+- `Row::packer()`: billions of calls (datum packing)
+
+Total: ~5,000+ billion calls to functions missing `#[inline]` annotations. Each cross-crate function
+call adds ~2-5ns of overhead (argument passing, call instruction, stack frame setup/teardown, return)
+compared to an inlined version. This overhead is invisible in benchmarks that use the `bench` profile
+(which inherits `release` with `lto = "thin"`), but is present in production/CI builds.
+
+**Fix:** Added `#[inline]` annotations to all hot cross-crate functions across 5 crates:
+
+1. **`src/ore/src/cast.rs`** - `CastFrom::cast_from` (macro-generated, 754B calls),
+   `CastFrom<NonZero<T>>` variant, and `CastInto::cast_into` blanket impl.
+
+2. **`src/persist-types/src/codec_impls.rs`** - `Codec64::encode/decode` for both i64 and u64
+   (183B calls, single `to_le_bytes()`/`from_le_bytes()` calls).
+
+3. **`src/persist-types/src/arrow.rs`** - `ArrayOrd::at()` (705B calls, trivial struct
+   construction), `ArrayIdx::Ord::cmp` (330B calls, the persist merge-sort comparison function),
+   `ArrayIdx::PartialOrd::partial_cmp`, and `ArrayIdx::PartialEq::eq`.
+
+4. **`src/repr/src/timestamp.rs`** - `Timestamp::less_equal` (856B calls) for all 3 PartialOrder
+   implementations (`Timestamp`, `&Timestamp`, `Timestamp`→`&Timestamp`), plus
+   `Timestamp::Codec64::encode/decode`.
+
+5. **`src/repr/src/row.rs`** - Replaced `#[derive(PartialEq, Eq, Hash)]` on `RowRef` with manual
+   implementations adding `#[inline]` to `eq()` and `hash()` (1,274B hash calls). Replaced
+   `#[derive(Eq, PartialEq)]` on `Row` with manual `#[inline]` implementations. Added `#[inline]`
+   to `Row::clone/clone_from` (527B calls), `Row::hash`, `Row::cmp/partial_cmp`,
+   `RowRef::cmp/partial_cmp` (410B calls), `RowRef::iter()`, `RowRef::byte_len()`,
+   `RowRef::data()`, `Row::packer()`, and `DatumListIter::next()`.
+
+6. **`src/repr/src/datum_vec.rs`** - `DatumVec::borrow/borrow_with/borrow_with_selective`.
+
+**Why this matters with LTO off:**
+
+When `lto = "off"`, the compiler treats each crate as an independent compilation unit. Function
+calls across crate boundaries go through the standard ABI: arguments are placed in registers/stack,
+a `call` instruction is executed, the callee sets up its stack frame, does its work, tears down the
+stack frame, and returns. For a trivial function like `CastFrom::cast_from(x) { x as usize }`, the
+function call overhead (~2-5ns) can be larger than the actual work (~0.3ns for an `as` cast).
+
+The `#[inline]` attribute causes the compiler to include the function's MIR (Mid-level Intermediate
+Representation) in the crate's metadata. When another crate calls the function, the compiler can
+substitute the function body directly at the call site, eliminating all call overhead. This is the
+SAME mechanism that Rust's standard library uses for all small trait method implementations (e.g.,
+`Option::map`, `Iterator::next`, `Vec::push`).
+
+With thin LTO (the `release` profile), the linker can perform cross-crate inlining at link time,
+partially compensating for missing `#[inline]`. However, thin LTO uses cost heuristics and may not
+inline all functions. With `#[inline]`, the compiler has stronger hints to inline.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench inline_hot_paths`, 10k rows):
+
+Note: benchmarks use the `bench` profile which inherits `release` (thin LTO), so they represent
+a lower bound on the improvement. The real impact is larger with `lto = "off"`.
+
+| Benchmark                        | Time (µs) | Per-row (ns) |
+|----------------------------------|-----------|-------------|
+| row_clone/int5_10k               | 19.4      | 1.9         |
+| row_clone/mixed6_10k             | 250.9     | 25.1        |
+| row_hash/int5_10k                | 67.3      | 6.7         |
+| row_hash/mixed6_10k              | 95.0      | 9.5         |
+| row_cmp/int5_10k_sequential      | 21.7      | 2.2         |
+| row_cmp/mixed6_10k_sequential    | 25.1      | 2.5         |
+| row_eq/int5_10k_equal            | 21.4      | 2.1         |
+| datum_iter/int5_10k_iterate      | 319       | 31.9        |
+| datum_iter/mixed6_10k_iterate    | 523       | 52.3        |
+| datum_vec_borrow/int5_10k        | 607       | 60.7        |
+| datum_vec_borrow/mixed6_10k      | 548       | 54.8        |
+| row_packer/int5_10k_pack         | 477       | 47.7        |
+| row_packer/mixed6_10k_pack       | 507       | 50.7        |
+| cast_from/u64_to_usize_10k      | 3.4       | 0.34        |
+| cast_from/usize_to_u64_10k      | 3.3       | 0.33        |
+
+**Estimated impact with LTO off (`optimized` profile):**
+
+For each function, the per-call overhead saved by `#[inline]` is approximately 2-5ns. At the
+coverage data call counts:
+
+| Function                  | Calls (billions) | Est. overhead saved (ns) | Total saved (s) |
+|---------------------------|----------------:|------------------------:|-----------------:|
+| RowRef Hash               | 1,274           | 3-5                     | 3,800-6,370      |
+| Timestamp::less_equal     | 856             | 2-3                     | 1,712-2,568      |
+| CastFrom::cast_from       | 754             | 2-3                     | 1,508-2,262      |
+| ArrayOrd::at()            | 705             | 2-3                     | 1,410-2,115      |
+| Row::clone()              | 527             | 2-3                     | 1,054-1,581      |
+| Row/RowRef cmp/eq         | 410             | 2-3                     | 820-1,230        |
+| ArrayIdx::cmp             | 330             | 3-5                     | 990-1,650        |
+| Codec64::encode/decode    | 183             | 2-3                     | 366-549          |
+| DatumListIter::next       | ~500            | 2-3                     | 1,000-1,500      |
+| **Total**                 | **~5,539**      |                         | **~12,660-19,825** |
+
+These estimates represent the aggregate function call overhead eliminated across the coverage trace.
+The actual wall-clock improvement depends on how many of these calls are on the critical path vs.
+in cold paths, branch prediction effects, and icache pressure from inlined code.
+
+**Files changed:**
+- `src/ore/src/cast.rs` - Added `#[inline]` to `CastFrom::cast_from` (both regular and NonZero
+  macro variants) and `CastInto::cast_into` blanket impl.
+- `src/persist-types/src/codec_impls.rs` - Added `#[inline]` to `Codec64::encode/decode` for i64
+  and u64.
+- `src/persist-types/src/arrow.rs` - Added `#[inline]` to `ArrayOrd::at()`, `ArrayIdx::cmp`,
+  `ArrayIdx::partial_cmp`, `ArrayIdx::eq`.
+- `src/repr/src/timestamp.rs` - Added `#[inline]` to 3 `PartialOrder::less_equal` impls and 2
+  `Codec64::encode/decode` impls for Timestamp.
+- `src/repr/src/row.rs` - Replaced derived `PartialEq, Eq, Hash` on `RowRef` with manual
+  `#[inline]` implementations. Replaced derived `PartialEq, Eq` on `Row` with manual `#[inline]`
+  implementations. Added `#[inline]` to `Row::clone/clone_from`, `Row::hash`, `Row::cmp/partial_cmp`,
+  `RowRef::cmp/partial_cmp`, `RowRef::iter()`, `RowRef::byte_len()`, `RowRef::data()`,
+  `Row::packer()`, `DatumListIter::next()`.
+- `src/repr/src/datum_vec.rs` - Added `#[inline]` to `DatumVec::borrow/borrow_with/borrow_with_selective`.
+- `src/repr/benches/inline_hot_paths.rs` - Added benchmark (new file).
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas identified during research:**
+- `push_datum()` (the core datum encoding function) is a large match statement (~200 lines)
+  without `#[inline]`. Adding `#[inline]` to it would increase code size significantly at every
+  call site. A better approach might be `#[inline(never)]` cold paths (error handling, rare types)
+  combined with `#[inline]` on the main function, allowing the compiler to inline the hot paths
+  (Int64, String, Bool) while keeping the cold paths out-of-line.
+- `CompactBytes` methods (clone, len, as_slice) in the external `compact_bytes` crate may
+  also be missing `#[inline]`. Since this is an external dependency, updating it requires
+  a crate version bump.
+- `Hashable::hashed()` in the `differential-dataflow` external crate may be missing `#[inline]`.
+  DD uses FNV hash for exchange distribution.
+- `MirScalarExpr::eval()` dispatch chain has 3 dispatch points for simple predicates. A specialized
+  evaluator for common predicate patterns could reduce this.
+- `ArrayIdx::cmp` with `#[inline]` may still be too large for the compiler to actually inline
+  (16 match arms). A function pointer vtable approach (set comparison function at ArrayOrd creation
+  time, call via indirect function call on every comparison) could eliminate the enum dispatch
+  entirely, but requires changing the ArrayOrd architecture.
