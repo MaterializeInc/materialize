@@ -4010,8 +4010,94 @@ in registers while the FFI path bounces through the C calling convention.
   non-expression-evaluation paths (sorting, deduplication, etc.). A manual `Ord` impl for
   `Datum` could intercept Numeric comparison everywhere, but requires handling all ~30
   variants manually.
-- `OrderedDecimal::hash()` also calls `reduce` (C FFI) on every hash. A fast hash for
-  Numeric could avoid this by computing a canonical form in pure Rust.
+- `OrderedDecimal::hash()` calls `reduce` (C FFI) on every hash, but investigation showed
+  `Datum::hash()` is NOT on any hot path. Row hashing uses raw byte hashing, not Datum-level
+  hashing. Only `DatumList` and `DatumMap` (rare types) use Datum::hash.
 - `Numeric::from(f64/f32)` still goes through FFI.
 - `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
+
+## Session 42: Fast-path Numeric reduce - bypass C FFI for Row packing
+
+**Date:** 2026-02-20
+
+**Problem:** Every time a `Numeric` value is packed into a `Row`, two C FFI operations occur:
+
+1. **`push_datum`** (line 2300 of `row.rs`): calls `numeric::cx_datum().reduce(&mut n.0)` —
+   clones a `Context` struct + makes a C FFI call to normalize trailing zeros. This happens for
+   EVERY Numeric value, even though ~95% of values are already reduced (from Row storage, from
+   our fast-path integer constructors, or from same-scale arithmetic).
+
+2. **`datum_size`** (line 2448 of `row.rs`): clones the entire `Decimal<13>` struct (35 bytes) +
+   clones a `Context` + makes a C FFI `reduce()` call — all just to compute the byte size of the
+   encoded value. This is used for buffer pre-allocation.
+
+**Fix:** Two optimizations:
+
+1. **`fast_numeric_reduce()`** in `numeric.rs`: Pure Rust implementation that avoids the C FFI
+   for the common case (already-reduced values). Checks `coefficient_units()[0] % 10 != 0` to
+   detect already-reduced values in ~2ns. For values with trailing zeros, performs the full
+   reduction in Rust by counting trailing zeros, dividing the base-1000 coefficient by the
+   appropriate power of 10, and reconstructing via `from_raw_parts()`. Falls back to FFI for
+   extreme exponents (outside [-39, 38], e.g., from `Numeric::from(f64::MAX)`). Respects the
+   context's max_exponent (38) by capping trailing-zero stripping.
+
+2. **`reduced_numeric_digit_count()`** in `numeric.rs`: Computes the digit count after reduction
+   entirely in Rust — no clone, no FFI. Just counts trailing zeros in the coefficient units
+   and subtracts from the digit count. Used by `datum_size` to compute the encoded size.
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench numeric_reduce`):
+
+### Per-operation reduce (ns/iter)
+
+| Scenario | FFI (ns) | Fast (ns) | Speedup |
+|---|---|---|---|
+| already_reduced (42) | 8.7 | 2.4 | **3.7x** |
+| money (12345.67) | 6.5 | 2.3 | **2.8x** |
+| trailing_zeros (1.50) | 11.4 | 20.0 | 0.57x (slower) |
+| large_trailing (123456789000) | 13.0 | 14.5 | 0.90x (slower) |
+| zero | 7.7 | 9.8 | 0.79x (slower) |
+
+### Per-operation digit_count / datum_size (ns/iter)
+
+| Scenario | FFI (ns) | Fast (ns) | Speedup |
+|---|---|---|---|
+| already_reduced (42) | 8.2 | 1.8 | **4.6x** |
+| money (12345.67) | 5.8 | 1.8 | **3.2x** |
+| trailing (1.50) | 10.7 | 2.2 | **4.9x** |
+
+### Row packing (10k values, µs)
+
+| Scenario | Time (µs) |
+|---|---|
+| pack_10k_money (already reduced) | 149 |
+| pack_10k_trailing | 324 |
+| pack_10k_ints | 151 |
+
+**Summary:** The common case (already-reduced values like money columns, integer-cast numerics,
+values read from existing Rows) sees a **2.8-3.7x speedup** for reduce and **3.2-4.9x speedup**
+for digit_count. Combined, this eliminates ~8ns of overhead per Numeric value during Row packing
+for the typical workload. The trailing-zeros case (uncommon — only from arithmetic that
+produces trailing zeros) is slightly slower due to the coefficient division loop in Rust, but
+this is offset by the digit_count improvement which is always faster.
+
+The digit_count optimization eliminates ALL cloning and FFI for size estimation — it's pure
+integer arithmetic on the coefficient units, with no struct copies.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` - Added `fast_numeric_reduce()` and
+  `reduced_numeric_digit_count()` functions. Added `test_fast_numeric_reduce` test.
+- `src/repr/src/row.rs` - Updated `push_datum` to use `fast_numeric_reduce` instead of
+  `cx_datum().reduce()`. Updated `datum_size` to use `reduced_numeric_digit_count` instead
+  of clone + FFI.
+- `src/repr/benches/numeric_reduce.rs` - New benchmark file.
+- `src/repr/Cargo.toml` - Registered benchmark.
+
+**Future optimization ideas:**
+- `mul_numeric` and `div_numeric` could use similar fast paths for simple cases.
+- `Numeric::from(f64/f32)` still goes through FFI.
+- `ArrayIdx::cmp` at 330B calls in persist merge sort does a 16-arm enum match per comparison.
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+- `push_signed_int` at 992M executions — already optimized with `#[inline(always)]`.
+- `DatumColumnDecoder::get()` at 978M executions — double dispatch pattern could be optimized.

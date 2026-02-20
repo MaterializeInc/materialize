@@ -520,6 +520,152 @@ pub fn fast_numeric_cmp(a: &Numeric, b: &Numeric) -> std::cmp::Ordering {
     }
 }
 
+/// Reduces a `Numeric` value by stripping trailing zeros from the coefficient,
+/// entirely in Rust without C FFI calls.
+///
+/// This is equivalent to `Context::reduce()` for the NUMERIC_DATUM context but
+/// avoids the C FFI overhead. After reduction:
+/// - Zero values are normalized to +0 with exponent 0
+/// - Non-zero values have trailing zeros stripped (up to the context's
+///   max_exponent of 38)
+/// - Special values (NaN, Infinity) are unchanged
+/// - Values with extreme exponents (outside [-39, 38]) fall back to FFI
+#[inline]
+pub fn fast_numeric_reduce(n: &mut Numeric) {
+    if n.is_special() {
+        return;
+    }
+
+    if n.is_zero() {
+        // Canonical zero: +0E+0 (1 digit, exponent 0, positive)
+        *n = Numeric::zero();
+        return;
+    }
+
+    let exponent = n.exponent();
+
+    // For extreme exponents (e.g., Numeric::from(f64::MAX) with exponent ~292),
+    // fall back to FFI reduce which handles clamping/overflow correctly.
+    let max_exponent = NUMERIC_DATUM_MAX_PRECISION as i32 - 1; // 38
+    let min_exponent = -(NUMERIC_DATUM_MAX_PRECISION as i32); // -39
+    if exponent > max_exponent || exponent < min_exponent {
+        cx_datum().reduce(n);
+        return;
+    }
+
+    // Quick check via coefficient_units() (no struct copy) — if the LSU
+    // is not divisible by 10, the value is already reduced.
+    let units = n.coefficient_units();
+    if units[0] % 10 != 0 {
+        return;
+    }
+
+    let digits = n.digits();
+
+    // Count total trailing decimal zeros in the coefficient.
+    let mut total_trailing = 0u32;
+    for &u in units.iter() {
+        if u == 0 {
+            total_trailing += 3;
+        } else {
+            let mut tmp = u;
+            while tmp % 10 == 0 {
+                tmp /= 10;
+                total_trailing += 1;
+            }
+            break;
+        }
+    }
+
+    // Cap stripping so the new exponent doesn't exceed max_exponent.
+    // The FFI reduce with cx_datum() (max_exponent=38) behaves the same way.
+    let max_strip = (max_exponent - exponent) as u32;
+    let total_trailing = total_trailing.min(max_strip);
+
+    if total_trailing == 0 {
+        return; // Capped at max_exponent
+    }
+
+    let new_digits = digits - total_trailing;
+    let new_exponent = exponent + total_trailing as i32;
+    // For non-special, non-zero values, bits is just the sign flag.
+    let bits: u8 = if n.is_negative() { 0x80 } else { 0 };
+
+    // Split: how many whole base-1000 units to skip, and how many
+    // remaining decimal zeros to divide out of the partial unit.
+    let whole_units_to_skip = (total_trailing / 3) as usize;
+    let partial_zeros = total_trailing % 3;
+
+    let remaining = &units[whole_units_to_skip..];
+
+    let mut new_lsu = [0u16; NUMERIC_DATUM_WIDTH_USIZE];
+
+    if partial_zeros == 0 {
+        // Only whole units were zero — just copy remaining units.
+        new_lsu[..remaining.len()].copy_from_slice(remaining);
+    } else {
+        // Divide the remaining coefficient by 10^partial_zeros to strip
+        // partial trailing zeros. Process from MSU to LSU, carrying
+        // remainders downward through the base-1000 units.
+        let divisor = if partial_zeros == 1 { 10u32 } else { 100u32 };
+        let mut carry = 0u32;
+        for i in (0..remaining.len()).rev() {
+            let val = carry * 1000 + remaining[i] as u32;
+            new_lsu[i] = (val / divisor) as u16;
+            carry = val % divisor;
+        }
+        debug_assert_eq!(carry, 0, "trailing zeros should divide evenly");
+    }
+
+    *n = Numeric::from_raw_parts(new_digits, new_exponent, bits, new_lsu);
+}
+
+/// Computes the digit count of a `Numeric` after reduction (trailing-zero
+/// stripping), without any C FFI calls or cloning.
+///
+/// This is used by `datum_size` to compute the encoded size of a Numeric
+/// value without the overhead of cloning + FFI reduce.
+#[inline]
+pub fn reduced_numeric_digit_count(n: &Numeric) -> u32 {
+    if n.is_special() || n.is_zero() {
+        return 1;
+    }
+
+    let exponent = n.exponent();
+    let max_exponent = NUMERIC_DATUM_MAX_PRECISION as i32 - 1; // 38
+    let min_exponent = -(NUMERIC_DATUM_MAX_PRECISION as i32); // -39
+
+    // For extreme exponents, fall back to clone + FFI.
+    if exponent > max_exponent || exponent < min_exponent {
+        let mut d = *n;
+        cx_datum().reduce(&mut d);
+        return d.digits();
+    }
+
+    let units = n.coefficient_units();
+
+    // Count total trailing decimal zeros.
+    let mut trailing = 0u32;
+    for &u in units.iter() {
+        if u == 0 {
+            trailing += 3;
+        } else {
+            let mut tmp = u;
+            while tmp % 10 == 0 {
+                tmp /= 10;
+                trailing += 1;
+            }
+            break;
+        }
+    }
+
+    // Cap stripping so the new exponent doesn't exceed max_exponent.
+    let max_strip = (max_exponent - exponent) as u32;
+    let trailing = trailing.min(max_strip);
+
+    n.digits() - trailing
+}
+
 fn twos_complement_be_to_u128(input: &[u8]) -> u128 {
     assert!(input.len() <= 16);
     let mut buf = [0; 16];
@@ -1607,6 +1753,111 @@ mod tests {
         assert!(try_numeric_from_i64(i64::MIN, None).is_some());
         assert!(try_numeric_from_u64(0, None).is_some());
         assert!(try_numeric_from_u64(u64::MAX, None).is_some());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_fast_numeric_reduce() {
+        let mut cx = cx_datum();
+
+        // Helper: compare fast_numeric_reduce result against FFI reduce.
+        fn check(n: &Numeric) {
+            let mut fast = *n;
+            fast_numeric_reduce(&mut fast);
+
+            let mut ffi = *n;
+            cx_datum().reduce(&mut ffi);
+
+            // Compare all raw parts.
+            let (fd, fe, fb, fl) = fast.to_raw_parts();
+            let (cd, ce, cb, cl) = ffi.to_raw_parts();
+            assert_eq!(
+                (fd, fe, fb),
+                (cd, ce, cb),
+                "mismatch for input={n}: fast=({fd},{fe},{fb:#x}), ffi=({cd},{ce},{cb:#x})"
+            );
+            let fast_units = &fl[..Numeric::digits_to_lsu_elements_len(fd)];
+            let ffi_units = &cl[..Numeric::digits_to_lsu_elements_len(cd)];
+            assert_eq!(
+                fast_units, ffi_units,
+                "lsu mismatch for input={n}: fast={fast_units:?}, ffi={ffi_units:?}"
+            );
+
+            // Also check reduced_numeric_digit_count matches.
+            let count = reduced_numeric_digit_count(n);
+            assert_eq!(count, fd, "digit count mismatch for input={n}");
+        }
+
+        // Already reduced values
+        check(&Numeric::from(0i32));
+        check(&Numeric::from(1i32));
+        check(&Numeric::from(-1i32));
+        check(&Numeric::from(42i32));
+        check(&Numeric::from(-999i32));
+        check(&Numeric::from(i32::MAX));
+        check(&Numeric::from(i32::MIN));
+
+        // Values with trailing zeros
+        let v100: Numeric = cx.parse("100").unwrap();
+        check(&v100);
+        let v1000: Numeric = cx.parse("1000").unwrap();
+        check(&v1000);
+        let v10000: Numeric = cx.parse("10000").unwrap();
+        check(&v10000);
+
+        // Values with trailing fractional zeros
+        let v1_50: Numeric = cx.parse("1.50").unwrap();
+        check(&v1_50);
+        let v1_500: Numeric = cx.parse("1.500").unwrap();
+        check(&v1_500);
+        let v1_000: Numeric = cx.parse("1.000").unwrap();
+        check(&v1_000);
+
+        // Large values with trailing zeros
+        let large: Numeric = cx.parse("123456789000").unwrap();
+        check(&large);
+        let large2: Numeric = cx.parse("100000000000000").unwrap();
+        check(&large2);
+
+        // Negative values with trailing zeros
+        let neg100: Numeric = cx.parse("-100").unwrap();
+        check(&neg100);
+        let neg1_50: Numeric = cx.parse("-1.50").unwrap();
+        check(&neg1_50);
+
+        // Zero variants
+        let mut neg_zero = Numeric::from(0i32);
+        cx.minus(&mut neg_zero);
+        check(&neg_zero);
+        let zero_exp: Numeric = cx.parse("0E+5").unwrap();
+        check(&zero_exp);
+
+        // Special values
+        check(&Numeric::nan());
+        let mut inf = Numeric::infinity();
+        check(&inf);
+        cx.minus(&mut inf);
+        check(&inf);
+
+        // Money-like values (already reduced, common case)
+        let money: Numeric = cx.parse("12345.67").unwrap();
+        check(&money);
+        let money2: Numeric = cx.parse("99999.99").unwrap();
+        check(&money2);
+
+        // Edge case: single-digit values
+        for i in 0..10 {
+            check(&Numeric::from(i as i32));
+        }
+
+        // Edge case: powers of 10
+        let mut pow = 1i64;
+        for _ in 0..18 {
+            let s = pow.to_string();
+            let n: Numeric = cx.parse(s.as_bytes()).unwrap();
+            check(&n);
+            pow *= 10;
+        }
     }
 
     #[mz_ore::test]

@@ -141,6 +141,10 @@ harness = false
 name = "numeric_cmp"
 harness = false
 
+[[bench]]
+name = "numeric_reduce"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
