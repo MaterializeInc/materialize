@@ -284,6 +284,12 @@ mod container {
         fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
             *self
         }
+        /// Copy raw datum bytes directly into the packer (single memcpy).
+        #[inline]
+        fn copy_into(&self, packer: &mut RowPacker) {
+            // SAFETY: `self.bytes` is correctly formatted row bytes.
+            unsafe { packer.extend_by_slice_unchecked(self.bytes) }
+        }
     }
 
     #[cfg(test)]

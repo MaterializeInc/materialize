@@ -12,7 +12,7 @@
 //! representations only need to commit to implementing these traits.
 
 use crate::row::DatumListIter;
-use crate::{Datum, Row};
+use crate::{Datum, Row, RowPacker};
 
 /// A helper trait to turn a type into an iterator of datums.
 pub trait ToDatumIter: Sized {
@@ -23,6 +23,15 @@ pub trait ToDatumIter: Sized {
 
     /// Obtains an iterator of datums out of an instance of `&Self`.
     fn to_datum_iter(&self) -> Self::DatumIter<'_>;
+
+    /// Copy the encoded datum bytes directly into a [`RowPacker`].
+    ///
+    /// The default implementation decodes each datum and re-encodes it via
+    /// `push_datum`, but types backed by raw Row-encoded bytes (like
+    /// `DatumSeq` and `Row`) override this with a single `memcpy`.
+    fn copy_into(&self, packer: &mut RowPacker) {
+        packer.extend(self.to_datum_iter());
+    }
 }
 
 impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
@@ -32,6 +41,10 @@ impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
         Self: 'a;
     fn to_datum_iter(&self) -> Self::DatumIter<'_> {
         (**self).to_datum_iter()
+    }
+    #[inline]
+    fn copy_into(&self, packer: &mut RowPacker) {
+        (**self).copy_into(packer)
     }
 }
 
@@ -44,5 +57,12 @@ impl ToDatumIter for Row {
     #[inline]
     fn to_datum_iter(&self) -> Self::DatumIter<'_> {
         self.iter()
+    }
+
+    /// Copy raw Row bytes directly into the packer (single memcpy).
+    #[inline]
+    fn copy_into(&self, packer: &mut RowPacker) {
+        // SAFETY: Row data is correctly encoded row bytes.
+        unsafe { packer.extend_by_slice_unchecked(self.data()) }
     }
 }

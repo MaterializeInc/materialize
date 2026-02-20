@@ -458,20 +458,34 @@ where
                 }
 
                 let mut row_builder = SharedRow::get();
-                let temp_storage = RowArena::new();
 
-                let mut datums_local = datums.borrow();
-                datums_local.extend(key.iter());
-                datums_local.extend(stream_row.iter());
-                datums_local.extend(lookup_row.to_datum_iter());
-
-                if let Some(row) = closure
-                    .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                    .expect("Closure claimed to never error")
-                {
+                if closure.is_identity() {
+                    // Fast path: skip datum decode, copy raw bytes directly.
+                    let mut packer = row_builder.packer();
+                    key.copy_into(&mut packer);
+                    stream_row.copy_into(&mut packer);
+                    lookup_row.copy_into(&mut packer);
+                    let row = &*row_builder;
                     for (time, diff2) in output.drain(..) {
                         let diff = diff1.clone() * diff2.clone();
                         session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                    }
+                } else {
+                    let temp_storage = RowArena::new();
+
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key.iter());
+                    datums_local.extend(stream_row.iter());
+                    datums_local.extend(lookup_row.to_datum_iter());
+
+                    if let Some(row) = closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .expect("Closure claimed to never error")
+                    {
+                        for (time, diff2) in output.drain(..) {
+                            let diff = diff1.clone() * diff2.clone();
+                            session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                        }
                     }
                 }
             },
@@ -531,9 +545,21 @@ where
                                         if source_relation == 0
                                             || inner_as_of.elements().iter().all(|e| e != time)
                                         {
-                                            // TODO: Consolidate as we push, defensively.
-                                            times_diffs
-                                                .push((Tr::owned_time(time), Tr::owned_diff(diff)));
+                                            let time = Tr::owned_time(time);
+                                            if initial_closure.is_identity() {
+                                                // Fast path: skip datum decode entirely,
+                                                // copy raw bytes from key + val.
+                                                let row = {
+                                                    let mut packer = row_builder.packer();
+                                                    key.copy_into(&mut packer);
+                                                    val.copy_into(&mut packer);
+                                                    row_builder.clone()
+                                                };
+                                                ok_session.give((row, time, Tr::owned_diff(diff)));
+                                            } else {
+                                                // TODO: Consolidate as we push, defensively.
+                                                times_diffs.push((time, Tr::owned_diff(diff)));
+                                            }
                                         }
                                     });
                                     differential_dataflow::consolidation::consolidate(

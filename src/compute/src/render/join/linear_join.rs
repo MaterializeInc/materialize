@@ -519,7 +519,22 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
-        if closure.could_error() {
+        if closure.is_identity() {
+            // Fast path: identity closure — skip all datum decode/re-encode,
+            // copy raw bytes from key + old-val + new-val directly.
+            let oks =
+                self.linear_join_spec
+                    .render(&prev_keyed, &next_input, move |key, old, new| {
+                        let mut row_builder = SharedRow::get();
+                        let mut packer = row_builder.packer();
+                        key.copy_into(&mut packer);
+                        old.copy_into(&mut packer);
+                        new.copy_into(&mut packer);
+                        Some(row_builder.clone())
+                    });
+
+            (oks, None)
+        } else if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
                 .render(&prev_keyed, &next_input, move |key, old, new| {
