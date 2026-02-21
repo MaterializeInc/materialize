@@ -4312,9 +4312,105 @@ for this path.
 - `src/repr/Cargo.toml` — Registered numeric_twos_complement benchmark.
 
 **Future optimization ideas:**
-- `numeric_to_twos_complement_wide` — use 256-bit arithmetic (u128 pair) to
-  fast-path the aggregation encoding for common cases.
 - `OrderedDecimal::hash` still calls `reduce` (FFI).
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
 - `div_numeric` could use a fast path for simple cases.
+
+---
+
+## Session 46: Fast-path numeric_to_twos_complement_wide — bypass C FFI with 256-bit arithmetic
+
+**Date:** 2026-02-21
+
+**Target:** `numeric_to_twos_complement_wide()` in `src/repr/src/adt/numeric.rs`.
+This function converts a `Numeric` into a 33-byte big-endian twos complement
+representation used in Avro encoding for aggregation accumulators. Session 45
+optimized the non-wide variant (17 bytes) for 3.5-5.5x speedup, and noted that
+the wide variant was harder due to requiring 256-bit arithmetic.
+
+**Problem:** The wide function performed 7+ C FFI calls per value:
+1. `NumericAgg::context()` — creates a wide-precision context
+2. `cx.to_width(numeric)` — converts Numeric (13 units) to NumericAgg (27 units)
+3. `cx.neg(&mut scaler)` + `cx.rescale(&mut d, &scaler)` — rescale to exponent -39
+4. `cx.abs(&mut scaler)` + `cx.scaleb(&mut d, &scaler)` — adjust to canonical coefficient
+5. Inner loop: `cx.rem()` + `cx.div_integer()` + `coefficient::<u128>()` — extract
+   base-2^128 chunks (2-3 iterations for a 33-byte result)
+
+The rescaled value represents `original_value × 10^39`. For common Numeric values
+(≤18 significant digits, exponent in [-39, 0]), the coefficient fits in i64 and the
+rescaled value fits in ~192 bits (well within the 33-byte / 264-bit buffer).
+
+**Fix:** Added a fast path using 256-bit arithmetic (u128 pair) entirely in Rust:
+
+1. **`POW10_U128[39]`** — precomputed powers of 10 as u128 (10^0 through 10^38;
+   10^39 overflows u128 and is handled by multiplying 10^38 × 10 in 256-bit).
+
+2. **`u256_mul(a, b)`** — schoolbook 128×128→256 multiplication using 64-bit halves.
+   Returns (lo, hi) where result = lo + hi × 2^128.
+
+3. **`u256_mul_small(lo, hi, factor)`** — multiplies a 256-bit value by a small u64
+   factor. Used for the 10^39 case.
+
+4. **`u256_mul_u64_pow10(val, pow_exp)`** — multiplies a u128 value by 10^pow_exp,
+   returning a 256-bit result. Dispatches to `u256_mul` for pow_exp ≤ 38 and
+   `u256_mul_small` for pow_exp = 39.
+
+5. **`write_twos_complement_be_33(buf, lo, hi, is_neg)`** — writes a 256-bit unsigned
+   value as 33-byte big-endian twos complement. For negative values, applies twos
+   complement negation (!val + 1) on the 256-bit pair before writing.
+
+The fast path activates when: exponent in [-39, 0] AND coefficient fits in i64
+(≤18 significant digits). This covers the vast majority of real-world Numeric values
+(money columns, integer-cast numerics, aggregation inputs).
+
+**Benchmark results** (criterion, `cargo bench -p mz-repr --bench numeric_twos_complement`):
+
+### Per-value wide twos complement encoding (ns/iter)
+
+| Value                    | Old FFI (ns) | New fast (ns) | Speedup     |
+|--------------------------|------------:|-------------:|------------:|
+| integer_42               | 275         | 10.5         | **26.2x**   |
+| money_12345_67           | 341         | 10.6         | **32.1x**   |
+| rescaled_scale6          | 277         | 10.7         | **25.9x**   |
+| large_18_digits          | 857         | 11.6         | **73.9x**   |
+| negative (-98765.4321)   | 384         | 10.8         | **35.5x**   |
+| zero                     | 41.8        | 10.6         | **3.9x**    |
+| huge_gt18_digits (FFI)   | 848         | 847          | ~1.0x       |
+| pure_int_999999          | 481         | 10.7         | **45.0x**   |
+
+**Summary:** **3.9-73.9x faster** for common Numeric values. The enormous speedup comes
+from eliminating ALL C FFI calls: the old path performed 7+ FFI roundtrips
+(context creation, to_width, rescale, scaleb, plus 2-3 iterations of rem/div_integer
+in the inner loop), while the new path does pure Rust integer arithmetic. The
+large_18_digits case shows the highest speedup (73.9x, from 857ns to 11.6ns) because
+the FFI inner loop needed more iterations to extract the larger coefficient in
+base-2^128 chunks. The zero case shows the lowest speedup (3.9x) because the old path
+already had a `is_zero()` early return after the rescale/scaleb setup, so only the setup
+FFI calls are eliminated.
+
+The consistent ~10-11ns for all fast-path values (regardless of coefficient size or
+sign) reflects the fixed cost of 256-bit multiplication + 33-byte buffer write — the
+u128 pair arithmetic is constant-time. The huge_gt18_digits case falls back to the
+FFI path (no regression).
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` — Added fast path to `numeric_to_twos_complement_wide`
+  using 256-bit arithmetic. Added `POW10_U128` table, `u256_mul`, `u256_mul_small`,
+  `u256_mul_u64_pow10`, and `write_twos_complement_be_33` helper functions.
+  Added `test_numeric_to_twos_complement_wide_fast_path` correctness test.
+- `src/repr/benches/numeric_twos_complement.rs` — Added wide benchmark group with
+  old (FFI reference) vs new (fast path) comparisons.
+
+**Future optimization ideas:**
+- `numeric_to_twos_complement_wide` could be extended to handle values with >18
+  significant digits but ≤39 digits using i128 coefficient extraction + wider
+  multiplication. This would cover all Numeric values, not just the i64-range subset.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+- `div_numeric` could use a fast path for simple cases.
+- `Rows::get` (columnar Row indexing) at 1,273B executions could eliminate the
+  `if index == 0` branch by storing bounds with a leading 0 sentinel.
+- `Region::len/capacity/as_vec` at 613B+ calls each do an enum dispatch that could
+  be eliminated by caching length alongside the enum.
