@@ -1610,9 +1610,13 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                     (NumericAgg::zero(), Diff::ZERO, Diff::ZERO, Diff::ONE)
                 } else {
                     // Take a narrow decimal (datum) into a wide decimal
-                    // (aggregator).
-                    let mut cx_agg = numeric::cx_agg();
-                    (cx_agg.to_width(n.0), Diff::ZERO, Diff::ZERO, Diff::ZERO)
+                    // (aggregator). Direct coefficient copy bypasses C FFI.
+                    (
+                        numeric::numeric_to_agg_direct(&n.0),
+                        Diff::ZERO,
+                        Diff::ZERO,
+                        Diff::ZERO,
+                    )
                 };
 
                 Accum::Numeric {
@@ -2092,20 +2096,32 @@ impl Multiply<Diff> for Accum {
                 nans,
                 non_nulls,
             } => {
-                let mut cx = numeric::cx_agg();
-                let mut f = NumericAgg::from(factor.into_inner());
-                // Unlike `plus_equals`, not necessary to reduce after this operation because `f` will
-                // always be an integer, i.e. we are never increasing the
-                // values' scale.
-                cx.mul(&mut f, &accum.0);
-                // `rounded` signals we have exceeded the aggregator's max
-                // precision, which means we've lost commutativity and
-                // associativity; nothing to be done here, so panic. For more
-                // context, see the DEC_Rounded definition at
-                // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
+                let factor_val = factor.into_inner();
+                let result = if let Some(r) =
+                    numeric::try_mul_numeric_agg_i64(&accum.0, factor_val)
+                {
+                    r
+                } else {
+                    // Fall back to C FFI for large coefficients.
+                    let mut cx = numeric::cx_agg();
+                    let mut f = NumericAgg::from(factor_val);
+                    // Unlike `plus_equals`, not necessary to reduce after this
+                    // operation because `f` will always be an integer, i.e. we
+                    // are never increasing the values' scale.
+                    cx.mul(&mut f, &accum.0);
+                    // `rounded` signals we have exceeded the aggregator's max
+                    // precision, which means we've lost commutativity and
+                    // associativity; nothing to be done here, so panic. For more
+                    // context, see the DEC_Rounded definition at
+                    // http://speleotrove.com/decimal/dncont.html
+                    assert!(
+                        !cx.status().rounded(),
+                        "Accum::Numeric multiply overflow"
+                    );
+                    f
+                };
                 Accum::Numeric {
-                    accum: OrderedDecimal(f),
+                    accum: OrderedDecimal(result),
                     pos_infs: pos_infs * factor,
                     neg_infs: neg_infs * factor,
                     nans: nans * factor,
