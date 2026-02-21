@@ -1811,8 +1811,12 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     non_nulls: _,
                 },
             ) => {
-                let mut cx_datum = numeric::cx_datum();
-                let d = cx_datum.to_width(accum.0);
+                // Fast path: try to narrow NumericAgg → Numeric without C FFI.
+                // Falls back to FFI only when the accumulator overflows Numeric's precision.
+                let d = numeric::try_numeric_agg_to_datum(&accum.0).unwrap_or_else(|| {
+                    let mut cx_datum = numeric::cx_datum();
+                    cx_datum.to_width(accum.0)
+                });
                 // Take a wide decimal (aggregator) into a
                 // narrow decimal (datum). If this operation
                 // overflows the datum, this new value will be
