@@ -552,6 +552,57 @@ fn numeric_agg_from_i64_coeff(val: i64, exponent: i32) -> NumericAgg {
     NumericAgg::from_raw_parts(sig_digits, exponent, bits, lsu)
 }
 
+/// Convert a `Numeric` (Decimal<13>) to `NumericAgg` (Decimal<27>) without C FFI.
+///
+/// This replaces `cx_agg.to_width(numeric)` which crosses the Rust→C→Rust FFI boundary.
+/// The conversion is just a coefficient unit copy: both types use the same base-1000
+/// little-endian representation, so we copy the Numeric's ≤13 units into the NumericAgg's
+/// 27-unit array and zero-fill the rest.
+///
+/// The caller must ensure the value is NOT special (NaN/Inf). Those should be handled
+/// before calling this function.
+#[inline]
+pub fn numeric_to_agg_direct(n: &Numeric) -> NumericAgg {
+    debug_assert!(!n.is_special());
+    let units = n.coefficient_units();
+    let mut lsu = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+    lsu[..units.len()].copy_from_slice(units);
+    let bits = if n.is_negative() { 0x80u8 } else { 0u8 };
+    NumericAgg::from_raw_parts(n.digits(), n.exponent(), bits, lsu)
+}
+
+/// Fast-path multiply of a `NumericAgg` by an i64 factor, bypassing `cx_agg.mul()`.
+///
+/// Returns `Some(result)` if the fast path succeeded, `None` if the caller should
+/// fall back to the FFI path.
+///
+/// Handles three cases:
+/// 1. factor == 1: return a copy (no work needed)
+/// 2. Coefficient fits in i64: multiply natively via `checked_mul`, reconstruct
+/// 3. Otherwise: return None (fall back to FFI)
+#[inline]
+pub fn try_mul_numeric_agg_i64(a: &NumericAgg, factor: i64) -> Option<NumericAgg> {
+    if factor == 1 {
+        // Fast path: no-op, just copy the coefficient units directly.
+        let units = a.coefficient_units();
+        let mut lsu = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+        lsu[..units.len()].copy_from_slice(units);
+        let bits = if a.is_negative() { 0x80u8 } else { 0u8 };
+        return Some(NumericAgg::from_raw_parts(a.digits(), a.exponent(), bits, lsu));
+    }
+    let coeff = decimal_coeff_to_i64(a)?;
+    let product = coeff.checked_mul(factor)?;
+    if product == 0 {
+        // Preserve IEEE decimal sign for zero: sign = XOR of operand signs.
+        // E.g., 0 * -1 = -0, -0 * 1 = -0, -0 * -1 = 0.
+        let result_neg = a.is_negative() != (factor < 0);
+        let lsu = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+        let bits = if result_neg { 0x80u8 } else { 0u8 };
+        return Some(NumericAgg::from_raw_parts(1, a.exponent(), bits, lsu));
+    }
+    Some(numeric_agg_from_i64_coeff(product, a.exponent()))
+}
+
 /// Fast-path addition for `NumericAgg` accumulator, bypassing `cx_agg.add()` and
 /// `cx_agg.reduce()` (2 C FFI calls).
 ///
@@ -2529,5 +2580,90 @@ mod tests {
         check("1234567.89", "9876543.21");
         check("0", "5");
         check("5", "0");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_numeric_to_agg_direct() {
+        // Compare numeric_to_agg_direct() against cx_agg.to_width() for various values.
+        fn check(s: &str) {
+            let mut cx = Context::<Numeric>::default();
+            cx.set_max_exponent(isize::from(NUMERIC_DATUM_MAX_PRECISION - 1))
+                .unwrap();
+            cx.set_min_exponent(-isize::from(NUMERIC_DATUM_MAX_PRECISION))
+                .unwrap();
+            let n: Numeric = cx.parse(s).unwrap();
+            // FFI reference
+            let mut cx_agg = cx_agg();
+            let expected = cx_agg.to_width(n);
+            // Fast path
+            let fast = numeric_to_agg_direct(&n);
+            assert_eq!(
+                fast.to_standard_notation_string(),
+                expected.to_standard_notation_string(),
+                "to_agg mismatch for {s}"
+            );
+            assert_eq!(fast.exponent(), expected.exponent(), "exponent mismatch for {s}");
+            assert_eq!(fast.is_negative(), expected.is_negative(), "sign mismatch for {s}");
+            assert_eq!(fast.digits(), expected.digits(), "digits mismatch for {s}");
+        }
+
+        check("0");
+        check("1");
+        check("-1");
+        check("42");
+        check("-42");
+        check("100");
+        check("999999999999999999"); // 18 digits
+        check("-999999999999999999");
+        check("0.001");
+        check("123.456789");
+        check("1234567.89");
+        check("-9876543.21");
+        check("0.000001");
+        check("99999999999999999999999999999999999999"); // 38 digits (max precision)
+        check("1E+10");
+        check("1E-10");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_try_mul_numeric_agg_i64() {
+        fn check(s: &str, factor: i64) {
+            let mut cx = cx_agg();
+            let a: NumericAgg = cx.parse(s).unwrap();
+            // FFI reference
+            let mut f = NumericAgg::from(factor);
+            cx.mul(&mut f, &a);
+            cx.reduce(&mut f);
+            // Fast path
+            if let Some(mut fast) = try_mul_numeric_agg_i64(&a, factor) {
+                cx.reduce(&mut fast);
+                assert_eq!(
+                    fast.to_standard_notation_string(),
+                    f.to_standard_notation_string(),
+                    "mul mismatch for {s} * {factor}"
+                );
+            }
+        }
+
+        // factor = 1 (no-op)
+        check("42", 1);
+        check("0", 1);
+        check("-99.99", 1);
+        check("999999999999999999", 1);
+        // factor = -1 (negate)
+        check("42", -1);
+        check("-42", -1);
+        check("0", -1);
+        check("1234567.89", -1);
+        // small factors
+        check("100", 5);
+        check("42", -3);
+        check("0.001", 1000);
+        check("999999999", 999999999);
+        // edge cases
+        check("0", 0);
+        check("42", 0);
     }
 }

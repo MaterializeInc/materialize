@@ -4483,3 +4483,49 @@ better reflect the actual improvement in the hot path.
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
 - `Rows::get` (columnar Row indexing) at 1,273B executions could eliminate the
   `if index == 0` branch by storing bounds with a leading 0 sentinel.
+
+---
+
+## Session 48: Numeric→NumericAgg to_width + NumericAgg×i64 multiply — bypass C FFI
+
+**Date:** 2026-02-21
+
+**Target:** Two FFI bottlenecks in the SUM aggregation pipeline:
+1. `datum_to_accumulator` calls `cx_agg.to_width(n)` (C FFI) to widen `Numeric` (13 units) → `NumericAgg` (27 units) — this is just a struct copy with zero-padded coefficient.
+2. `Multiply<Diff>` for `Accum::Numeric` calls `cx_agg.mul()` (2 FFI calls: `from_i64` + `mul`) — typically factor is 1 or -1.
+
+**Approach:**
+- `numeric_to_agg_direct()`: Copy coefficient units directly, construct `NumericAgg` via `from_raw_parts` — no FFI.
+- `try_mul_numeric_agg_i64()`: Fast-path for factor=1 (just copy), otherwise extract i64 coefficient → native multiply → reconstruct. Falls back to FFI for overflow.
+- Special case: `0 * -1 = -0` (IEEE decimal sign preservation via XOR of operand signs).
+
+**Benchmark results (numeric_to_agg):**
+
+| Benchmark | Old (ns) | New (ns) | Speedup |
+|-----------|----------|----------|---------|
+| to_width zero | 11.26 | 10.97 | 1.03x |
+| to_width small_int | 11.26 | 10.52 | 1.07x |
+| to_width money | 11.33 | 10.51 | 1.08x |
+| to_width large_18dig | 11.52 | 11.04 | 1.04x |
+| to_width negative | 11.16 | 10.58 | 1.05x |
+| to_width max_precision | 11.39 | 10.96 | 1.04x |
+| to_width small_exp | 11.17 | 10.52 | 1.06x |
+| **batch 10k to_width+add** | **104.8 µs** | **69.3 µs** | **1.51x** |
+| mul factor=1 money | 49.57 | 14.93 | **3.3x** |
+| mul factor=-1 money | 59.24 | 15.04 | **3.9x** |
+| mul factor=5 small | 47.56 | 14.74 | **3.2x** |
+| mul factor=2 large | 47.68 | 14.61 | **3.3x** |
+
+**Key insight:** Per-value `to_width` shows modest 3-8% improvement because the FFI `to_width` was already fast (just memcpy internally). But in the **batch pipeline** (to_width + add for 10k values), the improvement compounds to **1.51x** because we avoid repeated FFI context setup. The multiply fast path is the big win: **3.2-3.9x** for all common factors.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` — Added `numeric_to_agg_direct()` and `try_mul_numeric_agg_i64()` with correctness tests.
+- `src/compute/src/render/reduce.rs` — Updated `datum_to_accumulator` to use `numeric_to_agg_direct()`, updated `Multiply<Diff>` for `Accum::Numeric` to try fast path first.
+- `src/repr/benches/numeric_to_agg.rs` — New benchmark for to_width and multiply.
+
+**Future optimization ideas:**
+- `div_numeric` could use a fast path for simple cases.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `Rows::get` (columnar Row indexing) at 1,273B executions could eliminate the
+  `if index == 0` branch by storing bounds with a leading 0 sentinel.

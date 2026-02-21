@@ -161,6 +161,10 @@ harness = false
 name = "numeric_agg_add"
 harness = false
 
+[[bench]]
+name = "numeric_to_agg"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
