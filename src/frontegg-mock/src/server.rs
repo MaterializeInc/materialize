@@ -31,6 +31,7 @@ use crate::models::*;
 const AUTH_API_TOKEN_PATH: &str = "/identity/resources/auth/v1/api-token";
 const AUTH_USER_PATH: &str = "/identity/resources/auth/v1/user";
 const AUTH_API_TOKEN_REFRESH_PATH: &str = "/identity/resources/auth/v1/api-token/token/refresh";
+const AUTH_VENDOR_PATH: &str = "/auth/vendor";
 const GROUPS_PATH: &str = "/frontegg/identity/resources/groups/v1";
 const GROUP_PATH: &str = "/frontegg/identity/resources/groups/v1/{:id}";
 const GROUP_ROLES_PATH: &str = "/frontegg/identity/resources/groups/v1/{:id}/roles";
@@ -48,6 +49,9 @@ const USERS_V3_PATH: &str = "/identity/resources/users/v3";
 const ROLES_PATH: &str = "/identity/resources/roles/v2";
 const SCIM_CONFIGURATIONS_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2";
 const SCIM_CONFIGURATION_PATH: &str = "/frontegg/directory/resources/v1/configurations/scim2/{:id}";
+const TENANTS_PATH: &str = "/tenants/resources/tenants/v1";
+const TENANT_PATH: &str = "/tenants/resources/tenants/v1/{:id}";
+const TENANT_METADATA_PATH: &str = "/tenants/resources/tenants/v1/{:id}/metadata";
 const SSO_CONFIGS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations";
 const SSO_CONFIG_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/{:id}";
 const SSO_CONFIG_DOMAINS_PATH: &str =
@@ -153,12 +157,14 @@ impl FronteggMockServer {
             sso_configs: Mutex::new(BTreeMap::new()),
             groups: Mutex::new(BTreeMap::new()),
             scim_configurations: Mutex::new(BTreeMap::new()),
+            tenants: Mutex::new(BTreeMap::new()),
         });
 
         let router = Router::new()
             .route(AUTH_API_TOKEN_PATH, post(handle_post_auth_api_token))
             .route(AUTH_USER_PATH, post(handle_post_auth_user))
             .route(AUTH_API_TOKEN_REFRESH_PATH, post(handle_post_token_refresh))
+            .route(AUTH_VENDOR_PATH, post(handle_post_auth_vendor))
             .route(USERS_ME_PATH, get(handle_get_user_profile))
             .route(
                 USERS_API_TOKENS_PATH,
@@ -239,6 +245,12 @@ impl FronteggMockServer {
                 SCIM_CONFIGURATION_PATH,
                 delete(handle_delete_scim_configuration),
             )
+            .route(
+                TENANTS_PATH,
+                get(handle_list_tenants).post(handle_create_tenant),
+            )
+            .route(TENANT_PATH, get(handle_get_tenant))
+            .route(TENANT_METADATA_PATH, post(handle_set_tenant_metadata))
             .route(
                 INTERNAL_USER_PASSWORD_PATH,
                 post(internal_handle_get_user_password),
@@ -322,4 +334,5 @@ pub struct Context {
     pub sso_configs: Mutex<BTreeMap<String, SSOConfigStorage>>,
     pub groups: Mutex<BTreeMap<String, Group>>,
     pub scim_configurations: Mutex<BTreeMap<String, SCIM2ConfigurationStorage>>,
+    pub tenants: Mutex<BTreeMap<uuid::Uuid, TenantConfig>>,
 }
