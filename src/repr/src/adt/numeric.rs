@@ -779,6 +779,23 @@ pub fn numeric_to_twos_complement_be(
         return buf;
     }
 
+    // Fast path: for values with ≤18 significant digits (coefficient fits in i64)
+    // and non-positive exponent. When exponent <= 0, scaleb only adjusts the exponent
+    // to 0 without changing the coefficient, so we can write the coefficient directly
+    // as 17-byte big-endian twos complement without any FFI calls.
+    // (Positive exponents require value = coeff * 10^exp, which we skip here.)
+    if numeric.exponent() <= 0 {
+        if let Some(coeff) = coeff_to_i64(&numeric) {
+            // i64 → i128 sign-extension → 16-byte big-endian
+            let c128 = coeff as i128;
+            let be = c128.to_be_bytes();
+            // 17-byte buffer: byte 0 is sign extension, bytes 1-16 are the i128 big-endian
+            buf[0] = if coeff < 0 { 0xFF } else { 0x00 };
+            buf[1..17].copy_from_slice(&be);
+            return buf;
+        }
+    }
+
     let mut cx = Numeric::context();
 
     // Ensure `numeric` is a canonical coefficient.
@@ -2089,5 +2106,85 @@ mod tests {
             try_mul_fast(&big, &Numeric::from(2i32)).is_none(),
             "should fall back for >18 digit coefficient"
         );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_numeric_to_twos_complement_be_fast_path() {
+        let mut cx = cx_datum();
+
+        // Reference implementation: always uses FFI path.
+        fn reference_twos_complement_be(
+            mut numeric: Numeric,
+        ) -> [u8; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH] {
+            let mut buf = [0; Numeric::TWOS_COMPLEMENT_BYTE_WIDTH];
+            if numeric.is_special() {
+                return buf;
+            }
+            let mut cx = Numeric::context();
+            if numeric.exponent() < 0 {
+                let s = Numeric::from(-numeric.exponent());
+                cx.scaleb(&mut numeric, &s);
+            }
+            numeric_to_twos_complement_inner::<Numeric, NUMERIC_DATUM_WIDTH_USIZE>(
+                numeric, &mut cx, &mut buf,
+            );
+            buf
+        }
+
+        fn check(n: Numeric) {
+            let fast = numeric_to_twos_complement_be(n);
+            let slow = reference_twos_complement_be(n);
+            assert_eq!(
+                fast, slow,
+                "twos complement mismatch for {n} (exp={}): fast={fast:?}, slow={slow:?}",
+                n.exponent()
+            );
+        }
+
+        // Zero
+        check(Numeric::from(0i32));
+
+        // Small positive/negative integers
+        check(Numeric::from(1i32));
+        check(Numeric::from(-1i32));
+        check(Numeric::from(42i32));
+        check(Numeric::from(-42i32));
+        check(Numeric::from(i32::MAX));
+        check(Numeric::from(i32::MIN));
+
+        // Money-like decimals (negative exponent)
+        check(cx.parse("12345.67").unwrap());
+        check(cx.parse("-99999.99").unwrap());
+        check(cx.parse("0.001").unwrap());
+        check(cx.parse("-0.001").unwrap());
+
+        // Large coefficients that still fit in i64
+        check(cx.parse("999999999999999999").unwrap());
+        check(cx.parse("-999999999999999999").unwrap());
+
+        // Values after rescale (simulating Avro encoding)
+        let mut v: Numeric = cx.parse("123.45").unwrap();
+        let _ = rescale(&mut v, 6);
+        check(v);
+
+        let mut v: Numeric = cx.parse("-9876543.21").unwrap();
+        let _ = rescale(&mut v, 10);
+        check(v);
+
+        // Positive exponent (should fallback to FFI, but still correct)
+        let v: Numeric = cx.parse("1E+10").unwrap();
+        check(v);
+        let v: Numeric = cx.parse("-5E+5").unwrap();
+        check(v);
+
+        // Large coefficient (> 18 digits, must use FFI path)
+        check(cx.parse("12345678901234567890.12").unwrap());
+        check(cx.parse("-99999999999999999999.99").unwrap());
+
+        // Special values
+        check(Numeric::infinity());
+        let nan: Numeric = cx.parse("NaN").unwrap();
+        check(nan);
     }
 }

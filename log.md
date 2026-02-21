@@ -4262,3 +4262,59 @@ because `DatumKind` integer comparison is cheaper than the derived enum discrimi
 - `Row::clone()` at 527B executions is the largest source of allocation pressure.
 - `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
 - `div_numeric` could use a fast path for simple cases.
+
+---
+
+## Session 45: Fast-path numeric_to_twos_complement_be — bypass C FFI
+
+**Date:** 2026-02-20
+
+**Target:** `numeric_to_twos_complement_be()` in `src/repr/src/adt/numeric.rs`.
+This function converts a `Numeric` into its 17-byte big-endian twos complement
+representation, used in Avro encoding. Coverage shows ~0.8B calls. The original
+implementation clones a `Context`, calls `scaleb` (C FFI) to normalize the
+exponent, then runs a loop that repeatedly calls `rem`/`div_integer` (C FFI)
+to extract base-256 digits.
+
+**Insight:** `scaleb` only adjusts the exponent, it does NOT change the
+coefficient. For values with non-positive exponent and ≤18 significant digits
+(coefficient fits in i64), we can extract the coefficient directly with
+`coeff_to_i64()`, sign-extend to i128, and write the 17-byte big-endian twos
+complement representation entirely in Rust — zero FFI calls.
+
+**Benchmark results (`cargo bench -p mz-repr --bench numeric_twos_complement`):**
+
+| Benchmark | FFI (ns) | Fast (ns) | Speedup |
+|---|---|---|---|
+| integer_42 | 32.4 | 9.2 | **3.5x** |
+| money_12345_67 | 51.2 | 10.5 | **4.9x** |
+| rescaled_scale6 | 51.0 | 10.5 | **4.9x** |
+| large_18_digits | 48.7 | 12.3 | **4.0x** |
+| negative | 56.9 | 10.4 | **5.5x** |
+| zero | 8.3 | 9.3 | ~1x (already early-returns for special) |
+| huge_gt18_digits | 74.2 | 75.5 | ~1x (FFI fallback, expected) |
+
+**Speedup: 3.5-5.5x** for the common case (≤18 significant digits, non-positive
+exponent). This covers the vast majority of real-world Numeric values (money,
+counts, measurements).
+
+**Note on `numeric_to_twos_complement_wide`:** The wide variant (33-byte buffer,
+used in aggregation) is hotter at ~25B inner loop calls but harder to fast-path.
+It requires computing `coeff * 10^(39+exp)`, which overflows i128 for most
+practical values. A future optimization could use u128-pair (256-bit) arithmetic
+for this path.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` — Added fast path to `numeric_to_twos_complement_be`
+  that writes the coefficient directly as 17-byte big-endian twos complement when
+  exponent ≤ 0 and coefficient fits in i64. Added correctness test.
+- `src/repr/benches/numeric_twos_complement.rs` — New benchmark file.
+- `src/repr/Cargo.toml` — Registered numeric_twos_complement benchmark.
+
+**Future optimization ideas:**
+- `numeric_to_twos_complement_wide` — use 256-bit arithmetic (u128 pair) to
+  fast-path the aggregation encoding for common cases.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `zero_diffs.clone()` in `reduce.rs` clones `Vec<Accum>` per input row.
+- `div_numeric` could use a fast path for simple cases.
