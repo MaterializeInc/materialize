@@ -129,6 +129,26 @@ impl std::fmt::Debug for MirScalarExpr {
     }
 }
 
+/// Cold path for integer negation overflow — kept out-of-line to avoid
+/// bloating the fast path in `MirScalarExpr::eval`.
+#[cold]
+#[inline(never)]
+fn neg_overflow_i16<'a>(a: i16) -> Result<Datum<'a>, EvalError> {
+    Err(EvalError::Int16OutOfRange(a.to_string().into()))
+}
+
+#[cold]
+#[inline(never)]
+fn neg_overflow_i32<'a>(a: i32) -> Result<Datum<'a>, EvalError> {
+    Err(EvalError::Int32OutOfRange(a.to_string().into()))
+}
+
+#[cold]
+#[inline(never)]
+fn neg_overflow_i64<'a>(a: i64) -> Result<Datum<'a>, EvalError> {
+    Err(EvalError::Int64OutOfRange(a.to_string().into()))
+}
+
 impl MirScalarExpr {
     pub fn columns(is: &[usize]) -> Vec<MirScalarExpr> {
         is.iter().map(|i| MirScalarExpr::column(*i)).collect()
@@ -2039,7 +2059,99 @@ impl MirScalarExpr {
             MirScalarExpr::CallUnmaterializable(x) => Err(EvalError::Internal(
                 format!("cannot evaluate unmaterializable function: {:?}", x).into(),
             )),
-            MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
+            MirScalarExpr::CallUnary { func, expr } => {
+                // Fast path for hot unary operations: bypass the 325-arm
+                // UnaryFunc match, InputDatumType try_from_result conversion,
+                // and OutputDatumType into_result wrapping.
+                match func {
+                    UnaryFunc::IsNull(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        Ok(if d.is_null() {
+                            Datum::True
+                        } else {
+                            Datum::False
+                        })
+                    }
+                    UnaryFunc::Not(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::True => Ok(Datum::False),
+                            Datum::False => Ok(Datum::True),
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal(
+                                "invalid input type".into(),
+                            )),
+                        }
+                    }
+                    UnaryFunc::NegInt16(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::Int16(a) => match a.checked_neg() {
+                                Some(r) => Ok(Datum::Int16(r)),
+                                None => neg_overflow_i16(a),
+                            },
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    UnaryFunc::NegInt32(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::Int32(a) => match a.checked_neg() {
+                                Some(r) => Ok(Datum::Int32(r)),
+                                None => neg_overflow_i32(a),
+                            },
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    UnaryFunc::NegInt64(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::Int64(a) => match a.checked_neg() {
+                                Some(r) => Ok(Datum::Int64(r)),
+                                None => neg_overflow_i64(a),
+                            },
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    UnaryFunc::CastInt16ToInt32(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::Int16(a) => Ok(Datum::Int32(i32::from(a))),
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    UnaryFunc::CastInt16ToInt64(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::Int16(a) => Ok(Datum::Int64(i64::from(a))),
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    UnaryFunc::CastInt32ToInt64(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::Int32(a) => Ok(Datum::Int64(i64::from(a))),
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    UnaryFunc::CastBoolToInt32(_) => {
+                        let d = expr.eval(datums, temp_storage)?;
+                        match d {
+                            Datum::True => Ok(Datum::Int32(1)),
+                            Datum::False => Ok(Datum::Int32(0)),
+                            Datum::Null => Ok(Datum::Null),
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    _ => func.eval(datums, temp_storage, expr),
+                }
+            }
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                 // Fast path for comparison operators: bypass the EagerBinaryFunc
                 // ceremony (212-arm BinaryFunc match, InputDatumType try_from_iter
