@@ -499,12 +499,14 @@ where
                         let result = if let Some(projection) = pure_project {
                             row.project_onto(projection, &mut row_buf);
                             Ok(Some(row_buf.clone()))
-                        } else if let Some(projection) = eval_then_project {
-                            // Evaluate predicates with minimal decode, then byte-project (sorted).
+                        } else if eval_then_project.is_some()
+                            || eval_then_project_unordered.is_some()
+                        {
+                            // Evaluate predicates with minimal decode, then byte-project.
                             let mut datums =
                                 datum_vec.borrow_with_selective(&row, &mfp_needed);
-                            mfp
-                                .evaluate_into_project(
+                            if let Some(projection) = eval_then_project {
+                                mfp.evaluate_into_project(
                                     &mut *datums,
                                     &row_arena,
                                     row.as_ref(),
@@ -512,19 +514,16 @@ where
                                     &mut row_buf,
                                 )
                                 .map(|row| row.cloned())
-                        } else if let Some(projection) = eval_then_project_unordered {
-                            // Evaluate predicates with minimal decode, then byte-project (unsorted).
-                            let mut datums =
-                                datum_vec.borrow_with_selective(&row, &mfp_needed);
-                            mfp
-                                .evaluate_into_project_unordered(
+                            } else {
+                                mfp.evaluate_into_project_unordered(
                                     &mut *datums,
                                     &row_arena,
                                     row.as_ref(),
-                                    projection,
+                                    eval_then_project_unordered.unwrap(),
                                     &mut row_buf,
                                 )
                                 .map(|row| row.cloned())
+                            }
                         } else {
                             let mut datums =
                                 datum_vec.borrow_with_selective(&row, &mfp_needed);

@@ -4600,10 +4600,64 @@ add up.
 - `src/repr/benches/numeric_to_agg.rs` — Added from_agg benchmarks.
 
 **Future optimization ideas:**
-- MFPPushdown shows consistent 30% regression in CI (1.89s vs 1.46s for SELECT * FROM v1 WHERE f2 < 0
-  on 10M rows). Likely caused by icache pressure from enlarged do_work function body (sessions 20-22
-  added ~100 lines of fast path code). Could be mitigated by extracting fast paths into separate
-  #[inline(never)] functions or by restructuring the loop.
+- `ArrayIdx::cmp` in persist merge sort: 327B calls with 16-arm match. A direct `cmp_at()` method
+  on ArrayOrd could avoid creating intermediate ArrayIdx values.
+- `Region<T>` enum dispatch: 613B calls to `len()`. Caching the region length could avoid match.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+
+---
+
+## Session 50: do_work icache pressure reduction (MFPPushdown regression fix)
+
+**Problem:** CI benchmarks showed a consistent ~30% regression in the MFPPushdown benchmark
+(1.89s vs 1.46s on main for `SELECT * FROM v1 WHERE f2 < 0` filtering 10M rows). The `do_work`
+function in `persist_source.rs` had grown to 261 lines across sessions 19-22 as fast-path
+strategies were added. The function had three sequential `if let Some(...) { ... continue; }`
+blocks for pure_project, eval_then_project_sorted, and eval_then_project_unordered, with the
+sorted/unordered paths duplicating ~47 lines of nearly identical code. This bloated the hot loop,
+increasing icache pressure.
+
+**Approach:** Refactored `do_work` to reduce code size in the hot loop:
+
+1. **Introduced `MfpProjectStrategy` enum** to replace three separate `Option<Vec<usize>>`
+   parameters (`mfp_pure_project`, `mfp_eval_then_project`, `mfp_eval_then_project_unordered`).
+   The enum has four variants: `PureProject`, `EvalThenProjectSorted`, `EvalThenProjectUnordered`,
+   and `FullMfp`. A `from_mfp()` constructor computes the strategy once at startup.
+
+2. **Replaced sequential if-let chains with a single `match`** on `mfp_strategy` in the inner loop,
+   eliminating redundant branch evaluation for each row.
+
+3. **Merged sorted/unordered eval_then_project paths** into one match arm using `matches!()` to
+   select between `project_onto` and `project_onto_unordered`, removing ~47 lines of duplication.
+
+4. **Extracted audit violation reporting to `#[cold] #[inline(never)]` function**
+   (`report_pushdown_audit_violation`), keeping error-handling code out of the hot path.
+
+5. **Applied same deduplication to `compute_state.rs` and `oneshot_source.rs`** which had
+   similar duplicated eval_then_project paths.
+
+**Binary size measurements (do_work function via `nm --print-size`):**
+
+| Version | do_work size | Change |
+|---------|-------------|--------|
+| Baseline (pre-optimization) | 5417 bytes (0x1529) | — |
+| After refactoring | 4206 bytes (0x106e) | **−22.3% (−1211 bytes)** |
+
+The function is monomorphized 3 times in the binary, so total savings: **3633 bytes** of hot code
+removed from the icache footprint.
+
+**Local benchmark (1M rows, `SELECT * FROM v1 WHERE f2 < 0`):**
+Warm queries showed ~66-71ms (optimized) vs ~68-71ms (baseline) — within noise for 1M rows
+where the MFP loop takes <10ms of the total ~70ms query time. The CI benchmark with 10M rows
+should show more pronounced improvement since the inner loop dominates.
+
+**Files changed:**
+- `src/storage-operators/src/persist_source.rs` — Major refactoring: MfpProjectStrategy enum,
+  merged do_work strategy paths, extracted cold audit function.
+- `src/compute/src/compute_state.rs` — Merged duplicate eval_then_project paths.
+- `src/storage-operators/src/oneshot_source.rs` — Merged duplicate eval_then_project paths.
+
+**Future optimization ideas:**
 - `ArrayIdx::cmp` in persist merge sort: 327B calls with 16-arm match. A direct `cmp_at()` method
   on ArrayOrd could avoid creating intermediate ArrayIdx values.
 - `Region<T>` enum dispatch: 613B calls to `len()`. Caching the region length could avoid match.

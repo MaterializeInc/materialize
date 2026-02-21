@@ -1373,34 +1373,35 @@ impl PersistPeek {
                 let eval_result: Option<Row> = if let Some(projection) = pure_project {
                     row.project_onto(projection, &mut row_builder);
                     Some(row_builder.clone())
-                } else if let Some(projection) = eval_then_project {
-                    // Evaluate predicates/expressions, then byte-project (sorted).
+                } else if eval_then_project.is_some()
+                    || eval_then_project_unordered.is_some()
+                {
+                    // Evaluate predicates/expressions, then byte-project.
                     let mut datum_local =
                         datum_vec.borrow_with_selective(&row, &mfp_needed);
-                    mfp_plan
-                        .evaluate_into_project(
-                            &mut datum_local,
-                            &arena,
-                            row.as_ref(),
-                            projection,
-                            &mut row_builder,
-                        )
-                        .map(|row| row.cloned())
-                        .map_err(|e| e.to_string())?
-                } else if let Some(projection) = eval_then_project_unordered {
-                    // Evaluate predicates/expressions, then byte-project (unsorted).
-                    let mut datum_local =
-                        datum_vec.borrow_with_selective(&row, &mfp_needed);
-                    mfp_plan
-                        .evaluate_into_project_unordered(
-                            &mut datum_local,
-                            &arena,
-                            row.as_ref(),
-                            projection,
-                            &mut row_builder,
-                        )
-                        .map(|row| row.cloned())
-                        .map_err(|e| e.to_string())?
+                    if let Some(projection) = eval_then_project {
+                        mfp_plan
+                            .evaluate_into_project(
+                                &mut datum_local,
+                                &arena,
+                                row.as_ref(),
+                                projection,
+                                &mut row_builder,
+                            )
+                            .map(|row| row.cloned())
+                            .map_err(|e| e.to_string())?
+                    } else {
+                        mfp_plan
+                            .evaluate_into_project_unordered(
+                                &mut datum_local,
+                                &arena,
+                                row.as_ref(),
+                                eval_then_project_unordered.unwrap(),
+                                &mut row_builder,
+                            )
+                            .map(|row| row.cloned())
+                            .map_err(|e| e.to_string())?
+                    }
                 } else {
                     let mut datum_local =
                         datum_vec.borrow_with_selective(&row, &mfp_needed);
