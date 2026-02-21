@@ -12,6 +12,7 @@ use crate::server::Context;
 use crate::utils::{RefreshTokenTarget, generate_access_token, generate_refresh_token};
 use axum::{Json, extract::State, http::StatusCode};
 use mz_frontegg_auth::{ApiTokenResponse, ClaimTokenType};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -136,4 +137,48 @@ pub async fn handle_post_token_refresh(
             handle_post_auth_api_token(State(context), Json(request)).await
         }
     }
+}
+
+/// Request body for vendor authentication.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VendorAuthRequest {
+    pub client_id: String,
+    pub secret: String,
+}
+
+/// Response body for vendor authentication.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VendorAuthResponse {
+    pub token: String,
+    pub expires_in: i64,
+}
+
+/// Handle POST /auth/vendor
+/// Authenticates a vendor SDK client and returns a JWT token.
+pub async fn handle_post_auth_vendor(
+    State(context): State<Arc<Context>>,
+    Json(_request): Json<VendorAuthRequest>,
+) -> Result<Json<VendorAuthResponse>, StatusCode> {
+    // For the mock, we accept any client_id/secret and return a valid token.
+    // In production, this would validate the credentials.
+    let now_secs = (context.now)() / 1000;
+    let exp_secs = now_secs as i64 + context.expires_in_secs;
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &serde_json::json!({
+            "sub": "vendor",
+            "iss": context.issuer,
+            "iat": now_secs,
+            "exp": exp_secs,
+        }),
+        &context.encoding_key,
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(VendorAuthResponse {
+        token,
+        expires_in: context.expires_in_secs,
+    }))
 }
