@@ -261,7 +261,7 @@ fn coeff_to_i64(d: &Numeric) -> Option<i64> {
 ///
 /// The caller must ensure the value is representable (≤ 18 significant digits).
 #[inline]
-pub fn numeric_from_i64_coeff(mut val: i64, exponent: i32) -> Numeric {
+pub fn numeric_from_i64_coeff(val: i64, exponent: i32) -> Numeric {
     if val == 0 {
         let lsu = [0u16; 13];
         return Numeric::from_raw_parts(1, exponent, 0, lsu);
@@ -490,6 +490,103 @@ fn numeric_from_i128_coeff(val: i128, exponent: i32) -> Option<Numeric> {
         return None;
     }
     Some(Numeric::from_raw_parts(sig_digits, exponent, bits, lsu))
+}
+
+/// Extract the coefficient of a finite `Decimal<N>` as an `i64`, if it fits.
+///
+/// Generic version of `coeff_to_i64` that works on any `Decimal<N>` including `NumericAgg`.
+/// Returns `None` for special values (NaN/Inf) or values with more than
+/// 18 significant digits (which might overflow i64).
+#[inline]
+fn decimal_coeff_to_i64<const N: usize>(d: &Decimal<N>) -> Option<i64> {
+    if d.is_special() {
+        return None;
+    }
+    let units = d.coefficient_units();
+    // Each unit holds 0-999. 6 units = up to 18 digits, which fits in i64
+    // (i64::MAX = 9_223_372_036_854_775_807, 19 digits).
+    if units.len() > 6 {
+        return None;
+    }
+    let mut val: i64 = 0;
+    for &u in units.iter().rev() {
+        val = val * 1000 + u as i64;
+    }
+    if d.is_negative() {
+        val = -val;
+    }
+    Some(val)
+}
+
+/// Build a `NumericAgg` (`Decimal<27>`) from an i64 coefficient and exponent.
+///
+/// The caller must ensure the value is representable (≤ 18 significant digits).
+#[inline]
+fn numeric_agg_from_i64_coeff(val: i64, exponent: i32) -> NumericAgg {
+    if val == 0 {
+        let lsu = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+        return NumericAgg::from_raw_parts(1, exponent, 0, lsu);
+    }
+    let (bits, magnitude) = if val < 0 {
+        (0x80u8, (val as u64).wrapping_neg()) // DECNEG; handles i64::MIN correctly
+    } else {
+        (0u8, val as u64)
+    };
+    let mut lsu = [0u16; NUMERIC_AGG_WIDTH_USIZE];
+    let mut remaining = magnitude;
+    let mut n_units = 0usize;
+    while remaining > 0 {
+        lsu[n_units] = (remaining % 1000) as u16;
+        remaining /= 1000;
+        n_units += 1;
+    }
+    let top_unit = lsu[n_units - 1];
+    let top_digits = if top_unit >= 100 {
+        3
+    } else if top_unit >= 10 {
+        2
+    } else {
+        1
+    };
+    let sig_digits = (n_units as u32 - 1) * 3 + top_digits;
+    NumericAgg::from_raw_parts(sig_digits, exponent, bits, lsu)
+}
+
+/// Fast-path addition for `NumericAgg` accumulator, bypassing `cx_agg.add()` and
+/// `cx_agg.reduce()` (2 C FFI calls).
+///
+/// Returns `true` if the fast path succeeded (result written to `a`), `false` if
+/// the caller should fall back to the FFI path.
+///
+/// Succeeds when both operands have the same exponent and both coefficients + result
+/// fit in i64 (≤18 significant digits). With 81 digits of precision in NumericAgg,
+/// there's no risk of overflow, so `reduce()` is unnecessary.
+///
+/// For typical SUM aggregation over money/integer columns, the accumulator stays
+/// within i64 range for billions of rows.
+#[inline]
+pub fn try_add_numeric_agg(a: &mut NumericAgg, b: &NumericAgg) -> bool {
+    // Quick check: same exponent (handles 99%+ of SUM aggregation cases
+    // where all values come from the same SQL column with the same scale).
+    if a.exponent() != b.exponent() {
+        return false;
+    }
+    let ca = match decimal_coeff_to_i64(a) {
+        Some(v) => v,
+        None => return false,
+    };
+    let cb = match decimal_coeff_to_i64(b) {
+        Some(v) => v,
+        None => return false,
+    };
+    let result = match ca.checked_add(cb) {
+        Some(v) => v,
+        None => return false,
+    };
+    // The result fits in i64, and with 81 digits of precision in NumericAgg,
+    // a 19-digit i64 result is far from overflow. No reduce() needed.
+    *a = numeric_agg_from_i64_coeff(result, a.exponent());
+    true
 }
 
 /// Fast-path comparison of two `Numeric` values, bypassing the C FFI.
@@ -2392,5 +2489,45 @@ mod tests {
         check(Numeric::infinity());
         let nan: Numeric = cx.parse("NaN").unwrap();
         check(nan);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_try_add_numeric_agg() {
+        // Helper: compare fast-path result against FFI result.
+        // The fast path preserves the exponent (no reduce), so we
+        // reduce both to canonical form before comparing.
+        fn check(a_str: &str, b_str: &str) {
+            let mut cx = cx_agg();
+            let a: NumericAgg = cx.parse(a_str).unwrap();
+            let b: NumericAgg = cx.parse(b_str).unwrap();
+            // FFI reference
+            let mut expected = a.clone();
+            cx.add(&mut expected, &b);
+            cx.reduce(&mut expected);
+            // Fast path
+            let mut fast = a.clone();
+            if try_add_numeric_agg(&mut fast, &b) {
+                cx.reduce(&mut fast);
+                assert_eq!(
+                    fast.to_standard_notation_string(),
+                    expected.to_standard_notation_string(),
+                    "agg add mismatch for {a_str} + {b_str}"
+                );
+            }
+        }
+
+        check("0", "0");
+        check("1", "2");
+        check("100", "200");
+        check("-1", "1");
+        check("-50", "-50");
+        check("999999999999999999", "1");
+        check("-999999999999999999", "-1");
+        check("1.5", "2.5");
+        check("123.456", "789.012");
+        check("1234567.89", "9876543.21");
+        check("0", "5");
+        check("5", "0");
     }
 }

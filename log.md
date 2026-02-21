@@ -4414,3 +4414,72 @@ FFI path (no regression).
   `if index == 0` branch by storing bounds with a leading 0 sentinel.
 - `Region::len/capacity/as_vec` at 613B+ calls each do an enum dispatch that could
   be eliminated by caching length alongside the enum.
+
+---
+
+## Session 47: Fast-path NumericAgg SUM accumulation — bypass cx_agg.add + cx_agg.reduce
+
+**Date:** 2026-02-21
+
+**Target:** `Accum::Numeric::plus_equals` in `src/compute/src/render/reduce.rs`
+(~2.9B executions in coverage data). Every SUM aggregation over numeric/decimal
+columns calls `cx_agg.add()` + `cx_agg.reduce()` = 2 C FFI round-trips per
+accumulation step, plus a `Context<NumericAgg>` clone.
+
+**Approach:** For the common case where both the accumulator and the incoming
+value have the same exponent (same SQL scale — true for >99% of SUM over a
+single column) and both coefficients fit in i64 (≤18 significant digits), we
+extract the coefficients as native i64, add them with `checked_add`, and
+reconstruct the `NumericAgg` (`Decimal<27>`) from raw parts. This bypasses both
+FFI calls entirely.
+
+The fast path skips `reduce()` (trailing-zero stripping), which is safe because:
+1. The result coefficient fits in i64 (~19 digits), far below NumericAgg's 81-digit
+   capacity, so there's no precision pressure.
+2. The exponent is preserved from the inputs, maintaining consistency for subsequent
+   fast-path additions.
+3. If the FFI fallback runs later (different exponents), its `reduce()` works
+   correctly on any valid Decimal.
+
+**Key functions added to `src/repr/src/adt/numeric.rs`:**
+- `decimal_coeff_to_i64<const N: usize>()` — generic coefficient extraction for any
+  `Decimal<N>` (works for both `Numeric` and `NumericAgg`).
+- `numeric_agg_from_i64_coeff()` — builds `NumericAgg` from i64 coefficient + exponent.
+- `try_add_numeric_agg()` — the public fast-path: returns `true` if it succeeded.
+
+**Benchmark results** (`cargo bench --bench numeric_agg_add`):
+
+Single operation (NumericAgg = Decimal<27>):
+| Case | Old (FFI) | New (fast) | Speedup |
+|------|-----------|------------|---------|
+| Small int (42+58) | 21.6 ns | 16.4 ns | 1.3x |
+| Money (1234567.89+9876543.21) | 28.8 ns | 17.2 ns | 1.7x |
+| Large coeff (18 digits) | 43.8 ns | 16.4 ns | 2.7x |
+
+Batch SUM (10k values accumulated):
+| Case | Old (FFI) | New (fast) | Speedup |
+|------|-----------|------------|---------|
+| Money values | 202.8 µs | 165.6 µs | 1.2x |
+| Integer values | 201.9 µs | 155.7 µs | 1.3x |
+
+Note: Batch speedups are diluted by `NumericAgg` clone overhead per criterion
+iteration (Decimal<27> is 60 bytes). The single-operation speedups (1.3–2.7x)
+better reflect the actual improvement in the hot path.
+
+**Files changed:**
+- `src/repr/src/adt/numeric.rs` — Added `decimal_coeff_to_i64`, `numeric_agg_from_i64_coeff`,
+  `try_add_numeric_agg`, and `test_try_add_numeric_agg` correctness test.
+- `src/compute/src/render/reduce.rs` — Updated `Accum::Numeric` `plus_equals` to try
+  fast path before FFI fallback.
+- `src/repr/benches/numeric_agg_add.rs` — New benchmark for NumericAgg accumulator addition.
+
+**Future optimization ideas:**
+- `Accum::Numeric` `Multiply` trait (used for DD retraction scaling) also calls
+  `cx_agg.mul()` — could bypass FFI for small integer factors.
+- `datum_to_accumulator` calls `cx_agg.to_width()` to widen `Numeric` → `NumericAgg` —
+  could construct `NumericAgg` directly from `Numeric` raw parts without FFI.
+- `div_numeric` could use a fast path for simple cases.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+- `Row::clone()` at 527B executions is the largest source of allocation pressure.
+- `Rows::get` (columnar Row indexing) at 1,273B executions could eliminate the
+  `if index == 0` branch by storing bounds with a leading 0 sentinel.

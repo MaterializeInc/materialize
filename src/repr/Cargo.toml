@@ -157,6 +157,10 @@ harness = false
 name = "numeric_twos_complement"
 harness = false
 
+[[bench]]
+name = "numeric_agg_add"
+harness = false
+
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }
