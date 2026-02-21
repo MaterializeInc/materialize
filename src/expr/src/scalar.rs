@@ -2083,6 +2083,70 @@ impl MirScalarExpr {
                         };
                         Ok(if result { Datum::True } else { Datum::False })
                     }
+                    // Fast path for integer arithmetic: bypass the
+                    // EagerBinaryFunc ceremony (212-arm BinaryFunc match,
+                    // InputDatumType try_from_iter, OutputDatumType
+                    // into_result) and operate directly on Datum values.
+                    BinaryFunc::AddInt16(_)
+                    | BinaryFunc::SubInt16(_)
+                    | BinaryFunc::MulInt16(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Int16(a), Datum::Int16(b)) = (a, b) {
+                            let r = match func {
+                                BinaryFunc::AddInt16(_) => a.checked_add(b),
+                                BinaryFunc::SubInt16(_) => a.checked_sub(b),
+                                _ => a.checked_mul(b),
+                            };
+                            r.map(Datum::Int16)
+                                .ok_or(EvalError::NumericFieldOverflow)
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    BinaryFunc::AddInt32(_)
+                    | BinaryFunc::SubInt32(_)
+                    | BinaryFunc::MulInt32(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Int32(a), Datum::Int32(b)) = (a, b) {
+                            let r = match func {
+                                BinaryFunc::AddInt32(_) => a.checked_add(b),
+                                BinaryFunc::SubInt32(_) => a.checked_sub(b),
+                                _ => a.checked_mul(b),
+                            };
+                            r.map(Datum::Int32)
+                                .ok_or(EvalError::NumericFieldOverflow)
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    BinaryFunc::AddInt64(_)
+                    | BinaryFunc::SubInt64(_)
+                    | BinaryFunc::MulInt64(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Int64(a), Datum::Int64(b)) = (a, b) {
+                            let r = match func {
+                                BinaryFunc::AddInt64(_) => a.checked_add(b),
+                                BinaryFunc::SubInt64(_) => a.checked_sub(b),
+                                _ => a.checked_mul(b),
+                            };
+                            r.map(Datum::Int64)
+                                .ok_or(EvalError::NumericFieldOverflow)
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
                     _ => func.eval(datums, temp_storage, &[expr1, expr2]),
                 }
             }
