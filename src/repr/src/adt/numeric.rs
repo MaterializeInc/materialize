@@ -571,6 +571,57 @@ pub fn numeric_to_agg_direct(n: &Numeric) -> NumericAgg {
     NumericAgg::from_raw_parts(n.digits(), n.exponent(), bits, lsu)
 }
 
+/// Try to convert a `NumericAgg` (Decimal<27>) to `Numeric` (Decimal<13>) without C FFI.
+///
+/// This is the reverse of `numeric_to_agg_direct()`. Returns `Some(Numeric)` if the
+/// value fits exactly in Numeric's 39-digit precision, `None` if it needs rounding or
+/// overflow handling (caller should fall back to `cx_datum.to_width()`).
+///
+/// For SUM aggregation finalization, the accumulator typically fits in Numeric's
+/// precision, making this fast path succeed in >99% of cases.
+#[inline]
+pub fn try_numeric_agg_to_datum(a: &NumericAgg) -> Option<Numeric> {
+    // Special values (NaN, Inf) — rare in aggregation, fall back to FFI.
+    if a.is_special() {
+        return None;
+    }
+
+    // Zero: construct directly.
+    if a.is_zero() {
+        return Some(Numeric::zero());
+    }
+
+    let digits = a.digits();
+    let exponent = a.exponent();
+
+    // Check if coefficient fits in Numeric's 13 units (≤39 digits).
+    if digits > NUMERIC_DATUM_MAX_PRECISION as u32 {
+        return None;
+    }
+
+    // Check exponent range for Numeric context.
+    // adjusted_exponent = exponent + digits - 1 must be ≤ max_exponent (38).
+    let adjusted_exponent = exponent + digits as i32 - 1;
+    let max_exponent = NUMERIC_DATUM_MAX_PRECISION as i32 - 1; // 38
+    if adjusted_exponent > max_exponent {
+        return None;
+    }
+    // Etiny = min_exponent - (precision - 1) = -39 - 38 = -77.
+    let etiny = -(NUMERIC_DATUM_MAX_PRECISION as i32) - (NUMERIC_DATUM_MAX_PRECISION as i32 - 1);
+    if exponent < etiny {
+        return None;
+    }
+
+    // Copy coefficient units. With digits ≤ 39, n_units ≤ 13.
+    let units = a.coefficient_units();
+    let n_units = units.len();
+    let mut lsu = [0u16; NUMERIC_DATUM_WIDTH_USIZE];
+    lsu[..n_units].copy_from_slice(&units[..n_units]);
+
+    let bits = if a.is_negative() { 0x80u8 } else { 0u8 };
+    Some(Numeric::from_raw_parts(digits, exponent, bits, lsu))
+}
+
 /// Fast-path multiply of a `NumericAgg` by an i64 factor, bypassing `cx_agg.mul()`.
 ///
 /// Returns `Some(result)` if the fast path succeeded, `None` if the caller should
@@ -2624,6 +2675,60 @@ mod tests {
         check("99999999999999999999999999999999999999"); // 38 digits (max precision)
         check("1E+10");
         check("1E-10");
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_try_numeric_agg_to_datum() {
+        // Compare try_numeric_agg_to_datum() against cx_datum.to_width() for various values.
+        fn check(s: &str) {
+            let mut cx_agg = cx_agg();
+            let a: NumericAgg = cx_agg.parse(s).unwrap();
+            // FFI reference
+            let mut cx = cx_datum();
+            let expected = cx.to_width(a);
+            // Fast path
+            if let Some(fast) = try_numeric_agg_to_datum(&a) {
+                assert_eq!(
+                    fast.to_standard_notation_string(),
+                    expected.to_standard_notation_string(),
+                    "agg_to_datum mismatch for {s}"
+                );
+                assert_eq!(fast.exponent(), expected.exponent(), "exponent mismatch for {s}");
+                assert_eq!(fast.is_negative(), expected.is_negative(), "sign mismatch for {s}");
+                assert_eq!(fast.digits(), expected.digits(), "digits mismatch for {s}");
+            }
+        }
+
+        check("0");
+        check("1");
+        check("-1");
+        check("42");
+        check("-42");
+        check("100");
+        check("999999999999999999"); // 18 digits
+        check("-999999999999999999");
+        check("0.001");
+        check("123.456789");
+        check("1234567.89");
+        check("-9876543.21");
+        check("0.000001");
+        check("99999999999999999999999999999999999999"); // 38 digits
+        check("999999999999999999999999999999999999999"); // 39 digits (exact max)
+        check("1E+10");
+        check("1E-10");
+        // Values that round-trip through SUM: numeric_to_agg_direct then back.
+        let mut cx_n = cx_datum();
+        for &s in &["42.50", "100.00", "-999.99", "0.01"] {
+            let n: Numeric = cx_n.parse(s).unwrap();
+            let agg = numeric_to_agg_direct(&n);
+            let back = try_numeric_agg_to_datum(&agg).expect("round-trip should succeed");
+            assert_eq!(
+                back.to_standard_notation_string(),
+                n.to_standard_notation_string(),
+                "round-trip mismatch for {s}"
+            );
+        }
     }
 
     #[mz_ore::test]

@@ -207,5 +207,133 @@ fn bench_mul_agg(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_to_width, bench_to_width_batch, bench_mul_agg);
+/// Old path: cx_datum.to_width() = C FFI call (narrowing NumericAgg → Numeric).
+fn from_agg_ffi(a: &NumericAgg) -> Numeric {
+    let mut cx = numeric::cx_datum();
+    cx.to_width(*a)
+}
+
+/// New path: try fast path first, fall back to FFI.
+fn from_agg_fast(a: &NumericAgg) -> Numeric {
+    numeric::try_numeric_agg_to_datum(a).unwrap_or_else(|| {
+        let mut cx = numeric::cx_datum();
+        cx.to_width(*a)
+    })
+}
+
+fn bench_from_agg(c: &mut Criterion) {
+    let mut group = c.benchmark_group("numeric_agg_to_datum");
+    let mut cx = numeric::cx_agg();
+
+    // Zero
+    let zero: NumericAgg = cx.parse("0").unwrap();
+    group.bench_function("old_zero", |b| {
+        b.iter(|| from_agg_ffi(black_box(&zero)))
+    });
+    group.bench_function("new_zero", |b| {
+        b.iter(|| from_agg_fast(black_box(&zero)))
+    });
+
+    // Small integer (typical SUM result)
+    let small: NumericAgg = cx.parse("42").unwrap();
+    group.bench_function("old_small_int", |b| {
+        b.iter(|| from_agg_ffi(black_box(&small)))
+    });
+    group.bench_function("new_small_int", |b| {
+        b.iter(|| from_agg_fast(black_box(&small)))
+    });
+
+    // Money value (2 decimal places, typical SUM of money column)
+    let money: NumericAgg = cx.parse("12345678.99").unwrap();
+    group.bench_function("old_money", |b| {
+        b.iter(|| from_agg_ffi(black_box(&money)))
+    });
+    group.bench_function("new_money", |b| {
+        b.iter(|| from_agg_fast(black_box(&money)))
+    });
+
+    // Large SUM result (18 digits)
+    let large: NumericAgg = cx.parse("999999999999999999").unwrap();
+    group.bench_function("old_large_18dig", |b| {
+        b.iter(|| from_agg_ffi(black_box(&large)))
+    });
+    group.bench_function("new_large_18dig", |b| {
+        b.iter(|| from_agg_fast(black_box(&large)))
+    });
+
+    // Negative SUM result
+    let neg: NumericAgg = cx.parse("-98765432.1099").unwrap();
+    group.bench_function("old_negative", |b| {
+        b.iter(|| from_agg_ffi(black_box(&neg)))
+    });
+    group.bench_function("new_negative", |b| {
+        b.iter(|| from_agg_fast(black_box(&neg)))
+    });
+
+    // Max precision SUM (39 digits, fits exactly)
+    let max_prec: NumericAgg = cx.parse("123456789012345678901234567890123456789").unwrap();
+    group.bench_function("old_max_precision", |b| {
+        b.iter(|| from_agg_ffi(black_box(&max_prec)))
+    });
+    group.bench_function("new_max_precision", |b| {
+        b.iter(|| from_agg_fast(black_box(&max_prec)))
+    });
+
+    group.finish();
+}
+
+fn bench_from_agg_batch(c: &mut Criterion) {
+    let mut group = c.benchmark_group("numeric_agg_to_datum_batch");
+    let mut cx_n = dec::Context::<Numeric>::default();
+    cx_n.set_max_exponent(isize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))
+        .unwrap();
+    cx_n.set_min_exponent(-isize::from(numeric::NUMERIC_DATUM_MAX_PRECISION))
+        .unwrap();
+
+    // 10k values: simulate SUM finalization on mixed numeric accumulators.
+    // Convert Numeric values to NumericAgg via numeric_to_agg_direct, then narrow back.
+    let agg_values: Vec<NumericAgg> = (0..10_000)
+        .map(|i| {
+            let s = match i % 5 {
+                0 => format!("{}", i),
+                1 => format!("{}.{:02}", i / 100, i % 100),
+                2 => format!("-{}.{:04}", i, i % 10000),
+                3 => format!("0.{:06}", i % 1000000),
+                _ => format!("{}", i * 1000 + 42),
+            };
+            let n: Numeric = cx_n.parse(&*s).unwrap();
+            numeric::numeric_to_agg_direct(&n)
+        })
+        .collect();
+
+    group.bench_function("old_10k_mixed", |b| {
+        b.iter(|| {
+            let mut sum = Numeric::zero();
+            for a in &agg_values {
+                sum = from_agg_ffi(black_box(a));
+            }
+            sum
+        })
+    });
+    group.bench_function("new_10k_mixed", |b| {
+        b.iter(|| {
+            let mut sum = Numeric::zero();
+            for a in &agg_values {
+                sum = from_agg_fast(black_box(a));
+            }
+            sum
+        })
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_to_width,
+    bench_to_width_batch,
+    bench_mul_agg,
+    bench_from_agg,
+    bench_from_agg_batch,
+);
 criterion_main!(benches);
