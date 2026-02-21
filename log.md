@@ -4662,3 +4662,55 @@ should show more pronounced improvement since the inner loop dominates.
   on ArrayOrd could avoid creating intermediate ArrayIdx values.
 - `Region<T>` enum dispatch: 613B calls to `len()`. Caching the region length could avoid match.
 - `OrderedDecimal::hash` still calls `reduce` (FFI).
+
+---
+
+## Session 51: Integer arithmetic fast path in MirScalarExpr::eval
+
+**Date:** 2026-02-21
+
+**Target:** `MirScalarExpr::eval` integer arithmetic dispatch — bypassing the 212-arm
+`BinaryFunc` match, `InputDatumType::try_from_iter` conversion, and `OutputDatumType::into_result`
+wrapping for `AddInt16/32/64`, `SubInt16/32/64`, `MulInt16/32/64`.
+
+**Problem:** Coverage data shows `LazyBinaryFunc::eval` (the EagerBinaryFunc ceremony) executes
+**14.4 billion times**. For integer arithmetic, the actual work is a single `checked_add/sub/mul`
+instruction, but the framework overhead dominates:
+1. 212-arm `BinaryFunc::eval` jump table dispatch
+2. `InputDatumType::try_from_iter` — creates iterator, matches each Datum to extract native type
+3. `assert_none!` for leftover arguments
+4. `OutputDatumType::into_result` — wraps result back into Datum
+
+The comparison fast path (session 38) already bypasses this for Eq/NotEq/Lt/Lte/Gt/Gte. This
+session extends the pattern to integer arithmetic operations.
+
+**Approach:** Added fast-path match arms in `MirScalarExpr::eval` for `CallBinary` that directly
+extract integer values from Datums, perform `checked_add/sub/mul`, and return the result as a
+Datum — skipping the entire `BinaryFunc::eval` → `EagerBinaryFunc` → `InputDatumType` pipeline.
+
+**Benchmark results (`cargo bench -p mz-expr --bench arith_eval`):**
+
+| Benchmark | Baseline | Fast Path | Improvement |
+|---|---|---|---|
+| add_int32_col_lit | 37.5 ns | 27.3 ns | **−27%** |
+| sub_int32_col_col | 26.5 ns | 11.6 ns | **−57% (2.3x)** |
+| add_int64_col_lit | 36.5 ns | 21.7 ns | **−41% (1.7x)** |
+| mul_int64_col_col | 27.9 ns | 14.4 ns | **−48% (1.9x)** |
+| batch_add_int64 (10k) | 312 µs | 172 µs | **−45% (1.8x)** |
+| batch_compound_int64 (10k) | 434 µs | 170 µs | **−61% (2.6x)** |
+| add_int64_null | 36.6 ns | 21.7 ns | **−41%** |
+
+The compound expression (`col * col + col`) shows the most improvement at **2.6x faster** because
+both the multiply and add bypass the BinaryFunc dispatch.
+
+**Files changed:**
+- `src/expr/src/scalar.rs` — Added fast-path match arms for Add/Sub/Mul on Int16/Int32/Int64
+  in `MirScalarExpr::eval`, right after the existing comparison fast path.
+- `src/expr/benches/arith_eval.rs` — New benchmark for integer arithmetic evaluation.
+- `src/expr/Cargo.toml` — Added `arith_eval` bench entry.
+
+**Future optimization ideas:**
+- Extend fast path to float arithmetic (Add/Sub/Mul/Div Float32/64) with overflow/underflow checks.
+- Extend to integer division (Div/Mod Int16/32/64) with zero-check.
+- UnaryFunc dispatch (3.15B executions) — fast-path common unary operations like casts, negation.
+- `IsNull` unary fast path — extremely common in WHERE clauses.
