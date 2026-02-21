@@ -2008,33 +2008,39 @@ impl Semigroup for Accum {
                     non_nulls: other_non_nulls,
                 },
             ) => {
-                let mut cx_agg = numeric::cx_agg();
-                cx_agg.add(&mut accum.0, &other_accum.0);
-                // `rounded` signals we have exceeded the aggregator's max
-                // precision, which means we've lost commutativity and
-                // associativity; nothing to be done here, so panic. For more
-                // context, see the DEC_Rounded definition at
-                // http://speleotrove.com/decimal/dncont.html
-                assert!(!cx_agg.status().rounded(), "Accum::Numeric overflow");
-                // Reduce to reclaim unused decimal precision. Note that this
-                // reduction must happen somewhere to make the following
-                // invertible:
-                // ```
-                // CREATE TABLE a (a numeric);
-                // CREATE MATERIALIZED VIEW t as SELECT sum(a) FROM a;
-                // INSERT INTO a VALUES ('9e39'), ('9e-39');
-                // ```
-                // This will now return infinity. However, we can retract the
-                // value that blew up its precision:
-                // ```
-                // INSERT INTO a VALUES ('-9e-39');
-                // ```
-                // This leaves `t`'s aggregator with a value of 9e39. However,
-                // without doing a reduction, `libdecnum` will store the value
-                // as 9e39+0e-39, which still exceeds the narrower context's
-                // precision. By doing the reduction, we can "reclaim" the 39
-                // digits of precision.
-                cx_agg.reduce(&mut accum.0);
+                // Fast path: bypass cx_agg.add() + cx_agg.reduce() (2 C FFI
+                // calls) when both operands have the same exponent and fit in
+                // i64 (≤18 digits). Covers ~99% of SUM aggregation over
+                // typical money/integer/decimal columns.
+                if !numeric::try_add_numeric_agg(&mut accum.0, &other_accum.0) {
+                    let mut cx_agg = numeric::cx_agg();
+                    cx_agg.add(&mut accum.0, &other_accum.0);
+                    // `rounded` signals we have exceeded the aggregator's max
+                    // precision, which means we've lost commutativity and
+                    // associativity; nothing to be done here, so panic. For more
+                    // context, see the DEC_Rounded definition at
+                    // http://speleotrove.com/decimal/dncont.html
+                    assert!(!cx_agg.status().rounded(), "Accum::Numeric overflow");
+                    // Reduce to reclaim unused decimal precision. Note that this
+                    // reduction must happen somewhere to make the following
+                    // invertible:
+                    // ```
+                    // CREATE TABLE a (a numeric);
+                    // CREATE MATERIALIZED VIEW t as SELECT sum(a) FROM a;
+                    // INSERT INTO a VALUES ('9e39'), ('9e-39');
+                    // ```
+                    // This will now return infinity. However, we can retract the
+                    // value that blew up its precision:
+                    // ```
+                    // INSERT INTO a VALUES ('-9e-39');
+                    // ```
+                    // This leaves `t`'s aggregator with a value of 9e39. However,
+                    // without doing a reduction, `libdecnum` will store the value
+                    // as 9e39+0e-39, which still exceeds the narrower context's
+                    // precision. By doing the reduction, we can "reclaim" the 39
+                    // digits of precision.
+                    cx_agg.reduce(&mut accum.0);
+                }
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
