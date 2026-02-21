@@ -32,6 +32,7 @@ use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{Datum, ReprColumnType, Row, RowArena, SqlColumnType, SqlScalarType};
+use ordered_float::OrderedFloat;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -147,6 +148,26 @@ fn neg_overflow_i32<'a>(a: i32) -> Result<Datum<'a>, EvalError> {
 #[inline(never)]
 fn neg_overflow_i64<'a>(a: i64) -> Result<Datum<'a>, EvalError> {
     Err(EvalError::Int64OutOfRange(a.to_string().into()))
+}
+
+/// Cold path for integer division overflow — kept out-of-line to avoid
+/// bloating the fast path in `MirScalarExpr::eval`.
+#[cold]
+#[inline(never)]
+fn int_div_overflow_i16(a: i16, b: i16) -> EvalError {
+    EvalError::Int16OutOfRange(format!("{a} / {b}").into())
+}
+
+#[cold]
+#[inline(never)]
+fn int_div_overflow_i32(a: i32, b: i32) -> EvalError {
+    EvalError::Int32OutOfRange(format!("{a} / {b}").into())
+}
+
+#[cold]
+#[inline(never)]
+fn int_div_overflow_i64(a: i64, b: i64) -> EvalError {
+    EvalError::Int64OutOfRange(format!("{a} / {b}").into())
 }
 
 impl MirScalarExpr {
@@ -2259,6 +2280,184 @@ impl MirScalarExpr {
                                 .ok_or(EvalError::NumericFieldOverflow)
                         } else {
                             Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    // Fast path for float arithmetic: bypass the
+                    // EagerBinaryFunc ceremony and operate directly on f32/f64.
+                    BinaryFunc::AddFloat32(_)
+                    | BinaryFunc::SubFloat32(_)
+                    | BinaryFunc::MulFloat32(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Float32(a), Datum::Float32(b)) = (a, b) {
+                            let r = match func {
+                                BinaryFunc::AddFloat32(_) => *a + *b,
+                                BinaryFunc::SubFloat32(_) => *a - *b,
+                                _ => {
+                                    let p = *a * *b;
+                                    if p == 0.0f32 && *a != 0.0f32 && *b != 0.0f32 {
+                                        return Err(EvalError::FloatUnderflow);
+                                    }
+                                    p
+                                }
+                            };
+                            if r.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+                                Err(EvalError::FloatOverflow)
+                            } else {
+                                Ok(Datum::Float32(OrderedFloat(r)))
+                            }
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    BinaryFunc::AddFloat64(_)
+                    | BinaryFunc::SubFloat64(_)
+                    | BinaryFunc::MulFloat64(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Float64(a), Datum::Float64(b)) = (a, b) {
+                            let r = match func {
+                                BinaryFunc::AddFloat64(_) => *a + *b,
+                                BinaryFunc::SubFloat64(_) => *a - *b,
+                                _ => {
+                                    let p = *a * *b;
+                                    if p == 0.0f64 && *a != 0.0f64 && *b != 0.0f64 {
+                                        return Err(EvalError::FloatUnderflow);
+                                    }
+                                    p
+                                }
+                            };
+                            if r.is_infinite() && !a.is_infinite() && !b.is_infinite() {
+                                Err(EvalError::FloatOverflow)
+                            } else {
+                                Ok(Datum::Float64(OrderedFloat(r)))
+                            }
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    // Fast path for float division: includes zero-check.
+                    BinaryFunc::DivFloat32(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Float32(a), Datum::Float32(b)) = (a, b) {
+                            if *b == 0.0f32 && !a.is_nan() {
+                                return Err(EvalError::DivisionByZero);
+                            }
+                            let q = *a / *b;
+                            if q.is_infinite() && !a.is_infinite() {
+                                Err(EvalError::FloatOverflow)
+                            } else if q == 0.0f32 && *a != 0.0f32 && !b.is_infinite() {
+                                Err(EvalError::FloatUnderflow)
+                            } else {
+                                Ok(Datum::Float32(OrderedFloat(q)))
+                            }
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    BinaryFunc::DivFloat64(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        if let (Datum::Float64(a), Datum::Float64(b)) = (a, b) {
+                            if *b == 0.0f64 && !a.is_nan() {
+                                return Err(EvalError::DivisionByZero);
+                            }
+                            let q = *a / *b;
+                            if q.is_infinite() && !a.is_infinite() {
+                                Err(EvalError::FloatOverflow)
+                            } else if q == 0.0f64 && *a != 0.0f64 && !b.is_infinite() {
+                                Err(EvalError::FloatUnderflow)
+                            } else {
+                                Ok(Datum::Float64(OrderedFloat(q)))
+                            }
+                        } else {
+                            Err(EvalError::Internal("invalid input type".into()))
+                        }
+                    }
+                    // Fast path for integer division/modulo: includes zero-check.
+                    BinaryFunc::DivInt16(_)
+                    | BinaryFunc::DivInt32(_)
+                    | BinaryFunc::DivInt64(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        match (a, b) {
+                            (Datum::Int16(a), Datum::Int16(b)) => {
+                                if b == 0 {
+                                    Err(EvalError::DivisionByZero)
+                                } else {
+                                    a.checked_div(b)
+                                        .map(Datum::Int16)
+                                        .ok_or_else(|| int_div_overflow_i16(a, b))
+                                }
+                            }
+                            (Datum::Int32(a), Datum::Int32(b)) => {
+                                if b == 0 {
+                                    Err(EvalError::DivisionByZero)
+                                } else {
+                                    a.checked_div(b)
+                                        .map(Datum::Int32)
+                                        .ok_or_else(|| int_div_overflow_i32(a, b))
+                                }
+                            }
+                            (Datum::Int64(a), Datum::Int64(b)) => {
+                                if b == 0 {
+                                    Err(EvalError::DivisionByZero)
+                                } else {
+                                    a.checked_div(b)
+                                        .map(Datum::Int64)
+                                        .ok_or_else(|| int_div_overflow_i64(a, b))
+                                }
+                            }
+                            _ => Err(EvalError::Internal("invalid input type".into())),
+                        }
+                    }
+                    BinaryFunc::ModInt16(_)
+                    | BinaryFunc::ModInt32(_)
+                    | BinaryFunc::ModInt64(_) => {
+                        let a = expr1.eval(datums, temp_storage)?;
+                        let b = expr2.eval(datums, temp_storage)?;
+                        if a.is_null() || b.is_null() {
+                            return Ok(Datum::Null);
+                        }
+                        match (a, b) {
+                            (Datum::Int16(a), Datum::Int16(b)) => {
+                                if b == 0 {
+                                    Err(EvalError::DivisionByZero)
+                                } else {
+                                    Ok(Datum::Int16(a.checked_rem(b).unwrap_or(0)))
+                                }
+                            }
+                            (Datum::Int32(a), Datum::Int32(b)) => {
+                                if b == 0 {
+                                    Err(EvalError::DivisionByZero)
+                                } else {
+                                    Ok(Datum::Int32(a.checked_rem(b).unwrap_or(0)))
+                                }
+                            }
+                            (Datum::Int64(a), Datum::Int64(b)) => {
+                                if b == 0 {
+                                    Err(EvalError::DivisionByZero)
+                                } else {
+                                    Ok(Datum::Int64(a.checked_rem(b).unwrap_or(0)))
+                                }
+                            }
+                            _ => Err(EvalError::Internal("invalid input type".into())),
                         }
                     }
                     _ => func.eval(datums, temp_storage, &[expr1, expr2]),

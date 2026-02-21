@@ -33,6 +33,10 @@ harness = false
 name = "contains_check"
 harness = false
 
+[[bench]]
+name = "float_arith_eval"
+harness = false
+
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1.0.101"

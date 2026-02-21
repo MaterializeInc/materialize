@@ -4903,3 +4903,54 @@ at **60-120 seconds of CPU time**.
 - `OffsetStride::Saturated::index`: 1.58T calls — `stride * index` multiply could be replaced
   with additive running offset.
 - `checked_recur` overhead: 26B calls — RefCell borrow_mut on every recursive visit.
+
+---
+
+## Session 54: Fast-path float arithmetic + integer div/mod in MirScalarExpr::eval
+
+**Date:** 2026-02-21
+
+**Optimization:** Extended the fast-path pattern from sessions 51-52 (integer Add/Sub/Mul and
+unary functions) to cover:
+- Float32/Float64 Add/Sub/Mul (bypasses EagerBinaryFunc dispatch, does overflow check inline)
+- Float32/Float64 Div (bypass + zero check + overflow/underflow check)
+- Int16/Int32/Int64 Div (bypass + zero check + cold overflow helper)
+- Int16/Int32/Int64 Mod (bypass + zero check)
+
+The existing code path goes through: BinaryFunc 212-arm match → InputDatumType try_from_iter →
+EagerBinaryFunc::call → OutputDatumType into_result. The fast path collapses this to a direct
+match on the BinaryFunc variant, extracts the Datum values, does the arithmetic inline, and
+returns immediately. Cold `#[inline(never)]` helpers keep error-path code out of the hot path.
+
+**Benchmark results** (`cargo bench -p mz-expr --bench float_arith_eval`):
+
+| Benchmark | Baseline | Fast Path | Speedup |
+|---|---|---|---|
+| add_f64_col_col | 37.5 ns | 11.1 ns | **3.4x** |
+| sub_f64_col_col | 38.9 ns | 11.1 ns | **3.5x** |
+| mul_f64_col_col | 39.0 ns | 11.8 ns | **3.3x** |
+| div_f64_col_lit | 47.7 ns | 21.7 ns | **2.2x** |
+| div_i64_col_col | 36.9 ns | 11.2 ns | **3.3x** |
+| mod_i64_col_col | 39.6 ns | 11.3 ns | **3.5x** |
+| batch_add_f64/10k | 321 µs | 91 µs | **3.5x** |
+| batch_div_f64/10k | 371 µs | 165 µs | **2.2x** |
+| batch_div_i64/10k | 250 µs | 88 µs | **2.8x** |
+| batch_compound_f64/10k | 728 µs | 235 µs | **3.1x** |
+
+Consistent 2.2-3.5x speedup across all operations. Float division is 2.2x (more checks needed).
+Compound expression (mul+div+add) gets 3.1x from the fast paths compounding.
+
+**Files changed:**
+- `src/expr/src/scalar.rs` — Added fast-path match arms for float32/64 add/sub/mul/div and
+  int16/32/64 div/mod. Added cold helpers `int_div_overflow_i16/i32/i64`. Added
+  `use ordered_float::OrderedFloat`.
+- `src/expr/benches/float_arith_eval.rs` — New benchmark for float arithmetic and int div/mod.
+- `src/expr/Cargo.toml` — Added `float_arith_eval` bench entry.
+
+**Future optimization ideas:**
+- Extend fast path to comparison operators (Eq/NotEq/Lt/Lte/Gt/Gte) for Float32/Float64.
+- `ArrayIdx::cmp` in persist merge sort: 705B calls with 16-arm match.
+- `Region<T>` enum dispatch: 613B calls to `len()`.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+- `DatumVec::borrow/drop`: 26B+54B calls — lifetime transmute.
+- `checked_recur` overhead: 26B calls — RefCell borrow_mut on every recursive visit.
