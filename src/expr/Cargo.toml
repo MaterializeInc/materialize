@@ -29,6 +29,10 @@ harness = false
 name = "unary_eval"
 harness = false
 
+[[bench]]
+name = "contains_check"
+harness = false
+
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1.0.101"

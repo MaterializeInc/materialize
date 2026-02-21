@@ -2278,46 +2278,84 @@ impl MirScalarExpr {
     /// True iff the expression contains
     /// `UnmaterializableFunc::MzNow`.
     pub fn contains_temporal(&self) -> bool {
-        let mut contains = false;
-        self.visit_pre(|e| {
-            if let MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) = e {
-                contains = true;
+        match self {
+            MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow) => true,
+            MirScalarExpr::Column(_, _)
+            | MirScalarExpr::Literal(_, _)
+            | MirScalarExpr::CallUnmaterializable(_) => false,
+            MirScalarExpr::CallUnary { expr, .. } => expr.contains_temporal(),
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.contains_temporal() || expr2.contains_temporal()
             }
-        });
-        contains
+            MirScalarExpr::CallVariadic { exprs, .. } => {
+                exprs.iter().any(|e| e.contains_temporal())
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                cond.contains_temporal() || then.contains_temporal() || els.contains_temporal()
+            }
+        }
     }
 
     /// True iff the expression contains an `UnmaterializableFunc`.
     pub fn contains_unmaterializable(&self) -> bool {
-        let mut contains = false;
-        self.visit_pre(|e| {
-            if let MirScalarExpr::CallUnmaterializable(_) = e {
-                contains = true;
+        match self {
+            MirScalarExpr::CallUnmaterializable(_) => true,
+            MirScalarExpr::Column(_, _) | MirScalarExpr::Literal(_, _) => false,
+            MirScalarExpr::CallUnary { expr, .. } => expr.contains_unmaterializable(),
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.contains_unmaterializable() || expr2.contains_unmaterializable()
             }
-        });
-        contains
+            MirScalarExpr::CallVariadic { exprs, .. } => {
+                exprs.iter().any(|e| e.contains_unmaterializable())
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                cond.contains_unmaterializable()
+                    || then.contains_unmaterializable()
+                    || els.contains_unmaterializable()
+            }
+        }
     }
 
     /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {
-        let mut contains = false;
-        self.visit_pre(|e| match e {
-            MirScalarExpr::CallUnmaterializable(f) if !exceptions.contains(f) => contains = true,
-            _ => (),
-        });
-        contains
+        match self {
+            MirScalarExpr::CallUnmaterializable(f) => !exceptions.contains(f),
+            MirScalarExpr::Column(_, _) | MirScalarExpr::Literal(_, _) => false,
+            MirScalarExpr::CallUnary { expr, .. } => {
+                expr.contains_unmaterializable_except(exceptions)
+            }
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.contains_unmaterializable_except(exceptions)
+                    || expr2.contains_unmaterializable_except(exceptions)
+            }
+            MirScalarExpr::CallVariadic { exprs, .. } => exprs
+                .iter()
+                .any(|e| e.contains_unmaterializable_except(exceptions)),
+            MirScalarExpr::If { cond, then, els } => {
+                cond.contains_unmaterializable_except(exceptions)
+                    || then.contains_unmaterializable_except(exceptions)
+                    || els.contains_unmaterializable_except(exceptions)
+            }
+        }
     }
 
     /// True iff the expression contains a `Column`.
     pub fn contains_column(&self) -> bool {
-        let mut contains = false;
-        self.visit_pre(|e| {
-            if let MirScalarExpr::Column(_col, _name) = e {
-                contains = true;
+        match self {
+            MirScalarExpr::Column(_, _) => true,
+            MirScalarExpr::Literal(_, _) | MirScalarExpr::CallUnmaterializable(_) => false,
+            MirScalarExpr::CallUnary { expr, .. } => expr.contains_column(),
+            MirScalarExpr::CallBinary { expr1, expr2, .. } => {
+                expr1.contains_column() || expr2.contains_column()
             }
-        });
-        contains
+            MirScalarExpr::CallVariadic { exprs, .. } => {
+                exprs.iter().any(|e| e.contains_column())
+            }
+            MirScalarExpr::If { cond, then, els } => {
+                cond.contains_column() || then.contains_column() || els.contains_column()
+            }
+        }
     }
 
     /// True iff the expression contains a `Dummy`.

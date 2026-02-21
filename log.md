@@ -4712,5 +4712,194 @@ both the multiply and add bypass the BinaryFunc dispatch.
 **Future optimization ideas:**
 - Extend fast path to float arithmetic (Add/Sub/Mul/Div Float32/64) with overflow/underflow checks.
 - Extend to integer division (Div/Mod Int16/32/64) with zero-check.
-- UnaryFunc dispatch (3.15B executions) — fast-path common unary operations like casts, negation.
-- `IsNull` unary fast path — extremely common in WHERE clauses.
+- `ArrayIdx::cmp` in persist merge sort: 327B calls with 16-arm match. A direct `cmp_at()` method
+  on ArrayOrd could avoid creating intermediate ArrayIdx values.
+- `Region<T>` enum dispatch: 613B calls to `len()`. Caching the region length could avoid match.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+
+---
+
+## Session 52: Fast-path unary function evaluation - bypass EagerUnaryFunc dispatch
+
+**Date:** 2026-02-21
+
+**Target:** `MirScalarExpr::eval` unary function dispatch — bypassing the 325-arm
+`UnaryFunc` match, `InputDatumType::try_from_result` conversion, and
+`OutputDatumType::into_result` wrapping for the hottest unary operations: IsNull (1.186B
+executions), Not (442M), CastInt32ToInt64 (232M), NegInt32/64, CastInt16ToInt32/64,
+CastBoolToInt32.
+
+**Problem:** Coverage data shows `LazyUnaryFunc::eval` executes **3.15 billion times**. For
+trivial unary operations like `IsNull` (a single `datum.is_null()` check) and `Not` (a
+single boolean flip), the framework overhead dominates:
+1. 325-arm `UnaryFunc::eval` jump table dispatch
+2. `InputDatumType::try_from_result` — matches Datum to extract native type
+3. `EagerUnaryFunc::call()` dispatch — calls the actual function
+4. `OutputDatumType::into_result` — wraps result back into Datum
+
+Unlike `CallBinary` which had fast paths for comparisons (session 38) and arithmetic
+(session 51), `CallUnary` had no fast paths at all — every unary operation went through
+the full framework.
+
+**Fix:** Added fast-path match arms in `MirScalarExpr::eval` for 9 `UnaryFunc` variants
+that directly extract values from Datums, perform the operation, and return — skipping
+the entire `UnaryFunc::eval` → `EagerUnaryFunc` → `InputDatumType` pipeline:
+
+1. **IsNull** (1.186B calls): `datum.is_null()` → `Datum::True/False` directly
+2. **Not** (442M calls): Match `Datum::True/False/Null` directly, flip
+3. **NegInt16/32/64**: `checked_neg()` directly on extracted integer; cold `#[inline(never)]`
+   overflow helpers keep error-path code out of the hot path
+4. **CastInt16ToInt32/Int64**: `i32::from(a)` / `i64::from(a)` directly
+5. **CastInt32ToInt64** (232M calls): `i64::from(a)` directly
+6. **CastBoolToInt32** (52M calls): Match `True→1, False→0` directly
+
+All fast paths handle NULL propagation explicitly (matching `Datum::Null` and returning
+`Ok(Datum::Null)` for non-nullable input types), matching the framework's behavior.
+
+The negation overflow helpers (`neg_overflow_i16/32/64`) are marked `#[cold] #[inline(never)]`
+to prevent the error-path code (`a.to_string().into()`) from being inlined into the hot
+path — without this, the negation fast path was actually 2.4x *slower* than the framework
+path due to icache bloat from the inlined error code.
+
+**Benchmark results** (`cargo bench -p mz-expr --bench unary_eval`):
+
+### Per-call performance (ns/iter)
+
+| Operation | Old (framework) | New (fast path) | Speedup |
+|---|---:|---:|---|
+| is_null non-null | 15.86 | 8.61 | **1.84x** |
+| is_null null | 15.82 | 8.63 | **1.83x** |
+| not true | 10.26 | 8.69 | **1.18x** |
+| not false | 10.22 | 8.71 | **1.17x** |
+| not null | 18.10 | 8.75 | **2.07x** |
+| neg_int32 | 10.46 | 9.37 | **1.12x** |
+| neg_int64 | 10.44 | 9.35 | **1.12x** |
+| cast_int32_to_int64 | 10.22 | 9.29 | **1.10x** |
+| cast_int16_to_int32 | 10.27 | 9.37 | **1.10x** |
+| cast_bool_to_int32 | 10.24 | 9.39 | **1.09x** |
+
+### Batch performance (10k evaluations)
+
+| Scenario | Old (µs) | New (µs) | Speedup |
+|---|---|---|---|
+| batch_is_null 10k | 120.4 | 64.7 | **1.86x** |
+| batch_not 10k | 82.6 | 65.8 | **1.26x** |
+| batch_cast_int32_to_int64 10k | 83.1 | 66.6 | **1.25x** |
+| batch_neg_int32 10k | 85.9 | 68.6 | **1.25x** |
+| batch_not_is_null 10k (compound) | 169.1 | 102.4 | **1.65x** |
+
+**Summary:** **1.09-2.07x faster per call, 1.25-1.86x faster in batch**. The biggest win
+is for `IsNull` (1.84x per-call, 1.86x batch) because the old path went through a
+heavyweight dispatch chain just to call `datum.is_null()`. `Not` with NULL input shows
+2.07x because the old path's null propagation via `InputDatumType::try_from_result` was
+expensive for bool inputs (two match arms to check True/False, then a third for the null
+fallthrough). The compound `NOT(IsNull(col))` expression—extremely common in SQL WHERE
+clauses—shows 1.65x improvement because both operations benefit.
+
+At 1.186B IsNull calls and 442M Not calls in the coverage trace, this saves approximately
+8.6B ns (8.6 seconds) for IsNull and 700M ns (0.7 seconds) for Not in aggregate.
+
+**Files changed:**
+- `src/expr/src/scalar.rs` — Added fast-path match arms for 9 UnaryFunc variants in
+  `MirScalarExpr::eval`. Added `neg_overflow_i16/32/64` cold helper functions to keep
+  error-path code out of the hot path.
+- `src/expr/benches/unary_eval.rs` — New benchmark for unary function evaluation.
+- `src/expr/Cargo.toml` — Added `unary_eval` bench entry.
+
+**Future optimization ideas:**
+- Extend fast path to float arithmetic (Add/Sub/Mul/Div Float32/64) with overflow/underflow checks.
+- Extend to integer division (Div/Mod Int16/32/64) with zero-check.
+- `ArrayIdx::cmp` in persist merge sort: 327B calls with 16-arm match.
+- `Region<T>` enum dispatch: 613B calls to `len()`.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+
+---
+
+## Session 53: Direct recursive contains_temporal/contains_unmaterializable — eliminate visit_pre heap allocation
+
+**Date:** 2026-02-21
+
+**Target:** `MirScalarExpr::contains_temporal` (5.576B calls), `contains_unmaterializable`
+(2.309B calls), `contains_unmaterializable_except`, and `contains_column` — all using
+`visit_pre` which allocates a `Vec` on the heap per call and never short-circuits.
+
+**Problem:** Coverage data shows `contains_temporal` executes **5.576 billion times**, and
+`contains_unmaterializable` executes **2.309 billion times**. Both use the `visit_pre`
+iterator pattern which:
+1. Allocates a `Vec<&Self>` on the heap (`vec![self]`) — a heap allocation per call
+2. Iterates through ALL children even after finding the target (no short-circuit)
+3. Goes through the heavyweight `children()` iterator which creates 4 `Option` variables,
+   matches the enum, and chains iterators
+4. For leaf nodes (Column, Literal — the most common case), this means a heap alloc+dealloc
+   just to check one node that can never contain the target
+
+The `visit_pre` pattern visits 35.17B nodes total for `contains_temporal` (avg ~6.3 nodes/call)
+and 7.87B nodes for `contains_unmaterializable` (avg ~3.4 nodes/call).
+
+**Fix:** Replaced all four `visit_pre`-based containment checks with direct recursive
+`match self` implementations that:
+1. **No heap allocation** — uses the call stack instead of `Vec`
+2. **Short-circuits** — returns `true` immediately when the target is found via `||`
+3. **Direct matching** — matches on the expression variant directly instead of going through
+   the `children()` iterator chain
+4. **Follows existing pattern** — `could_error()` in the same file already uses this exact
+   recursive approach
+
+Functions optimized:
+- `contains_temporal()` — matches `CallUnmaterializable(MzNow)` directly
+- `contains_unmaterializable()` — matches any `CallUnmaterializable(_)`
+- `contains_unmaterializable_except()` — matches `CallUnmaterializable(f)` with exclusion
+- `contains_column()` — matches `Column(_, _)` directly
+
+**Benchmark results** (`cargo bench -p mz-expr --bench contains_check`):
+
+### contains_temporal
+
+| Benchmark | Old (visit_pre) | New (recursive) | Speedup |
+|---|---:|---:|---|
+| leaf_column | 9.14 ns | 1.56 ns | **5.9x** |
+| leaf_literal | 8.99 ns | 1.56 ns | **5.8x** |
+| binary_2_leaves | 46.89 ns | 3.76 ns | **12.5x** |
+| compound_7_nodes | 71.89 ns | 9.95 ns | **7.2x** |
+| deep_chain_11_nodes | 75.65 ns | 17.82 ns | **4.2x** |
+| batch_compound 10k | 711.9 µs | 98.0 µs | **7.3x** |
+
+### contains_unmaterializable
+
+| Benchmark | Old (visit_pre) | New (recursive) | Speedup |
+|---|---:|---:|---|
+| leaf_column | 8.52 ns | 1.58 ns | **5.4x** |
+| binary_2_leaves | 46.16 ns | 4.25 ns | **10.9x** |
+| compound_7_nodes | 71.33 ns | 11.18 ns | **6.4x** |
+
+**Summary:** **4.2-12.5x faster** across all expression sizes. The biggest wins are for
+binary expressions (12.5x) because the old code allocated a Vec, pushed 3 elements
+(self + 2 children), popped and visited all 3, then deallocated — while the new code
+is just 3 match + comparison instructions. Leaf nodes (the most common case at 5.9x)
+eliminate the heap alloc+dealloc entirely.
+
+At 5.576B `contains_temporal` calls with an average of ~6.3 nodes per call, the old code
+visited 35.17B nodes at ~2ns each (post-alloc) = ~70B ns overhead, plus ~9ns alloc/dealloc
+per call = ~50B ns. The new code processes ~2ns per node with no allocation, saving
+approximately **50-100 seconds of CPU time** in aggregate for `contains_temporal` alone.
+
+Combined with `contains_unmaterializable` (2.309B calls), total savings are estimated
+at **60-120 seconds of CPU time**.
+
+**Files changed:**
+- `src/expr/src/scalar.rs` — Replaced `visit_pre`-based `contains_temporal`,
+  `contains_unmaterializable`, `contains_unmaterializable_except`, and `contains_column`
+  with direct recursive match implementations.
+- `src/expr/benches/contains_check.rs` — New benchmark for containment check evaluation.
+- `src/expr/Cargo.toml` — Added `contains_check` bench entry.
+
+**Future optimization ideas:**
+- `ArrayIdx::cmp` in persist merge sort: 705B calls with 16-arm match. A direct `cmp_at()`
+  method on ArrayOrd could avoid creating intermediate ArrayIdx values.
+- `Region<T>` enum dispatch: 613B calls to `len()`. Caching the region length could avoid match.
+- `OrderedDecimal::hash` still calls `reduce` (FFI).
+- `DatumVec::borrow/drop`: 26B+54B calls — `mem::take` + `repurpose_allocation` round-trip
+  could be eliminated with in-place lifetime transmute.
+- `OffsetStride::Saturated::index`: 1.58T calls — `stride * index` multiply could be replaced
+  with additive running offset.
+- `checked_recur` overhead: 26B calls — RefCell borrow_mut on every recursive visit.
