@@ -14,10 +14,6 @@ name = "row"
 harness = false
 
 [[bench]]
-name = "datum_cmp"
-harness = false
-
-[[bench]]
 name = "strconv"
 harness = false
 

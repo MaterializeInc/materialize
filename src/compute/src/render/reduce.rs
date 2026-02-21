@@ -2101,8 +2101,7 @@ impl Multiply<Diff> for Accum {
                 non_nulls,
             } => {
                 let factor_val = factor.into_inner();
-                let result = if let Some(r) =
-                    numeric::try_mul_numeric_agg_i64(&accum.0, factor_val)
+                let result = if let Some(r) = numeric::try_mul_numeric_agg_i64(&accum.0, factor_val)
                 {
                     r
                 } else {
@@ -2118,10 +2117,7 @@ impl Multiply<Diff> for Accum {
                     // associativity; nothing to be done here, so panic. For more
                     // context, see the DEC_Rounded definition at
                     // http://speleotrove.com/decimal/dncont.html
-                    assert!(
-                        !cx.status().rounded(),
-                        "Accum::Numeric multiply overflow"
-                    );
+                    assert!(!cx.status().rounded(), "Accum::Numeric multiply overflow");
                     f
                 };
                 Accum::Numeric {

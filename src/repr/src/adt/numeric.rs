@@ -12,6 +12,8 @@
 //!
 //! [`rust-dec`]: https://github.com/MaterializeInc/rust-dec/
 
+#![allow(clippy::as_conversions)]
+
 use std::error::Error;
 use std::fmt;
 use std::sync::LazyLock;
@@ -639,7 +641,12 @@ pub fn try_mul_numeric_agg_i64(a: &NumericAgg, factor: i64) -> Option<NumericAgg
         let mut lsu = [0u16; NUMERIC_AGG_WIDTH_USIZE];
         lsu[..units.len()].copy_from_slice(units);
         let bits = if a.is_negative() { 0x80u8 } else { 0u8 };
-        return Some(NumericAgg::from_raw_parts(a.digits(), a.exponent(), bits, lsu));
+        return Some(NumericAgg::from_raw_parts(
+            a.digits(),
+            a.exponent(),
+            bits,
+            lsu,
+        ));
     }
     let coeff = decimal_coeff_to_i64(a)?;
     let product = coeff.checked_mul(factor)?;
@@ -1831,7 +1838,6 @@ mod tests {
         fn check_i64(val: i64, scale: Option<u8>) {
             let fast = try_numeric_from_i64(val, scale);
             // Build reference via FFI
-            let mut cx = cx_datum();
             let mut reference = Numeric::from(val);
             if let Some(s) = scale {
                 let _ = rescale(&mut reference, s);
@@ -1852,7 +1858,6 @@ mod tests {
 
         fn check_u64(val: u64, scale: Option<u8>) {
             let fast = try_numeric_from_u64(val, scale);
-            let mut cx = cx_datum();
             let mut reference = Numeric::from(val);
             if let Some(s) = scale {
                 let _ = rescale(&mut reference, s);
@@ -2002,7 +2007,7 @@ mod tests {
 
         // Edge case: single-digit values
         for i in 0..10 {
-            check(&Numeric::from(i as i32));
+            check(&Numeric::from(i));
         }
 
         // Edge case: powers of 10
@@ -2202,7 +2207,8 @@ mod tests {
             let fast = numeric_to_twos_complement_be(n);
             let slow = reference_twos_complement_be(n);
             assert_eq!(
-                fast, slow,
+                fast,
+                slow,
                 "twos complement mismatch for {n} (exp={}): fast={fast:?}, slow={slow:?}",
                 n.exponent()
             );
@@ -2284,7 +2290,8 @@ mod tests {
             let fast = numeric_to_twos_complement_wide(n);
             let slow = reference_twos_complement_wide(n);
             assert_eq!(
-                fast, slow,
+                fast,
+                slow,
                 "wide twos complement mismatch for {n} (exp={}): fast={fast:?}, slow={slow:?}",
                 n.exponent()
             );
@@ -2331,8 +2338,14 @@ mod tests {
         check(cx.parse("-99999999999999999999.99").unwrap());
 
         // Values with extreme negative exponents
-        check(cx.parse("0.000000000000000000000000000000000000001").unwrap()); // 1E-39
-        check(cx.parse("-0.000000000000000000000000000000000000001").unwrap()); // -1E-39
+        check(
+            cx.parse("0.000000000000000000000000000000000000001")
+                .unwrap(),
+        ); // 1E-39
+        check(
+            cx.parse("-0.000000000000000000000000000000000000001")
+                .unwrap(),
+        ); // -1E-39
 
         // Edge case: coeff=1 with exp=-39 → 1 * 10^0 = 1
         let mut v: Numeric = cx.parse("1").unwrap();
@@ -2410,8 +2423,16 @@ mod tests {
                 expected.to_standard_notation_string(),
                 "to_agg mismatch for {s}"
             );
-            assert_eq!(fast.exponent(), expected.exponent(), "exponent mismatch for {s}");
-            assert_eq!(fast.is_negative(), expected.is_negative(), "sign mismatch for {s}");
+            assert_eq!(
+                fast.exponent(),
+                expected.exponent(),
+                "exponent mismatch for {s}"
+            );
+            assert_eq!(
+                fast.is_negative(),
+                expected.is_negative(),
+                "sign mismatch for {s}"
+            );
             assert_eq!(fast.digits(), expected.digits(), "digits mismatch for {s}");
         }
 
@@ -2450,8 +2471,16 @@ mod tests {
                     expected.to_standard_notation_string(),
                     "agg_to_datum mismatch for {s}"
                 );
-                assert_eq!(fast.exponent(), expected.exponent(), "exponent mismatch for {s}");
-                assert_eq!(fast.is_negative(), expected.is_negative(), "sign mismatch for {s}");
+                assert_eq!(
+                    fast.exponent(),
+                    expected.exponent(),
+                    "exponent mismatch for {s}"
+                );
+                assert_eq!(
+                    fast.is_negative(),
+                    expected.is_negative(),
+                    "sign mismatch for {s}"
+                );
                 assert_eq!(fast.digits(), expected.digits(), "digits mismatch for {s}");
             }
         }

@@ -71,6 +71,7 @@ use crate::{CatalogItemId, ColumnName, DatumList, DatumMap, Row, RowArena, SqlCo
 /// the outer `Datum`). The idiom we've devised for this is a series of
 /// functions on `repr::row::RowPacker` prefixed with `push_`.
 ///
+#[allow(clippy::derived_hash_with_manual_eq)]
 #[derive(Clone, Copy, Hash, EnumKind)]
 #[enum_kind(DatumKind, derive(Hash, Ord, PartialOrd))]
 pub enum Datum<'a> {
@@ -204,54 +205,49 @@ impl<'a> Ord for Datum<'a> {
     #[inline]
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         use std::cmp::Ordering;
-        // Compare variant discriminants first (same as derived Ord).
-        // DatumKind preserves the variant declaration order.
-        let self_kind = DatumKind::from(self);
-        let other_kind = DatumKind::from(other);
-        match self_kind.cmp(&other_kind) {
-            Ordering::Equal => {}
-            ord => return ord,
-        }
-        // Same variant — compare inner values.
+        // Fast path for same-type comparisons (the ~99% case).
+        // When both operands are the same variant, the compiler generates a
+        // discriminant equality check + jump table, avoiding the 2× DatumKind
+        // conversions + discriminant comparison of the cross-type path.
         match (self, other) {
-            // Fieldless variants
+            (Datum::Int16(a), Datum::Int16(b)) => return a.cmp(b),
+            (Datum::Int32(a), Datum::Int32(b)) => return a.cmp(b),
+            (Datum::Int64(a), Datum::Int64(b)) => return a.cmp(b),
+            (Datum::UInt8(a), Datum::UInt8(b)) => return a.cmp(b),
+            (Datum::UInt16(a), Datum::UInt16(b)) => return a.cmp(b),
+            (Datum::UInt32(a), Datum::UInt32(b)) => return a.cmp(b),
+            (Datum::UInt64(a), Datum::UInt64(b)) => return a.cmp(b),
+            (Datum::Float32(a), Datum::Float32(b)) => return a.cmp(b),
+            (Datum::Float64(a), Datum::Float64(b)) => return a.cmp(b),
+            (Datum::Date(a), Datum::Date(b)) => return a.cmp(b),
+            (Datum::Time(a), Datum::Time(b)) => return a.cmp(b),
+            (Datum::Timestamp(a), Datum::Timestamp(b)) => return a.cmp(b),
+            (Datum::TimestampTz(a), Datum::TimestampTz(b)) => return a.cmp(b),
+            (Datum::Interval(a), Datum::Interval(b)) => return a.cmp(b),
+            (Datum::Bytes(a), Datum::Bytes(b)) => return a.cmp(b),
+            (Datum::String(a), Datum::String(b)) => return a.cmp(b),
+            (Datum::Numeric(a), Datum::Numeric(b)) => {
+                return crate::adt::numeric::fast_numeric_cmp(&a.0, &b.0);
+            }
+            (Datum::Uuid(a), Datum::Uuid(b)) => return a.cmp(b),
+            (Datum::MzTimestamp(a), Datum::MzTimestamp(b)) => return a.cmp(b),
+            (Datum::Array(a), Datum::Array(b)) => return a.cmp(b),
+            (Datum::List(a), Datum::List(b)) => return a.cmp(b),
+            (Datum::Map(a), Datum::Map(b)) => return a.cmp(b),
+            (Datum::Range(a), Datum::Range(b)) => return a.cmp(b),
+            (Datum::MzAclItem(a), Datum::MzAclItem(b)) => return a.cmp(b),
+            (Datum::AclItem(a), Datum::AclItem(b)) => return a.cmp(b),
             (Datum::False, Datum::False)
             | (Datum::True, Datum::True)
             | (Datum::JsonNull, Datum::JsonNull)
             | (Datum::Dummy, Datum::Dummy)
-            | (Datum::Null, Datum::Null) => Ordering::Equal,
-            // Numeric: fast-path bypassing 3 C FFI calls
-            (Datum::Numeric(a), Datum::Numeric(b)) => {
-                crate::adt::numeric::fast_numeric_cmp(&a.0, &b.0)
-            }
-            // All other variants with fields
-            (Datum::Int16(a), Datum::Int16(b)) => a.cmp(b),
-            (Datum::Int32(a), Datum::Int32(b)) => a.cmp(b),
-            (Datum::Int64(a), Datum::Int64(b)) => a.cmp(b),
-            (Datum::UInt8(a), Datum::UInt8(b)) => a.cmp(b),
-            (Datum::UInt16(a), Datum::UInt16(b)) => a.cmp(b),
-            (Datum::UInt32(a), Datum::UInt32(b)) => a.cmp(b),
-            (Datum::UInt64(a), Datum::UInt64(b)) => a.cmp(b),
-            (Datum::Float32(a), Datum::Float32(b)) => a.cmp(b),
-            (Datum::Float64(a), Datum::Float64(b)) => a.cmp(b),
-            (Datum::Date(a), Datum::Date(b)) => a.cmp(b),
-            (Datum::Time(a), Datum::Time(b)) => a.cmp(b),
-            (Datum::Timestamp(a), Datum::Timestamp(b)) => a.cmp(b),
-            (Datum::TimestampTz(a), Datum::TimestampTz(b)) => a.cmp(b),
-            (Datum::Interval(a), Datum::Interval(b)) => a.cmp(b),
-            (Datum::Bytes(a), Datum::Bytes(b)) => a.cmp(b),
-            (Datum::String(a), Datum::String(b)) => a.cmp(b),
-            (Datum::Array(a), Datum::Array(b)) => a.cmp(b),
-            (Datum::List(a), Datum::List(b)) => a.cmp(b),
-            (Datum::Map(a), Datum::Map(b)) => a.cmp(b),
-            (Datum::Uuid(a), Datum::Uuid(b)) => a.cmp(b),
-            (Datum::MzTimestamp(a), Datum::MzTimestamp(b)) => a.cmp(b),
-            (Datum::Range(a), Datum::Range(b)) => a.cmp(b),
-            (Datum::MzAclItem(a), Datum::MzAclItem(b)) => a.cmp(b),
-            (Datum::AclItem(a), Datum::AclItem(b)) => a.cmp(b),
-            // Discriminants are equal, so variants must match
-            _ => unreachable!(),
+            | (Datum::Null, Datum::Null) => return Ordering::Equal,
+            _ => {}
         }
+        // Cross-type comparison: use DatumKind discriminants for ordering.
+        let self_kind = DatumKind::from(self);
+        let other_kind = DatumKind::from(other);
+        self_kind.cmp(&other_kind)
     }
 }
 
