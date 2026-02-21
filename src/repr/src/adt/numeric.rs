@@ -828,6 +828,30 @@ pub fn numeric_to_twos_complement_wide(
     if numeric.is_special() {
         return buf;
     }
+
+    // Fast path: for values with ≤18 significant digits (coefficient fits in i64)
+    // and exponent in [-39, 0]. The wide encoding represents value * 10^39, which
+    // for i64-range coefficients fits in ~192 bits (well within 33-byte / 264-bit
+    // buffer). We compute this using 256-bit arithmetic (u128 pair) entirely in Rust,
+    // avoiding all C FFI calls (to_width, rescale, scaleb, rem, div_integer, coefficient).
+    if numeric.exponent() >= -39 && numeric.exponent() <= 0 {
+        if let Some(coeff) = coeff_to_i64(&numeric) {
+            let pow_exp = (39 + numeric.exponent()) as usize; // 0..=39
+            // Compute |coeff| * 10^pow_exp using 256-bit arithmetic.
+            let is_neg = coeff < 0;
+            let abs_coeff = if coeff == i64::MIN {
+                i64::MIN as u64 // 2^63, wrapping neg would overflow
+            } else if coeff < 0 {
+                (-coeff) as u64
+            } else {
+                coeff as u64
+            };
+            let (lo, hi) = u256_mul_u64_pow10(abs_coeff as u128, pow_exp);
+            write_twos_complement_be_33(&mut buf, lo, hi, is_neg);
+            return buf;
+        }
+    }
+
     let mut cx = NumericAgg::context();
     let mut d = cx.to_width(numeric);
     let mut scaler = NumericAgg::from(NUMERIC_DATUM_MAX_PRECISION);
@@ -841,6 +865,93 @@ pub fn numeric_to_twos_complement_wide(
 
     numeric_to_twos_complement_inner::<NumericAgg, NUMERIC_AGG_WIDTH_USIZE>(d, &mut cx, &mut buf);
     buf
+}
+
+/// Powers of 10 as u128, precomputed for fast 256-bit multiplication.
+/// Covers 10^0 through 10^38 (u128 max is ~3.4×10^38; 10^39 overflows).
+const POW10_U128: [u128; 39] = {
+    let mut table = [0u128; 39];
+    table[0] = 1;
+    let mut i = 1;
+    while i < 39 {
+        table[i] = table[i - 1] * 10;
+        i += 1;
+    }
+    table
+};
+
+/// Multiply a u128 value by 10^pow_exp, returning a 256-bit result as (lo, hi).
+/// The result is `lo + hi * 2^128`. Supports pow_exp 0..=39.
+#[inline]
+fn u256_mul_u64_pow10(val: u128, pow_exp: usize) -> (u128, u128) {
+    debug_assert!(pow_exp <= 39);
+    if pow_exp <= 38 {
+        u256_mul(val, POW10_U128[pow_exp])
+    } else {
+        // pow_exp == 39: 10^39 overflows u128, but val fits in u64.
+        // Compute val * 10^38 * 10.
+        let (lo, hi) = u256_mul(val, POW10_U128[38]);
+        u256_mul_small(lo, hi, 10)
+    }
+}
+
+/// Multiply two u128 values, returning a 256-bit result as (lo, hi).
+#[inline]
+fn u256_mul(a: u128, b: u128) -> (u128, u128) {
+    // Schoolbook multiplication using 64-bit halves.
+    let a_lo = a as u64 as u128;
+    let a_hi = (a >> 64) as u64 as u128;
+    let b_lo = b as u64 as u128;
+    let b_hi = (b >> 64) as u64 as u128;
+
+    let ll = a_lo * b_lo;
+    let lh = a_lo * b_hi;
+    let hl = a_hi * b_lo;
+    let hh = a_hi * b_hi;
+
+    // Accumulate: result = ll + (lh + hl) << 64 + hh << 128
+    let (mid, mid_carry) = lh.overflowing_add(hl);
+
+    let (lo, lo_carry) = ll.overflowing_add(mid << 64);
+    let hi = hh + (mid >> 64) + ((mid_carry as u128) << 64) + lo_carry as u128;
+
+    (lo, hi)
+}
+
+/// Multiply a 256-bit value (lo, hi) by a small factor, returning a 256-bit result.
+/// The small factor must fit in u64. The result must fit in 256 bits.
+#[inline]
+fn u256_mul_small(lo: u128, hi: u128, factor: u64) -> (u128, u128) {
+    let factor = factor as u128;
+    // Multiply lo part: result can overflow u128.
+    let lo_lo = (lo as u64 as u128) * factor;
+    let lo_hi = ((lo >> 64) as u64 as u128) * factor;
+    let new_lo = lo_lo + (lo_hi << 64);
+    let carry = (lo_hi >> 64) + if new_lo < lo_lo { 1 } else { 0 };
+    let new_hi = hi * factor + carry;
+    (new_lo, new_hi)
+}
+
+/// Write a 256-bit unsigned value as 33-byte big-endian twos complement.
+/// The value is represented as `lo + hi * 2^128`. If `is_neg`, the value
+/// is negated in twos complement.
+#[inline]
+fn write_twos_complement_be_33(buf: &mut [u8; 33], lo: u128, hi: u128, is_neg: bool) {
+    let (lo, hi) = if is_neg {
+        // Twos complement negation: !val + 1
+        let neg_lo = !lo;
+        let (neg_lo, carry) = neg_lo.overflowing_add(1);
+        let neg_hi = !hi + carry as u128;
+        (neg_lo, neg_hi)
+    } else {
+        (lo, hi)
+    };
+    // byte 0: sign extension byte (top of 264-bit value)
+    buf[0] = if is_neg { 0xFF } else { 0x00 };
+    // bytes 1..17: hi as big-endian
+    buf[1..17].copy_from_slice(&hi.to_be_bytes());
+    // bytes 17..33: lo as big-endian
+    buf[17..33].copy_from_slice(&lo.to_be_bytes());
 }
 
 fn numeric_to_twos_complement_inner<D: Dec<N>, const N: usize>(
@@ -1937,6 +2048,101 @@ mod tests {
         // Large coefficient (> 18 digits, must use FFI path)
         check(cx.parse("12345678901234567890.12").unwrap());
         check(cx.parse("-99999999999999999999.99").unwrap());
+
+        // Special values
+        check(Numeric::infinity());
+        let nan: Numeric = cx.parse("NaN").unwrap();
+        check(nan);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_numeric_to_twos_complement_wide_fast_path() {
+        let mut cx = cx_datum();
+
+        /// Reference implementation: always uses the FFI path.
+        fn reference_twos_complement_wide(
+            numeric: Numeric,
+        ) -> [u8; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH] {
+            let mut buf = [0; NumericAgg::TWOS_COMPLEMENT_BYTE_WIDTH];
+            if numeric.is_special() {
+                return buf;
+            }
+            let mut cx = NumericAgg::context();
+            let mut d = cx.to_width(numeric);
+            let mut scaler = NumericAgg::from(NUMERIC_DATUM_MAX_PRECISION);
+            cx.neg(&mut scaler);
+            cx.rescale(&mut d, &scaler);
+            cx.abs(&mut scaler);
+            cx.scaleb(&mut d, &scaler);
+            numeric_to_twos_complement_inner::<NumericAgg, NUMERIC_AGG_WIDTH_USIZE>(
+                d, &mut cx, &mut buf,
+            );
+            buf
+        }
+
+        fn check(n: Numeric) {
+            let fast = numeric_to_twos_complement_wide(n);
+            let slow = reference_twos_complement_wide(n);
+            assert_eq!(
+                fast, slow,
+                "wide twos complement mismatch for {n} (exp={}): fast={fast:?}, slow={slow:?}",
+                n.exponent()
+            );
+        }
+
+        // Zero
+        check(Numeric::from(0i32));
+
+        // Small positive/negative integers
+        check(Numeric::from(1i32));
+        check(Numeric::from(-1i32));
+        check(Numeric::from(42i32));
+        check(Numeric::from(-42i32));
+        check(Numeric::from(i32::MAX));
+        check(Numeric::from(i32::MIN));
+
+        // Money-like decimals (negative exponent)
+        check(cx.parse("12345.67").unwrap());
+        check(cx.parse("-99999.99").unwrap());
+        check(cx.parse("0.001").unwrap());
+        check(cx.parse("-0.001").unwrap());
+
+        // Large coefficients that still fit in i64
+        check(cx.parse("999999999999999999").unwrap());
+        check(cx.parse("-999999999999999999").unwrap());
+
+        // Values after rescale (simulating Avro encoding)
+        let mut v: Numeric = cx.parse("123.45").unwrap();
+        let _ = rescale(&mut v, 6);
+        check(v);
+
+        let mut v: Numeric = cx.parse("-9876543.21").unwrap();
+        let _ = rescale(&mut v, 10);
+        check(v);
+
+        // Positive exponent (should fallback to FFI, but still correct)
+        let v: Numeric = cx.parse("1E+10").unwrap();
+        check(v);
+        let v: Numeric = cx.parse("-5E+5").unwrap();
+        check(v);
+
+        // Large coefficient (> 18 digits, must use FFI path)
+        check(cx.parse("12345678901234567890.12").unwrap());
+        check(cx.parse("-99999999999999999999.99").unwrap());
+
+        // Values with extreme negative exponents
+        check(cx.parse("0.000000000000000000000000000000000000001").unwrap()); // 1E-39
+        check(cx.parse("-0.000000000000000000000000000000000000001").unwrap()); // -1E-39
+
+        // Edge case: coeff=1 with exp=-39 → 1 * 10^0 = 1
+        let mut v: Numeric = cx.parse("1").unwrap();
+        cx.rescale(&mut v, &Numeric::from(-39i32));
+        check(v);
+
+        // Large coefficient with scale
+        check(cx.parse("999999999999.999999").unwrap());
+        check(cx.parse("-999999999999.999999").unwrap());
 
         // Special values
         check(Numeric::infinity());
