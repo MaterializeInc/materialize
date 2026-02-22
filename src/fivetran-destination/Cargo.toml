@@ -31,7 +31,7 @@ socket2 = "0.5.10"
 thiserror = "2.0.18"
 tonic = { version = "0.14.2", features = ["gzip"] }
 tonic-prost = "0.14.2"
-tokio = { version = "1.48.0", features = ["rt"] }
+tokio = { version = "1.49.0", features = ["rt"] }
 tokio-postgres = { version = "0.7.15" }
 tokio-stream = { version = "0.1.18", features = ["net"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
