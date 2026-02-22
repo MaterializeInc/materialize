@@ -27,7 +27,7 @@ postgres-openssl = { version = "0.5.2" }
 proptest = { version = "1.9.0", default-features = false, features = [
     "std",
 ], optional = true }
-proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
+proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = [
     "no-recursion-limit",
 ], optional = true }
