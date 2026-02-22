@@ -243,7 +243,7 @@ def test(
                     c,
                     workload,
                     captured_continuous_data_dir,
-                    factor_ingestions,
+                    1.0,
                     factor_ingestions,
                     seed,
                     stop_event,

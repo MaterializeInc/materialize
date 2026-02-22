@@ -28,6 +28,8 @@ from materialize.util import PropagatingThread
 from materialize.workload_replay.column import Column
 from materialize.workload_replay.config import SEED_RANGE
 from materialize.workload_replay.ingest import (
+    _open_ingest_conn,
+    _resolve_child_obj,
     get_parquet_row_count,
     ingest,
     ingest_captured_parquet_kafka,
@@ -549,6 +551,30 @@ def _sample_rows(
     return rng.sample(rows, n)
 
 
+def _import_non_kafka_object(
+    c: Composition,
+    workload: dict[str, Any],
+    fqn: str,
+    data_path: str,
+    meta: dict[str, Any],
+    source_obj: dict[str, Any] | None,
+    factor: float,
+    seed: str | int,
+) -> None:
+    """Import a single non-Kafka object's Parquet data (thread target)."""
+    rng = random.Random(seed)
+    conn = _open_ingest_conn(c, meta, source_obj)
+    try:
+        col_types = [col["type"] for col in meta.get("columns", [])]
+        for batch in iter_parquet_batches(data_path, column_types=col_types):
+            batch = _sample_rows(batch, factor, rng)
+            ingest_captured_rows(c, workload, meta, source_obj, batch, conn=conn)
+    finally:
+        if conn is not None:
+            conn.close()
+    print(f"  Done: {fqn}")
+
+
 def import_captured_data_initial(
     c: Composition,
     workload: dict[str, Any],
@@ -556,13 +582,19 @@ def import_captured_data_initial(
     factor: float = 1.0,
     seed: str | int = 0,
 ) -> bool:
-    """Import initial captured data (Parquet) into upstream systems or MZ tables."""
+    """Import initial captured data (Parquet) into upstream systems or MZ tables.
+
+    Kafka objects are processed serially (already parallel internally).
+    Non-Kafka objects are imported in parallel (max 4 concurrent threads).
+    """
     parquet_files = _list_parquet_fqns(data_dir)
     if not parquet_files:
         return False
 
-    rng = random.Random(seed)
     imported = False
+    non_kafka_work: list[tuple[str, str, dict[str, Any], dict[str, Any] | None]] = []
+
+    # Phase 1: Kafka objects (serial, already parallel internally).
     for fqn, data_path in parquet_files:
         meta, source_obj = _lookup_fqn(fqn, workload)
         total_rows = get_parquet_row_count(data_path)
@@ -579,22 +611,46 @@ def import_captured_data_initial(
         else:
             print(f"  Importing {fqn} ({total_rows} rows)")
 
-        # Kafka sources: use the optimized Parquet-to-Avro path.
         source_type = source_obj.get("type") if source_obj else None
         if source_type == "kafka":
-            child_obj = source_obj
-            children = source_obj.get("children", {})  # type: ignore[union-attr]
-            if children and meta["name"] in children:
-                child_obj = children[meta["name"]]
+            assert source_obj is not None
+            child_obj = _resolve_child_obj(meta, source_obj)
             ingest_captured_parquet_kafka(
-                c, meta, source_obj, child_obj, data_path,  # type: ignore[arg-type]
-                factor=factor, seed=hash(seed),
+                c,
+                meta,
+                source_obj,
+                child_obj,
+                data_path,
+                factor=factor,
+                seed=int(seed),
             )
+            imported = True
         else:
-            col_types = [col["type"] for col in meta.get("columns", [])]
-            for batch in iter_parquet_batches(data_path, column_types=col_types):
-                batch = _sample_rows(batch, factor, rng)
-                ingest_captured_rows(c, workload, meta, source_obj, batch)
+            non_kafka_work.append((fqn, data_path, meta, source_obj))
+
+    # Phase 2: Non-Kafka objects (parallel, max 4 concurrent threads).
+    if non_kafka_work:
+        max_concurrent = 4
+        active_threads: list[PropagatingThread] = []
+
+        for fqn, data_path, meta, source_obj in non_kafka_work:
+            # Wait for a slot if we're at the limit.
+            while len(active_threads) >= max_concurrent:
+                for t in active_threads:
+                    t.join(timeout=0.1)
+                active_threads = [t for t in active_threads if t.is_alive()]
+
+            t = PropagatingThread(
+                target=_import_non_kafka_object,
+                name=f"import-{fqn}",
+                args=(c, workload, fqn, data_path, meta, source_obj, factor, seed),
+            )
+            t.start()
+            active_threads.append(t)
+
+        for t in active_threads:
+            t.join()
+
         imported = True
 
     return imported
@@ -620,41 +676,52 @@ def _replay_continuous_object(
     )
     timestamps = sorted(rows_by_timestamp.keys())
     if not timestamps:
+        print(f"  {fqn}: no continuous data rows, skipping")
         return
 
     rng = random.Random(seed)
     total = sum(len(v) for v in rows_by_timestamp.values())
+    duration_s = (timestamps[-1] - timestamps[0]) / 1000.0 / speed
     if factor < 1.0:
         target = int(total * factor)
         print(
-            f"  Replaying {target}/{total} rows for {fqn} across {len(timestamps)} timestamps (factor={factor})"
+            f"  Replaying {target}/{total} rows for {fqn} across {len(timestamps)} timestamps"
+            f" (factor={factor}, {duration_s:.0f}s at {speed}x speed)"
         )
     else:
-        print(f"  Replaying {total} rows for {fqn} across {len(timestamps)} timestamps")
+        print(
+            f"  Replaying {total} rows for {fqn} across {len(timestamps)} timestamps"
+            f" ({duration_s:.0f}s at {speed}x speed)"
+        )
 
     first_ts = timestamps[0]
     replay_start = time.time()
 
-    for ts in timestamps:
-        if stop_event.is_set():
-            break
-
-        target_time = replay_start + (ts - first_ts) / 1000.0 / speed
-        now = time.time()
-        if target_time > now:
-            stop_event.wait(timeout=target_time - now)
+    conn = _open_ingest_conn(c, meta, source_obj)
+    try:
+        for ts in timestamps:
             if stop_event.is_set():
                 break
 
-        rows = rows_by_timestamp[ts]
-        if factor < 1.0:
-            rows = _sample_rows(rows, factor, rng)
+            target_time = replay_start + (ts - first_ts) / 1000.0 / speed
+            now = time.time()
+            if target_time > now:
+                stop_event.wait(timeout=target_time - now)
+                if stop_event.is_set():
+                    break
 
-        try:
-            ingest_captured_rows(c, workload, meta, source_obj, rows)
-        except Exception as e:
-            print(f"  Error replaying {fqn} at ts {ts}: {e}")
-            break
+            rows = rows_by_timestamp[ts]
+            if factor < 1.0:
+                rows = _sample_rows(rows, factor, rng)
+
+            try:
+                ingest_captured_rows(c, workload, meta, source_obj, rows, conn=conn)
+            except Exception as e:
+                print(f"  Error replaying {fqn} at ts {ts}: {e}")
+                break
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def import_captured_data_streaming(

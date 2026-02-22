@@ -41,6 +41,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.workload_replay.column import Column
 from materialize.workload_replay.config import SEED_RANGE
+from materialize.workload_replay.objects import ensure_kafka_topic_ready
 from materialize.workload_replay.util import (
     get_kafka_topic,
     get_mysql_reference_db_table,
@@ -705,55 +706,92 @@ def parse_parquet_file(
     - timestamp → fixed_size_binary[16] → PackedNaiveDateTime decode
     - array → struct<dims,vals> → {elem,...}
     - date → int32 (days since epoch) → YYYY-MM-DD
+
+    When group_by_timestamp is True, reads one row group at a time to
+    keep peak memory at dict + one row group instead of ~3x file size.
     """
     import pyarrow.parquet as pq
-
-    table = pq.read_table(parquet_path)
-
-    # Detect columns that need special fixed_size_binary[16] timestamp decoding.
-    ts_cols: set[int] = set()
-    for i in range(table.num_columns):
-        dt = table.schema.field(i).type
-        if str(dt) == "fixed_size_binary[16]":
-            ts_cols.add(i)
-
-    # When group_by_timestamp, first two columns are mz_timestamp and mz_diff.
-    # column_types refers to the data columns only (starting at index 2).
-    data_col_start = 2 if group_by_timestamp else 0
-    columns = [table.column(i).to_pylist() for i in range(table.num_columns)]
-
-    def _convert_row(row_idx: int) -> list[str | None]:
-        row: list[str | None] = []
-        for col_idx in range(data_col_start, table.num_columns):
-            val = columns[col_idx][row_idx]
-            type_idx = col_idx - data_col_start
-            col_type = (
-                column_types[type_idx]
-                if column_types and type_idx < len(column_types)
-                else None
-            )
-            if val is None:
-                row.append(None)
-            elif col_idx in ts_cols and isinstance(val, bytes) and len(val) == 16:
-                row.append(_decode_packed_timestamp(val))
-            else:
-                row.append(_arrow_val_to_text(val, col_type=col_type))
-        return row
 
     if group_by_timestamp:
         from collections import defaultdict
 
-        ts_col = columns[0]  # mz_timestamp
-        diff_col = columns[1]  # mz_diff
+        pf = pq.ParquetFile(parquet_path)
+        schema = pf.schema_arrow
+        num_columns = len(schema)
+
+        ts_cols: set[int] = set()
+        for i in range(num_columns):
+            if str(schema.field(i).type) == "fixed_size_binary[16]":
+                ts_cols.add(i)
+
+        data_col_start = 2  # mz_timestamp, mz_diff, then data columns
+
         grouped: dict[int, list[list[str | None]]] = defaultdict(list)
-        for row_idx in range(table.num_rows):
-            if diff_col[row_idx] != 1:
-                continue
-            ts = ts_col[row_idx]
-            assert ts is not None, "mz_timestamp must not be NULL"
-            grouped[int(ts)].append(_convert_row(row_idx))
+        for rg_idx in range(pf.metadata.num_row_groups):
+            table = pf.read_row_group(rg_idx)
+            columns = [table.column(i).to_pylist() for i in range(num_columns)]
+            ts_col = columns[0]
+            diff_col = columns[1]
+
+            for row_idx in range(table.num_rows):
+                if diff_col[row_idx] != 1:
+                    continue
+                ts = ts_col[row_idx]
+                assert ts is not None, "mz_timestamp must not be NULL"
+                row: list[str | None] = []
+                for col_idx in range(data_col_start, num_columns):
+                    val = columns[col_idx][row_idx]
+                    type_idx = col_idx - data_col_start
+                    col_type = (
+                        column_types[type_idx]
+                        if column_types and type_idx < len(column_types)
+                        else None
+                    )
+                    if val is None:
+                        row.append(None)
+                    elif (
+                        col_idx in ts_cols and isinstance(val, bytes) and len(val) == 16
+                    ):
+                        row.append(_decode_packed_timestamp(val))
+                    else:
+                        row.append(_arrow_val_to_text(val, col_type=col_type))
+                grouped[int(ts)].append(row)
+
+            del table, columns
+
         return dict(grouped)
     else:
+        table = pq.read_table(parquet_path)
+
+        ts_cols_flat: set[int] = set()
+        for i in range(table.num_columns):
+            dt = table.schema.field(i).type
+            if str(dt) == "fixed_size_binary[16]":
+                ts_cols_flat.add(i)
+
+        columns = [table.column(i).to_pylist() for i in range(table.num_columns)]
+
+        def _convert_row(row_idx: int) -> list[str | None]:
+            row: list[str | None] = []
+            for col_idx in range(table.num_columns):
+                val = columns[col_idx][row_idx]
+                col_type = (
+                    column_types[col_idx]
+                    if column_types and col_idx < len(column_types)
+                    else None
+                )
+                if val is None:
+                    row.append(None)
+                elif (
+                    col_idx in ts_cols_flat
+                    and isinstance(val, bytes)
+                    and len(val) == 16
+                ):
+                    row.append(_decode_packed_timestamp(val))
+                else:
+                    row.append(_arrow_val_to_text(val, col_type=col_type))
+            return row
+
         return [_convert_row(row_idx) for row_idx in range(table.num_rows)]
 
 
@@ -837,21 +875,77 @@ def _tsv_to_typed_value(value: str | None, sql_type: str) -> Any:
         return value
 
 
-def ingest_captured_rows_mz_table(
+def _resolve_child_obj(
+    meta: dict[str, Any],
+    source_obj: dict[str, Any],
+) -> dict[str, Any]:
+    """Look up the child object for a subsource, falling back to source_obj itself."""
+    children = source_obj.get("children", {})
+    if children:
+        fqn = f"{meta['database']}.{meta['schema']}.{meta['name']}"
+        if fqn in children:
+            return children[fqn]
+    return source_obj
+
+
+def _open_ingest_conn(
     c: Composition,
+    meta: dict[str, Any],
+    source_obj: dict[str, Any] | None,
+) -> Any:
+    """Open a reusable connection for captured-data ingestion.
+
+    Returns a psycopg connection (MZ table / Postgres), pymysql connection
+    (MySQL), or None (kafka/webhook/sql-server/load-gen — these don't use
+    a persistent connection).
+    """
+    if source_obj is None or meta.get("object_type") == "table":
+        # MZ table
+        conn = psycopg.connect(
+            host="127.0.0.1",
+            port=c.port("materialized", 6877),
+            user="mz_system",
+            password="materialize",
+            dbname="materialize",
+        )
+        conn.autocommit = True
+        return conn
+
+    source_type = source_obj.get("type", "")
+    child_obj = _resolve_child_obj(meta, source_obj)
+
+    if source_type == "postgres":
+        ref_db, _, _ = get_postgres_reference_db_schema_table(child_obj)
+        conn = psycopg.connect(
+            host="127.0.0.1",
+            port=c.default_port("postgres"),
+            user="postgres",
+            password="postgres",
+            dbname=ref_db,
+        )
+        conn.autocommit = True
+        return conn
+
+    if source_type == "mysql":
+        ref_db, _ = get_mysql_reference_db_table(child_obj)
+        return pymysql.connect(
+            host="127.0.0.1",
+            user="root",
+            password=MySql.DEFAULT_ROOT_PASSWORD,
+            database=ref_db,
+            port=c.default_port("mysql"),
+            autocommit=False,
+        )
+
+    return None
+
+
+def ingest_captured_rows_mz_table(
+    conn: Any,
     meta: dict[str, Any],
     rows: list[list[str | None]],
 ) -> None:
     """COPY captured rows into a Materialize table."""
-    conn = psycopg.connect(
-        host="127.0.0.1",
-        port=c.port("materialized", 6877),
-        user="mz_system",
-        password="materialize",
-        dbname="materialize",
-    )
-    conn.autocommit = True
-
     col_names = [col["name"] for col in meta["columns"]]
 
     copy_stmt = SQL("COPY {}.{}.{} ({}) FROM STDIN").format(
@@ -861,34 +955,20 @@ def ingest_captured_rows_mz_table(
         SQL(", ").join(map(Identifier, col_names)),
     )
 
-    batch_size = 10000
     with conn.cursor() as cur:
-        for start in range(0, len(rows), batch_size):
-            batch = rows[start : start + batch_size]
-            with cur.copy(copy_stmt) as copy:
-                for row in batch:
-                    copy.write_row(row)
-
-    conn.close()
+        with cur.copy(copy_stmt) as copy:
+            for row in rows:
+                copy.write_row(row)
 
 
 def ingest_captured_rows_postgres(
-    c: Composition,
+    conn: Any,
     meta: dict[str, Any],
     child_obj: dict[str, Any],
     rows: list[list[str | None]],
 ) -> None:
     """COPY captured rows into upstream Postgres."""
-    ref_db, ref_schema, ref_table = get_postgres_reference_db_schema_table(child_obj)
-
-    conn = psycopg.connect(
-        host="127.0.0.1",
-        port=c.default_port("postgres"),
-        user="postgres",
-        password="postgres",
-        dbname=ref_db,
-    )
-    conn.autocommit = True
+    _, ref_schema, ref_table = get_postgres_reference_db_schema_table(child_obj)
 
     col_names = [col["name"] for col in meta["columns"]]
 
@@ -898,34 +978,20 @@ def ingest_captured_rows_postgres(
         SQL(", ").join(map(Identifier, col_names)),
     )
 
-    batch_size = 10000
     with conn.cursor() as cur:
-        for start in range(0, len(rows), batch_size):
-            batch = rows[start : start + batch_size]
-            with cur.copy(copy_stmt) as copy:
-                for row in batch:
-                    copy.write_row(row)
-
-    conn.close()
+        with cur.copy(copy_stmt) as copy:
+            for row in rows:
+                copy.write_row(row)
 
 
 def ingest_captured_rows_mysql(
-    c: Composition,
+    conn: Any,
     meta: dict[str, Any],
     child_obj: dict[str, Any],
     rows: list[list[str | None]],
 ) -> None:
     """Batch INSERT captured rows into upstream MySQL."""
-    ref_db, ref_table = get_mysql_reference_db_table(child_obj)
-
-    conn = pymysql.connect(
-        host="127.0.0.1",
-        user="root",
-        password=MySql.DEFAULT_ROOT_PASSWORD,
-        database=ref_db,
-        port=c.default_port("mysql"),
-        autocommit=False,
-    )
+    _, ref_table = get_mysql_reference_db_table(child_obj)
 
     col_names = [col["name"] for col in meta["columns"]]
     placeholders = ", ".join(["%s"] * len(col_names))
@@ -938,7 +1004,6 @@ def ingest_captured_rows_mysql(
             batch = rows[start : start + batch_size]
             cur.executemany(stmt, [tuple(row) for row in batch])
     conn.commit()
-    conn.close()
 
 
 def ingest_captured_rows_kafka(
@@ -949,6 +1014,7 @@ def ingest_captured_rows_kafka(
     rows: list[list[str | None]],
 ) -> None:
     """Produce captured rows as Avro messages to Kafka topic."""
+    ensure_kafka_topic_ready(c, source_obj)
     topic = get_kafka_topic(source_obj)
     debezium = "ENVELOPE DEBEZIUM" in child_obj.get("create_sql", "")
 
@@ -1021,6 +1087,8 @@ def ingest_captured_rows_kafka(
                 break
             except BufferError:
                 producer.poll(0.01)
+    # flush() is intentional here — this path is only used by continuous replay
+    # where per-tick flushing ensures timestamp ordering across ticks.
     producer.flush()
 
 
@@ -1220,6 +1288,7 @@ def ingest_captured_parquet_kafka(
 
     import pyarrow.parquet as pq
 
+    ensure_kafka_topic_ready(c, source_obj)
     topic = get_kafka_topic(source_obj)
     debezium = "ENVELOPE DEBEZIUM" in child_obj.get("create_sql", "")
     columns_meta = meta["columns"]
@@ -1238,9 +1307,15 @@ def ingest_captured_parquet_kafka(
     if factor < 1.0:
         rg_rng = random.Random(seed)
         num_rgs_to_read = max(1, int(num_row_groups * min(factor * 5, 1.0)))
-        selected_rgs = sorted(rg_rng.sample(range(num_row_groups), min(num_rgs_to_read, num_row_groups)))
-        rows_in_selected = sum(pf.metadata.row_group(rg).num_rows for rg in selected_rgs)
-        row_factor = min(1.0, target_rows / rows_in_selected) if rows_in_selected > 0 else 1.0
+        selected_rgs = sorted(
+            rg_rng.sample(range(num_row_groups), min(num_rgs_to_read, num_row_groups))
+        )
+        rows_in_selected = sum(
+            pf.metadata.row_group(rg).num_rows for rg in selected_rgs
+        )
+        row_factor = (
+            min(1.0, target_rows / rows_in_selected) if rows_in_selected > 0 else 1.0
+        )
     else:
         selected_rgs = list(range(num_row_groups))
         row_factor = 1.0
@@ -1322,6 +1397,25 @@ def ingest_captured_parquet_kafka(
     print(f"    {done}/{target_rows} (100.0%)\033[K")
 
 
+def _run_sql_server_testdrive(c: Composition, ref_db: str, stmts: list[str]) -> None:
+    """Execute a batch of SQL Server statements in a single testdrive subprocess."""
+    sql_block = "\n".join(stmts)
+    c.testdrive(
+        dedent(
+            f"""
+            $ sql-server-connect name=sql-server
+            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+            $ sql-server-execute name=sql-server
+            USE {ref_db};
+            {sql_block}
+        """
+        ),
+        quiet=True,
+        silent=True,
+    )
+
+
 def ingest_captured_rows_sql_server(
     c: Composition,
     meta: dict[str, Any],
@@ -1331,13 +1425,16 @@ def ingest_captured_rows_sql_server(
     """INSERT captured rows into upstream SQL Server via testdrive."""
     ref_db, ref_schema, ref_table = get_sql_server_reference_db_schema_table(child_obj)
 
-    batch_size = 100
+    batch_size = 1000
+    stmts_per_subprocess = 10  # up to 10 INSERT stmts (10K rows) per subprocess
+    pending_stmts: list[str] = []
+
     for start in range(0, len(rows), batch_size):
         batch = rows[start : start + batch_size]
         values_strs = []
         for row in batch:
             formatted = []
-            for i, val in enumerate(row):
+            for val in row:
                 if val is None:
                     formatted.append("NULL")
                 else:
@@ -1345,20 +1442,16 @@ def ingest_captured_rows_sql_server(
                     formatted.append(f"'{escaped}'")
             values_strs.append(f"({', '.join(formatted)})")
 
-        c.testdrive(
-            dedent(
-                f"""
-                $ sql-server-connect name=sql-server
-                server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
-
-                $ sql-server-execute name=sql-server
-                USE {ref_db};
-                INSERT INTO {ref_schema}.{ref_table} VALUES {', '.join(values_strs)}
-            """
-            ),
-            quiet=True,
-            silent=True,
+        pending_stmts.append(
+            f"INSERT INTO {ref_schema}.{ref_table} VALUES {', '.join(values_strs)}"
         )
+
+        if len(pending_stmts) >= stmts_per_subprocess:
+            _run_sql_server_testdrive(c, ref_db, pending_stmts)
+            pending_stmts = []
+
+    if pending_stmts:
+        _run_sql_server_testdrive(c, ref_db, pending_stmts)
 
 
 def ingest_captured_rows_webhook(
@@ -1366,7 +1459,7 @@ def ingest_captured_rows_webhook(
     meta: dict[str, Any],
     rows: list[list[str | None]],
 ) -> None:
-    """HTTP POST captured rows to a webhook source."""
+    """HTTP POST captured rows to a webhook source using concurrent requests."""
     url = (
         f"http://127.0.0.1:{c.port('materialized', 6876)}/api/webhook/"
         f"{urllib.parse.quote(meta['database'], safe='')}/"
@@ -1375,20 +1468,20 @@ def ingest_captured_rows_webhook(
     )
 
     async def _post_all() -> None:
-        connector = aiohttp.TCPConnector(limit=100)
+        connector = aiohttp.TCPConnector(limit=5000)
         timeout = aiohttp.ClientTimeout(total=None)
         async with aiohttp.ClientSession(
             connector=connector, timeout=timeout
         ) as session:
-            sem = asyncio.Semaphore(100)
-            for row in rows:
-                body = row[0] if row else ""
+            sem = asyncio.Semaphore(5000)
+
+            async def send_one(body: str | None) -> None:
                 backoff = 0.01
                 while True:
                     async with sem:
                         async with session.post(url, data=body) as resp:
                             if resp.status == 200:
-                                break
+                                return
                             elif resp.status == 429:
                                 await asyncio.sleep(backoff)
                                 backoff = min(backoff * 2, 1.0)
@@ -1397,6 +1490,8 @@ def ingest_captured_rows_webhook(
                                 raise RuntimeError(
                                     f"Webhook ingestion failed: {resp.status}: {text}"
                                 )
+
+            await asyncio.gather(*(send_one(row[0] if row else "") for row in rows))
 
     asyncio.run(_post_all())
 
@@ -1407,37 +1502,54 @@ def ingest_captured_rows(
     meta: dict[str, Any],
     source_obj: dict[str, Any] | None,
     rows: list[list[str | None]],
+    conn: Any = None,
 ) -> None:
-    """Dispatch captured rows to the appropriate upstream system."""
+    """Dispatch captured rows to the appropriate upstream system.
+
+    When *conn* is provided it is reused (caller owns open/close).
+    When *conn* is None a connection is opened and closed per call
+    (backward compat for continuous replay and small batches).
+    """
     if not rows:
         return
 
     # MZ table (no parent source, or explicitly a table).
     if source_obj is None or meta.get("object_type") == "table":
-        ingest_captured_rows_mz_table(c, meta, rows)
+        owns_conn = conn is None
+        try:
+            if owns_conn:
+                conn = _open_ingest_conn(c, meta, source_obj)
+            ingest_captured_rows_mz_table(conn, meta, rows)
+        finally:
+            if owns_conn and conn is not None:
+                conn.close()
         return
 
     source_type = source_obj.get("type", "")
+    child_obj = _resolve_child_obj(meta, source_obj)
 
-    # Find the child object (for subsources) or use source itself.
-    child_obj = source_obj
-    children = source_obj.get("children", {})
-    if children and meta["name"] in children:
-        child_obj = children[meta["name"]]
-
-    if source_type == "postgres":
-        ingest_captured_rows_postgres(c, meta, child_obj, rows)
-    elif source_type == "mysql":
-        ingest_captured_rows_mysql(c, meta, child_obj, rows)
-    elif source_type == "kafka":
-        ingest_captured_rows_kafka(c, meta, source_obj, child_obj, rows)
-    elif source_type == "sql-server":
-        ingest_captured_rows_sql_server(c, meta, child_obj, rows)
-    elif source_type == "webhook":
-        ingest_captured_rows_webhook(c, meta, rows)
-    elif source_type == "load-generator":
-        pass  # nothing to replay
-    else:
-        print(
-            f"  Warning: unknown source type '{source_type}' for {meta.get('name', '?')}, skipping"
-        )
+    owns_conn = conn is None
+    try:
+        if source_type == "postgres":
+            if owns_conn:
+                conn = _open_ingest_conn(c, meta, source_obj)
+            ingest_captured_rows_postgres(conn, meta, child_obj, rows)
+        elif source_type == "mysql":
+            if owns_conn:
+                conn = _open_ingest_conn(c, meta, source_obj)
+            ingest_captured_rows_mysql(conn, meta, child_obj, rows)
+        elif source_type == "kafka":
+            ingest_captured_rows_kafka(c, meta, source_obj, child_obj, rows)
+        elif source_type == "sql-server":
+            ingest_captured_rows_sql_server(c, meta, child_obj, rows)
+        elif source_type == "webhook":
+            ingest_captured_rows_webhook(c, meta, rows)
+        elif source_type == "load-generator":
+            pass  # nothing to replay
+        else:
+            print(
+                f"  Warning: unknown source type '{source_type}' for {meta.get('name', '?')}, skipping"
+            )
+    finally:
+        if owns_conn and conn is not None:
+            conn.close()
