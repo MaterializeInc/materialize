@@ -14,7 +14,7 @@ anyhow = "1.0.101"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 chrono = { version = "0.4.39", default-features = false, features = ["clock"] }
-futures = "0.3.31"
+futures = "0.3.32"
 hex = "0.4.3"
 itertools = "0.14.0"
 libc = "0.2.181"

@@ -24,7 +24,7 @@ axum = "0.8.8"
 bytes = { version = "1.11.1", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 differential-dataflow = "0.19.1"
-futures = "0.3.31"
+futures = "0.3.32"
 humantime = "2.3.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }

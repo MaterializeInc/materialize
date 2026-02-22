@@ -31,7 +31,7 @@ csv-core = { version = "0.1.13" }
 dec = "0.4.8"
 differential-dataflow = "0.19.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
+futures = "0.3.32"
 iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools = { version = "0.14.0" }

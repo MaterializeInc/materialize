@@ -14,7 +14,7 @@ anyhow = "1.0.101"
 async-trait = "0.1.89"
 dec = "0.4.8"
 deadpool-postgres = "0.10.3"
-futures = "0.3.31"
+futures = "0.3.32"
 futures-util = "0.3.31"
 mz-adapter-types = { path = "../adapter-types" }
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }

@@ -24,7 +24,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
 derivative = "2.2.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.31"
+futures = "0.3.32"
 headers = "0.4.1"
 http = "1.4.0"
 humantime = "2.3.0"
@@ -166,7 +166,7 @@ tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.101"
-cc = "1.2.55"
+cc = "1.2.56"
 mz-npm = { path = "../npm" }
 
 [features]

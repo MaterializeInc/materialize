@@ -14,7 +14,7 @@ anyhow = "1.0.101"
 async-trait = "0.1.89"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 differential-dataflow = "0.19.1"
-futures = "0.3.31"
+futures = "0.3.32"
 itertools = { version = "0.14.0" }
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
