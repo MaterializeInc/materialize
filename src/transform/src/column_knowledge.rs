@@ -20,7 +20,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
 use mz_ore::{assert_none, soft_panic_or_log};
-use mz_repr::{Datum, Row, SqlColumnType, SqlRelationType, SqlScalarType};
+use mz_repr::{Datum, ReprScalarType, Row, SqlColumnType, SqlRelationType, SqlScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -637,8 +637,8 @@ impl DatumKnowledge {
                 unreachable!();
             };
 
-            if !s_typ.base_eq(o_typ) {
-                ::tracing::error!("Undefined join of non-equal base types {s_typ:?} != {o_typ:?}");
+            if ReprScalarType::from(&*s_typ) != ReprScalarType::from(&*o_typ) {
+                soft_panic_or_log!("Undefined join of non-equal base types {s_typ:?}, {o_typ:?}");
                 *self = Self::top();
             } else if s_val != o_val {
                 let nullable = self.nullable() || other.nullable();
@@ -737,8 +737,8 @@ impl DatumKnowledge {
                 unreachable!();
             };
 
-            if !s_typ.base_eq(o_typ) {
-                soft_panic_or_log!("Undefined meet of non-equal base types {s_typ:?} != {o_typ:?}");
+            if ReprScalarType::from(&*s_typ) != ReprScalarType::from(&*o_typ) {
+                soft_panic_or_log!("Undefined meet of non-equal base types {s_typ:?}, {o_typ:?}");
                 *self = Self::top(); // this really should be Nothing
             } else if s_val != o_val {
                 *self = Nothing;
