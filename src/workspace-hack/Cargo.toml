@@ -21,9 +21,9 @@ ahash = { version = "0.8.12" }
 aho-corasick = { version = "1.1.4" }
 arrayvec = { version = "0.7.6" }
 arrow = { version = "57.1.0", default-features = false, features = ["ffi", "prettyprint"] }
-arrow-array = { version = "57.1.0", default-features = false, features = ["ffi"] }
-arrow-cast = { version = "57.1.0", default-features = false, features = ["prettyprint"] }
-arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-array = { version = "57.2.0", default-features = false, features = ["ffi"] }
+arrow-cast = { version = "57.2.0", default-features = false, features = ["prettyprint"] }
+arrow-data = { version = "57.2.0", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.8.13", default-features = false, features = ["sso"] }
@@ -103,7 +103,7 @@ num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 once_cell = { version = "1.21.3" }
 parking_lot = { version = "0.12.5", features = ["serde"] }
-parquet = { version = "57.1.0", features = ["async"] }
+parquet = { version = "57.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
 phf = { version = "0.13.1", features = ["uncased"] }
 phf_shared-594e8ee84c453af0 = { package = "phf_shared", version = "0.13.1", features = ["uncased"] }
@@ -172,9 +172,9 @@ ahash = { version = "0.8.12" }
 aho-corasick = { version = "1.1.4" }
 arrayvec = { version = "0.7.6" }
 arrow = { version = "57.1.0", default-features = false, features = ["ffi", "prettyprint"] }
-arrow-array = { version = "57.1.0", default-features = false, features = ["ffi"] }
-arrow-cast = { version = "57.1.0", default-features = false, features = ["prettyprint"] }
-arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-array = { version = "57.2.0", default-features = false, features = ["ffi"] }
+arrow-cast = { version = "57.2.0", default-features = false, features = ["prettyprint"] }
+arrow-data = { version = "57.2.0", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.8.13", default-features = false, features = ["sso"] }
@@ -257,7 +257,7 @@ num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 once_cell = { version = "1.21.3" }
 parking_lot = { version = "0.12.5", features = ["serde"] }
-parquet = { version = "57.1.0", features = ["async"] }
+parquet = { version = "57.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
 phf = { version = "0.13.1", features = ["uncased"] }
 phf_shared-594e8ee84c453af0 = { package = "phf_shared", version = "0.13.1", features = ["uncased"] }
