@@ -32,14 +32,14 @@ sysinfo = "0.29.11"
 tokio = "1.49.0"
 tokio-stream = "0.1.18"
 tracing = "0.1.44"
-sentry-tracing = "0.46.1"
+sentry-tracing = "0.46.2"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["turmoil"] }
 rand = "0.9.2"
 tracing-subscriber = "0.3.22"
-turmoil = "0.7.0"
+turmoil = "0.7.1"
 
 [features]
 default = ["workspace-hack"]

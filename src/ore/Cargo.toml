@@ -48,9 +48,9 @@ proptest = { version = "1.9.0", default-features = false, features = ["std"], op
 proptest-derive = { version = "0.8.0", optional = true }
 rand = { version = "0.9.2", optional = true }
 smallvec = { version = "1.15.1", optional = true }
-stacker = { version = "0.1.22", optional = true }
-sentry = { version = "0.46.1", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
-sentry-panic = { version = "0.46.1", optional = true }
+stacker = { version = "0.1.23", optional = true }
+sentry = { version = "0.46.2", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
+sentry-panic = { version = "0.46.2", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.49.0", features = [
     "io-util",
@@ -91,8 +91,8 @@ opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"], optional = true }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
 console-subscriber = { version = "0.5.0", optional = true }
-sentry-tracing = { version = "0.46.1", optional = true }
-turmoil = { version = "0.7.0", optional = true }
+sentry-tracing = { version = "0.46.2", optional = true }
+turmoil = { version = "0.7.1", optional = true }
 yansi = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
