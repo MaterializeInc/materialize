@@ -10,6 +10,21 @@
 use std::path::PathBuf;
 
 fn main() {
+    // `libduckdb-sys` copies the downloaded shared library into
+    // `target/<profile>/deps`. Ensure `target/debug/testdrive` can resolve it
+    // at runtime when launched directly.
+    if let Ok(target_os) = std::env::var("CARGO_CFG_TARGET_OS") {
+        match target_os.as_str() {
+            "macos" => {
+                println!("cargo:rustc-link-arg-bin=testdrive=-Wl,-rpath,@executable_path/deps");
+            }
+            "linux" => {
+                println!("cargo:rustc-link-arg-bin=testdrive=-Wl,-rpath,$ORIGIN/deps");
+            }
+            _ => {}
+        }
+    }
+
     let mut config = prost_build::Config::new();
     config
         .protoc_executable(mz_build_tools::protoc())

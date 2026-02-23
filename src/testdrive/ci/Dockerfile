@@ -17,6 +17,10 @@ COPY protobuf-include /usr/local/include
 RUN chmod +x /usr/local/bin/protoc
 ENV PROTOC /usr/local/bin/protoc
 ENV PROTOC_INCLUDE /usr/local/include
+# Install libduckdb.so that was downloaded
+COPY duckdb-download/*/*/libduckdb.so /usr/local/lib/
+RUN ldconfig
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 WORKDIR /workdir
 

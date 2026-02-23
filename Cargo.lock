@@ -5081,7 +5081,6 @@ name = "libduckdb-sys"
 version = "1.4.3"
 source = "git+https://github.com/MaterializeInc/duckdb-rs.git?rev=752c7efe2582#752c7efe25820590f590fb0a112443b9ddd396e7"
 dependencies = [
- "cc",
  "flate2",
  "reqwest",
  "serde",

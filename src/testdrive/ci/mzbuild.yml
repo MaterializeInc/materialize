@@ -16,3 +16,5 @@ pre-image:
       protobuf-src:
         bin: protobuf-bin
         include: protobuf-include
+      libduckdb-sys:
+        ../../../../../duckdb-download: duckdb-download
