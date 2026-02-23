@@ -37,7 +37,7 @@ use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
-use mz_ore::metrics::UIntGauge;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
@@ -143,6 +143,9 @@ pub struct ComputeState {
     /// Reference-counted to avoid cloning for `Context`.
     pub worker_config: Rc<ConfigSet>,
 
+    /// The process-global metrics registry.
+    pub metrics_registry: MetricsRegistry,
+
     /// Collections awaiting schedule instruction by the controller.
     ///
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
@@ -173,6 +176,7 @@ impl ComputeState {
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
         context: ComputeInstanceContext,
+        metrics_registry: MetricsRegistry,
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
@@ -194,6 +198,7 @@ impl ComputeState {
             tracing_handle,
             context,
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
+            metrics_registry,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
@@ -670,7 +675,12 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             traces,
             dataflow_index,
             compute_logger: logger,
-        } = logging::initialize(self.timely_worker, &config);
+        } = logging::initialize(
+            self.timely_worker,
+            &config,
+            self.compute_state.metrics_registry.clone(),
+            Rc::clone(&self.compute_state.worker_config),
+        );
 
         let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
