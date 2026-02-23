@@ -108,6 +108,9 @@ class Report:
         scenario_result = self.get_scenario_result_by_name(scenario_name)
         return scenario_result.get_scenario_version()
 
+    def has_scenario_result(self, scenario_name: str) -> bool:
+        return scenario_name in self._result_by_scenario_name
+
     def get_scenario_result_by_name(
         self, scenario_name: str
     ) -> BenchmarkScenarioResult:
@@ -121,6 +124,12 @@ class Report:
             if evaluator.is_regression(metric):
                 return True
 
+        return False
+
+    def has_any_regressions(self) -> bool:
+        for scenario_name in self.get_scenario_names():
+            if self.has_scenario_regression(scenario_name):
+                return True
         return False
 
 

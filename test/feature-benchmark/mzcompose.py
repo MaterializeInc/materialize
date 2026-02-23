@@ -583,6 +583,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     scenario_classes_scheduled_to_run: list[type[Scenario]] = buildkite.shard_list(
         selected_scenarios, lambda scenario_cls: scenario_cls.__name__
     )
+    scenario_classes_remaining = list(scenario_classes_scheduled_to_run)
 
     if (
         len(scenario_classes_scheduled_to_run) == 0
@@ -599,13 +600,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for run_index in range(0, args.runs_per_scenario):
         run_number = run_index + 1
         print(
-            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_scheduled_to_run])}"
+            f"Run {run_number} with scenarios: {', '.join([scenario.__name__ for scenario in scenario_classes_remaining])}"
         )
 
         report = Report(cycle_number=run_number)
         reports.append(report)
 
-        for scenario_class in scenario_classes_scheduled_to_run:
+        for scenario_class in scenario_classes_remaining:
             try:
                 scenario_result = run_one_scenario(c, scenario_class, args, first_run)
             except RuntimeError as e:
@@ -628,6 +629,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         print(f"+++ Benchmark Report for run {run_number}:")
         print(report)
+        scenario_classes_remaining = [
+            scenario_class
+            for scenario_class in scenario_classes_remaining
+            if report.has_scenario_regression(scenario_class.__name__)
+        ]
+        if not scenario_classes_remaining:
+            if run_number < args.runs_per_scenario:
+                print(
+                    "No regressions detected in this run; skipping remaining reruns for all scenarios."
+                )
+            break
 
     benchmark_result_selector = BestBenchmarkResultSelector()
     selected_report_by_scenario_name = (

@@ -9,7 +9,7 @@
 
 # TODO: Reenable when database-issues#8373 is fixed
 $ skip-if
-SELECT 1
+SELECT true
 
 # Exercise the Fivetran Destination.
 

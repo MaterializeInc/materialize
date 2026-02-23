@@ -39,6 +39,9 @@ class BenchmarkResultSelectorBase:
         available_wallclock_values = []
 
         for report in reports:
+            if not report.has_scenario_result(scenario_name):
+                continue
+
             scenario_result = report.get_scenario_result_by_name(scenario_name)
 
             metric_value = scenario_result.get_metric_by_measurement_type(
@@ -141,7 +144,10 @@ def get_discarded_reports_per_scenario(
         discarded_reports = []
 
         for report in reports:
-            if report.cycle_number != selected_report.cycle_number:
+            if (
+                report.cycle_number != selected_report.cycle_number
+                and report.has_scenario_result(scenario_name)
+            ):
                 discarded_reports.append(report)
 
         result[scenario_name] = discarded_reports
