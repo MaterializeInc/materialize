@@ -579,6 +579,54 @@ true
         )
 
 
+class NumericExpressionsAndAggregation(Dataflow):
+    """Benchmark numeric casts, arithmetic, comparisons, and SUM/MAX aggregation."""
+
+    def init(self) -> Action:
+        return TdAction(
+            f"""
+> DROP TABLE IF EXISTS numeric_input;
+
+> CREATE TABLE numeric_input (f1 BIGINT);
+
+> INSERT INTO numeric_input SELECT * FROM generate_series(1, {self.n()});
+
+> SELECT COUNT(*) = {self.n()} FROM numeric_input;
+true
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        n = self.n()
+        # i in [1, n]
+        expected_sum_1 = (n * (17 * n + 7)) // 2  # SUM(17*i - 5)
+        expected_sum_2 = (n * (51 * n + 39)) // 2  # SUM(((17*i - 5) * 3) + 9)
+        expected_sum_3 = (n * (n + 3)) // 2  # SUM((i + 3) - 2)
+        expected_min_4 = 12  # MIN(23*i - 11)
+        expected_max_4 = 23 * n - 11  # MAX(23*i - 11)
+
+        return Td(
+            f"""
+> SELECT 1
+  /* A */
+1
+
+> SELECT
+    SUM((f1::numeric * 17::numeric) - 5::numeric),
+    SUM((((f1::numeric * 17::numeric) - 5::numeric) * 3::numeric) + 9::numeric),
+    SUM((f1::numeric + 3::numeric) - 2::numeric),
+    MIN((f1::numeric * 23::numeric) - 11::numeric),
+    MAX((f1::numeric * 23::numeric) - 11::numeric)
+  FROM numeric_input
+  WHERE f1::numeric <= {n}::numeric
+    AND f1::numeric >= 1::numeric
+    AND (f1::numeric + 0::numeric) > 0::numeric
+  /* B */
+{expected_sum_1} {expected_sum_2} {expected_sum_3} {expected_min_4} {expected_max_4}
+"""
+        )
+
+
 class MinMaxMaintained(Dataflow):
     """Benchmark MinMax as an indexed view, which renders a dataflow for incremental
     maintenance, in contrast with one-shot SELECT processing"""
