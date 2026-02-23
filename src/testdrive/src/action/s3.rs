@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fs;
 use std::pin::Pin;
 use std::str;
 use std::thread;
@@ -262,8 +263,8 @@ pub async fn run_upload_file(
     let aws_client = mz_aws_util::s3::new_client(&state.aws_config);
 
     println!(
-        "Running upload-file with path {path} from cwd: {} with ls:\n{}",
-        std::env::current_dir()?.display(),
+        "Running upload-file with path {path} from cwd: {:?} with ls:\n{}",
+        fs::canonicalize(std::env::current_dir()?)?,
         std::fs::read_dir(std::env::current_dir()?)
             .unwrap()
             .filter_map(|entry| entry.ok())
