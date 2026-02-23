@@ -1539,6 +1539,227 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
     }
 }
 
+/// Datum skip payload table: maps each Tag discriminant to skip information.
+///
+/// Encoding:
+/// - Values 0..=126: fixed payload size in bytes (just advance pointer)
+/// - -1: variable-length with 1-byte length prefix (Tiny variants)
+/// - -2: variable-length with 2-byte length prefix (Short variants)
+/// - -3: variable-length with 4-byte length prefix (Long variants)
+/// - -4: variable-length with 8-byte length prefix (Huge variants, Dict)
+/// - -5: Numeric (variable-length, need to read digits byte)
+/// - -6: Array (ndims + dims + untagged elements)
+/// - i8::MIN (-128): complex type (Range with inline datums)
+const DATUM_SKIP_TABLE: [i8; 128] = {
+    let mut t = [i8::MIN; 128];
+
+    // Zero-size payloads (tag only, no data)
+    t[Tag::Null as u8 as usize] = 0;
+    t[Tag::False as u8 as usize] = 0;
+    t[Tag::True as u8 as usize] = 0;
+    t[Tag::JsonNull as u8 as usize] = 0;
+    t[Tag::Dummy as u8 as usize] = 0;
+
+    // Fixed-size payloads - legacy fixed-width encoding
+    t[Tag::Int16 as u8 as usize] = 2;
+    t[Tag::Int32 as u8 as usize] = 4;
+    t[Tag::Int64 as u8 as usize] = 8;
+    t[Tag::UInt8 as u8 as usize] = 1;
+    t[Tag::UInt16 as u8 as usize] = 2;
+    t[Tag::UInt32 as u8 as usize] = 4;
+    t[Tag::UInt64 as u8 as usize] = 8;
+    t[Tag::Float32 as u8 as usize] = 4;
+    t[Tag::Float64 as u8 as usize] = 8;
+    t[Tag::Date as u8 as usize] = 4; // i32 days
+    t[Tag::Time as u8 as usize] = 8; // u32 secs + u32 nanos
+    t[Tag::Timestamp as u8 as usize] = 16; // naive_date (i32+u32) + time (u32+u32)
+    t[Tag::TimestampTz as u8 as usize] = 16; // same as Timestamp
+    t[Tag::Interval as u8 as usize] = 16; // i32 months + i32 days + i64 micros
+    t[Tag::Uuid as u8 as usize] = 16; // 128-bit UUID
+    t[Tag::CheapTimestamp as u8 as usize] = 8; // i64 nanos
+    t[Tag::CheapTimestampTz as u8 as usize] = 8; // i64 nanos
+    t[Tag::MzTimestamp as u8 as usize] = 8; // u64
+    // MzAclItem: RoleId(1+8) + RoleId(1+8) + u64(8) = 26 bytes
+    t[Tag::MzAclItem as u8 as usize] = 26;
+    // AclItem: u32 + u32 + u64 = 16 bytes
+    t[Tag::AclItem as u8 as usize] = 16;
+
+    // Variable-length with length prefix
+    t[Tag::BytesTiny as u8 as usize] = -1;
+    t[Tag::BytesShort as u8 as usize] = -2;
+    t[Tag::BytesLong as u8 as usize] = -3;
+    t[Tag::BytesHuge as u8 as usize] = -4;
+    t[Tag::StringTiny as u8 as usize] = -1;
+    t[Tag::StringShort as u8 as usize] = -2;
+    t[Tag::StringLong as u8 as usize] = -3;
+    t[Tag::StringHuge as u8 as usize] = -4;
+    t[Tag::ListTiny as u8 as usize] = -1;
+    t[Tag::ListShort as u8 as usize] = -2;
+    t[Tag::ListLong as u8 as usize] = -3;
+    t[Tag::ListHuge as u8 as usize] = -4;
+    t[Tag::Dict as u8 as usize] = -4; // uses untagged_bytes = u64 length prefix
+
+    // Special variable-length types
+    t[Tag::Numeric as u8 as usize] = -5;
+    t[Tag::Array as u8 as usize] = -6;
+
+    // Variable-length integer encoding
+    t[Tag::NonNegativeInt16_0 as u8 as usize] = 0;
+    t[Tag::NonNegativeInt16_8 as u8 as usize] = 1;
+    t[Tag::NonNegativeInt16_16 as u8 as usize] = 2;
+
+    t[Tag::NonNegativeInt32_0 as u8 as usize] = 0;
+    t[Tag::NonNegativeInt32_8 as u8 as usize] = 1;
+    t[Tag::NonNegativeInt32_16 as u8 as usize] = 2;
+    t[Tag::NonNegativeInt32_24 as u8 as usize] = 3;
+    t[Tag::NonNegativeInt32_32 as u8 as usize] = 4;
+
+    t[Tag::NonNegativeInt64_0 as u8 as usize] = 0;
+    t[Tag::NonNegativeInt64_8 as u8 as usize] = 1;
+    t[Tag::NonNegativeInt64_16 as u8 as usize] = 2;
+    t[Tag::NonNegativeInt64_24 as u8 as usize] = 3;
+    t[Tag::NonNegativeInt64_32 as u8 as usize] = 4;
+    t[Tag::NonNegativeInt64_40 as u8 as usize] = 5;
+    t[Tag::NonNegativeInt64_48 as u8 as usize] = 6;
+    t[Tag::NonNegativeInt64_56 as u8 as usize] = 7;
+    t[Tag::NonNegativeInt64_64 as u8 as usize] = 8;
+
+    t[Tag::NegativeInt16_0 as u8 as usize] = 0;
+    t[Tag::NegativeInt16_8 as u8 as usize] = 1;
+    t[Tag::NegativeInt16_16 as u8 as usize] = 2;
+
+    t[Tag::NegativeInt32_0 as u8 as usize] = 0;
+    t[Tag::NegativeInt32_8 as u8 as usize] = 1;
+    t[Tag::NegativeInt32_16 as u8 as usize] = 2;
+    t[Tag::NegativeInt32_24 as u8 as usize] = 3;
+    t[Tag::NegativeInt32_32 as u8 as usize] = 4;
+
+    t[Tag::NegativeInt64_0 as u8 as usize] = 0;
+    t[Tag::NegativeInt64_8 as u8 as usize] = 1;
+    t[Tag::NegativeInt64_16 as u8 as usize] = 2;
+    t[Tag::NegativeInt64_24 as u8 as usize] = 3;
+    t[Tag::NegativeInt64_32 as u8 as usize] = 4;
+    t[Tag::NegativeInt64_40 as u8 as usize] = 5;
+    t[Tag::NegativeInt64_48 as u8 as usize] = 6;
+    t[Tag::NegativeInt64_56 as u8 as usize] = 7;
+    t[Tag::NegativeInt64_64 as u8 as usize] = 8;
+
+    t[Tag::UInt8_0 as u8 as usize] = 0;
+    t[Tag::UInt8_8 as u8 as usize] = 1;
+
+    t[Tag::UInt16_0 as u8 as usize] = 0;
+    t[Tag::UInt16_8 as u8 as usize] = 1;
+    t[Tag::UInt16_16 as u8 as usize] = 2;
+
+    t[Tag::UInt32_0 as u8 as usize] = 0;
+    t[Tag::UInt32_8 as u8 as usize] = 1;
+    t[Tag::UInt32_16 as u8 as usize] = 2;
+    t[Tag::UInt32_24 as u8 as usize] = 3;
+    t[Tag::UInt32_32 as u8 as usize] = 4;
+
+    t[Tag::UInt64_0 as u8 as usize] = 0;
+    t[Tag::UInt64_8 as u8 as usize] = 1;
+    t[Tag::UInt64_16 as u8 as usize] = 2;
+    t[Tag::UInt64_24 as u8 as usize] = 3;
+    t[Tag::UInt64_32 as u8 as usize] = 4;
+    t[Tag::UInt64_40 as u8 as usize] = 5;
+    t[Tag::UInt64_48 as u8 as usize] = 6;
+    t[Tag::UInt64_56 as u8 as usize] = 7;
+    t[Tag::UInt64_64 as u8 as usize] = 8;
+
+    t
+};
+
+/// DECDPUN from the decnumber library: digits per unit in the lsu array.
+const DECDPUN: usize = 3;
+
+/// Advance past one datum in the encoded byte stream without constructing a Datum.
+///
+/// This is significantly faster than `read_datum` for datums that are expensive to
+/// construct (timestamps, numerics) because it only advances the pointer without
+/// performing any value interpretation, chrono construction, or validation.
+///
+/// # Safety
+///
+/// Same as `read_datum`: the data must point to a validly encoded datum.
+unsafe fn skip_datum(data: &mut &[u8]) {
+    let tag_byte = data[0];
+    let skip_info = *DATUM_SKIP_TABLE.get_unchecked(usize::from(tag_byte));
+
+    if skip_info >= 0 {
+        // Fixed-size payload: advance past tag byte + payload
+        *data = &data[1 + skip_info as usize..];
+    } else {
+        // Consume the tag byte
+        *data = &data[1..];
+        match skip_info {
+            -1 => {
+                // 1-byte length prefix (Tiny)
+                let len = usize::from(data[0]);
+                *data = &data[1 + len..];
+            }
+            -2 => {
+                // 2-byte length prefix (Short)
+                let len = usize::from(u16::from_le_bytes([data[0], data[1]]));
+                *data = &data[2 + len..];
+            }
+            -3 => {
+                // 4-byte length prefix (Long)
+                let len =
+                    usize::cast_from(u32::from_le_bytes([data[0], data[1], data[2], data[3]]));
+                *data = &data[4 + len..];
+            }
+            -4 => {
+                // 8-byte length prefix (Huge/Dict)
+                let len = usize::cast_from(u64::from_le_bytes([
+                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                ]));
+                *data = &data[8 + len..];
+            }
+            -5 => {
+                // Numeric: 1 byte digits + 1 byte exponent + 1 byte bits + variable lsu
+                let digits = usize::from(data[0]);
+                let lsu_u16_len = (digits + DECDPUN - 1) / DECDPUN;
+                *data = &data[3 + lsu_u16_len * 2..];
+            }
+            -6 => {
+                // Array: 1 byte ndims + ndims*16 bytes dims + u64 len + data
+                let ndims = usize::from(data[0]);
+                *data = &data[1..];
+                let dims_size = ndims * size_of::<u64>() * 2;
+                *data = &data[dims_size..];
+                // Skip untagged bytes (u64 length prefix + data)
+                let len = usize::cast_from(u64::from_le_bytes([
+                    data[0], data[1], data[2], data[3], data[4], data[5], data[6], data[7],
+                ]));
+                *data = &data[8 + len..];
+            }
+            _ => {
+                // Range: 1 byte flags, then conditionally 0-2 inline datums
+                debug_assert_eq!(
+                    tag_byte,
+                    u8::from(Tag::Range),
+                    "unexpected complex tag in skip_datum"
+                );
+                let flags = data[0];
+                *data = &data[1..];
+                // EMPTY = 0x01 (range::InternalFlags::EMPTY)
+                if flags & 0x01 == 0 {
+                    // Not empty: has lower and upper bounds as inline datums
+                    // LB_INFINITE = 0x04 (range::InternalFlags::LB_INFINITE)
+                    if flags & 0x04 == 0 {
+                        skip_datum(data); // skip lower bound datum
+                    }
+                    // UB_INFINITE = 0x10 (range::InternalFlags::UB_INFINITE)
+                    if flags & 0x10 == 0 {
+                        skip_datum(data); // skip upper bound datum
+                    }
+                }
+            }
+        }
+    }
+}
+
 // --------------------------------------------------------------------------------
 // writing data
 
@@ -2728,6 +2949,31 @@ impl<'a> Iterator for DatumListIter<'a> {
         } else {
             Some(unsafe { read_datum(&mut self.data) })
         }
+    }
+
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // Skip n datums using skip_datum (much faster than read_datum for
+        // expensive types like timestamps and numerics since it avoids
+        // constructing Datum values).
+        for _ in 0..n {
+            if self.data.is_empty() {
+                return None;
+            }
+            unsafe { skip_datum(&mut self.data) };
+        }
+        self.next()
+    }
+
+    fn count(self) -> usize {
+        // Count datums using skip_datum instead of read_datum to avoid
+        // constructing Datum values.
+        let mut data = self.data;
+        let mut count = 0;
+        while !data.is_empty() {
+            unsafe { skip_datum(&mut data) };
+            count += 1;
+        }
+        count
     }
 }
 

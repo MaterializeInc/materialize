@@ -568,7 +568,8 @@ where
     write_u2(&mut tmp, 6, secs);
     // SAFETY: all bytes are ASCII digits or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, nanos);
+    // Strip leap-second encoding (nanos >= 1B) to get true fractional nanos.
+    format_nanos_to_micros(buf, nanos % 1_000_000_000);
     Nestable::Yes
 }
 
@@ -606,7 +607,8 @@ where
     write_u2(&mut tmp, 13, secs);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, nanos);
+    // Strip leap-second encoding (nanos >= 1B) to get true fractional nanos.
+    format_nanos_to_micros(buf, nanos % 1_000_000_000);
     if !year_ad {
         buf.write_str(" BC");
     }
@@ -669,7 +671,8 @@ where
     write_u2(&mut tmp, 13, secs);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, nanos);
+    // Strip leap-second encoding (nanos >= 1B) to get true fractional nanos.
+    format_nanos_to_micros(buf, nanos % 1_000_000_000);
     buf.write_str("+00");
     if !year_ad {
         buf.write_str(" BC");
@@ -793,13 +796,16 @@ where
         } else if neg_days || (days == 0 && neg_months) {
             buf.write_str("+");
         }
-        // Build "HH:MM:SS" in a stack buffer with a single write_str.
-        let mut tmp = [0u8; 8];
-        write_u2(&mut tmp, 0, hours as u32);
-        tmp[2] = b':';
-        write_u2(&mut tmp, 3, minutes as u32);
-        tmp[5] = b':';
-        write_u2(&mut tmp, 6, secs as u32);
+        // Format hours (can exceed 99 for large intervals), then ":MM:SS".
+        if hours < 10 {
+            buf.write_str("0");
+        }
+        buf.write_str(write_i64_buf(&mut int_buf, hours));
+        let mut tmp = [0u8; 6];
+        tmp[0] = b':';
+        write_u2(&mut tmp, 1, minutes as u32);
+        tmp[3] = b':';
+        write_u2(&mut tmp, 4, secs as u32);
         // SAFETY: all bytes are ASCII digits or ':'.
         buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
 
