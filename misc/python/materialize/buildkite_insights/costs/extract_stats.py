@@ -85,20 +85,21 @@ aws_instance_cost = {
 
 # https://www.hetzner.com/cloud/
 hetzner_instance_cost = {
-    "aarch64-2cpu-4gb": 0.0059,
-    "aarch64-4cpu-8gb": 0.0101,
-    "aarch64-8cpu-16gb": 0.0202,
-    "aarch64-16cpu-32gb": 0.0395,
-    "x86-64-2cpu-4gb": 0.0060,
-    "x86-64-4cpu-8gb": 0.0113,
-    "x86-64-8cpu-16gb": 0.0273,
-    "x86-64-16cpu-32gb": 0.0540,
-    "x86-64-dedi-2cpu-8gb": 0.0200,
-    "x86-64-dedi-4cpu-16gb": 0.0392,
-    "x86-64-dedi-8cpu-32gb": 0.0777,
-    "x86-64-dedi-16cpu-64gb": 0.1546,
-    "x86-64-dedi-32cpu-128gb": 0.3085,
-    "x86-64-dedi-48cpu-192gb": 0.4623,
+    "aarch64-2cpu-4gb": 0.0072,
+    "aarch64-4cpu-8gb": 0.0128,
+    "aarch64-8cpu-16gb": 0.0256,
+    "aarch64-16cpu-32gb": 0.0505,
+    "x86-64-2cpu-4gb": 0.0128,
+    "x86-64-4cpu-8gb": 0.0224,
+    "x86-64-8cpu-16gb": 0.0408,
+    "x86-64-12cpu-24gb": 0.0585,
+    "x86-64-16cpu-32gb": 0.0809,
+    "x86-64-dedi-2cpu-8gb": 0.0256,
+    "x86-64-dedi-4cpu-16gb": 0.0505,
+    "x86-64-dedi-8cpu-32gb": 0.1001,
+    "x86-64-dedi-16cpu-64gb": 0.2003,
+    "x86-64-dedi-32cpu-128gb": 0.4006,
+    "x86-64-dedi-48cpu-192gb": 0.6001,
     "x86-64": 0,  # local experiments
 }
 
