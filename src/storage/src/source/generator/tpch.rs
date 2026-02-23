@@ -330,6 +330,8 @@ impl Context {
             lineitems.push(row);
         }
 
+        self.cx.rescale(&mut totalprice, &Numeric::from(-2));
+
         self.row_buffer.packer().extend([
             Datum::Int64(key),
             Datum::Int64(custkey),
