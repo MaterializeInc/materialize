@@ -1708,11 +1708,8 @@ impl MirScalarExpr {
         let mut old_self = MirScalarExpr::column(0);
         while old_self != *self {
             old_self = self.clone();
-            match self {
-                MirScalarExpr::CallVariadic {
-                    func: func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
-                    exprs,
-                } => {
+            if let MirScalarExpr::CallVariadic { func, exprs } = self {
+                if let (Some(unit), Some(zero)) = (func.unit_of_and_or(), func.zero_of_and_or()) {
                     // Canonically order elements so that various deduplications work better,
                     // e.g., in undistribute_and_or.
                     // Also, extract_equal_or_both_null_inner depends on the args being sorted.
@@ -1726,17 +1723,16 @@ impl MirScalarExpr {
                         *self = exprs.swap_remove(0);
                     } else if exprs.len() == 0 {
                         // AND/OR of 0 arguments evaluates to true/false
-                        *self = func.unit_of_and_or();
-                    } else if exprs.iter().any(|e| *e == func.zero_of_and_or()) {
+                        *self = unit;
+                    } else if exprs.contains(&zero) {
                         // short-circuiting
-                        *self = func.zero_of_and_or();
+                        *self = zero;
                     } else {
                         // a AND true --> a
                         // a OR false --> a
-                        exprs.retain(|e| *e != func.unit_of_and_or());
+                        exprs.retain(|e| *e != unit);
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -1749,16 +1745,16 @@ impl MirScalarExpr {
         } = self
         {
             inner.flatten_associative();
-            match &mut **inner {
-                MirScalarExpr::CallVariadic {
-                    func: inner_func @ (VariadicFunc::And(_) | VariadicFunc::Or(_)),
-                    exprs,
-                } => {
-                    *inner_func = inner_func.switch_and_or();
+            if let MirScalarExpr::CallVariadic {
+                func: inner_func,
+                exprs,
+            } = &mut **inner
+            {
+                if let Some(switched) = inner_func.switch_and_or() {
+                    *inner_func = switched;
                     *exprs = exprs.into_iter().map(|e| e.take().not()).collect();
                     *self = (*inner).take(); // Removes the outer not
                 }
-                _ => {}
             }
         }
     }
@@ -1838,10 +1834,12 @@ impl MirScalarExpr {
             self.reduce_and_canonicalize_and_or(); // We don't want to deal with 1-arg AND/OR at the top
             if let MirScalarExpr::CallVariadic {
                 exprs: outer_operands,
-                func: outer_func @ (VariadicFunc::Or(_) | VariadicFunc::And(_)),
+                func: outer_func,
             } = self
             {
-                let inner_func = outer_func.switch_and_or();
+                let Some(inner_func) = outer_func.switch_and_or() else {
+                    continue;
+                };
 
                 // Make sure that each outer operand is a call to inner_func, by wrapping in a 1-arg
                 // call if necessary.

@@ -2412,11 +2412,11 @@ impl VariadicFunc {
         }
     }
 
-    pub fn switch_and_or(&self) -> Self {
+    pub fn switch_and_or(&self) -> Option<Self> {
         match self {
-            VariadicFunc::And(_) => Or.into(),
-            VariadicFunc::Or(_) => And.into(),
-            _ => unreachable!(),
+            VariadicFunc::And(_) => Some(Or.into()),
+            VariadicFunc::Or(_) => Some(And.into()),
+            _ => None,
         }
     }
 
@@ -2426,20 +2426,20 @@ impl VariadicFunc {
 
     /// Gives the unit (u) of OR or AND, such that `u AND/OR x == x`.
     /// Note that a 0-arg AND/OR evaluates to unit_of_and_or.
-    pub fn unit_of_and_or(&self) -> MirScalarExpr {
+    pub fn unit_of_and_or(&self) -> Option<MirScalarExpr> {
         match self {
-            VariadicFunc::And(_) => MirScalarExpr::literal_true(),
-            VariadicFunc::Or(_) => MirScalarExpr::literal_false(),
-            _ => unreachable!(),
+            VariadicFunc::And(_) => Some(MirScalarExpr::literal_true()),
+            VariadicFunc::Or(_) => Some(MirScalarExpr::literal_false()),
+            _ => None,
         }
     }
 
     /// Gives the zero (z) of OR or AND, such that `z AND/OR x == z`.
-    pub fn zero_of_and_or(&self) -> MirScalarExpr {
+    pub fn zero_of_and_or(&self) -> Option<MirScalarExpr> {
         match self {
-            VariadicFunc::And(_) => MirScalarExpr::literal_false(),
-            VariadicFunc::Or(_) => MirScalarExpr::literal_true(),
-            _ => unreachable!(),
+            VariadicFunc::And(_) => Some(MirScalarExpr::literal_false()),
+            VariadicFunc::Or(_) => Some(MirScalarExpr::literal_true()),
+            _ => None,
         }
     }
 
