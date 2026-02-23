@@ -25,41 +25,6 @@ harness = false
 name = "data_types"
 harness = false
 
-[[bench]]
-name = "row_compare"
-harness = false
-
-[[bench]]
-name = "row_aggregate"
-harness = false
-
-[[bench]]
-name = "row_project"
-harness = false
-
-[[bench]]
-name = "row_decode_selective"
-harness = false
-
-[[bench]]
-name = "row_encode"
-harness = false
-
-[[bench]]
-name = "arrange_kv"
-harness = false
-
-[[bench]]
-name = "join_concat"
-harness = false
-
-[[bench]]
-name = "hash_key_reconstruct"
-harness = false
-
-[[bench]]
-name = "reduction_monoid"
-harness = false
 [dependencies]
 anyhow = "1.0.101"
 arrow = { version = "57", default-features = false }

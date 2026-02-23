@@ -112,7 +112,7 @@ impl UpsertKey {
     pub fn from_value(value: Result<&Row, &UpsertError>, key_indices: &[usize]) -> Self {
         thread_local! {
             /// A thread-local datum cache used to calculate hashes
-            static VALUE_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+            static VALUE_DATUMS: RefCell<DatumVec> = const { RefCell::new(DatumVec::new()) };
         }
         VALUE_DATUMS.with(|value_datums| {
             let mut value_datums = value_datums.borrow_mut();
@@ -130,7 +130,7 @@ impl UpsertKey {
     ) -> Self {
         thread_local! {
             /// A thread-local datum cache used to calculate hashes
-            static KEY_DATUMS: RefCell<DatumVec> = RefCell::new(DatumVec::new());
+            static KEY_DATUMS: RefCell<DatumVec> = const { RefCell::new(DatumVec::new()) };
         }
         KEY_DATUMS.with(|key_datums| {
             let mut key_datums = key_datums.borrow_mut();

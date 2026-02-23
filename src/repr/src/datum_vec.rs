@@ -154,7 +154,7 @@ mod test {
         let row = Row::pack_slice(&[
             Datum::Int64(42),
             Datum::String("hello"),
-            Datum::Float64(3.14.into()),
+            Datum::Float64(std::f64::consts::PI.into()),
             Datum::Timestamp(ts),
             Datum::True,
         ]);
@@ -175,7 +175,7 @@ mod test {
         assert_eq!(selective.len(), 5);
         // Needed columns should match full decode
         assert_eq!(selective[0], Datum::Int64(42));
-        assert_eq!(selective[2], Datum::Float64(3.14.into()));
+        assert_eq!(selective[2], Datum::Float64(std::f64::consts::PI.into()));
         assert_eq!(selective[4], Datum::True);
         // Unneeded columns should be Null
         assert_eq!(selective[1], Datum::Null);

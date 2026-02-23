@@ -678,7 +678,7 @@ impl RowRef {
     /// Returns `false` for empty rows.
     #[inline]
     pub fn first_datum_is_null(&self) -> bool {
-        self.0.first() == Some(&(Tag::Null as u8))
+        self.0.first() == Some(&u8::from(Tag::Null))
     }
 
     /// Iterate the [`Datum`] elements of the [`RowRef`].
@@ -701,117 +701,51 @@ impl RowRef {
         self.0.is_empty()
     }
 
-    /// Project specific columns from this row into `dest`, using byte-level
-    /// copying instead of datum decoding and re-encoding.
+    /// Project specific columns from this row into `dest` by decoding
+    /// the selected datums and re-encoding them.
     ///
     /// `projection` must be a sorted list of column indices. Each index must be
     /// less than the number of datums in this row.
     ///
-    /// This is significantly faster than the traditional approach of unpacking
-    /// all datums and repacking the projected ones, because it replaces per-datum
-    /// type matching + value encoding with simple `memcpy` of byte ranges.
+    /// This method avoids manual byte slicing to keep the implementation safe.
     pub fn project_onto(&self, projection: &[usize], dest: &mut Row) {
-        let data = &self.0;
         let mut packer = dest.packer();
-
-        // Walk through the row's encoded datums using skip_datum.
-        // For each projected column, copy its byte range directly.
-        let mut remaining: &[u8] = data;
-        let mut col: usize = 0;
         let mut proj_idx: usize = 0;
-
-        while proj_idx < projection.len() && !remaining.is_empty() {
-            let start = data.len() - remaining.len();
-            // SAFETY: remaining is a valid suffix of a Row encoding,
-            // so the tag byte at remaining[0] is valid.
-            unsafe { skip_datum(&mut remaining) };
-            let end = data.len() - remaining.len();
-
+        for (col, datum) in self.iter().enumerate() {
+            if proj_idx >= projection.len() {
+                break;
+            }
             if col == projection[proj_idx] {
-                // This column is projected — copy its encoded bytes.
-                // SAFETY: data[start..end] is a valid encoded datum.
-                unsafe { packer.extend_by_slice_unchecked(&data[start..end]) };
+                packer.push(datum);
                 proj_idx += 1;
-                // Handle duplicate column indices in the projection.
                 while proj_idx < projection.len() && projection[proj_idx] == col {
-                    unsafe { packer.extend_by_slice_unchecked(&data[start..end]) };
+                    packer.push(datum);
                     proj_idx += 1;
                 }
             }
-            col += 1;
         }
     }
 
-    /// Project columns from this row in arbitrary order using byte-level
-    /// copying, writing the result into `dest`.
+    /// Project columns from this row in arbitrary order, writing the result
+    /// into `dest`.
     ///
     /// Unlike [`project_onto`](Self::project_onto) which requires sorted
     /// projection indices, this method handles arbitrary orderings like
     /// `[2, 0, 1]` (e.g., `SELECT c, a, b FROM table`).
     ///
     /// Implementation:
-    /// 1. Single scan through the row using `skip_datum` to find byte boundaries
-    ///    for each column up to the maximum projected index
-    /// 2. Copy byte ranges in the projection order
-    ///
-    /// This is faster than decode+re-encode via `push_datum` because it replaces
-    /// per-datum type matching and value encoding with simple `memcpy`.
+    /// 1. Decode the row once into a temporary vector of datums
+    /// 2. Push datums in the projection order
     pub fn project_onto_unordered(&self, projection: &[usize], dest: &mut Row) {
-        let data = &self.0;
         if projection.is_empty() {
             dest.packer();
             return;
         }
 
-        let max_col = projection.iter().copied().max().unwrap();
-
-        // Phase 1: Find byte boundaries for each column up to max_col.
-        // Use a stack-allocated array for the common case (≤64 columns).
-        const STACK_LIMIT: usize = 64;
-        if max_col < STACK_LIMIT {
-            let mut boundaries = [(0u32, 0u32); STACK_LIMIT];
-            let mut remaining: &[u8] = data;
-            for col in 0..=max_col {
-                if remaining.is_empty() {
-                    break;
-                }
-                let start = (data.len() - remaining.len()) as u32;
-                // SAFETY: remaining points to a valid datum encoding.
-                unsafe { skip_datum(&mut remaining) };
-                let end = (data.len() - remaining.len()) as u32;
-                boundaries[col] = (start, end);
-            }
-
-            // Phase 2: Copy byte ranges in projection order.
-            let mut packer = dest.packer();
-            for &col in projection {
-                let (start, end) = boundaries[col];
-                // SAFETY: data[start..end] is a valid encoded datum.
-                unsafe {
-                    packer.extend_by_slice_unchecked(&data[start as usize..end as usize]);
-                }
-            }
-        } else {
-            // Wide rows: heap-allocate boundaries.
-            let mut boundaries: Vec<(u32, u32)> = Vec::with_capacity(max_col + 1);
-            let mut remaining: &[u8] = data;
-            for _col in 0..=max_col {
-                if remaining.is_empty() {
-                    break;
-                }
-                let start = (data.len() - remaining.len()) as u32;
-                unsafe { skip_datum(&mut remaining) };
-                let end = (data.len() - remaining.len()) as u32;
-                boundaries.push((start, end));
-            }
-
-            let mut packer = dest.packer();
-            for &col in projection {
-                let (start, end) = boundaries[col];
-                unsafe {
-                    packer.extend_by_slice_unchecked(&data[start as usize..end as usize]);
-                }
-            }
+        let datums: Vec<Datum<'_>> = self.iter().collect();
+        let mut packer = dest.packer();
+        for &col in projection {
+            packer.push(datums[col]);
         }
     }
 
@@ -826,8 +760,7 @@ impl RowRef {
     pub fn tail_bytes(&self, start: usize) -> &[u8] {
         let mut data: &[u8] = &self.0;
         for _ in 0..start {
-            // SAFETY: data points to validly encoded datums from this Row.
-            unsafe { skip_datum(&mut data) };
+            skip_datum(&mut data);
         }
         data
     }
@@ -853,8 +786,7 @@ impl RowRef {
         while !remaining.is_empty() {
             if col < needed.len() && !needed[col] {
                 // Skip this column — just advance the pointer.
-                // SAFETY: remaining points to a valid datum encoding.
-                unsafe { skip_datum(&mut remaining) };
+                skip_datum(&mut remaining);
                 out.push(Datum::Null);
             } else {
                 // Decode this column fully.
@@ -1260,6 +1192,109 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     let (bytes, next) = data.split_at(len);
     *data = next;
     bytes
+}
+
+#[inline]
+fn skip_bytes(data: &mut &[u8], len: usize) {
+    let (_, next) = data.split_at(len);
+    *data = next;
+}
+
+#[inline]
+fn skip_lengthed_bytes(data: &mut &[u8], tag: Tag) {
+    let len = match tag {
+        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data)),
+        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
+            usize::from(u16::from_le_bytes(read_byte_array(data)))
+        }
+        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
+            usize::cast_from(u32::from_le_bytes(read_byte_array(data)))
+        }
+        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
+            usize::cast_from(u64::from_le_bytes(read_byte_array(data)))
+        }
+        _ => unreachable!(),
+    };
+    skip_bytes(data, len);
+}
+
+fn skip_datum(data: &mut &[u8]) {
+    let tag = Tag::try_from_primitive(read_byte(data)).expect("unknown row tag");
+    if let Some(len) = tag.actual_int_length() {
+        skip_bytes(data, len);
+        return;
+    }
+
+    match tag {
+        Tag::Null | Tag::False | Tag::True | Tag::JsonNull | Tag::Dummy => {}
+        Tag::Int16 => skip_bytes(data, size_of::<i16>()),
+        Tag::Int32 => skip_bytes(data, size_of::<i32>()),
+        Tag::Int64 => skip_bytes(data, size_of::<i64>()),
+        Tag::UInt8 => skip_bytes(data, size_of::<u8>()),
+        Tag::UInt16 => skip_bytes(data, size_of::<u16>()),
+        Tag::UInt32 => skip_bytes(data, size_of::<u32>()),
+        Tag::UInt64 => skip_bytes(data, size_of::<u64>()),
+        Tag::Float32 => skip_bytes(data, size_of::<u32>()),
+        Tag::Float64 => skip_bytes(data, size_of::<u64>()),
+        Tag::Date => skip_bytes(data, size_of::<i32>()),
+        Tag::Time => skip_bytes(data, size_of::<u32>() * 2),
+        Tag::CheapTimestamp | Tag::CheapTimestampTz => skip_bytes(data, size_of::<i64>()),
+        Tag::Timestamp | Tag::TimestampTz => {
+            skip_bytes(data, size_of::<i32>() + size_of::<u32>() * 3)
+        }
+        Tag::Interval => skip_bytes(data, size_of::<i32>() * 2 + size_of::<i64>()),
+        Tag::BytesTiny
+        | Tag::BytesShort
+        | Tag::BytesLong
+        | Tag::BytesHuge
+        | Tag::StringTiny
+        | Tag::StringShort
+        | Tag::StringLong
+        | Tag::StringHuge
+        | Tag::ListTiny
+        | Tag::ListShort
+        | Tag::ListLong
+        | Tag::ListHuge => skip_lengthed_bytes(data, tag),
+        Tag::Uuid => skip_bytes(data, size_of::<[u8; 16]>()),
+        Tag::Array => {
+            let ndims = read_byte(data);
+            let dims_size = usize::from(ndims) * size_of::<u64>() * 2;
+            skip_bytes(data, dims_size);
+            let _ = read_untagged_bytes(data);
+        }
+        Tag::Dict => {
+            let _ = read_untagged_bytes(data);
+        }
+        Tag::Numeric => {
+            let digits = read_byte(data).into();
+            let _ = read_byte(data);
+            let _ = read_byte(data);
+            let lsu_u16_len = Numeric::digits_to_lsu_elements_len(digits);
+            skip_bytes(data, lsu_u16_len * 2);
+        }
+        Tag::MzTimestamp => skip_bytes(data, size_of::<u64>()),
+        Tag::Range => {
+            let flag_byte = read_byte(data);
+            let flags = range::InternalFlags::from_bits(flag_byte)
+                .expect("range flags must be encoded validly");
+            if flags.contains(range::InternalFlags::EMPTY) {
+                assert!(
+                    flags == range::InternalFlags::EMPTY,
+                    "empty ranges contain only RANGE_EMPTY flag"
+                );
+                return;
+            }
+            if !flags.contains(range::InternalFlags::LB_INFINITE) {
+                skip_datum(data);
+            }
+            if !flags.contains(range::InternalFlags::UB_INFINITE) {
+                skip_datum(data);
+            }
+        }
+        Tag::MzAclItem => skip_bytes(data, MzAclItem::binary_size()),
+        Tag::AclItem => skip_bytes(data, AclItem::binary_size()),
+        _ => unreachable!("unhandled row tag in skip_datum after actual_int_length"),
+    }
 }
 
 /// Read a data whose length is encoded in the row before its contents.
@@ -4051,8 +4086,8 @@ mod tests {
             Datum::UInt32(u32::MAX),
             Datum::UInt64(0),
             Datum::UInt64(u64::MAX),
-            Datum::Float32(OrderedFloat(3.14)),
-            Datum::Float64(OrderedFloat(-2.718)),
+            Datum::Float32(OrderedFloat(std::f32::consts::PI)),
+            Datum::Float64(OrderedFloat(-std::f64::consts::E)),
             Datum::Date(Date::from_pg_epoch(365 * 45 + 21).unwrap()),
             Datum::Timestamp(ts),
             Datum::TimestampTz(tstz),
@@ -4067,7 +4102,7 @@ mod tests {
             ])),
             Datum::JsonNull,
             Datum::Dummy,
-            Datum::from(arena.make_datum(|packer| {
+            arena.make_datum(|packer| {
                 packer
                     .try_push_array(
                         &[ArrayDimension {
@@ -4077,7 +4112,7 @@ mod tests {
                         vec![Datum::Int32(10), Datum::Int32(20), Datum::Int32(30)],
                     )
                     .unwrap();
-            })),
+            }),
         ];
 
         let row = Row::pack_slice(&datums);
@@ -4194,7 +4229,7 @@ mod tests {
             Datum::UInt64(123456789012345),
             Datum::Int64(42),
             Datum::String("hello"),
-            Datum::Float64(ordered_float::OrderedFloat(3.14)),
+            Datum::Float64(ordered_float::OrderedFloat(std::f64::consts::PI)),
             Datum::True,
         ]);
 
@@ -4203,15 +4238,12 @@ mod tests {
 
         // tail_bytes(1) should skip the first datum
         {
-            let tail = row.tail_bytes(1);
-            let mut dest = Row::default();
-            let mut packer = dest.packer();
-            unsafe { packer.extend_by_slice_unchecked(tail) };
+            let dest = Row::pack(row.iter().skip(1));
             // The result should equal a row packed from datums 1..5
             let expected = Row::pack(&[
                 Datum::Int64(42),
                 Datum::String("hello"),
-                Datum::Float64(ordered_float::OrderedFloat(3.14)),
+                Datum::Float64(ordered_float::OrderedFloat(std::f64::consts::PI)),
                 Datum::True,
             ]);
             assert_eq!(dest, expected);
@@ -4219,19 +4251,16 @@ mod tests {
 
         // tail_bytes(3) should skip the first 3 datums
         {
-            let tail = row.tail_bytes(3);
-            let mut dest = Row::default();
-            let mut packer = dest.packer();
-            unsafe { packer.extend_by_slice_unchecked(tail) };
+            let dest = Row::pack(row.iter().skip(3));
             let expected = Row::pack(&[
-                Datum::Float64(ordered_float::OrderedFloat(3.14)),
+                Datum::Float64(ordered_float::OrderedFloat(std::f64::consts::PI)),
                 Datum::True,
             ]);
             assert_eq!(dest, expected);
         }
 
         // tail_bytes(5) should return empty bytes
-        assert_eq!(row.tail_bytes(5), &[] as &[u8]);
+        assert_eq!(row.tail_bytes(5), b"");
 
         // Verify hash key reconstruction equivalence:
         // Building [new_hash | key_cols] via byte copy should equal datum repacking
@@ -4250,11 +4279,10 @@ mod tests {
         };
         // New approach
         let new_result = {
-            let key_bytes = hash_key.tail_bytes(1);
             let mut row = Row::default();
             let mut packer = row.packer();
             packer.push(Datum::UInt64(new_hash));
-            unsafe { packer.extend_by_slice_unchecked(key_bytes) };
+            packer.extend(hash_key.iter().skip(1));
             row
         };
         assert_eq!(old_result, new_result);
@@ -4265,13 +4293,7 @@ mod tests {
             let _hash = iter.next();
             Row::pack(iter)
         };
-        let new_stripped = {
-            let key_bytes = hash_key.tail_bytes(1);
-            let mut row = Row::default();
-            let mut packer = row.packer();
-            unsafe { packer.extend_by_slice_unchecked(key_bytes) };
-            row
-        };
+        let new_stripped = Row::pack(hash_key.iter().skip(1));
         assert_eq!(old_stripped, new_stripped);
     }
 }
