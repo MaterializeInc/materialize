@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 use std::{fmt, vec};
@@ -70,6 +71,37 @@ fn return_true() -> bool {
 }
 
 impl SqlColumnType {
+    /// Try to union many types, returning a result to distinguish success and failure.
+    /// See [`SqlColumnType::try_union`] for details.
+    pub fn try_union_many<'a>(
+        typs: impl IntoIterator<Item = &'a Self>,
+    ) -> Result<Self, anyhow::Error> {
+        let mut iter = typs.into_iter();
+        let Some(typ) = iter.next() else {
+            bail!("Cannot union empty iterator");
+        };
+        let mut typ = Cow::Borrowed(typ);
+        while let Some(other) = iter.next() {
+            typ = Cow::Owned(typ.try_union(other)?);
+        }
+        Ok(typ.into_owned())
+    }
+
+    /// Try to union many types. See [`SqlColumnType::union`] for details.
+    ///
+    /// Panics on failure.
+    pub fn union_many<'a>(typs: impl IntoIterator<Item = &'a Self>) -> Self {
+        let mut iter = typs.into_iter();
+        let Some(typ) = iter.next() else {
+            panic!("Cannot union empty iterator");
+        };
+        let mut typ = Cow::Borrowed(typ);
+        while let Some(other) = iter.next() {
+            typ = Cow::Owned(typ.union(other));
+        }
+        typ.into_owned()
+    }
+
     /// Backports nullability information from `backport_typ` into `self`,
     /// affecting the outer `.nullable` field but also record fields deeper
     /// into the type.

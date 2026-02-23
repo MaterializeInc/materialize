@@ -66,28 +66,60 @@ impl fmt::Display for And {
     }
 }
 
-pub fn and<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    // If any is false, then return false. Else, if any is null, then return null. Else, return true.
-    let mut null = false;
-    let mut err = None;
-    for expr in exprs {
-        match expr.eval(datums, temp_storage) {
-            Ok(Datum::False) => return Ok(Datum::False), // short-circuit
-            Ok(Datum::True) => {}
-            // No return in these two cases, because we might still see a false
-            Ok(Datum::Null) => null = true,
-            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
-            _ => unreachable!(),
+impl LazyVariadicFunc for And {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        // If any is false, then return false. Else, if any is null, then return null. Else, return true.
+        let mut null = false;
+        let mut err = None;
+        for expr in exprs {
+            match expr.eval(datums, temp_storage) {
+                Ok(Datum::False) => return Ok(Datum::False), // short-circuit
+                Ok(Datum::True) => {}
+                // No return in these two cases, because we might still see a false
+                Ok(Datum::Null) => null = true,
+                Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
+                _ => unreachable!(),
+            }
+        }
+        match (err, null) {
+            (Some(err), _) => Err(err),
+            (None, true) => Ok(Datum::Null),
+            (None, false) => Ok(Datum::True),
         }
     }
-    match (err, null) {
-        (Some(err), _) => Err(err),
-        (None, true) => Ok(Datum::Null),
-        (None, false) => Ok(Datum::True),
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        SqlScalarType::Bool.nullable(in_nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
+
+    fn is_infix_op(&self) -> bool {
+        true
     }
 }
 
@@ -486,18 +518,49 @@ impl fmt::Display for Coalesce {
     }
 }
 
-fn coalesce<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    for e in exprs {
-        let d = e.eval(datums, temp_storage)?;
-        if !d.is_null() {
-            return Ok(d);
+impl LazyVariadicFunc for Coalesce {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        for e in exprs {
+            let d = e.eval(datums, temp_storage)?;
+            if !d.is_null() {
+                return Ok(d);
+            }
         }
+        Ok(Datum::Null)
     }
-    Ok(Datum::Null)
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        // Note that the parser doesn't allow empty argument lists for variadic functions
+        // that use the standard function call syntax (ArrayCreate and co. are different
+        // because of the special syntax for calling them).
+        let nullable = input_types.iter().all(|typ| typ.nullable);
+        SqlColumnType::union_many(input_types).nullable(nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -719,25 +782,40 @@ impl fmt::Display for ErrorIfNull {
     }
 }
 
-fn error_if_null<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    let first = exprs[0].eval(datums, temp_storage)?;
-    match first {
-        Datum::Null => {
-            let err_msg = match exprs[1].eval(datums, temp_storage)? {
-                Datum::Null => {
-                    return Err(EvalError::Internal(
-                        "unexpected NULL in error side of error_if_null".into(),
-                    ));
-                }
-                o => o.unwrap_str(),
-            };
-            Err(EvalError::IfNullError(err_msg.into()))
+impl LazyVariadicFunc for ErrorIfNull {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        let first = exprs[0].eval(datums, temp_storage)?;
+        match first {
+            Datum::Null => {
+                let err_msg = match exprs[1].eval(datums, temp_storage)? {
+                    Datum::Null => {
+                        return Err(EvalError::Internal(
+                            "unexpected NULL in error side of error_if_null".into(),
+                        ));
+                    }
+                    o => o.unwrap_str(),
+                };
+                Err(EvalError::IfNullError(err_msg.into()))
+            }
+            _ => Ok(first),
         }
-        _ => Ok(first),
+    }
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        input_types[0].scalar_type.clone().nullable(false)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
     }
 }
 
@@ -761,16 +839,43 @@ impl fmt::Display for Greatest {
     }
 }
 
-fn greatest<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-    Ok(datums
-        .filter(|d| Ok(!d.is_null()))
-        .max()?
-        .unwrap_or(Datum::Null))
+impl LazyVariadicFunc for Greatest {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
+        Ok(datums
+            .filter(|d| Ok(!d.is_null()))
+            .max()?
+            .unwrap_or(Datum::Null))
+    }
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        SqlColumnType::union_many(input_types)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -970,16 +1075,43 @@ impl fmt::Display for Least {
     }
 }
 
-fn least<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
-    Ok(datums
-        .filter(|d| Ok(!d.is_null()))
-        .min()?
-        .unwrap_or(Datum::Null))
+impl LazyVariadicFunc for Least {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        let datums = fallible_iterator::convert(exprs.iter().map(|e| e.eval(datums, temp_storage)));
+        Ok(datums
+            .filter(|d| Ok(!d.is_null()))
+            .min()?
+            .unwrap_or(Datum::Null))
+    }
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        SqlColumnType::union_many(input_types)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -1275,28 +1407,60 @@ impl fmt::Display for Or {
     }
 }
 
-pub fn or<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    // If any is true, then return true. Else, if any is null, then return null. Else, return false.
-    let mut null = false;
-    let mut err = None;
-    for expr in exprs {
-        match expr.eval(datums, temp_storage) {
-            Ok(Datum::False) => {}
-            Ok(Datum::True) => return Ok(Datum::True), // short-circuit
-            // No return in these two cases, because we might still see a true
-            Ok(Datum::Null) => null = true,
-            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
-            _ => unreachable!(),
+impl LazyVariadicFunc for Or {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        // If any is true, then return true. Else, if any is null, then return null. Else, return false.
+        let mut null = false;
+        let mut err = None;
+        for expr in exprs {
+            match expr.eval(datums, temp_storage) {
+                Ok(Datum::False) => {}
+                Ok(Datum::True) => return Ok(Datum::True), // short-circuit
+                // No return in these two cases, because we might still see a true
+                Ok(Datum::Null) => null = true,
+                Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
+                _ => unreachable!(),
+            }
+        }
+        match (err, null) {
+            (Some(err), _) => Err(err),
+            (None, true) => Ok(Datum::Null),
+            (None, false) => Ok(Datum::False),
         }
     }
-    match (err, null) {
-        (Some(err), _) => Err(err),
-        (None, true) => Ok(Datum::Null),
-        (None, false) => Ok(Datum::False),
+
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        SqlScalarType::Bool.nullable(in_nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
+
+    fn is_infix_op(&self) -> bool {
+        true
     }
 }
 
@@ -2004,6 +2168,46 @@ impl fmt::Display for TimezoneTime {
     }
 }
 
+/// A description of an SQL variadic function that has the ability to lazy
+/// evaluate its arguments.
+pub(crate) trait LazyVariadicFunc: fmt::Display {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError>;
+
+    /// The output SqlColumnType of this function.
+    fn output_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
+
+    /// Whether this function will produce NULL on NULL input.
+    fn propagates_nulls(&self) -> bool;
+
+    /// Whether this function will produce NULL on non-NULL input.
+    fn introduces_nulls(&self) -> bool;
+
+    /// Whether this function might error on non-error input.
+    fn could_error(&self) -> bool {
+        true
+    }
+
+    /// Returns true if the function is monotone.
+    fn is_monotone(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the function is associative.
+    fn is_associative(&self) -> bool {
+        false
+    }
+
+    /// Returns true if the function is an infix operator.
+    fn is_infix_op(&self) -> bool {
+        false
+    }
+}
+
 derive_variadic! {
     Coalesce(Coalesce),
     Greatest(Greatest),
@@ -2058,12 +2262,12 @@ impl VariadicFunc {
     ) -> Result<Datum<'a>, EvalError> {
         // Evaluate all non-eager functions directly
         match self {
-            VariadicFunc::Coalesce(_) => return coalesce(datums, temp_storage, exprs),
-            VariadicFunc::Greatest(_) => return greatest(datums, temp_storage, exprs),
-            VariadicFunc::And(_) => return and(datums, temp_storage, exprs),
-            VariadicFunc::Or(_) => return or(datums, temp_storage, exprs),
-            VariadicFunc::ErrorIfNull(_) => return error_if_null(datums, temp_storage, exprs),
-            VariadicFunc::Least(_) => return least(datums, temp_storage, exprs),
+            VariadicFunc::Coalesce(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Greatest(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::And(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Or(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::ErrorIfNull(f) => return f.eval(datums, temp_storage, exprs),
+            VariadicFunc::Least(f) => return f.eval(datums, temp_storage, exprs),
             _ => {}
         };
 
@@ -2162,12 +2366,13 @@ impl VariadicFunc {
 
     pub fn is_associative(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce(_)
-            | VariadicFunc::Greatest(_)
-            | VariadicFunc::Least(_)
-            | VariadicFunc::Concat(_)
-            | VariadicFunc::And(_)
-            | VariadicFunc::Or(_) => true,
+            VariadicFunc::And(s) => s.is_associative(),
+            VariadicFunc::Coalesce(s) => s.is_associative(),
+            VariadicFunc::Greatest(s) => s.is_associative(),
+            VariadicFunc::Least(s) => s.is_associative(),
+            VariadicFunc::Concat(_) => true,
+            VariadicFunc::Or(s) => s.is_associative(),
+            VariadicFunc::ErrorIfNull(s) => s.is_associative(),
 
             VariadicFunc::MakeTimestamp(_)
             | VariadicFunc::PadLeading(_)
@@ -2189,7 +2394,6 @@ impl VariadicFunc {
             | VariadicFunc::RegexpMatch(_)
             | VariadicFunc::HmacString(_)
             | VariadicFunc::HmacBytes(_)
-            | VariadicFunc::ErrorIfNull(_)
             | VariadicFunc::DateBinTimestamp(_)
             | VariadicFunc::DateBinTimestampTz(_)
             | VariadicFunc::DateDiffTimestamp(_)
@@ -2211,20 +2415,10 @@ impl VariadicFunc {
     pub fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
         let in_nullable = input_types.iter().any(|t| t.nullable);
         match self {
-            Self::Greatest(_) | Self::Least(_) => {
-                input_types.into_iter().reduce(|l, r| l.union(&r)).unwrap()
-            }
-            Self::Coalesce(_) => {
-                // Note that the parser doesn't allow empty argument lists for variadic functions
-                // that use the standard function call syntax (ArrayCreate and co. are different
-                // because of the special syntax for calling them).
-                let nullable = input_types.iter().all(|typ| typ.nullable);
-                input_types
-                    .into_iter()
-                    .reduce(|l, r| l.union(&r))
-                    .unwrap()
-                    .nullable(nullable)
-            }
+            Self::And(s) => s.output_type(&input_types),
+            Self::Greatest(s) => s.output_type(&input_types),
+            Self::Least(s) => s.output_type(&input_types),
+            Self::Coalesce(s) => s.output_type(&input_types),
             Self::Concat(_) | Self::ConcatWs(_) => SqlScalarType::String.nullable(in_nullable),
             Self::MakeTimestamp(_) => SqlScalarType::Timestamp { precision: None }.nullable(true),
             Self::PadLeading(_) => SqlScalarType::String.nullable(in_nullable),
@@ -2296,7 +2490,7 @@ impl VariadicFunc {
                 SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
             }
             Self::HmacString(_) | Self::HmacBytes(_) => SqlScalarType::Bytes.nullable(in_nullable),
-            Self::ErrorIfNull(_) => input_types[0].scalar_type.clone().nullable(false),
+            Self::ErrorIfNull(s) => s.output_type(&input_types),
             Self::DateBinTimestamp(_) => {
                 SqlScalarType::Timestamp { precision: None }.nullable(in_nullable)
             }
@@ -2307,7 +2501,7 @@ impl VariadicFunc {
             Self::DateDiffTimestampTz(_) => SqlScalarType::Int64.nullable(in_nullable),
             Self::DateDiffDate(_) => SqlScalarType::Int64.nullable(in_nullable),
             Self::DateDiffTime(_) => SqlScalarType::Int64.nullable(in_nullable),
-            Self::And(_) | Self::Or(_) => SqlScalarType::Bool.nullable(in_nullable),
+            Self::Or(s) => s.output_type(&input_types),
             Self::RangeCreate(RangeCreate { elem_type }) => SqlScalarType::Range {
                 element_type: Box::new(elem_type.clone()),
             }
@@ -2334,16 +2528,21 @@ impl VariadicFunc {
     /// NB: if any input is NULL the output will be returned as NULL without
     /// calling the function.
     pub fn propagates_nulls(&self) -> bool {
+        match self {
+            VariadicFunc::And(s) => return s.propagates_nulls(),
+            VariadicFunc::Or(s) => return s.propagates_nulls(),
+            VariadicFunc::Coalesce(s) => return s.propagates_nulls(),
+            VariadicFunc::Greatest(s) => return s.propagates_nulls(),
+            VariadicFunc::Least(s) => return s.propagates_nulls(),
+            VariadicFunc::ErrorIfNull(s) => return s.propagates_nulls(),
+            _ => {}
+        }
         // NOTE: The following is a list of the variadic functions
-        // that **DO NOT** propagate nulls.
+        // that **DO NOT** propagate nulls, unless they've been converted
+        // to the new variadic func infrastructure.
         !matches!(
             self,
-            VariadicFunc::And(_)
-                | VariadicFunc::Or(_)
-                | VariadicFunc::Coalesce(_)
-                | VariadicFunc::Greatest(_)
-                | VariadicFunc::Least(_)
-                | VariadicFunc::Concat(_)
+            VariadicFunc::Concat(_)
                 | VariadicFunc::ConcatWs(_)
                 | VariadicFunc::JsonbBuildArray(_)
                 | VariadicFunc::JsonbBuildObject(_)
@@ -2367,6 +2566,12 @@ impl VariadicFunc {
     /// introduces nulls even when it does not.
     pub fn introduces_nulls(&self) -> bool {
         match self {
+            Self::And(s) => s.introduces_nulls(),
+            Self::Or(s) => s.introduces_nulls(),
+            Self::Coalesce(s) => s.introduces_nulls(),
+            Self::Greatest(s) => s.introduces_nulls(),
+            Self::Least(s) => s.introduces_nulls(),
+            Self::ErrorIfNull(s) => s.introduces_nulls(),
             Self::Concat(_)
             | Self::ConcatWs(_)
             | Self::PadLeading(_)
@@ -2384,27 +2589,21 @@ impl VariadicFunc {
             | Self::SplitPart(_)
             | Self::HmacString(_)
             | Self::HmacBytes(_)
-            | Self::ErrorIfNull(_)
             | Self::DateBinTimestamp(_)
             | Self::DateBinTimestampTz(_)
             | Self::DateDiffTimestamp(_)
             | Self::DateDiffTimestampTz(_)
             | Self::DateDiffDate(_)
             | Self::DateDiffTime(_)
-            | Self::RangeCreate(..)
-            | Self::And(_)
-            | Self::Or(_)
-            | Self::MakeAclItem(_)
+            | Self::RangeCreate(..) => false,
+            Self::MakeAclItem(_)
             | Self::MakeMzAclItem(_)
             | Self::ArrayPosition(_)
             | Self::ArrayFill(..)
             | Self::TimezoneTime(_)
             | Self::RegexpSplitToArray(_)
             | Self::RegexpReplace(_) => false,
-            Self::Coalesce(_)
-            | Self::Greatest(_)
-            | Self::Least(_)
-            | Self::MakeTimestamp(_)
+            Self::MakeTimestamp(_)
             | Self::ArrayIndex(..)
             | Self::StringToArray(_)
             | Self::ListIndex(_)
@@ -2421,7 +2620,11 @@ impl VariadicFunc {
     }
 
     pub fn is_infix_op(&self) -> bool {
-        matches!(self, Self::And(_) | Self::Or(_))
+        match self {
+            VariadicFunc::And(s) => s.is_infix_op(),
+            VariadicFunc::Or(_) => true,
+            _ => false,
+        }
     }
 
     /// Gives the unit (u) of OR or AND, such that `u AND/OR x == x`.
@@ -2446,9 +2649,12 @@ impl VariadicFunc {
     /// Returns true if the function could introduce an error on non-error inputs.
     pub fn could_error(&self) -> bool {
         match self {
-            VariadicFunc::And(_) | VariadicFunc::Or(_) => false,
-            VariadicFunc::Coalesce(_) => false,
-            VariadicFunc::Greatest(_) | VariadicFunc::Least(_) => false,
+            VariadicFunc::And(s) => s.could_error(),
+            VariadicFunc::Or(s) => s.could_error(),
+            VariadicFunc::Coalesce(s) => s.could_error(),
+            VariadicFunc::Greatest(s) => s.could_error(),
+            VariadicFunc::ErrorIfNull(s) => s.could_error(),
+            VariadicFunc::Least(s) => s.could_error(),
             VariadicFunc::Concat(_) | VariadicFunc::ConcatWs(_) => false,
             VariadicFunc::Replace(_) => false,
             VariadicFunc::Translate(_) => false,
@@ -2473,11 +2679,11 @@ impl VariadicFunc {
     /// ie. the arguments and the result are non-error datums.
     pub fn is_monotone(&self) -> bool {
         match self {
-            VariadicFunc::Coalesce(_)
-            | VariadicFunc::Greatest(_)
-            | VariadicFunc::Least(_)
-            | VariadicFunc::And(_)
-            | VariadicFunc::Or(_) => true,
+            VariadicFunc::Coalesce(s) => s.is_monotone(),
+            VariadicFunc::Greatest(s) => s.is_monotone(),
+            VariadicFunc::Least(s) => s.is_monotone(),
+            VariadicFunc::And(s) => s.is_monotone(),
+            VariadicFunc::Or(s) => s.is_monotone(),
             VariadicFunc::Concat(_)
             | VariadicFunc::ConcatWs(_)
             | VariadicFunc::MakeTimestamp(_)
@@ -2497,9 +2703,9 @@ impl VariadicFunc {
             | VariadicFunc::SplitPart(_)
             | VariadicFunc::RegexpMatch(_)
             | VariadicFunc::HmacString(_)
-            | VariadicFunc::HmacBytes(_)
-            | VariadicFunc::ErrorIfNull(_)
-            | VariadicFunc::DateBinTimestamp(_)
+            | VariadicFunc::HmacBytes(_) => false,
+            VariadicFunc::ErrorIfNull(s) => s.is_monotone(),
+            VariadicFunc::DateBinTimestamp(_)
             | VariadicFunc::DateBinTimestampTz(_)
             | VariadicFunc::RangeCreate(..)
             | VariadicFunc::MakeAclItem(_)
