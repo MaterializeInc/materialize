@@ -124,7 +124,9 @@ pub fn format_int16<F>(buf: &mut F, i: i16) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", i);
+    // i16 max is 6 chars ("-32768"), but we use the shared i64 buffer.
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_i64_buf(&mut tmp, i as i64));
     Nestable::Yes
 }
 
@@ -143,7 +145,8 @@ pub fn format_int32<F>(buf: &mut F, i: i32) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", i);
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_i64_buf(&mut tmp, i as i64));
     Nestable::Yes
 }
 
@@ -159,7 +162,8 @@ pub fn format_int64<F>(buf: &mut F, i: i64) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", i);
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_i64_buf(&mut tmp, i));
     Nestable::Yes
 }
 
@@ -178,7 +182,8 @@ pub fn format_uint16<F>(buf: &mut F, u: u16) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", u);
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_u64_buf(&mut tmp, u as u64));
     Nestable::Yes
 }
 
@@ -197,7 +202,8 @@ pub fn format_uint32<F>(buf: &mut F, u: u32) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", u);
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_u64_buf(&mut tmp, u as u64));
     Nestable::Yes
 }
 
@@ -213,8 +219,86 @@ pub fn format_uint64<F>(buf: &mut F, u: u64) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", u);
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_u64_buf(&mut tmp, u));
     Nestable::Yes
+}
+
+/// Two-digit lookup table for fast integer-to-ASCII conversion.
+/// Entry `i` contains the two ASCII bytes for the decimal number `i` (00-99).
+const DIGIT_PAIRS: &[u8; 200] = b"\
+    0001020304050607080910111213141516171819\
+    2021222324252627282930313233343536373839\
+    4041424344454647484950515253545556575859\
+    6061626364656667686970717273747576777879\
+    8081828384858687888990919293949596979899";
+
+/// Formats a signed 64-bit integer into a stack buffer, returning the
+/// formatted string slice. Uses the 2-digit lookup table for speed and
+/// negative-number arithmetic to handle `i64::MIN` without overflow.
+#[inline]
+fn write_i64_buf(buf: &mut [u8; 20], n: i64) -> &str {
+    if n == 0 {
+        return "0";
+    }
+    let negative = n < 0;
+    // Work with negative values to avoid overflow on i64::MIN.
+    let mut val = if negative { n } else { -n };
+    let mut pos = buf.len();
+    // Process two digits at a time using the lookup table.
+    while val <= -100 {
+        let rem = (-(val % 100)) as usize;
+        val /= 100;
+        pos -= 2;
+        buf[pos] = DIGIT_PAIRS[rem * 2];
+        buf[pos + 1] = DIGIT_PAIRS[rem * 2 + 1];
+    }
+    // Handle the last 1-2 digits.
+    let rem = (-val) as usize;
+    if rem >= 10 {
+        pos -= 2;
+        buf[pos] = DIGIT_PAIRS[rem * 2];
+        buf[pos + 1] = DIGIT_PAIRS[rem * 2 + 1];
+    } else {
+        pos -= 1;
+        buf[pos] = b'0' + rem as u8;
+    }
+    if negative {
+        pos -= 1;
+        buf[pos] = b'-';
+    }
+    // SAFETY: all bytes written are ASCII.
+    unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }
+}
+
+/// Formats an unsigned 64-bit integer into a stack buffer, returning the
+/// formatted string slice. Uses the 2-digit lookup table for speed.
+#[inline]
+fn write_u64_buf(buf: &mut [u8; 20], mut n: u64) -> &str {
+    if n == 0 {
+        return "0";
+    }
+    let mut pos = buf.len();
+    // Process two digits at a time using the lookup table.
+    while n >= 100 {
+        let rem = (n % 100) as usize;
+        n /= 100;
+        pos -= 2;
+        buf[pos] = DIGIT_PAIRS[rem * 2];
+        buf[pos + 1] = DIGIT_PAIRS[rem * 2 + 1];
+    }
+    // Handle the last 1-2 digits.
+    if n >= 10 {
+        let n = n as usize;
+        pos -= 2;
+        buf[pos] = DIGIT_PAIRS[n * 2];
+        buf[pos + 1] = DIGIT_PAIRS[n * 2 + 1];
+    } else {
+        pos -= 1;
+        buf[pos] = b'0' + n as u8;
+    }
+    // SAFETY: all bytes written are ASCII.
+    unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }
 }
 
 /// Parses an `mz_timestamp` from `s`.
@@ -229,7 +313,8 @@ pub fn format_mz_timestamp<F>(buf: &mut F, u: crate::Timestamp) -> Nestable
 where
     F: FormatBuffer,
 {
-    write!(buf, "{}", u);
+    let mut tmp = [0u8; 20];
+    buf.write_str(write_u64_buf(&mut tmp, u64::from(u)));
     Nestable::Yes
 }
 
