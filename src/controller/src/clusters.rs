@@ -36,6 +36,7 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort,
 };
 use mz_ore::cast::CastInto;
+use mz_ore::netio::SocketAddr;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
@@ -439,15 +440,14 @@ where
                 };
                 metrics_task = Some(metrics_task_join_handle);
 
-                // Register the service for HTTP proxying. TCP addresses are
-                // queried lazily via tcp_addresses() since they may not be
-                // available immediately (the process orchestrator allocates
-                // TCP proxy ports asynchronously).
-                self.replica_http_locator.register_replica(
-                    cluster_id,
-                    replica_id,
-                    Arc::from(service),
-                );
+                // Register the replica for HTTP proxying.
+                let http_addresses = service
+                    .addresses("internal-http")
+                    .iter()
+                    .map(|s| SocketAddr::from_str(s).expect("valid socket address"))
+                    .collect();
+                self.replica_http_locator
+                    .register_replica(cluster_id, replica_id, http_addresses);
             }
         }
 

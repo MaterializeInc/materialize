@@ -13,31 +13,18 @@
 //! mapping of cluster replica HTTP addresses. This is used by environmentd to
 //! proxy HTTP requests to clusterd internal endpoints without requiring
 //! direct network access to the clusterd pods.
-//!
-//! The reason for this to exist is that the process orchestrator with
-//! HTTP-to-domain socket proxies only lazily starts its proxies, meaning
-//! we don't know the ports to forward to until after the replica is started.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_orchestrator::Service;
+use mz_ore::netio::SocketAddr;
 
 /// Tracks HTTP addresses for cluster replica processes.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct ReplicaHttpLocator {
-    /// Maps (cluster_id, replica_id) -> Service reference.
-    /// We store the Service and call tcp_addresses() lazily.
-    services: RwLock<BTreeMap<(ClusterId, ReplicaId), Arc<dyn Service>>>,
-}
-
-impl std::fmt::Debug for ReplicaHttpLocator {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReplicaHttpLocator")
-            .field("services", &"<services>")
-            .finish()
-    }
+    /// Maps (cluster_id, replica_id) to a list of process HTTP addresses.
+    replica_addresses: RwLock<BTreeMap<(ClusterId, ReplicaId), Vec<SocketAddr>>>,
 }
 
 impl ReplicaHttpLocator {
@@ -50,10 +37,9 @@ impl ReplicaHttpLocator {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         process: usize,
-    ) -> Option<String> {
-        let guard = self.services.read().expect("lock poisoned");
-        let service = guard.get(&(cluster_id, replica_id))?;
-        let addrs = service.tcp_addresses("internal-http");
+    ) -> Option<SocketAddr> {
+        let guard = self.replica_addresses.read().expect("lock poisoned");
+        let addrs = guard.get(&(cluster_id, replica_id))?;
         addrs.get(process).cloned()
     }
 
@@ -64,17 +50,17 @@ impl ReplicaHttpLocator {
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        service: Arc<dyn Service>,
+        addresses: Vec<SocketAddr>,
     ) {
-        let mut guard = self.services.write().expect("lock poisoned");
-        guard.insert((cluster_id, replica_id), service);
+        let mut guard = self.replica_addresses.write().expect("lock poisoned");
+        guard.insert((cluster_id, replica_id), addresses);
     }
 
     /// Removes a replica from the locator.
     ///
     /// Called by the controller when a replica is dropped.
     pub(crate) fn remove_replica(&self, cluster_id: ClusterId, replica_id: ReplicaId) {
-        let mut guard = self.services.write().expect("lock poisoned");
+        let mut guard = self.replica_addresses.write().expect("lock poisoned");
         guard.remove(&(cluster_id, replica_id));
     }
 }

@@ -331,10 +331,8 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         config: ServiceConfig,
     ) -> Result<Box<dyn Service>, anyhow::Error> {
         let service = ProcessService {
-            id: id.to_string(),
             run_dir: self.config.service_run_dir(id),
             scale: config.scale,
-            services: Arc::clone(&self.services),
         };
 
         // Enable disk if the size does not disable it.
@@ -1201,31 +1199,14 @@ struct AddressedTcpListener {
 
 #[derive(Debug)]
 struct ProcessService {
-    id: String,
     run_dir: PathBuf,
     scale: NonZero<u16>,
-    /// Shared reference to the services state, used to look up TCP proxy addresses.
-    services: Arc<Mutex<BTreeMap<String, Vec<ProcessState>>>>,
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
         (0..self.scale.get())
             .map(|i| socket_path(&self.run_dir, port, i))
-            .collect()
-    }
-
-    fn tcp_addresses(&self, port: &str) -> Vec<String> {
-        let guard = self.services.lock().expect("lock poisoned");
-        let Some(states) = guard.get(&self.id) else {
-            // Service not yet provisioned, return empty
-            return Vec::new();
-        };
-
-        states
-            .iter()
-            .filter_map(|state| state.tcp_proxy_addrs.get(port))
-            .map(|addr| addr.to_string())
             .collect()
     }
 }
