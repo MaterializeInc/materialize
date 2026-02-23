@@ -36,7 +36,6 @@ use mz_orchestrator::{
     ServiceEvent, ServicePort,
 };
 use mz_ore::cast::CastInto;
-use mz_ore::netio::SocketAddr;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
@@ -441,11 +440,7 @@ where
                 metrics_task = Some(metrics_task_join_handle);
 
                 // Register the replica for HTTP proxying.
-                let http_addresses = service
-                    .addresses("internal-http")
-                    .iter()
-                    .map(|s| SocketAddr::from_str(s).expect("valid socket address"))
-                    .collect();
+                let http_addresses = service.addresses("internal-http");
                 self.replica_http_locator
                     .register_replica(cluster_id, replica_id, http_addresses);
             }

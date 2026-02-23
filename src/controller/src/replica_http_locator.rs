@@ -18,13 +18,12 @@ use std::collections::BTreeMap;
 use std::sync::RwLock;
 
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::netio::SocketAddr;
 
 /// Tracks HTTP addresses for cluster replica processes.
 #[derive(Debug, Default)]
 pub struct ReplicaHttpLocator {
     /// Maps (cluster_id, replica_id) to a list of process HTTP addresses.
-    replica_addresses: RwLock<BTreeMap<(ClusterId, ReplicaId), Vec<SocketAddr>>>,
+    replica_addresses: RwLock<BTreeMap<(ClusterId, ReplicaId), Vec<String>>>,
 }
 
 impl ReplicaHttpLocator {
@@ -37,7 +36,7 @@ impl ReplicaHttpLocator {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
         process: usize,
-    ) -> Option<SocketAddr> {
+    ) -> Option<String> {
         let guard = self.replica_addresses.read().expect("lock poisoned");
         let addrs = guard.get(&(cluster_id, replica_id))?;
         addrs.get(process).cloned()
@@ -50,7 +49,7 @@ impl ReplicaHttpLocator {
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-        addresses: Vec<SocketAddr>,
+        addresses: Vec<String>,
     ) {
         let mut guard = self.replica_addresses.write().expect("lock poisoned");
         guard.insert((cluster_id, replica_id), addresses);

@@ -28,7 +28,7 @@ use hyper::Uri;
 use hyper_util::rt::TokioIo;
 use mz_controller::ReplicaHttpLocator;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_ore::netio::{SocketAddr, Stream};
+use mz_ore::netio::{SocketAddrType, Stream};
 
 use crate::http::AuthedClient;
 
@@ -122,11 +122,11 @@ async fn handle_cluster_proxy_inner(
         format!("/{path}")
     };
 
-    let authority = match &http_addr {
-        SocketAddr::Inet(addr) => addr.to_string(),
+    let authority = match SocketAddrType::guess(&http_addr) {
         // UDS addresses aren't valid URI authorities, use a placeholder.
-        SocketAddr::Unix(_) => format!("cluster_{cluster_id}_replica_{replica_id}_{process}"),
-        SocketAddr::Turmoil(addr) => addr.clone(),
+        SocketAddrType::Unix => format!("cluster_{cluster_id}_replica_{replica_id}_{process}"),
+        SocketAddrType::Turmoil => http_addr.trim_start_matches("turmoil:").to_owned(),
+        SocketAddrType::Inet => http_addr.clone(),
     };
     let uri = Uri::try_from(format!("http://{authority}{path_query}")).map_err(|e| {
         (
@@ -157,7 +157,7 @@ async fn handle_cluster_proxy_inner(
         .insert(http::header::CONNECTION, HeaderValue::from_static("close"));
 
     // Connect to the target with timeout
-    let stream = tokio::time::timeout(CONNECT_TIMEOUT, Stream::connect(&http_addr))
+    let stream = tokio::time::timeout(CONNECT_TIMEOUT, Stream::connect(http_addr.as_str()))
         .await
         .map_err(|_| {
             (
