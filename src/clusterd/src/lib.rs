@@ -315,7 +315,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                             .serve_connection(TokioIo::new(conn), hyper_service)
                             .await
                         {
-                            error!("failed to serve internal_http connection: {error:#}");
+                            // This can happen when the client performs an unclean shutdown, so a
+                            // high severity isn't warranted. Might even downgrade this to DEBUG if
+                            // it turns out too noisy.
+                            info!("error serving internal_http connection: {error:#}");
                         }
                     },
                 );
