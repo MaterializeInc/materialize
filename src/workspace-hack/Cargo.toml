@@ -114,7 +114,7 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 predicates = { version = "3.1.3" }
 prettyplease = { version = "0.2.37", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
-proptest = { version = "1.9.0" }
+proptest = { version = "1.10.0" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-reflect = { version = "0.16.3", default-features = false, features = ["serde"] }
 prost-types = { version = "0.14.3" }
@@ -268,7 +268,7 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", defa
 predicates = { version = "3.1.3" }
 prettyplease = { version = "0.2.37", default-features = false, features = ["verbatim"] }
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
-proptest = { version = "1.9.0" }
+proptest = { version = "1.10.0" }
 proptest-derive = { version = "0.8.0", default-features = false, features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-build = { version = "0.14.3", features = ["cleanup-markdown"] }
@@ -326,7 +326,7 @@ zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays",
 zstd-sys = { version = "2.0.16", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
-bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
+bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
@@ -342,7 +342,7 @@ spin = { version = "0.10.0" }
 tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
+bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
@@ -358,7 +358,7 @@ spin = { version = "0.10.0" }
 tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.dependencies]
-bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
+bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
@@ -371,7 +371,7 @@ spin = { version = "0.10.0" }
 tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
-bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
+bitflags = { version = "2.11.0", default-features = false, features = ["std"] }
 hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }

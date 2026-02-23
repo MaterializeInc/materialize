@@ -42,7 +42,7 @@ mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 parquet = { version = "57", default-features = false, features = ["arrow", "async", "snap"] }
 prometheus = { version = "0.14.0", default-features = false }
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 prost = "0.14.3"
 reqwest = { version = "0.12.28", features = ["stream"] }
 sentry = { version = "0.46.1", default-features = false, features = [] }

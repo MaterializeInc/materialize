@@ -18,7 +18,7 @@ globset = "0.4.18"
 http = "1.4.0"
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test", "overflowing"] }
 num = "0.4.3"
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 regex = "1.12.2"
