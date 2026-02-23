@@ -627,7 +627,12 @@ where
                 .catalog_connection
                 .connect(&storage_configuration, InTask::Yes)
                 .await
-                .context("Failed to connect to iceberg catalog")?;
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                        connection.catalog_connection.uri, connection.namespace, connection.table
+                    )
+                })?;
 
             let table = load_or_create_table(
                 catalog.as_ref(),
@@ -1017,7 +1022,12 @@ where
                 .catalog_connection
                 .connect(&storage_configuration, InTask::Yes)
                 .await
-                .context("Failed to connect to iceberg catalog")?;
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                        connection.catalog_connection.uri, connection.namespace, connection.table
+                    )
+                })?;
 
             let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
             let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
@@ -1027,7 +1037,12 @@ where
             let table = catalog
                 .load_table(&table_ident)
                 .await
-                .context("Failed to load Iceberg table")?;
+                .with_context(|| {
+                    format!(
+                        "Failed to load Iceberg table '{}.{}' in write_data_files operator",
+                        connection.namespace, connection.table
+                    )
+                })?;
 
             let table_metadata = table.metadata().clone();
             let current_schema = Arc::clone(table_metadata.current_schema());
@@ -1521,7 +1536,12 @@ where
                 .catalog_connection
                 .connect(&storage_configuration, InTask::Yes)
                 .await
-                .context("Failed to connect to iceberg catalog")?;
+                .with_context(|| {
+                    format!(
+                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                        connection.catalog_connection.uri, connection.namespace, connection.table
+                    )
+                })?;
 
             let mut write_handle = write_handle.await?;
 
@@ -1533,7 +1553,12 @@ where
             let mut table = catalog
                 .load_table(&table_ident)
                 .await
-                .context("Failed to load Iceberg table")?;
+                .with_context(|| {
+                    format!(
+                        "Failed to load Iceberg table '{}.{}' in commit_to_iceberg operator",
+                        connection.namespace, connection.table
+                    )
+                })?;
 
             #[allow(clippy::disallowed_types)]
             let mut batch_descriptions: std::collections::HashMap<
@@ -1718,7 +1743,14 @@ where
                             },
                             Ok(table) => RetryResult::Ok(table)
                         }
-                    }).await.context("failed to commit to iceberg");
+                    })
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to commit batch to Iceberg table '{}.{}'",
+                            connection.namespace, connection.table
+                        )
+                    });
                     let duration = instant.elapsed();
                     metrics
                         .commit_duration_seconds

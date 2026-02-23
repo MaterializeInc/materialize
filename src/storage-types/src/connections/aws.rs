@@ -9,7 +9,7 @@
 
 //! AWS configuration for sources and sinks.
 
-use anyhow::{anyhow, bail};
+use anyhow::{Context, anyhow, bail};
 use aws_config::sts::AssumeRoleProvider;
 use aws_credential_types::Credentials;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
@@ -129,7 +129,14 @@ impl AwsAssumeRole {
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
     ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
-        let external_id = self.external_id(connection_context, connection_id)?;
+        let external_id = self
+            .external_id(connection_context, connection_id)
+            .with_context(|| {
+                format!(
+                    "failed to compute external ID for AWS AssumeRole connection {} (role arn {})",
+                    connection_id, self.arn
+                )
+            })?;
         // It's okay to use `dangerously_load_credentials_provider` here, as
         // this is the method that provides a safe wrapper by forcing use of the
         // correct external ID.
@@ -154,7 +161,12 @@ impl AwsAssumeRole {
         external_id: Option<String>,
     ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
         let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
-            bail!("internal error: no AWS connection role configured");
+            bail!(
+                "internal error: no AWS connection role configured while loading AssumeRole \
+                 credentials for connection {} (role arn {})",
+                connection_id,
+                self.arn
+            );
         };
 
         // Load the default SDK configuration to use for the assume role
@@ -240,6 +252,14 @@ impl AwsAssumeRole {
 }
 
 impl AwsConnection {
+    /// Returns a string describing the authentication method of this connection, for use in error messages.
+    pub(crate) fn auth_method(&self) -> &'static str {
+        match self.auth {
+            AwsAuth::Credentials(_) => "credentials",
+            AwsAuth::AssumeRole(_) => "assume_role",
+        }
+    }
+
     /// Loads the AWS SDK configuration with the configuration specified on this
     /// object.
     pub async fn load_sdk_config(
@@ -257,15 +277,39 @@ impl AwsConnection {
                 AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
                     credentials
                         .load_credentials_provider(&connection_context, InTask::No)
-                        .await?,
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to load static AWS credentials for connection {}",
+                                connection_id
+                            )
+                        })?,
                 ),
                 AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
                     assume_role
                         .load_credentials_provider(&connection_context, connection_id)
-                        .await?,
+                        .await
+                        .with_context(|| {
+                            format!(
+                                "failed to initialize AssumeRole credential provider for \
+                                 connection {} (role arn {})",
+                                connection_id, assume_role.arn
+                            )
+                        })?,
                 ),
             };
-            this.load_sdk_config_from_credentials(credentials).await
+            this.load_sdk_config_from_credentials(credentials)
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to build AWS SDK config for connection {} \
+                         (auth method: {}, region: {:?}, endpoint: {:?})",
+                        connection_id,
+                        this.auth_method(),
+                        this.region,
+                        this.endpoint
+                    )
+                })
         }
         .run_in_task_if(in_task, || "load_sdk_config".to_string())
         .await

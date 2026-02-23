@@ -107,7 +107,17 @@ impl AwsCredentialLoad for AwsSdkCredentialLoader {
             .provider
             .provide_credentials()
             .await
-            .context("failed to load AWS credentials from SDK provider")?;
+            .map_err(|e| {
+                warn!(
+                    error = %e.display_with_causes(),
+                    "failed to load AWS credentials for Iceberg FileIO from SDK provider"
+                );
+                e
+            })
+            .context(
+                "failed to load AWS credentials from SDK provider for Iceberg FileIO \
+                 (credential source may be temporarily unavailable)",
+            )?;
 
         Ok(Some(AwsCredential {
             access_key_id: creds.access_key_id().to_string(),
@@ -575,7 +585,17 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 aws_ref.connection_id,
                 in_task,
             )
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to load AWS SDK config for S3 Tables Iceberg catalog \
+                     (connection id: {}, auth method: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id,
+                    aws_ref.connection.auth_method(),
+                    self.uri,
+                    s3tables.warehouse
+                )
+            })?;
 
         let aws_region = aws_ref
             .connection
@@ -615,7 +635,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
         let catalog = RestCatalogBuilder::default()
             .with_aws_config(aws_config.clone())
             .load("IcebergCatalog", props.into_iter().collect())
-            .await?;
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create S3 Tables Iceberg catalog \
+                     (connection id: {}, catalog uri: {}, warehouse: {})",
+                    aws_ref.connection_id, self.uri, s3tables.warehouse
+                )
+            })?;
 
         let catalog = if matches!(aws_auth, AwsAuth::AssumeRole(_)) {
             let credentials_provider = aws_config
