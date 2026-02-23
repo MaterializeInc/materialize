@@ -1417,6 +1417,7 @@ impl Catalog {
         &self,
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
+        optimizer_features: OptimizerFeatures,
     ) {
         let Some(mut global_mir) = self.try_get_optimized_plan(&id).cloned() else {
             soft_panic_or_log!("optimized plan missing for ID {id}");
@@ -1438,7 +1439,6 @@ impl Catalog {
         physical_plan.as_of = None;
         physical_plan.until = Default::default();
 
-        let optimizer_features = OptimizerFeatures::from(self.system_config());
         let mut local_exprs = Vec::new();
         if let Some(local_mir) = local_mir {
             local_exprs.push((

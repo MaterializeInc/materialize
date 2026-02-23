@@ -443,6 +443,7 @@ impl Coordinator {
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&explain_ctx);
+        let optimizer_features = optimizer_config.features.clone();
         let force_non_monotonic = Default::default();
 
         // Build an optimizer for this MATERIALIZED VIEW.
@@ -508,6 +509,7 @@ impl Coordinator {
                                     local_mir_plan,
                                     global_mir_plan,
                                     global_lir_plan,
+                                    optimizer_features,
                                 })
                             }
                         }
@@ -578,6 +580,7 @@ impl Coordinator {
             local_mir_plan,
             global_mir_plan,
             global_lir_plan,
+            optimizer_features,
             ..
         } = stage;
 
@@ -704,9 +707,11 @@ impl Coordinator {
                         .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
                         .await;
 
-                    coord
-                        .catalog()
-                        .cache_expressions(global_id, Some(local_mir_for_cache));
+                    coord.catalog().cache_expressions(
+                        global_id,
+                        Some(local_mir_for_cache),
+                        optimizer_features,
+                    );
 
                     df_desc.set_as_of(dataflow_as_of.clone());
                     df_desc.set_initial_as_of(initial_as_of);

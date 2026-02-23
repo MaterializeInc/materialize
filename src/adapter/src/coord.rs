@@ -643,6 +643,7 @@ pub struct CreateIndexFinish {
     resolved_ids: ResolvedIds,
     global_mir_plan: optimize::index::GlobalMirPlan,
     global_lir_plan: optimize::index::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -845,6 +846,7 @@ pub struct CreateMaterializedViewFinish {
     local_mir_plan: optimize::materialized_view::LocalMirPlan,
     global_mir_plan: optimize::materialized_view::GlobalMirPlan,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
+    optimizer_features: OptimizerFeatures,
 }
 
 #[derive(Debug)]
@@ -3007,7 +3009,7 @@ impl Coordinator {
                 .catalog()
                 .resolve_full_name(entry.name(), None)
                 .to_string();
-            let (_optimized_plan, physical_plan, _metainfo) = self
+            let (_optimized_plan, physical_plan, _metainfo, _optimizer_features) = self
                 .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
                 .expect("builtin CT should optimize successfully");
 
@@ -3096,7 +3098,7 @@ impl Coordinator {
                                         self.owned_catalog(),
                                         compute_instance.clone(),
                                         global_id,
-                                        optimizer_config,
+                                        optimizer_config.clone(),
                                         self.optimizer_metrics(),
                                     );
 
@@ -3136,9 +3138,7 @@ impl Coordinator {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: OptimizerFeatures::from(
-                                            self.catalog().system_config(),
-                                        ),
+                                        optimizer_features: optimizer_config.features.clone(),
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
@@ -3195,7 +3195,7 @@ impl Coordinator {
                                         mv.non_null_assertions.clone(),
                                         mv.refresh_schedule.clone(),
                                         debug_name,
-                                        optimizer_config,
+                                        optimizer_config.clone(),
                                         self.optimizer_metrics(),
                                         force_non_monotonic,
                                     );
@@ -3237,9 +3237,7 @@ impl Coordinator {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: OptimizerFeatures::from(
-                                            self.catalog().system_config(),
-                                        ),
+                                        optimizer_features: optimizer_config.features.clone(),
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
@@ -3281,8 +3279,8 @@ impl Coordinator {
                                     .catalog()
                                     .resolve_full_name(entry.name(), None)
                                     .to_string();
-                                let (optimized_plan, physical_plan, metainfo) = self
-                                    .optimize_create_continual_task(
+                                let (optimized_plan, physical_plan, metainfo, optimizer_features) =
+                                    self.optimize_create_continual_task(
                                         ct,
                                         global_id,
                                         self.owned_catalog(),
@@ -3294,9 +3292,7 @@ impl Coordinator {
                                         global_mir: optimized_plan.clone(),
                                         physical_plan: physical_plan.clone(),
                                         dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features: OptimizerFeatures::from(
-                                            self.catalog().system_config(),
-                                        ),
+                                        optimizer_features,
                                     },
                                 );
                                 (optimized_plan, physical_plan, metainfo)
