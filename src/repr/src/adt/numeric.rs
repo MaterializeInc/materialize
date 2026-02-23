@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 use anyhow::bail;
 use dec::{Context, Decimal};
 use mz_lowertest::MzReflect;
-use mz_ore::cast;
+use mz_ore::cast::{self, CastFrom};
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use proptest_derive::Arbitrary;
@@ -436,7 +436,7 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
 /// implementation with **zero heap allocations**.
 ///
 /// This replaces `Decimal::to_standard_notation_string()` which performs two
-/// heap allocations per call: one for `coefficient_digits()` (Vec<u8>) and
+/// heap allocations per call: one for `coefficient_digits()` (`Vec<u8>`) and
 /// one for the result String. Instead, this function extracts digits from
 /// `coefficient_units()` (a zero-copy &[u16] slice) into a stack-allocated
 /// buffer and writes the entire result with a single `write_str()` call.
@@ -450,7 +450,7 @@ pub fn write_numeric_standard_notation<const N: usize>(
     }
 
     let units = d.coefficient_units();
-    let ndigits = d.digits() as usize;
+    let ndigits = usize::cast_from(d.digits());
     let exponent = d.exponent();
     let nunit = units.len();
 
@@ -464,30 +464,33 @@ pub fn write_numeric_standard_notation<const N: usize>(
     let msu = units[nunit - 1];
     let msu_ndigits = if ndigits % 3 == 0 { 3 } else { ndigits % 3 };
     if msu_ndigits >= 3 {
-        digit_buf[pos] = (msu / 100) as u8;
+        digit_buf[pos] = u8::try_from(msu / 100).unwrap();
         pos += 1;
     }
     if msu_ndigits >= 2 {
-        digit_buf[pos] = ((msu / 10) % 10) as u8;
+        digit_buf[pos] = u8::try_from((msu / 10) % 10).unwrap();
         pos += 1;
     }
-    digit_buf[pos] = (msu % 10) as u8;
+    digit_buf[pos] = u8::try_from(msu % 10).unwrap();
     pos += 1;
 
     // Remaining units (full 3-digit groups), most-significant first
     for i in (0..nunit.saturating_sub(1)).rev() {
         let u = units[i];
-        digit_buf[pos] = (u / 100) as u8;
-        digit_buf[pos + 1] = ((u / 10) % 10) as u8;
-        digit_buf[pos + 2] = (u % 10) as u8;
+        digit_buf[pos] = u8::try_from(u / 100).unwrap();
+        digit_buf[pos + 1] = u8::try_from((u / 10) % 10).unwrap();
+        digit_buf[pos + 2] = u8::try_from(u % 10).unwrap();
         pos += 3;
     }
 
     // Strip leading zeros (matching to_standard_notation_string behavior)
     let raw_digits = &digit_buf[..ndigits];
-    let first_nonzero = raw_digits.iter().position(|&d| d != 0).unwrap_or(ndigits - 1);
+    let first_nonzero = raw_digits
+        .iter()
+        .position(|&d| d != 0)
+        .unwrap_or(ndigits - 1);
     let digits = &raw_digits[first_nonzero..];
-    let sig_digits = digits.len() as i32;
+    let sig_digits = i32::try_from(digits.len()).unwrap();
 
     // Build output in a stack buffer. Max size:
     // 1 (sign) + 3*N (digits) + (3*N - 1) (trailing zeros) + 1 (point) = 6*N + 1
@@ -514,7 +517,7 @@ pub fn write_numeric_standard_notation<const N: usize>(
         }
     } else if sig_digits > -exponent {
         // Digits span the decimal point
-        let before_point = (sig_digits + exponent) as usize;
+        let before_point = usize::try_from(sig_digits + exponent).unwrap();
         for &digit in &digits[..before_point] {
             out[opos] = b'0' + digit;
             opos += 1;

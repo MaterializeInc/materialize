@@ -1380,7 +1380,8 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
             let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
             // Compute remainder from quotient to avoid a second integer division.
-            let nsecs = (ts - secs * 1_000_000_000) as u32;
+            // div_euclid guarantees the remainder is in 0..999_999_999.
+            let nsecs = u32::try_from(ts - secs * 1_000_000_000).unwrap();
             let ndt = DateTime::from_timestamp(secs, nsecs)
                 .expect("We only write round-trippable timestamps")
                 .naive_utc();
@@ -1390,7 +1391,7 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         Tag::CheapTimestampTz => {
             let ts = i64::from_le_bytes(read_byte_array(data));
             let secs = ts.div_euclid(1_000_000_000);
-            let nsecs = (ts - secs * 1_000_000_000) as u32;
+            let nsecs = u32::try_from(ts - secs * 1_000_000_000).unwrap();
             let dt = DateTime::from_timestamp(secs, nsecs)
                 .expect("We only write round-trippable timestamps");
             Datum::TimestampTz(CheckedTimestamp::from_timestamplike_unchecked(dt))
@@ -1544,123 +1545,131 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
 /// - -6: Array (ndims + dims + untagged elements)
 /// - i8::MIN (-128): complex type (Range with inline datums)
 const DATUM_SKIP_TABLE: [i8; 128] = {
-    let mut t = [i8::MIN; 128];
+    /// Convert a #[repr(u8)] Tag to usize for array indexing.
+    /// `as u8` extracts the discriminant (no other const-compatible way exists);
+    /// `u8_to_usize` is the mz_ore safe widening const fn.
+    #[allow(clippy::as_conversions)]
+    const fn t(tag: Tag) -> usize {
+        mz_ore::cast::u8_to_usize(tag as u8)
+    }
+
+    let mut tbl = [i8::MIN; 128];
 
     // Zero-size payloads (tag only, no data)
-    t[Tag::Null as u8 as usize] = 0;
-    t[Tag::False as u8 as usize] = 0;
-    t[Tag::True as u8 as usize] = 0;
-    t[Tag::JsonNull as u8 as usize] = 0;
-    t[Tag::Dummy as u8 as usize] = 0;
+    tbl[t(Tag::Null)] = 0;
+    tbl[t(Tag::False)] = 0;
+    tbl[t(Tag::True)] = 0;
+    tbl[t(Tag::JsonNull)] = 0;
+    tbl[t(Tag::Dummy)] = 0;
 
     // Fixed-size payloads - legacy fixed-width encoding
-    t[Tag::Int16 as u8 as usize] = 2;
-    t[Tag::Int32 as u8 as usize] = 4;
-    t[Tag::Int64 as u8 as usize] = 8;
-    t[Tag::UInt8 as u8 as usize] = 1;
-    t[Tag::UInt16 as u8 as usize] = 2;
-    t[Tag::UInt32 as u8 as usize] = 4;
-    t[Tag::UInt64 as u8 as usize] = 8;
-    t[Tag::Float32 as u8 as usize] = 4;
-    t[Tag::Float64 as u8 as usize] = 8;
-    t[Tag::Date as u8 as usize] = 4; // i32 days
-    t[Tag::Time as u8 as usize] = 8; // u32 secs + u32 nanos
-    t[Tag::Timestamp as u8 as usize] = 16; // naive_date (i32+u32) + time (u32+u32)
-    t[Tag::TimestampTz as u8 as usize] = 16; // same as Timestamp
-    t[Tag::Interval as u8 as usize] = 16; // i32 months + i32 days + i64 micros
-    t[Tag::Uuid as u8 as usize] = 16; // 128-bit UUID
-    t[Tag::CheapTimestamp as u8 as usize] = 8; // i64 nanos
-    t[Tag::CheapTimestampTz as u8 as usize] = 8; // i64 nanos
-    t[Tag::MzTimestamp as u8 as usize] = 8; // u64
+    tbl[t(Tag::Int16)] = 2;
+    tbl[t(Tag::Int32)] = 4;
+    tbl[t(Tag::Int64)] = 8;
+    tbl[t(Tag::UInt8)] = 1;
+    tbl[t(Tag::UInt16)] = 2;
+    tbl[t(Tag::UInt32)] = 4;
+    tbl[t(Tag::UInt64)] = 8;
+    tbl[t(Tag::Float32)] = 4;
+    tbl[t(Tag::Float64)] = 8;
+    tbl[t(Tag::Date)] = 4; // i32 days
+    tbl[t(Tag::Time)] = 8; // u32 secs + u32 nanos
+    tbl[t(Tag::Timestamp)] = 16; // naive_date (i32+u32) + time (u32+u32)
+    tbl[t(Tag::TimestampTz)] = 16; // same as Timestamp
+    tbl[t(Tag::Interval)] = 16; // i32 months + i32 days + i64 micros
+    tbl[t(Tag::Uuid)] = 16; // 128-bit UUID
+    tbl[t(Tag::CheapTimestamp)] = 8; // i64 nanos
+    tbl[t(Tag::CheapTimestampTz)] = 8; // i64 nanos
+    tbl[t(Tag::MzTimestamp)] = 8; // u64
     // MzAclItem: RoleId(1+8) + RoleId(1+8) + u64(8) = 26 bytes
-    t[Tag::MzAclItem as u8 as usize] = 26;
+    tbl[t(Tag::MzAclItem)] = 26;
     // AclItem: u32 + u32 + u64 = 16 bytes
-    t[Tag::AclItem as u8 as usize] = 16;
+    tbl[t(Tag::AclItem)] = 16;
 
     // Variable-length with length prefix
-    t[Tag::BytesTiny as u8 as usize] = -1;
-    t[Tag::BytesShort as u8 as usize] = -2;
-    t[Tag::BytesLong as u8 as usize] = -3;
-    t[Tag::BytesHuge as u8 as usize] = -4;
-    t[Tag::StringTiny as u8 as usize] = -1;
-    t[Tag::StringShort as u8 as usize] = -2;
-    t[Tag::StringLong as u8 as usize] = -3;
-    t[Tag::StringHuge as u8 as usize] = -4;
-    t[Tag::ListTiny as u8 as usize] = -1;
-    t[Tag::ListShort as u8 as usize] = -2;
-    t[Tag::ListLong as u8 as usize] = -3;
-    t[Tag::ListHuge as u8 as usize] = -4;
-    t[Tag::Dict as u8 as usize] = -4; // uses untagged_bytes = u64 length prefix
+    tbl[t(Tag::BytesTiny)] = -1;
+    tbl[t(Tag::BytesShort)] = -2;
+    tbl[t(Tag::BytesLong)] = -3;
+    tbl[t(Tag::BytesHuge)] = -4;
+    tbl[t(Tag::StringTiny)] = -1;
+    tbl[t(Tag::StringShort)] = -2;
+    tbl[t(Tag::StringLong)] = -3;
+    tbl[t(Tag::StringHuge)] = -4;
+    tbl[t(Tag::ListTiny)] = -1;
+    tbl[t(Tag::ListShort)] = -2;
+    tbl[t(Tag::ListLong)] = -3;
+    tbl[t(Tag::ListHuge)] = -4;
+    tbl[t(Tag::Dict)] = -4; // uses untagged_bytes = u64 length prefix
 
     // Special variable-length types
-    t[Tag::Numeric as u8 as usize] = -5;
-    t[Tag::Array as u8 as usize] = -6;
+    tbl[t(Tag::Numeric)] = -5;
+    tbl[t(Tag::Array)] = -6;
 
     // Variable-length integer encoding
-    t[Tag::NonNegativeInt16_0 as u8 as usize] = 0;
-    t[Tag::NonNegativeInt16_8 as u8 as usize] = 1;
-    t[Tag::NonNegativeInt16_16 as u8 as usize] = 2;
+    tbl[t(Tag::NonNegativeInt16_0)] = 0;
+    tbl[t(Tag::NonNegativeInt16_8)] = 1;
+    tbl[t(Tag::NonNegativeInt16_16)] = 2;
 
-    t[Tag::NonNegativeInt32_0 as u8 as usize] = 0;
-    t[Tag::NonNegativeInt32_8 as u8 as usize] = 1;
-    t[Tag::NonNegativeInt32_16 as u8 as usize] = 2;
-    t[Tag::NonNegativeInt32_24 as u8 as usize] = 3;
-    t[Tag::NonNegativeInt32_32 as u8 as usize] = 4;
+    tbl[t(Tag::NonNegativeInt32_0)] = 0;
+    tbl[t(Tag::NonNegativeInt32_8)] = 1;
+    tbl[t(Tag::NonNegativeInt32_16)] = 2;
+    tbl[t(Tag::NonNegativeInt32_24)] = 3;
+    tbl[t(Tag::NonNegativeInt32_32)] = 4;
 
-    t[Tag::NonNegativeInt64_0 as u8 as usize] = 0;
-    t[Tag::NonNegativeInt64_8 as u8 as usize] = 1;
-    t[Tag::NonNegativeInt64_16 as u8 as usize] = 2;
-    t[Tag::NonNegativeInt64_24 as u8 as usize] = 3;
-    t[Tag::NonNegativeInt64_32 as u8 as usize] = 4;
-    t[Tag::NonNegativeInt64_40 as u8 as usize] = 5;
-    t[Tag::NonNegativeInt64_48 as u8 as usize] = 6;
-    t[Tag::NonNegativeInt64_56 as u8 as usize] = 7;
-    t[Tag::NonNegativeInt64_64 as u8 as usize] = 8;
+    tbl[t(Tag::NonNegativeInt64_0)] = 0;
+    tbl[t(Tag::NonNegativeInt64_8)] = 1;
+    tbl[t(Tag::NonNegativeInt64_16)] = 2;
+    tbl[t(Tag::NonNegativeInt64_24)] = 3;
+    tbl[t(Tag::NonNegativeInt64_32)] = 4;
+    tbl[t(Tag::NonNegativeInt64_40)] = 5;
+    tbl[t(Tag::NonNegativeInt64_48)] = 6;
+    tbl[t(Tag::NonNegativeInt64_56)] = 7;
+    tbl[t(Tag::NonNegativeInt64_64)] = 8;
 
-    t[Tag::NegativeInt16_0 as u8 as usize] = 0;
-    t[Tag::NegativeInt16_8 as u8 as usize] = 1;
-    t[Tag::NegativeInt16_16 as u8 as usize] = 2;
+    tbl[t(Tag::NegativeInt16_0)] = 0;
+    tbl[t(Tag::NegativeInt16_8)] = 1;
+    tbl[t(Tag::NegativeInt16_16)] = 2;
 
-    t[Tag::NegativeInt32_0 as u8 as usize] = 0;
-    t[Tag::NegativeInt32_8 as u8 as usize] = 1;
-    t[Tag::NegativeInt32_16 as u8 as usize] = 2;
-    t[Tag::NegativeInt32_24 as u8 as usize] = 3;
-    t[Tag::NegativeInt32_32 as u8 as usize] = 4;
+    tbl[t(Tag::NegativeInt32_0)] = 0;
+    tbl[t(Tag::NegativeInt32_8)] = 1;
+    tbl[t(Tag::NegativeInt32_16)] = 2;
+    tbl[t(Tag::NegativeInt32_24)] = 3;
+    tbl[t(Tag::NegativeInt32_32)] = 4;
 
-    t[Tag::NegativeInt64_0 as u8 as usize] = 0;
-    t[Tag::NegativeInt64_8 as u8 as usize] = 1;
-    t[Tag::NegativeInt64_16 as u8 as usize] = 2;
-    t[Tag::NegativeInt64_24 as u8 as usize] = 3;
-    t[Tag::NegativeInt64_32 as u8 as usize] = 4;
-    t[Tag::NegativeInt64_40 as u8 as usize] = 5;
-    t[Tag::NegativeInt64_48 as u8 as usize] = 6;
-    t[Tag::NegativeInt64_56 as u8 as usize] = 7;
-    t[Tag::NegativeInt64_64 as u8 as usize] = 8;
+    tbl[t(Tag::NegativeInt64_0)] = 0;
+    tbl[t(Tag::NegativeInt64_8)] = 1;
+    tbl[t(Tag::NegativeInt64_16)] = 2;
+    tbl[t(Tag::NegativeInt64_24)] = 3;
+    tbl[t(Tag::NegativeInt64_32)] = 4;
+    tbl[t(Tag::NegativeInt64_40)] = 5;
+    tbl[t(Tag::NegativeInt64_48)] = 6;
+    tbl[t(Tag::NegativeInt64_56)] = 7;
+    tbl[t(Tag::NegativeInt64_64)] = 8;
 
-    t[Tag::UInt8_0 as u8 as usize] = 0;
-    t[Tag::UInt8_8 as u8 as usize] = 1;
+    tbl[t(Tag::UInt8_0)] = 0;
+    tbl[t(Tag::UInt8_8)] = 1;
 
-    t[Tag::UInt16_0 as u8 as usize] = 0;
-    t[Tag::UInt16_8 as u8 as usize] = 1;
-    t[Tag::UInt16_16 as u8 as usize] = 2;
+    tbl[t(Tag::UInt16_0)] = 0;
+    tbl[t(Tag::UInt16_8)] = 1;
+    tbl[t(Tag::UInt16_16)] = 2;
 
-    t[Tag::UInt32_0 as u8 as usize] = 0;
-    t[Tag::UInt32_8 as u8 as usize] = 1;
-    t[Tag::UInt32_16 as u8 as usize] = 2;
-    t[Tag::UInt32_24 as u8 as usize] = 3;
-    t[Tag::UInt32_32 as u8 as usize] = 4;
+    tbl[t(Tag::UInt32_0)] = 0;
+    tbl[t(Tag::UInt32_8)] = 1;
+    tbl[t(Tag::UInt32_16)] = 2;
+    tbl[t(Tag::UInt32_24)] = 3;
+    tbl[t(Tag::UInt32_32)] = 4;
 
-    t[Tag::UInt64_0 as u8 as usize] = 0;
-    t[Tag::UInt64_8 as u8 as usize] = 1;
-    t[Tag::UInt64_16 as u8 as usize] = 2;
-    t[Tag::UInt64_24 as u8 as usize] = 3;
-    t[Tag::UInt64_32 as u8 as usize] = 4;
-    t[Tag::UInt64_40 as u8 as usize] = 5;
-    t[Tag::UInt64_48 as u8 as usize] = 6;
-    t[Tag::UInt64_56 as u8 as usize] = 7;
-    t[Tag::UInt64_64 as u8 as usize] = 8;
+    tbl[t(Tag::UInt64_0)] = 0;
+    tbl[t(Tag::UInt64_8)] = 1;
+    tbl[t(Tag::UInt64_16)] = 2;
+    tbl[t(Tag::UInt64_24)] = 3;
+    tbl[t(Tag::UInt64_32)] = 4;
+    tbl[t(Tag::UInt64_40)] = 5;
+    tbl[t(Tag::UInt64_48)] = 6;
+    tbl[t(Tag::UInt64_56)] = 7;
+    tbl[t(Tag::UInt64_64)] = 8;
 
-    t
+    tbl
 };
 
 /// DECDPUN from the decnumber library: digits per unit in the lsu array.
@@ -1681,7 +1690,7 @@ unsafe fn skip_datum(data: &mut &[u8]) {
 
     if skip_info >= 0 {
         // Fixed-size payload: advance past tag byte + payload
-        *data = &data[1 + skip_info as usize..];
+        *data = &data[1 + usize::from(u8::try_from(skip_info).unwrap())..];
     } else {
         // Consume the tag byte
         *data = &data[1..];

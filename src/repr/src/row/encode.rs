@@ -988,8 +988,9 @@ impl DatumColumnDecoder {
                 array.is_valid(idx).then(|| array.value(idx)).map(|x| {
                     let packed = PackedNaiveDateTime::from_bytes(x)
                         .expect("failed to roundtrip PackedNaiveDateTime");
-                    let timestamp =
-                        CheckedTimestamp::from_timestamplike_unchecked(packed.into_value().and_utc());
+                    let timestamp = CheckedTimestamp::from_timestamplike_unchecked(
+                        packed.into_value().and_utc(),
+                    );
                     Datum::TimestampTz(timestamp)
                 })
             }

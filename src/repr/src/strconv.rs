@@ -126,7 +126,7 @@ where
 {
     // i16 max is 6 chars ("-32768"), but we use the shared i64 buffer.
     let mut tmp = [0u8; 20];
-    buf.write_str(write_i64_buf(&mut tmp, i as i64));
+    buf.write_str(write_i64_buf(&mut tmp, i64::from(i)));
     Nestable::Yes
 }
 
@@ -146,7 +146,7 @@ where
     F: FormatBuffer,
 {
     let mut tmp = [0u8; 20];
-    buf.write_str(write_i64_buf(&mut tmp, i as i64));
+    buf.write_str(write_i64_buf(&mut tmp, i64::from(i)));
     Nestable::Yes
 }
 
@@ -183,7 +183,7 @@ where
     F: FormatBuffer,
 {
     let mut tmp = [0u8; 20];
-    buf.write_str(write_u64_buf(&mut tmp, u as u64));
+    buf.write_str(write_u64_buf(&mut tmp, u64::from(u)));
     Nestable::Yes
 }
 
@@ -203,7 +203,7 @@ where
     F: FormatBuffer,
 {
     let mut tmp = [0u8; 20];
-    buf.write_str(write_u64_buf(&mut tmp, u as u64));
+    buf.write_str(write_u64_buf(&mut tmp, u64::from(u)));
     Nestable::Yes
 }
 
@@ -241,62 +241,53 @@ fn write_i64_buf(buf: &mut [u8; 20], n: i64) -> &str {
     if n == 0 {
         return "0";
     }
+    // Handle i64::MIN safely via unsigned_abs().
     let negative = n < 0;
-    // Work with negative values to avoid overflow on i64::MIN.
-    let mut val = if negative { n } else { -n };
-    let mut pos = buf.len();
-    // Process two digits at a time using the lookup table.
-    while val <= -100 {
-        let rem = (-(val % 100)) as usize;
-        val /= 100;
-        pos -= 2;
-        buf[pos] = DIGIT_PAIRS[rem * 2];
-        buf[pos + 1] = DIGIT_PAIRS[rem * 2 + 1];
-    }
-    // Handle the last 1-2 digits.
-    let rem = (-val) as usize;
-    if rem >= 10 {
-        pos -= 2;
-        buf[pos] = DIGIT_PAIRS[rem * 2];
-        buf[pos + 1] = DIGIT_PAIRS[rem * 2 + 1];
-    } else {
-        pos -= 1;
-        buf[pos] = b'0' + rem as u8;
-    }
+    let mag = n.unsigned_abs();
+    let mut pos = write_u64_into(buf, mag);
     if negative {
         pos -= 1;
         buf[pos] = b'-';
     }
-    // SAFETY: all bytes written are ASCII.
+    // SAFETY: all bytes written are ASCII digits or '-'.
     unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }
 }
 
-/// Formats an unsigned 64-bit integer into a stack buffer, returning the
-/// formatted string slice. Uses the 2-digit lookup table for speed.
+/// Writes the digits of a u64 into `buf` from the right, returning the start
+/// position. This is the shared core used by both signed and unsigned formatters.
 #[inline]
-fn write_u64_buf(buf: &mut [u8; 20], mut n: u64) -> &str {
-    if n == 0 {
-        return "0";
-    }
+fn write_u64_into(buf: &mut [u8; 20], mut n: u64) -> usize {
     let mut pos = buf.len();
-    // Process two digits at a time using the lookup table.
     while n >= 100 {
-        let rem = (n % 100) as usize;
+        // n % 100 is 0..99, guaranteed to fit in u8.
+        let rem = usize::from(u8::try_from(n % 100).unwrap());
         n /= 100;
         pos -= 2;
         buf[pos] = DIGIT_PAIRS[rem * 2];
         buf[pos + 1] = DIGIT_PAIRS[rem * 2 + 1];
     }
-    // Handle the last 1-2 digits.
+    // n is now 0..99.
+    let n = u8::try_from(n).unwrap();
     if n >= 10 {
-        let n = n as usize;
+        let idx = usize::from(n);
         pos -= 2;
-        buf[pos] = DIGIT_PAIRS[n * 2];
-        buf[pos + 1] = DIGIT_PAIRS[n * 2 + 1];
+        buf[pos] = DIGIT_PAIRS[idx * 2];
+        buf[pos + 1] = DIGIT_PAIRS[idx * 2 + 1];
     } else {
         pos -= 1;
-        buf[pos] = b'0' + n as u8;
+        buf[pos] = b'0' + n;
     }
+    pos
+}
+
+/// Formats an unsigned 64-bit integer into a stack buffer, returning the
+/// formatted string slice. Uses the 2-digit lookup table for speed.
+#[inline]
+fn write_u64_buf(buf: &mut [u8; 20], n: u64) -> &str {
+    if n == 0 {
+        return "0";
+    }
+    let pos = write_u64_into(buf, n);
     // SAFETY: all bytes written are ASCII.
     unsafe { std::str::from_utf8_unchecked(&buf[pos..]) }
 }
@@ -559,7 +550,11 @@ where
     // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
     // second() still returns 59, so we must detect and display 60.
     let nanos = t.nanosecond();
-    let secs = if nanos >= 1_000_000_000 { 60 } else { t.second() };
+    let secs = if nanos >= 1_000_000_000 {
+        60
+    } else {
+        t.second()
+    };
     let mut tmp = [0u8; 8];
     write_u2(&mut tmp, 0, t.hour());
     tmp[2] = b':';
@@ -568,8 +563,8 @@ where
     write_u2(&mut tmp, 6, secs);
     // SAFETY: all bytes are ASCII digits or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    // Strip leap-second encoding (nanos >= 1B) to get true fractional nanos.
-    format_nanos_to_micros(buf, nanos % 1_000_000_000);
+    // Preserve chrono-compatible leap-second formatting: 60.1234-style output.
+    format_nanos_to_micros(buf, nanos);
     Nestable::Yes
 }
 
@@ -592,7 +587,11 @@ where
     // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
     // second() still returns 59, so we must detect and display 60.
     let nanos = ts.nanosecond();
-    let secs = if nanos >= 1_000_000_000 { 60 } else { ts.second() };
+    let secs = if nanos >= 1_000_000_000 {
+        60
+    } else {
+        ts.second()
+    };
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
     let mut tmp = [0u8; 15];
     tmp[0] = b'-';
@@ -607,8 +606,8 @@ where
     write_u2(&mut tmp, 13, secs);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    // Strip leap-second encoding (nanos >= 1B) to get true fractional nanos.
-    format_nanos_to_micros(buf, nanos % 1_000_000_000);
+    // Preserve chrono-compatible leap-second formatting: 60.1234-style output.
+    format_nanos_to_micros(buf, nanos);
     if !year_ad {
         buf.write_str(" BC");
     }
@@ -656,7 +655,11 @@ where
     // Chrono encodes leap seconds with nanosecond >= 1_000_000_000;
     // second() still returns 59, so we must detect and display 60.
     let nanos = ts.nanosecond();
-    let secs = if nanos >= 1_000_000_000 { 60 } else { ts.second() };
+    let secs = if nanos >= 1_000_000_000 {
+        60
+    } else {
+        ts.second()
+    };
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
     let mut tmp = [0u8; 15];
     tmp[0] = b'-';
@@ -671,8 +674,8 @@ where
     write_u2(&mut tmp, 13, secs);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    // Strip leap-second encoding (nanos >= 1B) to get true fractional nanos.
-    format_nanos_to_micros(buf, nanos % 1_000_000_000);
+    // Preserve chrono-compatible leap-second formatting: 60.1234-style output.
+    format_nanos_to_micros(buf, nanos);
     buf.write_str("+00");
     if !year_ad {
         buf.write_str(" BC");
@@ -746,7 +749,7 @@ where
         if neg_months {
             buf.write_str("-");
         }
-        buf.write_str(write_i64_buf(&mut int_buf, years as i64));
+        buf.write_str(write_i64_buf(&mut int_buf, i64::from(years)));
         if years > 1 || neg_months {
             buf.write_str(" years");
         } else {
@@ -761,7 +764,7 @@ where
         if neg_months {
             buf.write_str("-");
         }
-        buf.write_str(write_i64_buf(&mut int_buf, months as i64));
+        buf.write_str(write_i64_buf(&mut int_buf, i64::from(months)));
         if months > 1 || neg_months {
             buf.write_str(" months");
         } else {
@@ -803,9 +806,9 @@ where
         buf.write_str(write_i64_buf(&mut int_buf, hours));
         let mut tmp = [0u8; 6];
         tmp[0] = b':';
-        write_u2(&mut tmp, 1, minutes as u32);
+        write_u2(&mut tmp, 1, u32::try_from(minutes).unwrap());
         tmp[3] = b':';
-        write_u2(&mut tmp, 4, secs as u32);
+        write_u2(&mut tmp, 4, u32::try_from(secs).unwrap());
         // SAFETY: all bytes are ASCII digits or ':'.
         buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
 
@@ -821,7 +824,7 @@ where
             // Write nanos right-aligned into frac_buf[1..1+width].
             let mut n = nanos;
             for i in (1..=width).rev() {
-                frac_buf[i] = b'0' + (n % 10) as u8;
+                frac_buf[i] = b'0' + u8::try_from(n % 10).unwrap();
                 n /= 10;
             }
             // SAFETY: all bytes are ASCII digits or '.'.
@@ -993,8 +996,8 @@ where
         let hex_len = chunk.len() * 2;
 
         for (i, &b) in chunk.iter().enumerate() {
-            hex_buf[i * 2] = HEX_CHARS[(b >> 4) as usize];
-            hex_buf[i * 2 + 1] = HEX_CHARS[(b & 0x0f) as usize];
+            hex_buf[i * 2] = HEX_CHARS[usize::from(b >> 4)];
+            hex_buf[i * 2 + 1] = HEX_CHARS[usize::from(b & 0x0f)];
         }
 
         // SAFETY: hex_buf contains only ASCII hex digits which are valid UTF-8.
@@ -1044,8 +1047,8 @@ where
 /// Writes a 2-digit zero-padded value (0-99) into `buf` at `offset`.
 #[inline(always)]
 fn write_u2(buf: &mut [u8], offset: usize, val: u32) {
-    buf[offset] = b'0' + (val / 10) as u8;
-    buf[offset + 1] = b'0' + (val % 10) as u8;
+    buf[offset] = b'0' + u8::try_from(val / 10).unwrap();
+    buf[offset + 1] = b'0' + u8::try_from(val % 10).unwrap();
 }
 
 /// Writes a year with at least 4-digit zero-padding directly to a FormatBuffer.
@@ -1054,10 +1057,10 @@ fn write_year<F: FormatBuffer>(buf: &mut F, year: u32) {
     // Common case: 4-digit year (covers 1000-9999).
     if year <= 9999 {
         let tmp = [
-            b'0' + (year / 1000) as u8,
-            b'0' + ((year / 100) % 10) as u8,
-            b'0' + ((year / 10) % 10) as u8,
-            b'0' + (year % 10) as u8,
+            b'0' + u8::try_from(year / 1000).unwrap(),
+            b'0' + u8::try_from((year / 100) % 10).unwrap(),
+            b'0' + u8::try_from((year / 10) % 10).unwrap(),
+            b'0' + u8::try_from(year % 10).unwrap(),
         ];
         // SAFETY: all bytes are ASCII digits.
         buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
@@ -1085,7 +1088,7 @@ where
         tmp[0] = b'.';
         let mut m = micros;
         for i in (1..=digits).rev() {
-            tmp[i] = b'0' + (m % 10) as u8;
+            tmp[i] = b'0' + u8::try_from(m % 10).unwrap();
             m /= 10;
         }
         // Strip trailing zeros (but keep at least one fractional digit).
@@ -2511,16 +2514,55 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_format_leap_second_fraction() {
+        let leap = NaiveDate::from_isoywd_opt(2019, 30, chrono::Weekday::Wed)
+            .unwrap()
+            .and_hms_milli_opt(23, 59, 59, 1234)
+            .unwrap();
+
+        let mut buf = String::new();
+        format_time(&mut buf, leap.time());
+        assert_eq!(buf, "23:59:60.1234");
+
+        buf.clear();
+        format_timestamp(&mut buf, &leap);
+        assert_eq!(buf, "2019-07-24 23:59:60.1234");
+
+        buf.clear();
+        let leap_tz = DateTime::<Utc>::from_naive_utc_and_offset(leap, Utc);
+        format_timestamptz(&mut buf, &leap_tz);
+        assert_eq!(buf, "2019-07-24 23:59:60.1234+00");
+    }
+
+    #[mz_ore::test]
     fn test_format_float64() {
         // Build expected values by checking what ryu actually outputs
         // and applying our transformations (strip ".0", insert "e+" for
         // positive exponents).
         let test_values: Vec<f64> = vec![
-            0.0, 1.0, -1.0, 42.0, 100.0, 3.14, std::f64::consts::PI,
-            0.001, 0.0001, 1e-7, 1.5e-10, -1.5e-10,
-            1e15, 1.5e15, 1e20, 1.23e100, -1.5e10,
-            999999.999, f64::MAX, f64::MIN_POSITIVE, 5e-324,
-            -42.5, -0.001,
+            0.0,
+            1.0,
+            -1.0,
+            42.0,
+            100.0,
+            3.125,
+            std::f64::consts::PI,
+            0.001,
+            0.0001,
+            1e-7,
+            1.5e-10,
+            -1.5e-10,
+            1e15,
+            1.5e15,
+            1e20,
+            1.23e100,
+            -1.5e10,
+            999999.999,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            5e-324,
+            -42.5,
+            -0.001,
         ];
         for val in &test_values {
             let mut buf = String::new();
@@ -2629,7 +2671,10 @@ mod tests {
             // With microseconds
             (Interval::new(0, 0, 1_500_000), "00:00:01.5"),
             // Complex with everything
-            (Interval::new(14, 3, 3_723_456_789), "1 year 2 months 3 days 01:02:03.456789"),
+            (
+                Interval::new(14, 3, 3_723_456_789),
+                "1 year 2 months 3 days 01:02:03.456789",
+            ),
             // Negative time
             (Interval::new(0, 0, -3_723_000_000), "-01:02:03"),
         ];
