@@ -99,7 +99,7 @@ steps:
       depends_on: build-x86_64
       timeout_in_minutes: 1440
       agents:
-        queue: hetzner-x86-64-16cpu-32gb
+        queue: hetzner-x86-64-12cpu-24gb
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
@@ -269,7 +269,7 @@ steps:
         agents:
           # no matching manifest of MySQL 5.7.x for linux/arm64/v8 in the manifest list entries
           # Increased memory usage following new source syntax
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc
@@ -345,7 +345,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -357,7 +357,7 @@ steps:
         timeout_in_minutes: 60
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -370,7 +370,7 @@ steps:
         timeout_in_minutes: 60
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -383,7 +383,7 @@ steps:
         timeout_in_minutes: 60
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -396,7 +396,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -408,7 +408,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -420,7 +420,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -432,7 +432,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -456,7 +456,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -468,7 +468,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -480,7 +480,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -490,7 +490,7 @@ steps:
     label: "Product limits (finding new limits)"
     depends_on: build-x86_64
     agents:
-      queue: hetzner-x86-64-16cpu-32gb
+      queue: hetzner-x86-64-12cpu-24gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: limits

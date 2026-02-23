@@ -633,7 +633,7 @@ steps:
         timeout_in_minutes: 120
         agents:
           # Flaky timeouts with smaller agent, SQL Server seems to use a lot of CPU
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -933,7 +933,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -945,7 +945,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -958,7 +958,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -976,7 +976,7 @@ steps:
         timeout_in_minutes: 45
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -993,7 +993,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1005,7 +1005,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1017,7 +1017,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1029,7 +1029,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1041,7 +1041,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1053,7 +1053,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1065,7 +1065,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1077,7 +1077,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 4
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1089,7 +1089,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 4
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1101,7 +1101,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1114,7 +1114,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1126,7 +1126,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1138,7 +1138,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1150,7 +1150,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1162,7 +1162,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1174,7 +1174,7 @@ steps:
         timeout_in_minutes: 120
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1217,7 +1217,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 3
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1228,7 +1228,7 @@ steps:
         depends_on: build-x86_64
         timeout_in_minutes: 180
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:
@@ -1241,7 +1241,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1254,7 +1254,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1267,7 +1267,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1279,7 +1279,7 @@ steps:
         timeout_in_minutes: 180
         parallelism: 2
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
@@ -1943,7 +1943,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1955,7 +1955,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1967,7 +1967,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1979,7 +1979,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -1992,7 +1992,7 @@ steps:
         timeout_in_minutes: 90
         agents:
           # Sporadic OoM otherwise
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -2005,7 +2005,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -2017,7 +2017,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -2029,7 +2029,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -2041,7 +2041,7 @@ steps:
         artifact_paths: [parallel-workload-queries.log.zst]
         timeout_in_minutes: 90
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -2054,7 +2054,7 @@ steps:
         timeout_in_minutes: 90
         skip: "TODO(def-): Properly stop all db actions during backup & restore"
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-workload
@@ -2297,7 +2297,7 @@ steps:
          depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-x86-64-16cpu-32gb
+           queue: hetzner-x86-64-12cpu-24gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition
@@ -2321,7 +2321,7 @@ steps:
          depends_on: build-x86_64
          timeout_in_minutes: 180
          agents:
-           queue: hetzner-x86-64-16cpu-32gb
+           queue: hetzner-x86-64-12cpu-24gb
          plugins:
            - ./ci/plugins/mzcompose:
                composition: race-condition

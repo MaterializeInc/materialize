@@ -334,6 +334,8 @@ def increase_agents_timeouts(
                     agent = "hetzner-x86-64-8cpu-16gb"
                 elif agent == "hetzner-x86-64-8cpu-16gb":
                     agent = "hetzner-x86-64-16cpu-32gb"
+                elif agent == "hetzner-x86-64-12cpu-24gb":
+                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
                 elif agent == "hetzner-x86-64-16cpu-32gb":
                     agent = "hetzner-x86-64-dedi-16cpu-64gb"
                 elif agent == "hetzner-x86-64-16cpu-64gb":
@@ -387,6 +389,7 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
         stuck = set(
             {
                 "hetzner-x86-64-16cpu-32gb",
+                "hetzner-x86-64-12cpu-24gb",
                 "hetzner-x86-64-8cpu-16gb",
                 "hetzner-x86-64-4cpu-8gb",
                 "hetzner-x86-64-2cpu-4gb",
@@ -507,7 +510,11 @@ def switch_jobs_to_aws(pipeline: Any, priority: int) -> None:
 
         elif agent in ("hetzner-x86-64-4cpu-8gb", "hetzner-x86-64-2cpu-4gb"):
             step["agents"]["queue"] = "linux-x86_64"
-        elif agent in ("hetzner-x86-64-8cpu-16gb", "hetzner-x86-64-16cpu-32gb"):
+        elif agent in (
+            "hetzner-x86-64-8cpu-16gb",
+            "hetzner-x86-64-12cpu-24gb",
+            "hetzner-x86-64-16cpu-32gb",
+        ):
             step["agents"]["queue"] = "linux-x86_64-medium"
         elif agent == "hetzner-x86-64-dedi-2cpu-8gb":
             step["agents"]["queue"] = "linux-x86_64"
