@@ -246,10 +246,16 @@ struct CreateSourceInner {
 }
 
 impl Coordinator {
-    /// Sequences the next staged of a [Staged] plan. This is designed for use with plans that
-    /// execute both on and off of the coordinator thread. Stages can either produce another stage
-    /// to execute or a final response. An explicit [Span] is passed to allow for convenient
-    /// tracing.
+    /// Sequences a [Staged] plan.
+    ///
+    /// This is designed for plans that execute both on and off the coordinator
+    /// thread. Stages can either produce another stage to execute or a final
+    /// response.
+    ///
+    /// While a stage is cancelable, this method installs a
+    /// connection-scoped cancel watch entry so background work can observe
+    /// cancellation requests consistently with other frontend/coordinator
+    /// sequencing paths.
     pub(crate) async fn sequence_staged<S>(
         &mut self,
         mut ctx: S::Ctx,
@@ -267,7 +273,7 @@ impl Coordinator {
                     // Channel to await cancellation. Insert a new channel, but check if the previous one
                     // was already canceled.
                     if let Some((_prev_tx, prev_rx)) = self
-                        .staged_cancellation
+                        .connection_cancel_watches
                         .insert(session.conn_id().clone(), watch::channel(false))
                     {
                         let was_canceled = *prev_rx.borrow();
@@ -279,7 +285,7 @@ impl Coordinator {
                 } else {
                     // If no cancel allowed, remove it so handle_spawn doesn't observe any previous value
                     // when cancel_enabled may have been true on an earlier stage.
-                    self.staged_cancellation.remove(session.conn_id());
+                    self.connection_cancel_watches.remove(session.conn_id());
                 }
             } else {
                 cancel_enabled = false
@@ -312,6 +318,8 @@ impl Coordinator {
         }
     }
 
+    /// Waits for either the spawned stage work to complete or cancellation to
+    /// be signaled through the connection-scoped cancel watch.
     fn handle_spawn<C, T, F>(
         &self,
         ctx: C,
@@ -325,7 +333,7 @@ impl Coordinator {
     {
         let rx: BoxFuture<()> = if let Some((_tx, rx)) = ctx
             .session()
-            .and_then(|session| self.staged_cancellation.get(session.conn_id()))
+            .and_then(|session| self.connection_cancel_watches.get(session.conn_id()))
         {
             let mut rx = rx.clone();
             Box::pin(async move {

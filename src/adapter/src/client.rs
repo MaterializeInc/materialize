@@ -575,6 +575,23 @@ pub struct SessionClient {
     pub enable_frontend_peek_sequencing: bool,
 }
 
+/// Keeps a connection cancel watch installed in the coordinator for the
+/// duration of a frontend read-then-write attempt.
+struct FrontendConnectionCancelWatchGuard {
+    conn_id: ConnectionId,
+    client: Option<Client>,
+}
+
+impl Drop for FrontendConnectionCancelWatchGuard {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            client.send(Command::UnregisterConnectionCancelWatch {
+                conn_id: self.conn_id.clone(),
+            });
+        }
+    }
+}
+
 impl SessionClient {
     /// Parses a SQL expression, reporting failures as a telemetry event if
     /// possible.
@@ -1076,6 +1093,8 @@ impl SessionClient {
                 | Command::UnregisterFrontendPeek { .. }
                 | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
+                | Command::RegisterConnectionCancelWatch { .. }
+                | Command::UnregisterConnectionCancelWatch { .. }
                 | Command::CreateInternalSubscribe { .. }
                 | Command::AttemptWrite { .. }
                 | Command::DropInternalSubscribe { .. } => {}
@@ -1183,6 +1202,8 @@ impl SessionClient {
         }
     }
 
+    /// Runs frontend read-then-write while reacting to both local/session
+    /// cancellation and coordinator-issued connection cancellation.
     async fn try_frontend_read_then_write_with_cancel(
         &mut self,
         portal_name: &str,
@@ -1190,8 +1211,43 @@ impl SessionClient {
         cancel_future: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let conn_id = self.session().conn_id().clone();
+
         let inner_client = self.inner().clone();
         let mut cancel_future = pin::pin!(cancel_future);
+
+        // Cancellation can arrive via two independent paths:
+        //
+        // 1) `cancel_future`: local/session-side cancellation (e.g. client
+        // connection closes). For this path we must still forward a privileged
+        // cancel to the coordinator so in-flight work owned there is canceled.
+        //
+        // 2) `connection_cancel`: coordinator-side cancellation (e.g.
+        // `pg_cancel_backend`) reflected through the connection cancel watch.
+        // This can trigger while frontend RTW is still planning or optimizing,
+        // before coordinator-owned subscribe/write steps are installed.
+        //
+        // We select on both so frontend RTW exits promptly regardless of where
+        // cancellation originated.
+
+        let mut connection_cancel_rx = self
+            .peek_client
+            .call_coordinator(|tx| Command::RegisterConnectionCancelWatch {
+                conn_id: conn_id.clone(),
+                tx,
+            })
+            .await;
+        let _connection_cancel_guard = FrontendConnectionCancelWatchGuard {
+            conn_id: conn_id.clone(),
+            client: Some(inner_client.clone()),
+        };
+        if *connection_cancel_rx.borrow() {
+            return Err(AdapterError::Canceled);
+        }
+        let connection_cancel = async move {
+            let _ = connection_cancel_rx.wait_for(|v| *v).await;
+        };
+        tokio::pin!(connection_cancel);
+
         let mut frontend_read_then_write =
             pin::pin!(self.try_frontend_read_then_write(portal_name, outer_ctx_extra));
 
@@ -1205,6 +1261,9 @@ impl SessionClient {
                     inner_client.send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
                     });
+                }
+                _ = &mut connection_cancel => {
+                    return Err(AdapterError::Canceled);
                 }
             }
         }

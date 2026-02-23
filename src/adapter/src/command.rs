@@ -41,7 +41,7 @@ use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -326,6 +326,21 @@ pub enum Command {
     /// No response channel needed - this is fire-and-forget.
     FrontendStatementLogging(FrontendStatementLoggingEvent),
 
+    /// Registers a connection-scoped cancellation watch and returns a receiver
+    /// that becomes `true` when cancellation is requested for the connection.
+    ///
+    /// This is shared by coordinator staged sequencing and frontend
+    /// read-then-write execution.
+    RegisterConnectionCancelWatch {
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<watch::Receiver<bool>>,
+    },
+
+    /// Unregisters a previously registered connection-scoped cancellation watch.
+    UnregisterConnectionCancelWatch {
+        conn_id: ConnectionId,
+    },
+
     /// Creates an internal subscribe (not visible in introspection) and returns
     /// the response channel. Initially used for frontend-sequenced
     /// read-then-write (DELETE/UPDATE/INSERT...SELECT) operations via OCC.
@@ -404,6 +419,8 @@ impl Command {
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
+            | Command::RegisterConnectionCancelWatch { .. }
+            | Command::UnregisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
             | Command::AttemptWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,
@@ -442,6 +459,8 @@ impl Command {
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
+            | Command::RegisterConnectionCancelWatch { .. }
+            | Command::UnregisterConnectionCancelWatch { .. }
             | Command::CreateInternalSubscribe { .. }
             | Command::AttemptWrite { .. }
             | Command::DropInternalSubscribe { .. } => None,

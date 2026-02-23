@@ -1230,14 +1230,16 @@ fn test_cancel_frontend_read_then_write_long_running_query() {
         .unwrap();
 
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
-    let cancel_thread = thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(200));
-        match shutdown_rx.try_recv() {
-            Ok(()) => return,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                let _ = cancel_token.cancel_query(postgres::NoTls);
+    let cancel_thread = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
         }
     });
 
@@ -1256,7 +1258,48 @@ fn test_cancel_frontend_read_then_write_long_running_query() {
         .query_one("SELECT count(*) FROM t", &[])
         .unwrap()
         .get::<_, i64>(0);
-    assert_eq!(rows, 1, "cancelled statement should not have committed writes");
+    assert_eq!(
+        rows, 1,
+        "cancelled statement should not have committed writes"
+    );
+
+    // NOTE: mz_sleep with a constant ts get's evaluated differently. This gives
+    // us additional coverage for cancelling at different moments in the
+    // processing pipeline.
+    let cancel_token = client.cancel_token();
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let cancel_thread = thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(200));
+            match shutdown_rx.try_recv() {
+                Ok(()) => return,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    let _ = cancel_token.cancel_query(postgres::NoTls);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
+    });
+
+    match client.batch_execute(
+        "INSERT INTO t SELECT a, CASE WHEN mz_unsafe.mz_sleep(10) > 0 THEN 0 END AS ts FROM t",
+    ) {
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {e:?}"),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    shutdown_tx.send(()).unwrap();
+    cancel_thread.join().unwrap();
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(
+        rows, 1,
+        "cancelled statement should not have committed writes"
+    );
 }
 
 fn test_cancellation_cancels_dataflows(query: &str) {
