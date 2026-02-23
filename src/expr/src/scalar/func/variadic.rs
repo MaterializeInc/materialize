@@ -17,7 +17,7 @@ use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
 use itertools::Itertools;
@@ -26,15 +26,18 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, ReinterpretCast};
 use mz_ore::soft_assert_or_log;
 use mz_pgtz::timezone::TimezoneSpec;
-use mz_repr::adt::array::{ArrayDimension, ArrayDimensions, InvalidArrayError};
+use mz_repr::adt::array::{Array, ArrayDimension, ArrayDimensions, InvalidArrayError};
+use mz_repr::adt::date::Date;
+use mz_repr::adt::interval::Interval;
+use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::adt::mz_acl_item::{AclItem, AclMode, MzAclItem};
 use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_bound_flags};
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, InputDatumType, OutputDatumType, ReprScalarType, Row, RowArena,
-    SqlColumnType, SqlScalarType,
+    AsColumnType, ColumnName, Datum, DatumList, InputDatumType, OptionalArg, OutputDatumType,
+    ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -234,6 +237,31 @@ impl fmt::Display for ArrayFill {
     }
 }
 
+impl EagerVariadicFunc for ArrayFill {
+    type Input<'a> = (Datum<'a>, Datum<'a>, OptionalArg<Datum<'a>>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (fill, dims, lower_bounds): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let mut datums = vec![fill, dims];
+        if let OptionalArg(Some(lb)) = lower_bounds {
+            datums.push(lb);
+        }
+        array_fill(&datums, temp_storage)
+    }
+
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+}
+
 fn array_fill<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -327,6 +355,45 @@ fn array_fill<'a>(
     })?)
 }
 
+impl EagerVariadicFunc for ArrayCreate {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(&self, datums: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a> {
+        // FIXME: Don't reallocate.
+        let datums = datums.iter().map(|d| *d).collect::<Vec<_>>();
+        match &self.elem_type {
+            SqlScalarType::Array(_) => array_create_multidim(&datums, temp_storage),
+            _ => array_create_scalar(&datums, temp_storage),
+        }
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        soft_assert_or_log!(
+            input_types.iter().all(|t| {
+                ReprScalarType::from(&self.elem_type)
+                    .union(&ReprScalarType::from(&t.scalar_type))
+                    .is_ok()
+            }),
+            "Args to ArrayCreate should have types that are repr-compatible with the elem_type.\
+            \nArgs:{input_types:#?}\nelem_type:{:#?}",
+            self.elem_type
+        );
+        match &self.elem_type {
+            SqlScalarType::Array(_) => self.elem_type.clone().nullable(false),
+            _ => SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false),
+        }
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+}
+
 #[derive(
     Ord,
     PartialOrd,
@@ -342,51 +409,79 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
+
 impl fmt::Display for ArrayIndex {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("array_index")
     }
 }
 
-fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
-    mz_ore::soft_assert_no_log!(offset == 0 || offset == 1, "offset must be either 0 or 1");
+impl EagerVariadicFunc for ArrayIndex {
+    type Input<'a> = (Array<'a>, Variadic<i64>);
+    type Output<'a> = Option<Datum<'a>>;
 
-    let array = datums[0].unwrap_array();
-    let dims = array.dims();
-    if dims.len() != datums.len() - 1 {
-        // You missed the datums "layer"
-        return Datum::Null;
-    }
+    fn call<'a>(
+        &self,
+        (array, indices): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        mz_ore::soft_assert_no_log!(
+            self.offset == 0 || self.offset == 1,
+            "offset must be either 0 or 1"
+        );
 
-    let mut final_idx = 0;
-
-    for (d, idx) in dims.into_iter().zip_eq(datums[1..].iter()) {
-        // Lower bound is written in terms of 1-based indexing, which offset accounts for.
-        let idx = isize::cast_from(idx.unwrap_int64() + offset);
-
-        let (lower, upper) = d.dimension_bounds();
-
-        // This index missed all of the data at this layer. The dimension bounds are inclusive,
-        // while range checks are exclusive, so adjust.
-        if !(lower..upper + 1).contains(&idx) {
-            return Datum::Null;
+        let dims = array.dims();
+        if dims.len() != indices.len() {
+            // You missed the datums "layer"
+            return None;
         }
 
-        // We discover how many indices our last index represents physically.
-        final_idx *= d.length;
+        let mut final_idx = 0;
 
-        // Because both index and lower bound are handled in 1-based indexing, taking their
-        // difference moves us back into 0-based indexing. Similarly, if the lower bound is
-        // negative, subtracting a negative value >= to itself ensures its non-negativity.
-        final_idx += usize::try_from(idx - d.lower_bound)
-            .expect("previous bounds check ensures phsical index is at least 0");
+        for (d, idx) in dims.into_iter().zip_eq(indices.iter()) {
+            // Lower bound is written in terms of 1-based indexing, which offset accounts for.
+            let idx = isize::cast_from(*idx + self.offset);
+
+            let (lower, upper) = d.dimension_bounds();
+
+            // This index missed all of the data at this layer. The dimension bounds are inclusive,
+            // while range checks are exclusive, so adjust.
+            if !(lower..upper + 1).contains(&idx) {
+                return None;
+            }
+
+            // We discover how many indices our last index represents physically.
+            final_idx *= d.length;
+
+            // Because both index and lower bound are handled in 1-based indexing, taking their
+            // difference moves us back into 0-based indexing. Similarly, if the lower bound is
+            // negative, subtracting a negative value >= to itself ensures its non-negativity.
+            final_idx += usize::try_from(idx - d.lower_bound)
+                .expect("previous bounds check ensures phsical index is at least 0");
+        }
+
+        array.elements().iter().nth(final_idx)
     }
 
-    array
-        .elements()
-        .iter()
-        .nth(final_idx)
-        .unwrap_or(Datum::Null)
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        input_types[0]
+            .scalar_type
+            .unwrap_array_element_type()
+            .clone()
+            .nullable(true)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -409,35 +504,47 @@ impl fmt::Display for ArrayPosition {
     }
 }
 
-fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let array = match datums[0] {
-        Datum::Null => return Ok(Datum::Null),
-        o => o.unwrap_array(),
-    };
+impl EagerVariadicFunc for ArrayPosition {
+    type Input<'a> = (Datum<'a>, Datum<'a>, OptionalArg<Datum<'a>>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
 
-    if array.dims().len() > 1 {
-        return Err(EvalError::MultiDimensionalArraySearch);
+    fn call<'a>(
+        &self,
+        (arr_datum, search, initial_pos): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let array = match arr_datum {
+            Datum::Null => return Ok(Datum::Null),
+            o => o.unwrap_array(),
+        };
+
+        if array.dims().len() > 1 {
+            return Err(EvalError::MultiDimensionalArraySearch);
+        }
+
+        if search == Datum::Null {
+            return Ok(Datum::Null);
+        }
+
+        let skip: usize = match initial_pos.0 {
+            Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".into())),
+            None => 0,
+            Some(o) => usize::try_from(o.unwrap_int32())
+                .unwrap_or(0)
+                .saturating_sub(1),
+        };
+
+        let r = array.elements().iter().skip(skip).position(|d| d == search);
+
+        Ok(Datum::from(r.map(|p| {
+            // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
+            i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
+        })))
     }
 
-    let search = datums[1];
-    if search == Datum::Null {
-        return Ok(Datum::Null);
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Int32.nullable(true)
     }
-
-    let skip: usize = match datums.get(2) {
-        Some(Datum::Null) => return Err(EvalError::MustNotBeNull("initial position".into())),
-        None => 0,
-        Some(o) => usize::try_from(o.unwrap_int32())
-            .unwrap_or(0)
-            .saturating_sub(1),
-    };
-
-    let r = array.elements().iter().skip(skip).position(|d| d == search);
-
-    Ok(Datum::from(r.map(|p| {
-        // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
-        i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
-    })))
 }
 
 #[derive(
@@ -465,38 +572,48 @@ impl fmt::Display for ArrayToString {
 // WARNING: This function has potential OOM risk!
 // It is very difficult to calculate the output size ahead of time without knowing how to
 // calculate the stringified size of each element for all possible datatypes.
-fn array_to_string<'a>(
-    datums: &[Datum<'a>],
-    elem_type: &SqlScalarType,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if datums[0].is_null() || datums[1].is_null() {
-        return Ok(Datum::Null);
-    }
-    let array = datums[0].unwrap_array();
-    let delimiter = datums[1].unwrap_str();
-    let null_str = match datums.get(2) {
-        None | Some(Datum::Null) => None,
-        Some(d) => Some(d.unwrap_str()),
-    };
+impl EagerVariadicFunc for ArrayToString {
+    type Input<'a> = (Array<'a>, &'a str, OptionalArg<Option<&'a str>>);
+    type Output<'a> = Result<String, EvalError>;
 
-    let mut out = String::new();
-    for elem in array.elements().iter() {
-        if elem.is_null() {
-            if let Some(null_str) = null_str {
-                out.push_str(null_str);
+    fn call<'a>(
+        &self,
+        (array, delimiter, OptionalArg(null_str)): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        // `flatten` treats absent arguments (`None`) the same as explicit NULL
+        // (`Some(None)`), both becoming `None`.
+        let null_str = null_str.flatten();
+        let mut out = String::new();
+        for elem in array.elements().iter() {
+            if elem.is_null() {
+                if let Some(null_str) = null_str {
+                    out.push_str(null_str);
+                    out.push_str(delimiter);
+                }
+            } else {
+                stringify_datum(&mut out, elem, &self.elem_type)?;
                 out.push_str(delimiter);
             }
-        } else {
-            stringify_datum(&mut out, elem, elem_type)?;
-            out.push_str(delimiter);
         }
+        if out.len() > 0 {
+            // Lop off last delimiter only if string is not empty
+            out.truncate(out.len() - delimiter.len());
+        }
+        Ok(out)
     }
-    if out.len() > 0 {
-        // Lop off last delimiter only if string is not empty
-        out.truncate(out.len() - delimiter.len());
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
     }
-    Ok(Datum::String(temp_storage.push_string(out)))
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -595,31 +712,48 @@ impl fmt::Display for RangeCreate {
     }
 }
 
-fn create_range<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let flags = match datums[2] {
-        Datum::Null => {
-            return Err(EvalError::InvalidRange(
-                InvalidRangeError::NullRangeBoundFlags,
-            ));
+impl EagerVariadicFunc for RangeCreate {
+    type Input<'a> = (Datum<'a>, Datum<'a>, Datum<'a>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (lower, upper, flags_datum): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let flags = match flags_datum {
+            Datum::Null => {
+                return Err(EvalError::InvalidRange(
+                    InvalidRangeError::NullRangeBoundFlags,
+                ));
+            }
+            o => o.unwrap_str(),
+        };
+
+        let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
+
+        let mut range = Range::new(Some((
+            RangeBound::new(lower, lower_inclusive),
+            RangeBound::new(upper, upper_inclusive),
+        )));
+
+        range.canonicalize()?;
+
+        Ok(temp_storage.make_datum(|row| {
+            row.push_range(range).expect("errors already handled");
+        }))
+    }
+
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Range {
+            element_type: Box::new(self.elem_type.clone()),
         }
-        o => o.unwrap_str(),
-    };
+        .nullable(false)
+    }
 
-    let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
-
-    let mut range = Range::new(Some((
-        RangeBound::new(datums[0], lower_inclusive),
-        RangeBound::new(datums[1], upper_inclusive),
-    )));
-
-    range.canonicalize()?;
-
-    Ok(temp_storage.make_datum(|row| {
-        row.push_range(range).expect("errors already handled");
-    }))
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -642,21 +776,33 @@ impl fmt::Display for DateDiffDate {
     }
 }
 
-fn date_diff_date<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
-        .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
+impl EagerVariadicFunc for DateDiffDate {
+    type Input<'a> = (&'a str, Date, Date);
+    type Output<'a> = Result<i64, EvalError>;
 
-    let a = a.unwrap_date();
-    let b = b.unwrap_date();
+    fn call<'a>(
+        &self,
+        (unit_str, a, b): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let unit = unit_str
+            .parse()
+            .map_err(|_| EvalError::InvalidDatePart(unit_str.into()))?;
 
-    // Convert the Date into a timestamp so we can calculate age.
-    let a_ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
-    let b_ts = CheckedTimestamp::try_from(NaiveDate::from(b).and_hms_opt(0, 0, 0).unwrap())?;
-    let diff = b_ts.diff_as(&a_ts, unit)?;
+        // Convert the Date into a timestamp so we can calculate age.
+        let a_ts = CheckedTimestamp::try_from(NaiveDate::from(a).and_hms_opt(0, 0, 0).unwrap())?;
+        let b_ts = CheckedTimestamp::try_from(NaiveDate::from(b).and_hms_opt(0, 0, 0).unwrap())?;
+        let diff = b_ts.diff_as(&a_ts, unit)?;
+        Ok(diff)
+    }
 
-    Ok(Datum::Int64(diff))
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -679,23 +825,35 @@ impl fmt::Display for DateDiffTime {
     }
 }
 
-fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
-        .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
+impl EagerVariadicFunc for DateDiffTime {
+    type Input<'a> = (&'a str, NaiveTime, NaiveTime);
+    type Output<'a> = Result<i64, EvalError>;
 
-    let a = a.unwrap_time();
-    let b = b.unwrap_time();
+    fn call<'a>(
+        &self,
+        (unit_str, a, b): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let unit = unit_str
+            .parse()
+            .map_err(|_| EvalError::InvalidDatePart(unit_str.into()))?;
 
-    // Convert the Time into a timestamp so we can calculate age.
-    let a_ts =
-        CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(a))?;
-    let b_ts =
-        CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(b))?;
-    let diff = b_ts.diff_as(&a_ts, unit)?;
+        // Convert the Time into a timestamp so we can calculate age.
+        let a_ts =
+            CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(a))?;
+        let b_ts =
+            CheckedTimestamp::try_from(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap().and_time(b))?;
+        let diff = b_ts.diff_as(&a_ts, unit)?;
+        Ok(diff)
+    }
 
-    Ok(Datum::Int64(diff))
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -718,17 +876,34 @@ impl fmt::Display for DateDiffTimestamp {
     }
 }
 
-fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
-        .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
+impl EagerVariadicFunc for DateDiffTimestamp {
+    type Input<'a> = (
+        &'a str,
+        CheckedTimestamp<NaiveDateTime>,
+        CheckedTimestamp<NaiveDateTime>,
+    );
+    type Output<'a> = Result<i64, EvalError>;
 
-    let a = a.unwrap_timestamp();
-    let b = b.unwrap_timestamp();
-    let diff = b.diff_as(&a, unit)?;
+    fn call<'a>(
+        &self,
+        (unit, a, b): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let unit = unit
+            .parse()
+            .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
 
-    Ok(Datum::Int64(diff))
+        let diff = b.diff_as(&a, unit)?;
+        Ok(diff)
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -751,17 +926,33 @@ impl fmt::Display for DateDiffTimestampTz {
     }
 }
 
-fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
-    let unit = unit.unwrap_str();
-    let unit = unit
-        .parse()
-        .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
+impl EagerVariadicFunc for DateDiffTimestampTz {
+    type Input<'a> = (
+        &'a str,
+        CheckedTimestamp<DateTime<Utc>>,
+        CheckedTimestamp<DateTime<Utc>>,
+    );
+    type Output<'a> = Result<i64, EvalError>;
 
-    let a = a.unwrap_timestamptz();
-    let b = b.unwrap_timestamptz();
-    let diff = b.diff_as(&a, unit)?;
+    fn call<'a>(
+        &self,
+        (unit, a, b): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let unit = unit
+            .parse()
+            .map_err(|_| EvalError::InvalidDatePart(unit.into()))?;
+        let diff = b.diff_as(&a, unit)?;
+        Ok(diff)
+    }
 
-    Ok(Datum::Int64(diff))
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -900,14 +1091,27 @@ impl fmt::Display for HmacString {
     }
 }
 
-pub fn hmac_string<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = datums[0].unwrap_str().as_bytes();
-    let key = datums[1].unwrap_str().as_bytes();
-    let typ = datums[2].unwrap_str();
-    hmac_inner(to_digest, key, typ, temp_storage)
+impl EagerVariadicFunc for HmacString {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<&'a [u8], EvalError>;
+
+    fn call<'a>(
+        &self,
+        (to_digest, key, typ): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let to_digest = to_digest.as_bytes();
+        let key = key.as_bytes();
+        hmac_inner(to_digest, key, typ, temp_storage)
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -930,14 +1134,25 @@ impl fmt::Display for HmacBytes {
     }
 }
 
-pub fn hmac_bytes<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = datums[0].unwrap_bytes();
-    let key = datums[1].unwrap_bytes();
-    let typ = datums[2].unwrap_str();
-    hmac_inner(to_digest, key, typ, temp_storage)
+impl EagerVariadicFunc for HmacBytes {
+    type Input<'a> = (&'a [u8], &'a [u8], &'a str);
+    type Output<'a> = Result<&'a [u8], EvalError>;
+
+    fn call<'a>(
+        &self,
+        (to_digest, key, typ): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        hmac_inner(to_digest, key, typ, temp_storage)
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 pub fn hmac_inner<'a>(
@@ -945,7 +1160,7 @@ pub fn hmac_inner<'a>(
     key: &[u8],
     typ: &str,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<&'a [u8], EvalError> {
     let bytes = match typ {
         "md5" => {
             let mut mac = Hmac::<Md5>::new_from_slice(key).expect("HMAC accepts any key size");
@@ -979,7 +1194,7 @@ pub fn hmac_inner<'a>(
         }
         other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
     };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+    Ok(temp_storage.push_bytes(bytes))
 }
 
 #[derive(
@@ -1002,13 +1217,27 @@ impl fmt::Display for JsonbBuildArray {
     }
 }
 
-fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
-        packer.push_list(datums.into_iter().map(|d| match d {
-            Datum::Null => Datum::JsonNull,
-            d => *d,
-        }))
-    })
+impl EagerVariadicFunc for JsonbBuildArray {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = JsonbRef<'a>;
+
+    fn call<'a>(&self, datums: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a> {
+        let datum = temp_storage.make_datum(|packer| {
+            packer.push_list(datums.into_iter().map(|d| match d {
+                Datum::Null => Datum::JsonNull,
+                d => d,
+            }))
+        });
+        JsonbRef::from_datum(datum)
+    }
+
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Jsonb.nullable(true)
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -1031,30 +1260,39 @@ impl fmt::Display for JsonbBuildObject {
     }
 }
 
-fn jsonb_build_object<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let mut kvs = datums.chunks(2).collect::<Vec<_>>();
-    kvs.sort_by(|kv1, kv2| kv1[0].cmp(&kv2[0]));
-    kvs.dedup_by(|kv1, kv2| kv1[0] == kv2[0]);
-    temp_storage.try_make_datum(|packer| {
-        packer.push_dict_with(|packer| {
-            for kv in kvs {
-                let k = kv[0];
-                if k.is_null() {
-                    return Err(EvalError::KeyCannotBeNull);
-                };
-                let v = match kv[1] {
-                    Datum::Null => Datum::JsonNull,
-                    d => d,
-                };
-                packer.push(k);
-                packer.push(v);
-            }
-            Ok(())
-        })
-    })
+impl EagerVariadicFunc for JsonbBuildObject {
+    type Input<'a> = Variadic<(Datum<'a>, Datum<'a>)>;
+    type Output<'a> = Result<JsonbRef<'a>, EvalError>;
+
+    fn call<'a>(&self, mut kvs: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a> {
+        kvs.0.sort_by(|kv1, kv2| kv1.0.cmp(&kv2.0));
+        kvs.0.dedup_by(|kv1, kv2| kv1.0 == kv2.0);
+        let datum = temp_storage.try_make_datum(|packer| {
+            packer.push_dict_with(|packer| {
+                for (k, v) in kvs {
+                    if k.is_null() {
+                        return Err(EvalError::KeyCannotBeNull);
+                    }
+                    let v = match v {
+                        Datum::Null => Datum::JsonNull,
+                        d => d,
+                    };
+                    packer.push(k);
+                    packer.push(v);
+                }
+                Ok(())
+            })
+        })?;
+        Ok(JsonbRef::from_datum(datum))
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -1138,6 +1376,40 @@ impl fmt::Display for ListCreate {
     }
 }
 
+impl EagerVariadicFunc for ListCreate {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = Datum<'a>;
+
+    fn call<'a>(&self, datums: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a> {
+        temp_storage.make_datum(|packer| packer.push_list(datums))
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        soft_assert_or_log!(
+            input_types.iter().all(|t| {
+                ReprScalarType::from(&self.elem_type)
+                    .union(&ReprScalarType::from(&t.scalar_type))
+                    .is_ok()
+            }),
+            "Args to ListCreate should have types that are compatible with the elem_type.\nArgs:{input_types:#?}\nelem_type:{:#?}",
+            self.elem_type
+        );
+        SqlScalarType::List {
+            element_type: Box::new(self.elem_type.clone()),
+            custom_id: None,
+        }
+        .nullable(false)
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+}
+
 #[derive(
     Ord,
     PartialOrd,
@@ -1160,8 +1432,34 @@ impl fmt::Display for RecordCreate {
     }
 }
 
-fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums))
+impl EagerVariadicFunc for RecordCreate {
+    type Input<'a> = Variadic<Datum<'a>>;
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(&self, datums: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a> {
+        Ok(temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied())))
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Record {
+            fields: self
+                .field_names
+                .clone()
+                .into_iter()
+                .zip_eq(input_types)
+                .collect(),
+            custom_id: None,
+        }
+        .nullable(false)
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -1183,28 +1481,47 @@ impl fmt::Display for ListIndex {
         f.write_str("list_index")
     }
 }
+
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    let mut buf = datums[0];
+impl EagerVariadicFunc for ListIndex {
+    type Input<'a> = (DatumList<'a>, Variadic<i64>);
+    type Output<'a> = Datum<'a>;
 
-    for i in datums[1..].iter() {
-        if buf.is_null() {
-            break;
+    fn call<'a>(
+        &self,
+        (buf, indices): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let mut buf = Datum::List(buf);
+        for i in indices {
+            if i < 1 {
+                return Datum::Null;
+            }
+
+            buf = match buf.unwrap_list().iter().nth(i as usize - 1) {
+                Some(datum) => datum,
+                None => return Datum::Null,
+            }
         }
-
-        let i = i.unwrap_int64();
-        if i < 1 {
-            return Datum::Null;
-        }
-
-        buf = buf
-            .unwrap_list()
-            .iter()
-            .nth(i as usize - 1)
-            .unwrap_or(Datum::Null);
+        buf
     }
-    buf
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        input_types[0]
+            .scalar_type
+            .unwrap_list_nth_layer_type(input_types.len() - 1)
+            .clone()
+            .nullable(true)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -1227,25 +1544,37 @@ impl fmt::Display for MakeAclItem {
     }
 }
 
-fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let grantee = Oid(datums[0].unwrap_uint32());
-    let grantor = Oid(datums[1].unwrap_uint32());
-    let privileges = datums[2].unwrap_str();
-    let acl_mode = AclMode::parse_multiple_privileges(privileges)
-        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
-    let is_grantable = datums[3].unwrap_bool();
-    if is_grantable {
-        return Err(EvalError::Unsupported {
-            feature: "GRANT OPTION".into(),
-            discussion_no: None,
-        });
+impl EagerVariadicFunc for MakeAclItem {
+    type Input<'a> = (u32, u32, &'a str, bool);
+    type Output<'a> = Result<AclItem, EvalError>;
+
+    fn call<'a>(&self, input: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
+        let (grantee_oid, grantor_oid, privileges, is_grantable) = input;
+        let grantee = Oid(grantee_oid);
+        let grantor = Oid(grantor_oid);
+        let acl_mode = AclMode::parse_multiple_privileges(privileges)
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
+        if is_grantable {
+            return Err(EvalError::Unsupported {
+                feature: "GRANT OPTION".into(),
+                discussion_no: None,
+            });
+        }
+
+        Ok(AclItem {
+            grantee,
+            grantor,
+            acl_mode,
+        })
     }
 
-    Ok(Datum::AclItem(AclItem {
-        grantee,
-        grantor,
-        acl_mode,
-    }))
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -1268,29 +1597,43 @@ impl fmt::Display for MakeMzAclItem {
     }
 }
 
-fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let grantee: RoleId = datums[0]
-        .unwrap_str()
-        .parse()
-        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
-    let grantor: RoleId = datums[1]
-        .unwrap_str()
-        .parse()
-        .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
-    if grantor == RoleId::Public {
-        return Err(EvalError::InvalidRoleId(
-            "mz_aclitem grantor cannot be PUBLIC role".into(),
-        ));
-    }
-    let privileges = datums[2].unwrap_str();
-    let acl_mode = AclMode::parse_multiple_privileges(privileges)
-        .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
+impl EagerVariadicFunc for MakeMzAclItem {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<MzAclItem, EvalError>;
 
-    Ok(Datum::MzAclItem(MzAclItem {
-        grantee,
-        grantor,
-        acl_mode,
-    }))
+    fn call<'a>(
+        &self,
+        (grantee_str, grantor_str, privileges): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let grantee: RoleId = grantee_str
+            .parse()
+            .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
+        let grantor: RoleId = grantor_str
+            .parse()
+            .map_err(|e: anyhow::Error| EvalError::InvalidRoleId(e.to_string().into()))?;
+        if grantor == RoleId::Public {
+            return Err(EvalError::InvalidRoleId(
+                "mz_aclitem grantor cannot be PUBLIC role".into(),
+            ));
+        }
+        let acl_mode = AclMode::parse_multiple_privileges(privileges)
+            .map_err(|e: anyhow::Error| EvalError::InvalidPrivileges(e.to_string().into()))?;
+
+        Ok(MzAclItem {
+            grantee,
+            grantor,
+            acl_mode,
+        })
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -1315,39 +1658,55 @@ impl fmt::Display for MakeTimestamp {
 
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let year: i32 = match datums[0].unwrap_int64().try_into() {
-        Ok(year) => year,
-        Err(_) => return Ok(Datum::Null),
-    };
-    let month: u32 = match datums[1].unwrap_int64().try_into() {
-        Ok(month) => month,
-        Err(_) => return Ok(Datum::Null),
-    };
-    let day: u32 = match datums[2].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
-    };
-    let hour: u32 = match datums[3].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
-    };
-    let minute: u32 = match datums[4].unwrap_int64().try_into() {
-        Ok(day) => day,
-        Err(_) => return Ok(Datum::Null),
-    };
-    let second_float = datums[5].unwrap_float64();
-    let second = second_float as u32;
-    let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
-    let date = match NaiveDate::from_ymd_opt(year, month, day) {
-        Some(date) => date,
-        None => return Ok(Datum::Null),
-    };
-    let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
-        Some(timestamp) => timestamp,
-        None => return Ok(Datum::Null),
-    };
-    Ok(timestamp.try_into()?)
+impl EagerVariadicFunc for MakeTimestamp {
+    type Input<'a> = (i64, i64, i64, i64, i64, f64);
+    type Output<'a> = Result<Option<CheckedTimestamp<NaiveDateTime>>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (year, month, day, hour, minute, second_float): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let year: i32 = match year.try_into() {
+            Ok(year) => year,
+            Err(_) => return Ok(None),
+        };
+        let month: u32 = match month.try_into() {
+            Ok(month) => month,
+            Err(_) => return Ok(None),
+        };
+        let day: u32 = match day.try_into() {
+            Ok(day) => day,
+            Err(_) => return Ok(None),
+        };
+        let hour: u32 = match hour.try_into() {
+            Ok(hour) => hour,
+            Err(_) => return Ok(None),
+        };
+        let minute: u32 = match minute.try_into() {
+            Ok(minute) => minute,
+            Err(_) => return Ok(None),
+        };
+        let second = second_float as u32;
+        let micros = ((second_float - second as f64) * 1_000_000.0) as u32;
+        let date = match NaiveDate::from_ymd_opt(year, month, day) {
+            Some(date) => date,
+            None => return Ok(None),
+        };
+        let timestamp = match date.and_hms_micro_opt(hour, minute, second, micros) {
+            Some(timestamp) => timestamp,
+            None => return Ok(None),
+        };
+        Ok(Some(timestamp.try_into()?))
+    }
+
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        Self::Output::as_column_type().nullable(true)
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -1372,21 +1731,34 @@ impl fmt::Display for MapBuild {
     }
 }
 
-fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    // Collect into a `BTreeMap` to provide the same semantics as it.
-    let map: std::collections::BTreeMap<&str, _> = datums
-        .into_iter()
-        .tuples()
-        .filter_map(|(k, v)| {
-            if k.is_null() {
-                None
-            } else {
-                Some((k.unwrap_str(), v))
-            }
-        })
-        .collect();
+impl EagerVariadicFunc for MapBuild {
+    type Input<'a> = Variadic<(Option<&'a str>, Datum<'a>)>;
+    type Output<'a> = Result<Datum<'a>, EvalError>;
 
-    temp_storage.make_datum(|packer| packer.push_dict(map))
+    fn call<'a>(&self, datums: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a> {
+        let map: std::collections::BTreeMap<&str, _> = datums
+            .into_iter()
+            .filter_map(|(k, v)| k.map(|k| (k, v)))
+            .collect();
+
+        Ok(temp_storage.make_datum(|packer| packer.push_dict(map)))
+    }
+
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Map {
+            value_type: Box::new(self.value_type.clone()),
+            custom_id: None,
+        }
+        .nullable(true)
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -1486,44 +1858,52 @@ impl fmt::Display for PadLeading {
     }
 }
 
-fn pad_leading<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
+impl EagerVariadicFunc for PadLeading {
+    type Input<'a> = (&'a str, i32, OptionalArg<&'a str>);
+    type Output<'a> = Result<&'a str, EvalError>;
 
-    let len = match usize::try_from(datums[1].unwrap_int32()) {
-        Ok(len) => len,
-        Err(_) => {
-            return Err(EvalError::InvalidParameterValue(
-                "length must be nonnegative".into(),
-            ));
+    fn call<'a>(
+        &self,
+        (string, raw_len, pad): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let len = match usize::try_from(raw_len) {
+            Ok(len) => len,
+            Err(_) => {
+                return Err(EvalError::InvalidParameterValue(
+                    "length must be nonnegative".into(),
+                ));
+            }
+        };
+        if len > MAX_STRING_FUNC_RESULT_BYTES {
+            return Err(EvalError::LengthTooLarge);
         }
-    };
-    if len > MAX_STRING_FUNC_RESULT_BYTES {
-        return Err(EvalError::LengthTooLarge);
+
+        let pad_string = pad.unwrap_or(" ");
+
+        let (end_char, end_char_byte_offset) = string
+            .chars()
+            .take(len)
+            .fold((0, 0), |acc, char| (acc.0 + 1, acc.1 + char.len_utf8()));
+
+        let mut buf = String::with_capacity(len);
+        if len == end_char {
+            buf.push_str(&string[0..end_char_byte_offset]);
+        } else {
+            buf.extend(pad_string.chars().cycle().take(len - end_char));
+            buf.push_str(string);
+        }
+
+        Ok(temp_storage.push_string(buf))
     }
 
-    let pad_string = if datums.len() == 3 {
-        datums[2].unwrap_str()
-    } else {
-        " "
-    };
-
-    let (end_char, end_char_byte_offset) = string
-        .chars()
-        .take(len)
-        .fold((0, 0), |acc, char| (acc.0 + 1, acc.1 + char.len_utf8()));
-
-    let mut buf = String::with_capacity(len);
-    if len == end_char {
-        buf.push_str(&string[0..end_char_byte_offset]);
-    } else {
-        buf.extend(pad_string.chars().cycle().take(len - end_char));
-        buf.push_str(string);
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
     }
-
-    Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
 #[derive(
@@ -1546,18 +1926,27 @@ impl fmt::Display for RegexpMatch {
     }
 }
 
-fn regexp_match_dynamic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let haystack = datums[0];
-    let needle = datums[1].unwrap_str();
-    let flags = match datums.get(2) {
-        Some(d) => d.unwrap_str(),
-        None => "",
-    };
-    let needle = build_regex(needle, flags)?;
-    regexp_match_static(haystack, temp_storage, &needle)
+impl EagerVariadicFunc for RegexpMatch {
+    type Input<'a> = (&'a str, &'a str, OptionalArg<&'a str>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (haystack, needle, flags): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let flags = flags.unwrap_or("");
+        let needle = build_regex(needle, flags)?;
+        regexp_match_static(Datum::String(haystack), temp_storage, &needle)
+    }
+
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -1580,17 +1969,31 @@ impl fmt::Display for RegexpSplitToArray {
     }
 }
 
-fn regexp_split_to_array<'a>(
-    text: Datum<'a>,
-    regexp: Datum<'a>,
-    flags: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let text = text.unwrap_str();
-    let regexp = regexp.unwrap_str();
-    let flags = flags.unwrap_str();
-    let regexp = build_regex(regexp, flags)?;
-    regexp_split_to_array_re(text, &regexp, temp_storage)
+impl EagerVariadicFunc for RegexpSplitToArray {
+    type Input<'a> = (&'a str, &'a str, OptionalArg<&'a str>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (text, regexp_str, flags): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let flags = flags.unwrap_or("");
+        let regexp = build_regex(regexp_str, flags)?;
+        regexp_split_to_array_re(text, &regexp, temp_storage)
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable =
+            LazyVariadicFunc::introduces_nulls(self) || (propagates_nulls && in_nullable);
+        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(nullable)
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -1613,24 +2016,28 @@ impl fmt::Display for RegexpReplace {
     }
 }
 
-fn regexp_replace_dynamic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let source = datums[0];
-    let pattern = datums[1];
-    let replacement = datums[2];
-    let flags = match datums.get(3) {
-        Some(d) => d.unwrap_str(),
-        None => "",
-    };
-    let (limit, flags) = regexp_replace_parse_flags(flags);
-    let regexp = build_regex(pattern.unwrap_str(), &flags)?;
-    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
-        Cow::Borrowed(s) => s,
-        Cow::Owned(s) => temp_storage.push_string(s),
-    };
-    Ok(Datum::String(replaced))
+impl EagerVariadicFunc for RegexpReplace {
+    type Input<'a> = (&'a str, &'a str, &'a str, OptionalArg<&'a str>);
+    type Output<'a> = Result<Cow<'a, str>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (source, pattern, replacement, flags_opt): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let flags = flags_opt.0.unwrap_or("");
+        let (limit, flags) = regexp_replace_parse_flags(flags);
+        let regexp = build_regex(pattern, &flags)?;
+        Ok(regexp.replacen(source, limit, replacement))
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -1653,28 +2060,82 @@ impl fmt::Display for Replace {
     }
 }
 
-fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
-    // we first check if its possible for the fully replaced string to exceed the limit by assuming that
-    // every possible substring is replaced.
-    //
-    // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
-    // the actual number of replacements that would occur, and using that to calculate the final size.
-    let text = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str();
-    let to = datums[2].unwrap_str();
-    let possible_size = text.len() * to.len();
-    if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
-        let replacement_count = text.matches(from).count();
-        let estimated_size = text.len() + replacement_count * (to.len().saturating_sub(from.len()));
-        if estimated_size > MAX_STRING_FUNC_RESULT_BYTES {
-            return Err(EvalError::LengthTooLarge);
+impl EagerVariadicFunc for Replace {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<String, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (text, from, to): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
+        // we first check if it's possible for the fully replaced string to exceed the limit by assuming that
+        // every possible substring is replaced.
+        //
+        // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
+        // the actual number of replacements that would occur, and using that to calculate the final size.
+        let possible_size = text.len() * to.len();
+        if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
+            let replacement_count = text.matches(from).count();
+            let estimated_size =
+                text.len() + replacement_count * (to.len().saturating_sub(from.len()));
+            if estimated_size > MAX_STRING_FUNC_RESULT_BYTES {
+                return Err(EvalError::LengthTooLarge);
+            }
         }
+
+        Ok(text.replace(from, to))
     }
 
-    Ok(Datum::String(
-        temp_storage.push_string(text.replace(from, to)),
-    ))
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+}
+
+fn string_to_array_impl<'a>(
+    string: &str,
+    delimiter: &str,
+    null_string: Option<&'a str>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+
+    let result = string.split(delimiter);
+    let found: Vec<&str> = if delimiter.is_empty() {
+        result.filter(|s| !s.is_empty()).collect()
+    } else {
+        result.collect()
+    };
+    let array_dimensions = [ArrayDimension {
+        lower_bound: 1,
+        length: found.len(),
+    }];
+
+    if let Some(null_string) = null_string {
+        let found_datums = found.into_iter().map(|chunk| {
+            if chunk.eq(null_string) {
+                Datum::Null
+            } else {
+                Datum::String(chunk)
+            }
+        });
+
+        packer.try_push_array(&array_dimensions, found_datums)?;
+    } else {
+        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
+    }
+
+    Ok(temp_storage.push_unary_row(row))
 }
 
 #[derive(
@@ -1697,86 +2158,57 @@ impl fmt::Display for StringToArray {
     }
 }
 
-fn string_to_array<'a>(
-    string_datum: Datum<'a>,
-    delimiter: Datum<'a>,
-    null_string: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if string_datum.is_null() {
-        return Ok(Datum::Null);
+impl EagerVariadicFunc for StringToArray {
+    type Input<'a> = (&'a str, Option<&'a str>, OptionalArg<Option<&'a str>>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (string, delimiter, null_string): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        if string.is_empty() {
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.try_push_array(&[], std::iter::empty::<Datum>())?;
+
+            return Ok(temp_storage.push_unary_row(row));
+        }
+
+        let Some(delimiter) = delimiter else {
+            let split_all_chars_delimiter = "";
+            return string_to_array_impl(
+                string,
+                split_all_chars_delimiter,
+                null_string.flatten(),
+                temp_storage,
+            );
+        };
+
+        if delimiter.is_empty() {
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.try_push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: 1,
+                }],
+                vec![string].into_iter().map(Datum::String),
+            )?;
+
+            Ok(temp_storage.push_unary_row(row))
+        } else {
+            string_to_array_impl(string, delimiter, null_string.flatten(), temp_storage)
+        }
     }
 
-    let string = string_datum.unwrap_str();
-
-    if string.is_empty() {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.try_push_array(&[], std::iter::empty::<Datum>())?;
-
-        return Ok(temp_storage.push_unary_row(row));
+    fn output_type(&self, _input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)
     }
 
-    if delimiter.is_null() {
-        let split_all_chars_delimiter = "";
-        return string_to_array_impl(string, split_all_chars_delimiter, null_string, temp_storage);
+    fn introduces_nulls(&self) -> bool {
+        true
     }
-
-    let delimiter = delimiter.unwrap_str();
-
-    if delimiter.is_empty() {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        packer.try_push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: 1,
-            }],
-            vec![string].into_iter().map(Datum::String),
-        )?;
-
-        Ok(temp_storage.push_unary_row(row))
-    } else {
-        string_to_array_impl(string, delimiter, null_string, temp_storage)
-    }
-}
-
-fn string_to_array_impl<'a>(
-    string: &str,
-    delimiter: &str,
-    null_string: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let mut row = Row::default();
-    let mut packer = row.packer();
-
-    let result = string.split(delimiter);
-    let found: Vec<&str> = if delimiter.is_empty() {
-        result.filter(|s| !s.is_empty()).collect()
-    } else {
-        result.collect()
-    };
-    let array_dimensions = [ArrayDimension {
-        lower_bound: 1,
-        length: found.len(),
-    }];
-
-    if null_string.is_null() {
-        packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
-    } else {
-        let null_string = null_string.unwrap_str();
-        let found_datums = found.into_iter().map(|chunk| {
-            if chunk.eq(null_string) {
-                Datum::Null
-            } else {
-                Datum::String(chunk)
-            }
-        });
-
-        packer.try_push_array(&array_dimensions, found_datums)?;
-    }
-
-    Ok(temp_storage.push_unary_row(row))
 }
 
 #[derive(
@@ -1799,55 +2231,70 @@ impl fmt::Display for Substr {
     }
 }
 
-fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let s: &'a str = datums[0].unwrap_str();
+impl EagerVariadicFunc for Substr {
+    type Input<'a> = (&'a str, i32, OptionalArg<i32>);
+    type Output<'a> = Result<&'a str, EvalError>;
 
-    let raw_start_idx = i64::from(datums[1].unwrap_int32()) - 1;
-    let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
-        Ok(i) => i,
-        Err(_) => {
-            return Err(EvalError::InvalidParameterValue(
-                format!(
-                    "substring starting index ({}) exceeds min/max position",
-                    raw_start_idx
-                )
-                .into(),
-            ));
-        }
-    };
-
-    let mut char_indices = s.char_indices();
-    let get_str_index = |(index, _char)| index;
-
-    let str_len = s.len();
-    let start_char_idx = char_indices.nth(start_idx).map_or(str_len, get_str_index);
-
-    if datums.len() == 3 {
-        let end_idx = match i64::from(datums[2].unwrap_int32()) {
-            e if e < 0 => {
+    fn call<'a>(
+        &self,
+        (s, start, length): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let raw_start_idx = i64::from(start) - 1;
+        let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
+            Ok(i) => i,
+            Err(_) => {
                 return Err(EvalError::InvalidParameterValue(
-                    "negative substring length not allowed".into(),
+                    format!(
+                        "substring starting index ({}) exceeds min/max position",
+                        raw_start_idx
+                    )
+                    .into(),
                 ));
-            }
-            e if e == 0 || e + raw_start_idx < 1 => return Ok(Datum::String("")),
-            e => {
-                let e = cmp::min(raw_start_idx + e - 1, e - 1);
-                match usize::try_from(e) {
-                    Ok(i) => i,
-                    Err(_) => {
-                        return Err(EvalError::InvalidParameterValue(
-                            format!("substring length ({}) exceeds max position", e).into(),
-                        ));
-                    }
-                }
             }
         };
 
-        let end_char_idx = char_indices.nth(end_idx).map_or(str_len, get_str_index);
+        let mut char_indices = s.char_indices();
+        let get_str_index = |(index, _char)| index;
 
-        Ok(Datum::String(&s[start_char_idx..end_char_idx]))
-    } else {
-        Ok(Datum::String(&s[start_char_idx..]))
+        let str_len = s.len();
+        let start_char_idx = char_indices.nth(start_idx).map_or(str_len, get_str_index);
+
+        if let OptionalArg(Some(len)) = length {
+            let end_idx = match i64::from(len) {
+                e if e < 0 => {
+                    return Err(EvalError::InvalidParameterValue(
+                        "negative substring length not allowed".into(),
+                    ));
+                }
+                e if e == 0 || e + raw_start_idx < 1 => return Ok(""),
+                e => {
+                    let e = cmp::min(raw_start_idx + e - 1, e - 1);
+                    match usize::try_from(e) {
+                        Ok(i) => i,
+                        Err(_) => {
+                            return Err(EvalError::InvalidParameterValue(
+                                format!("substring length ({}) exceeds max position", e).into(),
+                            ));
+                        }
+                    }
+                }
+            };
+
+            let end_char_idx = char_indices.nth(end_idx).map_or(str_len, get_str_index);
+
+            Ok(&s[start_char_idx..end_char_idx])
+        } else {
+            Ok(&s[start_char_idx..])
+        }
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
     }
 }
 
@@ -1871,36 +2318,47 @@ impl fmt::Display for SplitPart {
     }
 }
 
-fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
-    let string = datums[0].unwrap_str();
-    let delimiter = datums[1].unwrap_str();
+impl EagerVariadicFunc for SplitPart {
+    type Input<'a> = (&'a str, &'a str, i32);
+    type Output<'a> = Result<&'a str, EvalError>;
 
-    // Provided index value begins at 1, not 0.
-    let index = match usize::try_from(i64::from(datums[2].unwrap_int32()) - 1) {
-        Ok(index) => index,
-        Err(_) => {
-            return Err(EvalError::InvalidParameterValue(
-                "field position must be greater than zero".into(),
-            ));
-        }
-    };
+    fn call<'a>(
+        &self,
+        (string, delimiter, field): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let index = match usize::try_from(i64::from(field) - 1) {
+            Ok(index) => index,
+            Err(_) => {
+                return Err(EvalError::InvalidParameterValue(
+                    "field position must be greater than zero".into(),
+                ));
+            }
+        };
 
-    // If the provided delimiter is the empty string,
-    // PostgreSQL does not break the string into individual
-    // characters. Instead, it generates the following parts: [string].
-    if delimiter.is_empty() {
-        if index == 0 {
-            return Ok(datums[0]);
-        } else {
-            return Ok(Datum::String(""));
+        // If the provided delimiter is the empty string,
+        // PostgreSQL does not break the string into individual
+        // characters. Instead, it generates the following parts: [string].
+        if delimiter.is_empty() {
+            if index == 0 {
+                return Ok(string);
+            } else {
+                return Ok("");
+            }
         }
+
+        // If provided index is greater than the number of split parts,
+        // return an empty string.
+        Ok(string.split(delimiter).nth(index).unwrap_or(""))
     }
 
-    // If provided index is greater than the number of split parts,
-    // return an empty string.
-    Ok(Datum::String(
-        string.split(delimiter).nth(index).unwrap_or(""),
-    ))
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 }
 
 #[derive(
@@ -1923,26 +2381,44 @@ impl fmt::Display for Concat {
     }
 }
 
-fn text_concat_variadic<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let mut total_size = 0;
-    for d in datums {
-        if !d.is_null() {
-            total_size += d.unwrap_str().len();
-            if total_size > MAX_STRING_FUNC_RESULT_BYTES {
-                return Err(EvalError::LengthTooLarge);
+impl EagerVariadicFunc for Concat {
+    type Input<'a> = Variadic<Option<&'a str>>;
+    type Output<'a> = Result<String, EvalError>;
+
+    fn call<'a>(&self, strs: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
+        let mut total_size = 0;
+        for s in &strs {
+            if let Some(s) = s {
+                total_size += s.len();
+                if total_size > MAX_STRING_FUNC_RESULT_BYTES {
+                    return Err(EvalError::LengthTooLarge);
+                }
             }
         }
-    }
-    let mut buf = String::new();
-    for d in datums {
-        if !d.is_null() {
-            buf.push_str(d.unwrap_str());
+        let mut buf = String::with_capacity(total_size);
+        for s in strs {
+            if let Some(s) = s {
+                buf.push_str(s);
+            }
         }
+        Ok(buf)
     }
-    Ok(Datum::String(temp_storage.push_string(buf)))
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -1965,35 +2441,46 @@ impl fmt::Display for ConcatWs {
     }
 }
 
-fn text_concat_ws<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let ws = match datums[0] {
-        Datum::Null => return Ok(Datum::Null),
-        d => d.unwrap_str(),
-    };
+impl EagerVariadicFunc for ConcatWs {
+    type Input<'a> = (&'a str, Variadic<Option<&'a str>>);
+    type Output<'a> = Result<String, EvalError>;
 
-    let mut total_size = 0;
-    for d in &datums[1..] {
-        if !d.is_null() {
-            total_size += d.unwrap_str().len();
-            total_size += ws.len();
-            if total_size > MAX_STRING_FUNC_RESULT_BYTES {
-                return Err(EvalError::LengthTooLarge);
+    fn call<'a>(
+        &self,
+        (ws, rest): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let mut total_size = 0;
+        for s in &rest {
+            if let Some(s) = s {
+                total_size += s.len();
+                total_size += ws.len();
+                if total_size > MAX_STRING_FUNC_RESULT_BYTES {
+                    return Err(EvalError::LengthTooLarge);
+                }
             }
         }
+
+        let buf = Itertools::join(&mut rest.into_iter().filter_map(|s| s), ws);
+
+        Ok(buf)
     }
 
-    let buf = Itertools::join(
-        &mut datums[1..].iter().filter_map(|d| match d {
-            Datum::Null => None,
-            d => Some(d.unwrap_str()),
-        }),
-        ws,
-    );
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
 
-    Ok(Datum::String(temp_storage.push_string(buf)))
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(
@@ -2016,22 +2503,38 @@ impl fmt::Display for Translate {
     }
 }
 
-fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    let string = datums[0].unwrap_str();
-    let from = datums[1].unwrap_str().chars().collect::<Vec<_>>();
-    let to = datums[2].unwrap_str().chars().collect::<Vec<_>>();
+impl EagerVariadicFunc for Translate {
+    type Input<'a> = (&'a str, &'a str, &'a str);
+    type Output<'a> = Result<String, EvalError>;
 
-    Datum::String(
-        temp_storage.push_string(
-            string
-                .chars()
-                .filter_map(|c| match from.iter().position(|f| f == &c) {
-                    Some(idx) => to.get(idx).copied(),
-                    None => Some(c),
-                })
-                .collect(),
-        ),
-    )
+    fn call<'a>(
+        &self,
+        (string, from_str, to_str): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        let from = from_str.chars().collect::<Vec<_>>();
+        let to = to_str.chars().collect::<Vec<_>>();
+
+        Ok(string
+            .chars()
+            .filter_map(|c| match from.iter().position(|f| f == &c) {
+                Some(idx) => to.get(idx).copied(),
+                None => Some(c),
+            })
+            .collect())
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
 }
 
 // TODO ///
@@ -2058,56 +2561,70 @@ impl fmt::Display for ListSliceLinear {
 
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
-fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    assert_eq!(
-        datums.len() % 2,
-        1,
-        "expr::scalar::func::list_slice expects an odd number of arguments; 1 for list + 2 \
-        for each start-end pair"
-    );
-    assert!(
-        datums.len() > 2,
-        "expr::scalar::func::list_slice expects at least 3 arguments; 1 for list + at least \
-        one start-end pair"
-    );
+impl EagerVariadicFunc for ListSliceLinear {
+    type Input<'a> = (DatumList<'a>, Variadic<(i64, i64)>);
+    type Output<'a> = Result<Datum<'a>, EvalError>;
 
-    let mut start_idx = 0;
-    let mut total_length = usize::MAX;
+    fn call<'a>(
+        &self,
+        (list, slices): Self::Input<'a>,
+        temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        assert!(
+            slices.len() >= 1,
+            "expr::scalar::func::list_slice expects at least 3 arguments; 1 for list + at least \
+            one start-end pair"
+        );
 
-    for (start, end) in datums[1..].iter().tuples::<(_, _)>() {
-        let start = std::cmp::max(start.unwrap_int64(), 1);
-        let end = end.unwrap_int64();
+        let mut start_idx = 0;
+        let mut total_length = usize::MAX;
 
-        // Result should be empty list.
-        if start > end {
-            start_idx = 0;
-            total_length = 0;
-            break;
+        for (start, end) in slices {
+            let start = std::cmp::max(start, 1);
+
+            // Result should be empty list.
+            if start > end {
+                start_idx = 0;
+                total_length = 0;
+                break;
+            }
+
+            let start_inner = start as usize - 1;
+            // Start index only moves to geq positions.
+            start_idx += start_inner;
+
+            // Length index only moves to leq positions
+            let length_inner = (end - start) as usize + 1;
+            total_length = std::cmp::min(length_inner, total_length - start_inner);
         }
 
-        let start_inner = start as usize - 1;
-        // Start index only moves to geq positions.
-        start_idx += start_inner;
+        let iter = list.iter().skip(start_idx).take(total_length);
 
-        // Length index only moves to leq positions
-        let length_inner = (end - start) as usize + 1;
-        total_length = std::cmp::min(length_inner, total_length - start_inner);
+        Ok(temp_storage.make_datum(|row| {
+            row.push_list_with(|row| {
+                // if iter is empty, will get the appropriate empty list.
+                for d in iter {
+                    row.push(d);
+                }
+            });
+        }))
     }
 
-    let iter = datums[0]
-        .unwrap_list()
-        .iter()
-        .skip(start_idx)
-        .take(total_length);
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable =
+            LazyVariadicFunc::introduces_nulls(self) || (propagates_nulls && in_nullable);
+        input_types[0].scalar_type.clone().nullable(nullable)
+    }
 
-    temp_storage.make_datum(|row| {
-        row.push_list_with(|row| {
-            // if iter is empty, will get the appropriate empty list.
-            for d in iter {
-                row.push(d);
-            }
-        });
-    })
+    fn propagates_nulls(&self) -> bool {
+        true
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
 }
 
 #[derive(
@@ -2127,6 +2644,31 @@ pub struct DateBinTimestamp;
 impl fmt::Display for DateBinTimestamp {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("timestamp_bin")
+    }
+}
+
+impl EagerVariadicFunc for DateBinTimestamp {
+    type Input<'a> = (
+        Interval,
+        CheckedTimestamp<NaiveDateTime>,
+        CheckedTimestamp<NaiveDateTime>,
+    );
+    type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (stride, source, origin): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        date_bin(stride, source, origin)
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
     }
 }
 
@@ -2150,6 +2692,31 @@ impl fmt::Display for DateBinTimestampTz {
     }
 }
 
+impl EagerVariadicFunc for DateBinTimestampTz {
+    type Input<'a> = (
+        Interval,
+        CheckedTimestamp<DateTime<Utc>>,
+        CheckedTimestamp<DateTime<Utc>>,
+    );
+    type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (stride, source, origin): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        date_bin(stride, source, origin)
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
+    }
+}
+
 #[derive(
     Ord,
     PartialOrd,
@@ -2167,6 +2734,28 @@ pub struct TimezoneTime;
 impl fmt::Display for TimezoneTime {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("timezonet")
+    }
+}
+
+impl EagerVariadicFunc for TimezoneTime {
+    type Input<'a> = (&'a str, NaiveTime, CheckedTimestamp<DateTime<Utc>>);
+    type Output<'a> = Result<NaiveTime, EvalError>;
+
+    fn call<'a>(
+        &self,
+        (tz_str, time, wall_time): Self::Input<'a>,
+        _temp_storage: &'a RowArena,
+    ) -> Self::Output<'a> {
+        parse_timezone(tz_str, TimezoneSpec::Posix)
+            .map(|tz| timezone_time(tz, time, &wall_time.naive_utc()))
+    }
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = LazyVariadicFunc::propagates_nulls(self);
+        let nullable = output.nullable;
+        output.nullable(nullable || (propagates_nulls && in_nullable))
     }
 }
 
@@ -2361,95 +2950,79 @@ impl VariadicFunc {
             _ => {}
         };
 
-        // Compute parameters to eager functions
-        let ds = exprs
-            .iter()
-            .map(|e| e.eval(datums, temp_storage))
-            .collect::<Result<Vec<_>, _>>()?;
-        // Check NULL propagation
-        if self.propagates_nulls() && ds.iter().any(|d| d.is_null()) {
-            return Ok(Datum::Null);
-        }
-
-        // Evaluate eager functions
+        // All remaining functions are eager and use the blanket LazyVariadicFunc impl
         match self {
+            // These were handled above
             VariadicFunc::Coalesce(_)
             | VariadicFunc::Greatest(_)
             | VariadicFunc::And(_)
             | VariadicFunc::Or(_)
             | VariadicFunc::ErrorIfNull(_)
             | VariadicFunc::Least(_) => unreachable!(),
-            VariadicFunc::Concat(_) => text_concat_variadic(&ds, temp_storage),
-            VariadicFunc::ConcatWs(_) => text_concat_ws(&ds, temp_storage),
-            VariadicFunc::MakeTimestamp(_) => make_timestamp(&ds),
-            VariadicFunc::PadLeading(_) => pad_leading(&ds, temp_storage),
-            VariadicFunc::Substr(_) => substr(&ds),
-            VariadicFunc::Replace(_) => replace(&ds, temp_storage),
-            VariadicFunc::Translate(_) => Ok(translate(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildArray(_) => Ok(jsonb_build_array(&ds, temp_storage)),
-            VariadicFunc::JsonbBuildObject(_) => jsonb_build_object(&ds, temp_storage),
-            VariadicFunc::MapBuild(..) => Ok(map_build(&ds, temp_storage)),
-            VariadicFunc::ArrayCreate(ArrayCreate {
-                elem_type: SqlScalarType::Array(_),
-            }) => array_create_multidim(&ds, temp_storage),
-            VariadicFunc::ArrayCreate(..) => array_create_scalar(&ds, temp_storage),
-            VariadicFunc::ArrayToString(ArrayToString { elem_type }) => {
-                array_to_string(&ds, elem_type, temp_storage)
+            // All eager functions delegate through the blanket impl
+            VariadicFunc::Concat(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::ConcatWs(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::MakeTimestamp(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
             }
-            VariadicFunc::ArrayIndex(ArrayIndex { offset }) => Ok(array_index(&ds, *offset)),
-            VariadicFunc::ListCreate(..) | VariadicFunc::RecordCreate(..) => {
-                Ok(list_create(&ds, temp_storage))
+            VariadicFunc::PadLeading(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::Substr(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::Replace(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::Translate(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::JsonbBuildArray(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
             }
-            VariadicFunc::ListIndex(_) => Ok(list_index(&ds)),
-            VariadicFunc::ListSliceLinear(_) => Ok(list_slice_linear(&ds, temp_storage)),
-            VariadicFunc::SplitPart(_) => split_part(&ds),
-            VariadicFunc::RegexpMatch(_) => regexp_match_dynamic(&ds, temp_storage),
-            VariadicFunc::HmacString(_) => hmac_string(&ds, temp_storage),
-            VariadicFunc::HmacBytes(_) => hmac_bytes(&ds, temp_storage),
-            VariadicFunc::DateBinTimestamp(_) => date_bin(
-                ds[0].unwrap_interval(),
-                ds[1].unwrap_timestamp(),
-                ds[2].unwrap_timestamp(),
-            )
-            .into_result(temp_storage),
-            VariadicFunc::DateBinTimestampTz(_) => date_bin(
-                ds[0].unwrap_interval(),
-                ds[1].unwrap_timestamptz(),
-                ds[2].unwrap_timestamptz(),
-            )
-            .into_result(temp_storage),
-            VariadicFunc::DateDiffTimestamp(_) => date_diff_timestamp(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTimestampTz(_) => date_diff_timestamptz(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffDate(_) => date_diff_date(ds[0], ds[1], ds[2]),
-            VariadicFunc::DateDiffTime(_) => date_diff_time(ds[0], ds[1], ds[2]),
-            VariadicFunc::RangeCreate(..) => create_range(&ds, temp_storage),
-            VariadicFunc::MakeAclItem(_) => make_acl_item(&ds),
-            VariadicFunc::MakeMzAclItem(_) => make_mz_acl_item(&ds),
-            VariadicFunc::ArrayPosition(_) => array_position(&ds),
-            VariadicFunc::ArrayFill(..) => array_fill(&ds, temp_storage),
-            VariadicFunc::TimezoneTime(_) => {
-                parse_timezone(ds[0].unwrap_str(), TimezoneSpec::Posix).map(|tz| {
-                    timezone_time(
-                        tz,
-                        ds[1].unwrap_time(),
-                        &ds[2].unwrap_timestamptz().naive_utc(),
-                    )
-                    .into()
-                })
+            VariadicFunc::JsonbBuildObject(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
             }
-            VariadicFunc::RegexpSplitToArray(_) => {
-                let flags = if ds.len() == 2 {
-                    Datum::String("")
-                } else {
-                    ds[2]
-                };
-                regexp_split_to_array(ds[0], ds[1], flags, temp_storage)
+            VariadicFunc::MapBuild(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::ArrayCreate(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::ArrayToString(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
             }
-            VariadicFunc::RegexpReplace(_) => regexp_replace_dynamic(&ds, temp_storage),
-            VariadicFunc::StringToArray(_) => {
-                let null_string = if ds.len() == 2 { Datum::Null } else { ds[2] };
-
-                string_to_array(ds[0], ds[1], null_string, temp_storage)
+            VariadicFunc::ArrayIndex(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::ListCreate(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::RecordCreate(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::ListIndex(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::ListSliceLinear(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::SplitPart(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::RegexpMatch(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::HmacString(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::HmacBytes(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::DateBinTimestamp(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::DateBinTimestampTz(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::DateDiffTimestamp(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::DateDiffTimestampTz(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::DateDiffDate(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::DateDiffTime(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::RangeCreate(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::MakeAclItem(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::MakeMzAclItem(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::ArrayPosition(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::ArrayFill(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::TimezoneTime(f) => LazyVariadicFunc::eval(f, datums, temp_storage, exprs),
+            VariadicFunc::RegexpSplitToArray(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::RegexpReplace(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
+            }
+            VariadicFunc::StringToArray(f) => {
+                LazyVariadicFunc::eval(f, datums, temp_storage, exprs)
             }
         }
     }
