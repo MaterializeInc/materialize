@@ -16,25 +16,31 @@
 # Instead, we should set "offset_committed" to the dataflow's "resume_lsn" as soon as the responsible worker starts up.
 # This is a more accurate representation of how much catching up the replica has to do.
 
+# IMPORTANT: The Postgres server has a custom pg_hba.conf that only
+# accepts connections from specific users. You will have to update
+# pg_hba.conf if you modify the existing user names or add new ones.
+
+> CREATE SECRET pgpass AS 'postgres'
+> CREATE CONNECTION pg TO POSTGRES (
+    HOST postgres,
+    DATABASE postgres,
+    USER postgres,
+    PASSWORD SECRET pgpass
+  )
+
 # Load up a table with a lot of data.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER USER postgres WITH replication;
+DROP SCHEMA IF EXISTS public CASCADE;
+CREATE SCHEMA public;
+
 DROP PUBLICATION IF EXISTS mz_source;
-DROP TABLE IF EXISTS t0;
+CREATE PUBLICATION mz_source FOR ALL TABLES;
+
 CREATE TABLE t0 (f1 INTEGER, f2 TEXT);
 ALTER TABLE t0 REPLICA IDENTITY FULL;
 
 INSERT INTO t0 SELECT i, repeat(md5(i::text), 1000) FROM generate_series(1, 10000) AS i;
-
-# Configure PostgreSQL
-$ postgres-connect name=pg_source url=postgres://postgres:postgres@postgres
-$ postgres-execute connection=pg_source
-DROP USER IF EXISTS materialize;
-CREATE USER materialize PASSWORD 'materialize';
-ALTER USER materialize REPLICATION;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO materialize;
-GRANT USAGE ON SCHEMA public TO materialize;
-
-CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 # Configure Materialize
 
@@ -42,19 +48,6 @@ $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdri
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET storage_statistics_collection_interval = 100
 ALTER SYSTEM SET storage_statistics_interval = 200
-
-> DROP SECRET IF EXISTS pgpass CASCADE;
-> DROP CONNECTION IF EXISTS pg CASCADE;
-
-> CREATE SECRET pgpass AS 'materialize'
-> CREATE CONNECTION pg TO POSTGRES (
-    HOST postgres,
-    DATABASE postgres,
-    USER materialize,
-    PASSWORD SECRET pgpass
-  );
-
-> DROP SOURCE IF EXISTS mz_source CASCADE;
 
 > BEGIN
 > CREATE SOURCE mz_source
