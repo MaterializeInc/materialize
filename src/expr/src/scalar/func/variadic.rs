@@ -46,6 +46,26 @@ use crate::func::{
 };
 use crate::{EvalError, MirScalarExpr};
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct And;
+
+impl fmt::Display for And {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("AND")
+    }
+}
+
 pub fn and<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -68,6 +88,28 @@ pub fn and<'a>(
         (Some(err), _) => Err(err),
         (None, true) => Ok(Datum::Null),
         (None, false) => Ok(Datum::True),
+    }
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ArrayCreate {
+    pub elem_type: SqlScalarType,
+}
+
+impl fmt::Display for ArrayCreate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("array_create")
     }
 }
 
@@ -135,6 +177,28 @@ fn array_create_multidim<'a>(
     let datum =
         temp_storage.try_make_datum(move |packer| packer.try_push_array(&dims, elements))?;
     Ok(datum)
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ArrayFill {
+    pub elem_type: SqlScalarType,
+}
+
+impl fmt::Display for ArrayFill {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("array_fill")
+    }
 }
 
 fn array_fill<'a>(
@@ -230,6 +294,27 @@ fn array_fill<'a>(
     })?)
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ArrayIndex {
+    pub offset: i64,
+}
+impl fmt::Display for ArrayIndex {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("array_index")
+    }
+}
+
 fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
     mz_ore::soft_assert_no_log!(offset == 0 || offset == 1, "offset must be either 0 or 1");
 
@@ -271,6 +356,26 @@ fn array_index<'a>(datums: &[Datum<'a>], offset: i64) -> Datum<'a> {
         .unwrap_or(Datum::Null)
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ArrayPosition;
+
+impl fmt::Display for ArrayPosition {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("array_position")
+    }
+}
+
 fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let array = match datums[0] {
         Datum::Null => return Ok(Datum::Null),
@@ -300,6 +405,28 @@ fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         // Adjust count for the amount we skipped, plus 1 for adjustng to PG indexing scheme.
         i32::try_from(p + skip + 1).expect("fewer than i32::MAX elements in array")
     })))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ArrayToString {
+    pub elem_type: SqlScalarType,
+}
+
+impl fmt::Display for ArrayToString {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("array_to_string")
+    }
 }
 
 // WARNING: This function has potential OOM risk!
@@ -339,6 +466,26 @@ fn array_to_string<'a>(
     Ok(Datum::String(temp_storage.push_string(out)))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Coalesce;
+
+impl fmt::Display for Coalesce {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("coalesce")
+    }
+}
+
 fn coalesce<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -351,6 +498,36 @@ fn coalesce<'a>(
         }
     }
     Ok(Datum::Null)
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct RangeCreate {
+    pub elem_type: SqlScalarType,
+}
+
+impl fmt::Display for RangeCreate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match &self.elem_type {
+            SqlScalarType::Int32 => "int4range",
+            SqlScalarType::Int64 => "int8range",
+            SqlScalarType::Date => "daterange",
+            SqlScalarType::Numeric { .. } => "numrange",
+            SqlScalarType::Timestamp { .. } => "tsrange",
+            SqlScalarType::TimestampTz { .. } => "tstzrange",
+            _ => unreachable!(),
+        })
+    }
 }
 
 fn create_range<'a>(
@@ -380,6 +557,26 @@ fn create_range<'a>(
     }))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct DateDiffDate;
+
+impl fmt::Display for DateDiffDate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("datediff")
+    }
+}
+
 fn date_diff_date<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
     let unit = unit.unwrap_str();
     let unit = unit
@@ -395,6 +592,26 @@ fn date_diff_date<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
     let diff = b_ts.diff_as(&a_ts, unit)?;
 
     Ok(Datum::Int64(diff))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct DateDiffTime;
+
+impl fmt::Display for DateDiffTime {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("datediff")
+    }
 }
 
 fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
@@ -416,6 +633,26 @@ fn date_diff_time<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, Eval
     Ok(Datum::Int64(diff))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct DateDiffTimestamp;
+
+impl fmt::Display for DateDiffTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("datediff")
+    }
+}
+
 fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
     let unit = unit.unwrap_str();
     let unit = unit
@@ -429,6 +666,26 @@ fn date_diff_timestamp<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>,
     Ok(Datum::Int64(diff))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct DateDiffTimestampTz;
+
+impl fmt::Display for DateDiffTimestampTz {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("datediff")
+    }
+}
+
 fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a>, EvalError> {
     let unit = unit.unwrap_str();
     let unit = unit
@@ -440,6 +697,26 @@ fn date_diff_timestamptz<'a>(unit: Datum, a: Datum, b: Datum) -> Result<Datum<'a
     let diff = b.diff_as(&a, unit)?;
 
     Ok(Datum::Int64(diff))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ErrorIfNull;
+
+impl fmt::Display for ErrorIfNull {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("error_if_null")
+    }
 }
 
 fn error_if_null<'a>(
@@ -464,6 +741,26 @@ fn error_if_null<'a>(
     }
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Greatest;
+
+impl fmt::Display for Greatest {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("greatest")
+    }
+}
+
 fn greatest<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -476,6 +773,26 @@ fn greatest<'a>(
         .unwrap_or(Datum::Null))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct HmacString;
+
+impl fmt::Display for HmacString {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("hmac")
+    }
+}
+
 pub fn hmac_string<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -484,6 +801,26 @@ pub fn hmac_string<'a>(
     let key = datums[1].unwrap_str().as_bytes();
     let typ = datums[2].unwrap_str();
     hmac_inner(to_digest, key, typ, temp_storage)
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct HmacBytes;
+
+impl fmt::Display for HmacBytes {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("hmac")
+    }
 }
 
 pub fn hmac_bytes<'a>(
@@ -538,6 +875,26 @@ pub fn hmac_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct JsonbBuildArray;
+
+impl fmt::Display for JsonbBuildArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("jsonb_build_array")
+    }
+}
+
 fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().map(|d| match d {
@@ -545,6 +902,26 @@ fn jsonb_build_array<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
             d => *d,
         }))
     })
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct JsonbBuildObject;
+
+impl fmt::Display for JsonbBuildObject {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("jsonb_build_object")
+    }
 }
 
 fn jsonb_build_object<'a>(
@@ -573,6 +950,26 @@ fn jsonb_build_object<'a>(
     })
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Least;
+
+impl fmt::Display for Least {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("least")
+    }
+}
+
 fn least<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -585,10 +982,73 @@ fn least<'a>(
         .unwrap_or(Datum::Null))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ListCreate {
+    pub elem_type: SqlScalarType,
+}
+
+impl fmt::Display for ListCreate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("list_create")
+    }
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct RecordCreate {
+    pub field_names: Vec<ColumnName>,
+}
+
+impl fmt::Display for RecordCreate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("record_create")
+    }
+}
+
 fn list_create<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     temp_storage.make_datum(|packer| packer.push_list(datums))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ListIndex;
+
+impl fmt::Display for ListIndex {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("list_index")
+    }
+}
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
@@ -613,6 +1073,26 @@ fn list_index<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
     buf
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct MakeAclItem;
+
+impl fmt::Display for MakeAclItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("makeaclitem")
+    }
+}
+
 fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let grantee = Oid(datums[0].unwrap_uint32());
     let grantor = Oid(datums[1].unwrap_uint32());
@@ -632,6 +1112,26 @@ fn make_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         grantor,
         acl_mode,
     }))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct MakeMzAclItem;
+
+impl fmt::Display for MakeMzAclItem {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("make_mz_aclitem")
+    }
 }
 
 fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
@@ -657,6 +1157,26 @@ fn make_mz_acl_item<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
         grantor,
         acl_mode,
     }))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct MakeTimestamp;
+
+impl fmt::Display for MakeTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("makets")
+    }
 }
 
 // TODO(benesch): remove potentially dangerous usage of `as`.
@@ -696,6 +1216,28 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     Ok(timestamp.try_into()?)
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct MapBuild {
+    pub value_type: SqlScalarType,
+}
+
+impl fmt::Display for MapBuild {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("map_build")
+    }
+}
+
 fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     // Collect into a `BTreeMap` to provide the same semantics as it.
     let map: std::collections::BTreeMap<&str, _> = datums
@@ -711,6 +1253,26 @@ fn map_build<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
         .collect();
 
     temp_storage.make_datum(|packer| packer.push_dict(map))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Or;
+
+impl fmt::Display for Or {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("OR")
+    }
 }
 
 pub fn or<'a>(
@@ -735,6 +1297,26 @@ pub fn or<'a>(
         (Some(err), _) => Err(err),
         (None, true) => Ok(Datum::Null),
         (None, false) => Ok(Datum::False),
+    }
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct PadLeading;
+
+impl fmt::Display for PadLeading {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("lpad")
     }
 }
 
@@ -778,6 +1360,26 @@ fn pad_leading<'a>(
     Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct RegexpMatch;
+
+impl fmt::Display for RegexpMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("regexp_match")
+    }
+}
+
 fn regexp_match_dynamic<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -792,6 +1394,26 @@ fn regexp_match_dynamic<'a>(
     regexp_match_static(haystack, temp_storage, &needle)
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct RegexpSplitToArray;
+
+impl fmt::Display for RegexpSplitToArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("regexp_split_to_array")
+    }
+}
+
 fn regexp_split_to_array<'a>(
     text: Datum<'a>,
     regexp: Datum<'a>,
@@ -803,6 +1425,26 @@ fn regexp_split_to_array<'a>(
     let flags = flags.unwrap_str();
     let regexp = build_regex(regexp, flags)?;
     regexp_split_to_array_re(text, &regexp, temp_storage)
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct RegexpReplace;
+
+impl fmt::Display for RegexpReplace {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("regexp_replace")
+    }
 }
 
 fn regexp_replace_dynamic<'a>(
@@ -823,6 +1465,26 @@ fn regexp_replace_dynamic<'a>(
         Cow::Owned(s) => temp_storage.push_string(s),
     };
     Ok(Datum::String(replaced))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Replace;
+
+impl fmt::Display for Replace {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("replace")
+    }
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
@@ -847,6 +1509,26 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum
     Ok(Datum::String(
         temp_storage.push_string(text.replace(from, to)),
     ))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct StringToArray;
+
+impl fmt::Display for StringToArray {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("string_to_array")
+    }
 }
 
 fn string_to_array<'a>(
@@ -931,6 +1613,26 @@ fn string_to_array_impl<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Substr;
+
+impl fmt::Display for Substr {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("substr")
+    }
+}
+
 fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let s: &'a str = datums[0].unwrap_str();
 
@@ -983,6 +1685,26 @@ fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     }
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct SplitPart;
+
+impl fmt::Display for SplitPart {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("split_string")
+    }
+}
+
 fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     let string = datums[0].unwrap_str();
     let delimiter = datums[1].unwrap_str();
@@ -1015,6 +1737,26 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Concat;
+
+impl fmt::Display for Concat {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("concat")
+    }
+}
+
 fn text_concat_variadic<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
@@ -1035,6 +1777,26 @@ fn text_concat_variadic<'a>(
         }
     }
     Ok(Datum::String(temp_storage.push_string(buf)))
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ConcatWs;
+
+impl fmt::Display for ConcatWs {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("concat_ws")
+    }
 }
 
 fn text_concat_ws<'a>(
@@ -1068,6 +1830,26 @@ fn text_concat_ws<'a>(
     Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct Translate;
+
+impl fmt::Display for Translate {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("translate")
+    }
+}
+
 fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     let string = datums[0].unwrap_str();
     let from = datums[1].unwrap_str().chars().collect::<Vec<_>>();
@@ -1087,6 +1869,26 @@ fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> 
 }
 
 // TODO ///
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct ListSliceLinear;
+
+impl fmt::Display for ListSliceLinear {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("list_slice_linear")
+    }
+}
 
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
@@ -1142,140 +1944,63 @@ fn list_slice_linear<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Da
     })
 }
 
-macro_rules! variadic_fn {
-    ($name:ident, $display:expr) => {
-        #[derive(
-            Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-        )]
-        pub struct $name;
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct DateBinTimestamp;
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str($display)
-            }
-        }
-    };
-    ($name:ident { $($field:ident : $ty:ty),* $(,)? }, $display:expr) => {
-        #[derive(
-            Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-        )]
-        pub struct $name {
-            $(pub $field: $ty,)*
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                f.write_str($display)
-            }
-        }
-    };
-    ($name:ident { $($field:ident : $ty:ty),* $(,)? }) => {
-        #[derive(
-            Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect,
-        )]
-        pub struct $name {
-            $(pub $field: $ty,)*
-        }
-    };
+impl fmt::Display for DateBinTimestamp {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("timestamp_bin")
+    }
 }
 
-// Lazy functions (implement lazy evaluation directly)
-variadic_fn!(And, "AND");
-variadic_fn!(Or, "OR");
-variadic_fn!(Coalesce, "coalesce");
-variadic_fn!(Greatest, "greatest");
-variadic_fn!(Least, "least");
-variadic_fn!(ErrorIfNull, "error_if_null");
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct DateBinTimestampTz;
 
-// Eager unit functions
-variadic_fn!(Concat, "concat");
-variadic_fn!(ConcatWs, "concat_ws");
-variadic_fn!(MakeTimestamp, "makets");
-variadic_fn!(PadLeading, "lpad");
-variadic_fn!(Substr, "substr");
-variadic_fn!(Replace, "replace");
-variadic_fn!(Translate, "translate");
-variadic_fn!(JsonbBuildArray, "jsonb_build_array");
-variadic_fn!(JsonbBuildObject, "jsonb_build_object");
-variadic_fn!(ListIndex, "list_index");
-variadic_fn!(ListSliceLinear, "list_slice_linear");
-variadic_fn!(SplitPart, "split_string");
-variadic_fn!(RegexpMatch, "regexp_match");
-variadic_fn!(HmacString, "hmac");
-variadic_fn!(HmacBytes, "hmac");
-variadic_fn!(DateBinTimestamp, "timestamp_bin");
-variadic_fn!(DateBinTimestampTz, "timestamptz_bin");
-variadic_fn!(DateDiffTimestamp, "datediff");
-variadic_fn!(DateDiffTimestampTz, "datediff");
-variadic_fn!(DateDiffDate, "datediff");
-variadic_fn!(DateDiffTime, "datediff");
-variadic_fn!(MakeAclItem, "makeaclitem");
-variadic_fn!(MakeMzAclItem, "make_mz_aclitem");
-variadic_fn!(ArrayPosition, "array_position");
-variadic_fn!(StringToArray, "string_to_array");
-variadic_fn!(TimezoneTime, "timezonet");
-variadic_fn!(RegexpSplitToArray, "regexp_split_to_array");
-variadic_fn!(RegexpReplace, "regexp_replace");
-
-// Eager functions with data
-variadic_fn!(
-    MapBuild {
-        value_type: SqlScalarType
-    },
-    "map_build"
-);
-variadic_fn!(
-    ArrayCreate {
-        // We need to know the element type to type empty arrays.
-        elem_type: SqlScalarType
-    },
-    "array_create"
-);
-variadic_fn!(
-    ArrayToString {
-        elem_type: SqlScalarType
-    },
-    "array_to_string"
-);
-variadic_fn!(
-    ArrayIndex {
-        // Adjusts the index by offset depending on whether being called on an array or an
-        // Int2Vector.
-        offset: i64
-    },
-    "array_index"
-);
-variadic_fn!(
-    ListCreate {
-        // We need to know the element type to type empty lists.
-        elem_type: SqlScalarType
-    },
-    "list_create"
-);
-variadic_fn!(RecordCreate { field_names: Vec<ColumnName> }, "record_create");
-variadic_fn!(
-    ArrayFill {
-        elem_type: SqlScalarType
-    },
-    "array_fill"
-);
-
-// RangeCreate gets a hand-written Display (field-dependent).
-variadic_fn!(RangeCreate {
-    elem_type: SqlScalarType
-});
-
-impl fmt::Display for RangeCreate {
+impl fmt::Display for DateBinTimestampTz {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match &self.elem_type {
-            SqlScalarType::Int32 => "int4range",
-            SqlScalarType::Int64 => "int8range",
-            SqlScalarType::Date => "daterange",
-            SqlScalarType::Numeric { .. } => "numrange",
-            SqlScalarType::Timestamp { .. } => "tsrange",
-            SqlScalarType::TimestampTz { .. } => "tstzrange",
-            _ => unreachable!(),
-        })
+        f.write_str("timestamptz_bin")
+    }
+}
+
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct TimezoneTime;
+
+impl fmt::Display for TimezoneTime {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("timezonet")
     }
 }
 

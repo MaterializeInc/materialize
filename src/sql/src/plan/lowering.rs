@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::iter::repeat;
 
 use itertools::Itertools;
-use mz_expr::func::variadic::{ListCreate, Or, RecordCreate};
+use mz_expr::func::variadic;
 use mz_expr::visit::Visit;
 use mz_expr::{AccessStrategy, AggregateFunc, MirRelationExpr, MirScalarExpr, func};
 use mz_ore::collections::CollectionExt;
@@ -1033,15 +1033,15 @@ impl HirScalarExpr {
                     func,
                     exprs,
                     name: _,
-                } => SS::CallVariadic {
+                } => SS::call_variadic(
                     func,
-                    exprs: exprs
+                    exprs
                         .into_iter()
                         .map(|expr| {
                             expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)
                         })
-                        .collect::<Result<Vec<_>, _>>()?,
-                },
+                        .collect::<Result<_, _>>()?,
+                ),
                 If {
                     cond,
                     then,
@@ -1115,7 +1115,7 @@ impl HirScalarExpr {
 
                             // Restrict to records not satisfying `cond_expr` and apply `els` as a map.
                             let mut else_inner = get_inner.filter(vec![SS::call_variadic(
-                                Or,
+                                variadic::Or,
                                 vec![
                                     cond_expr.clone().call_binary(SS::literal_false(), func::Eq),
                                     cond_expr.clone().call_is_null(),
@@ -1197,7 +1197,7 @@ impl HirScalarExpr {
                          original_row_record,
                          original_row_record_type: SqlScalarType| {
                             let agg_input = MirScalarExpr::call_variadic(
-                                ListCreate {
+                                variadic::ListCreate {
                                     elem_type: original_row_record_type.clone(),
                                 },
                                 vec![original_row_record],
@@ -1205,7 +1205,7 @@ impl HirScalarExpr {
                             let mut agg_input = vec![agg_input];
                             agg_input.extend(order_by_mir.clone());
                             let agg_input = MirScalarExpr::call_variadic(
-                                RecordCreate {
+                                variadic::RecordCreate {
                                     field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from(UNKNOWN_COLUMN_NAME))
                                         .collect_vec(),
@@ -1272,7 +1272,7 @@ impl HirScalarExpr {
                                     })
                                     .collect();
                             let fn_input_record = MirScalarExpr::call_variadic(
-                                RecordCreate {
+                                variadic::RecordCreate {
                                     field_names: fn_input_record_fields
                                         .iter()
                                         .map(|(n, _)| n.clone())
@@ -1291,7 +1291,7 @@ impl HirScalarExpr {
                             let mut agg_input = vec![fn_input_record];
                             agg_input.extend(order_by_mir.clone());
                             let agg_input = MirScalarExpr::call_variadic(
-                                RecordCreate {
+                                variadic::RecordCreate {
                                     field_names: (0..agg_input.len())
                                         .map(|_| ColumnName::from(UNKNOWN_COLUMN_NAME))
                                         .collect_vec(),
@@ -1498,7 +1498,7 @@ impl HirScalarExpr {
 
                     // Original row made into a record
                     let original_row_record = MirScalarExpr::call_variadic(
-                        RecordCreate {
+                        variadic::RecordCreate {
                             field_names: fields.iter().map(|(name, _)| name.clone()).collect_vec(),
                         },
                         (0..input_arity).map(MirScalarExpr::column).collect_vec(),
@@ -1720,13 +1720,13 @@ impl HirScalarExpr {
                 func,
                 exprs,
                 name: _,
-            } => SS::CallVariadic {
+            } => SS::call_variadic(
                 func,
-                exprs: exprs
+                exprs
                     .into_iter()
                     .map(|expr| expr.lower_uncorrelated(config))
                     .collect::<Result<_, _>>()?,
-            },
+            ),
             If {
                 cond,
                 then,
