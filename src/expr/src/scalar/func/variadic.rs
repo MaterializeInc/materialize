@@ -67,28 +67,60 @@ impl fmt::Display for And {
     }
 }
 
-pub fn and<'a>(
-    datums: &[Datum<'a>],
-    temp_storage: &'a RowArena,
-    exprs: &'a [MirScalarExpr],
-) -> Result<Datum<'a>, EvalError> {
-    // If any is false, then return false. Else, if any is null, then return null. Else, return true.
-    let mut null = false;
-    let mut err = None;
-    for expr in exprs {
-        match expr.eval(datums, temp_storage) {
-            Ok(Datum::False) => return Ok(Datum::False), // short-circuit
-            Ok(Datum::True) => {}
-            // No return in these two cases, because we might still see a false
-            Ok(Datum::Null) => null = true,
-            Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
-            _ => unreachable!(),
+impl LazyVariadicFunc for And {
+    fn eval<'a>(
+        &'a self,
+        datums: &[Datum<'a>],
+        temp_storage: &'a RowArena,
+        exprs: &'a [MirScalarExpr],
+    ) -> Result<Datum<'a>, EvalError> {
+        // If any is false, then return false. Else, if any is null, then return null. Else, return true.
+        let mut null = false;
+        let mut err = None;
+        for expr in exprs {
+            match expr.eval(datums, temp_storage) {
+                Ok(Datum::False) => return Ok(Datum::False), // short-circuit
+                Ok(Datum::True) => {}
+                // No return in these two cases, because we might still see a false
+                Ok(Datum::Null) => null = true,
+                Err(this_err) => err = std::cmp::max(err.take(), Some(this_err)),
+                _ => unreachable!(),
+            }
+        }
+        match (err, null) {
+            (Some(err), _) => Err(err),
+            (None, true) => Ok(Datum::Null),
+            (None, false) => Ok(Datum::True),
         }
     }
-    match (err, null) {
-        (Some(err), _) => Err(err),
-        (None, true) => Ok(Datum::Null),
-        (None, false) => Ok(Datum::True),
+
+    fn output_type(&self, input_types: Vec<SqlColumnType>) -> SqlColumnType {
+        let in_nullable = input_types.iter().any(|t| t.nullable);
+        SqlScalarType::Bool.nullable(in_nullable)
+    }
+
+    fn propagates_nulls(&self) -> bool {
+        false
+    }
+
+    fn introduces_nulls(&self) -> bool {
+        false
+    }
+
+    fn could_error(&self) -> bool {
+        false
+    }
+
+    fn is_monotone(&self) -> bool {
+        true
+    }
+
+    fn is_associative(&self) -> bool {
+        true
+    }
+
+    fn is_infix_op(&self) -> bool {
+        true
     }
 }
 
@@ -2189,7 +2221,7 @@ impl VariadicFunc {
         match self {
             VariadicFunc::Coalesce(_) => return coalesce(datums, temp_storage, exprs),
             VariadicFunc::Greatest(_) => return greatest(datums, temp_storage, exprs),
-            VariadicFunc::And(_) => return and(datums, temp_storage, exprs),
+            VariadicFunc::And(f) => return f.eval(datums, temp_storage, exprs),
             VariadicFunc::Or(_) => return or(datums, temp_storage, exprs),
             VariadicFunc::ErrorIfNull(_) => return error_if_null(datums, temp_storage, exprs),
             VariadicFunc::Least(_) => return least(datums, temp_storage, exprs),
