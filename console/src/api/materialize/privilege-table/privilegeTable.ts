@@ -53,12 +53,6 @@ export const RELATION_OIDS = {
  * In the future, we can expand this function to objects other than relations.
  */
 export function buildPrivilegeTableQuery() {
-  /**
-   * TODO: Use has_table_privilege once https://github.com/MaterializeInc/database-issues/issues/8815 is fixed
-   *
-   * We need to hardcode the privilege for mz_recent_activity_log_redacted since has_table_privilege is broken for it
-   * specifically.
-   */
   return sql<{
     relation: string;
     privilege: string;

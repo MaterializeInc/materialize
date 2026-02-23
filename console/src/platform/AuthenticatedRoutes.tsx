@@ -345,7 +345,7 @@ const EnvironmentRoutes = () => {
                     <QueryHistoryRoutes />
                   </BaseLayout>
                 }
-                // TODO (SangJunBak): Remove guard once we want to re-enable Query History for self managed https://github.com/MaterializeInc/cloud/issues/10755
+                // TODO (SangJunBak): Remove guard once we want to re-enable Query History for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
                 selfManagedConfigElement={<RedirectToHome />}
               />
             }
