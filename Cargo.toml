@@ -349,8 +349,8 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "4e0da31" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "4e0da31" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.

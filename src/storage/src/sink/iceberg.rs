@@ -1082,22 +1082,37 @@ where
 
             let writer_properties = WriterProperties::new();
 
+            // Precompute schemas that don't change between writer instances.
+            let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
+            let pos_schema = Arc::new(arrow_schema_to_schema(&pos_arrow_schema).context(
+                "Failed to convert position delete Arrow schema to Iceberg schema",
+            )?);
+
+            let eq_config = EqualityDeleteWriterConfig::new(
+                equality_ids.clone(),
+                Arc::clone(&current_schema),
+            )
+            .context("Failed to create EqualityDeleteWriterConfig")?;
+            let eq_schema = Arc::new(
+                arrow_schema_to_schema(eq_config.projected_arrow_schema_ref()).context(
+                    "Failed to convert equality delete Arrow schema to Iceberg schema",
+                )?,
+            );
+
             let arrow_schema_for_closure = Arc::clone(&arrow_schema);
             let current_schema_for_closure = Arc::clone(&current_schema);
-            let file_io_for_closure = file_io.clone();
-            let location_generator_for_closure = location_generator.clone();
-            let file_name_generator_for_closure = file_name_generator.clone();
-            let equality_ids_for_closure = equality_ids.clone();
-            let writer_properties_for_closure = writer_properties.clone();
 
             let create_delta_writer = move |disable_seen_rows: bool| {
                 let arrow_schema = Arc::clone(&arrow_schema_for_closure);
                 let current_schema = Arc::clone(&current_schema_for_closure);
-                let file_io = file_io_for_closure.clone();
-                let location_generator = location_generator_for_closure.clone();
-                let file_name_generator = file_name_generator_for_closure.clone();
-                let equality_ids = equality_ids_for_closure.clone();
-                let writer_properties = writer_properties_for_closure.clone();
+                let file_io = file_io.clone();
+                let location_generator = location_generator.clone();
+                let file_name_generator = file_name_generator.clone();
+                let equality_ids = equality_ids.clone();
+                let writer_properties = writer_properties.clone();
+                let pos_schema = Arc::clone(&pos_schema);
+                let eq_schema = Arc::clone(&eq_schema);
+                let eq_config = eq_config.clone();
 
                 async move {
                     let data_parquet_writer = ParquetWriterBuilder::new(
@@ -1115,10 +1130,6 @@ where
                     );
                     let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
 
-                    let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
-                    let pos_schema = Arc::new(arrow_schema_to_schema(&pos_arrow_schema).context(
-                        "Failed to convert position delete Arrow schema to Iceberg schema",
-                    )?);
                     let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
                     let pos_parquet_writer =
                         ParquetWriterBuilder::new(writer_properties.clone(), pos_schema);
@@ -1131,18 +1142,6 @@ where
                     );
                     let pos_delete_writer_builder =
                         PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
-
-                    let eq_config = EqualityDeleteWriterConfig::new(
-                        equality_ids.clone(),
-                        Arc::clone(&current_schema),
-                    )
-                    .context("Failed to create EqualityDeleteWriterConfig")?;
-
-                    let eq_schema = Arc::new(
-                        arrow_schema_to_schema(eq_config.projected_arrow_schema_ref()).context(
-                            "Failed to convert equality delete Arrow schema to Iceberg schema",
-                        )?,
-                    );
 
                     let eq_parquet_writer =
                         ParquetWriterBuilder::new(writer_properties.clone(), eq_schema);
@@ -1186,7 +1185,7 @@ where
             #[allow(clippy::disallowed_types)]
             let mut in_flight_batches: std::collections::HashMap<
                 (Antichain<Timestamp>, Antichain<Timestamp>),
-                DeltaWriterType,
+                Box<DeltaWriterType>,
             > = std::collections::HashMap::new();
 
             let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
@@ -1300,7 +1299,9 @@ where
                                     );
                                 }
                                 let prev =
-                                    in_flight_batches.insert(batch_desc.clone(), delta_writer);
+                                    in_flight_batches.insert(
+                                        batch_desc.clone(), Box::new(delta_writer)
+                                    );
                                 if prev.is_some() {
                                     anyhow::bail!(
                                         "Duplicate batch description received for description {:?}",
