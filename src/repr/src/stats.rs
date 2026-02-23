@@ -188,12 +188,10 @@ pub fn col_values<'a>(
         (SqlScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
             let lower =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?.into_value();
-            let lower =
-                CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
+            let lower = CheckedTimestamp::from_timestamplike_unchecked(lower);
             let upper =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.upper))?.into_value();
-            let upper =
-                CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
+            let upper = CheckedTimestamp::from_timestamplike_unchecked(upper);
 
             Some((Datum::Timestamp(lower), Datum::Timestamp(upper)))
         }
@@ -204,11 +202,11 @@ pub fn col_values<'a>(
             let lower = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?
                 .into_value()
                 .and_utc();
-            let lower = soft_expect_or_log(CheckedTimestamp::from_timestamplike(lower))?;
+            let lower = CheckedTimestamp::from_timestamplike_unchecked(lower);
             let upper = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.upper))?
                 .into_value()
                 .and_utc();
-            let upper = soft_expect_or_log(CheckedTimestamp::from_timestamplike(upper))?;
+            let upper = CheckedTimestamp::from_timestamplike_unchecked(upper);
 
             Some((Datum::TimestampTz(lower), Datum::TimestampTz(upper)))
         }
