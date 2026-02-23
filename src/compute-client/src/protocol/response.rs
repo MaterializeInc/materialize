@@ -236,7 +236,7 @@ pub struct StashedPeekResponse {
 }
 
 impl StashedPeekResponse {
-    /// Total count of [`Row`]s represented by this collection, considering a
+    /// Total count of [mz_repr::Row]s represented by this collection, considering a
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
