@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 bincode = "1.3.3"
 clap = { version = "4.5.23", features = ["env", "derive"] }
-futures = "0.3.31"
+futures = "0.3.32"
 itertools = "0.14.0"
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
