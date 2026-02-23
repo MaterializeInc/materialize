@@ -1394,7 +1394,14 @@ async fn execute_stmt<S: ResultSender>(
                     &pg_typ,
                     raw_param.as_bytes(),
                 ) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Ok(param) => match param.into_datum_decode_error(&buf, &pg_typ, "parameter") {
+                        Ok(datum) => datum,
+                        Err(msg) => {
+                            return Ok(
+                                SqlResult::err(client, Error::Unstructured(anyhow!(msg))).into()
+                            );
+                        }
+                    },
                     Err(err) => {
                         let msg = anyhow!("unable to decode parameter: {}", err);
                         return Ok(SqlResult::err(client, Error::Unstructured(msg)).into());

@@ -557,7 +557,13 @@ pub fn decode_copy_format_text(
             let raw_value = parser.consume_raw_value()?;
             if let Some(raw_value) = raw_value {
                 match mz_pgrepr::Value::decode_text(typ, raw_value) {
-                    Ok(value) => row.push(value.into_datum(&buf, typ)),
+                    Ok(value) => {
+                        row.push(
+                            value
+                                .into_datum_decode_error(&buf, typ, "column")
+                                .map_err(|msg| io::Error::new(io::ErrorKind::InvalidData, msg))?,
+                        );
+                    }
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
                         return Err(io::Error::new(io::ErrorKind::InvalidData, msg));

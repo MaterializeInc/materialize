@@ -268,6 +268,31 @@ impl<D> Range<D> {
                 }),
         }
     }
+
+    /// Like [`into_bounds`](Self::into_bounds), but the conversion may fail.
+    ///
+    /// Use this when converting each bound with a fallible function (e.g.
+    /// `into_datum`). Callers need not reach into `Range`'s internals
+    /// (`RangeInner`, `RangeLowerBound`, `RangeUpperBound`).
+    pub fn try_into_bounds<F, O, E>(self, conv: F) -> Result<Range<O>, E>
+    where
+        F: Fn(D) -> Result<O, E>,
+    {
+        let inner = match self.inner {
+            None => None,
+            Some(RangeInner { lower, upper }) => Some(RangeInner {
+                lower: RangeLowerBound {
+                    inclusive: lower.inclusive,
+                    bound: lower.bound.map(&conv).transpose()?,
+                },
+                upper: RangeUpperBound {
+                    inclusive: upper.inclusive,
+                    bound: upper.bound.map(&conv).transpose()?,
+                },
+            }),
+        };
+        Ok(Range { inner })
+    }
 }
 
 /// Range implementations meant to work with `Range<Datum>` and `Range<DatumNested>`.

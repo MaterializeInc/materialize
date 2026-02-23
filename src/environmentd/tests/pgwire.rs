@@ -705,6 +705,11 @@ fn test_pgtest_copy_from() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_copy_from_range() {
+    pg_test_inner(Path::new("../../test/pgtest/copy-from-range.pt"), false);
+}
+
+#[mz_ore::test]
 fn test_pgtest_copy() {
     pg_test_inner(Path::new("../../test/pgtest/copy.pt"), false);
 }

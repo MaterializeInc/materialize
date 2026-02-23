@@ -2264,6 +2264,14 @@ impl RowPacker<'_> {
         res
     }
 
+    /// Like [`RowPacker::push_dict_with`], but accepts a fallible closure.
+    pub fn try_push_dict_with<F, E>(&mut self, f: F) -> Result<(), E>
+    where
+        F: FnOnce(&mut RowPacker) -> Result<(), E>,
+    {
+        self.push_dict_with(f)
+    }
+
     /// Convenience function to construct an array from an iter of `Datum`s.
     ///
     /// Returns an error if the number of elements in `iter` does not match

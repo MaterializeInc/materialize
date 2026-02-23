@@ -1327,7 +1327,14 @@ where
             let datum = match raw_param {
                 None => Datum::Null,
                 Some(bytes) => match mz_pgrepr::Value::decode(format, &pg_typ, &bytes) {
-                    Ok(param) => param.into_datum(&buf, &pg_typ),
+                    Ok(param) => match param.into_datum_decode_error(&buf, &pg_typ, "parameter") {
+                        Ok(datum) => datum,
+                        Err(msg) => {
+                            return self
+                                .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                                .await;
+                        }
+                    },
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
                         return self

@@ -226,7 +226,12 @@ impl OneshotFormat for CsvDecoder {
                     StorageErrorXKind::invalid_record_batch(err.to_string())
                         .with_context("decode_text")
                 })?;
-                packer.push(value.into_datum(&arena, typ));
+                let datum = value
+                    .into_datum_decode_error(&arena, typ, "record field")
+                    .map_err(|msg| {
+                        StorageErrorXKind::invalid_record_batch(msg).with_context("into_datum")
+                    })?;
+                packer.push(datum);
             }
         }
 
