@@ -224,8 +224,8 @@ impl Context {
             console.external_certificate_name(),
             console.external_certificate_secret_name(),
             None,
-            CertificatePrivateKeyAlgorithm::Rsa,
-            Some(4096),
+            CertificatePrivateKeyAlgorithm::Ed25519,
+            None,
         )
     }
 
