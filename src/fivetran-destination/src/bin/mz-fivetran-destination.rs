@@ -60,7 +60,7 @@ async fn run(Args { port }: Args) -> Result<(), Box<dyn std::error::Error>> {
     // sets `IPV6_V6ONLY` to false to make sure Linux dual stack kicks in.
     let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
     // Disable Nagle's algorithm, maybe not needed but seems decent to start.
-    socket.set_nodelay(true)?;
+    socket.set_tcp_nodelay(true)?;
     // Now required; see https://github.com/tokio-rs/tokio/issues/7172
     socket.set_nonblocking(true)?;
     // OpenBSD disables dual-stack, if we need to support OpenBSD we'll have to explicitly create
