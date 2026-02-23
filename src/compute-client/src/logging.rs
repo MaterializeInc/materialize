@@ -182,6 +182,8 @@ pub enum ComputeLog {
     LirMapping,
     /// Mappings from dataflows to `GlobalId`s.
     DataflowGlobal,
+    /// Prometheus metrics gathered from the metrics registry.
+    PrometheusMetrics,
 }
 
 impl LogVariant {
@@ -381,6 +383,22 @@ impl LogVariant {
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("global_id", SqlScalarType::String.nullable(false))
                 .with_key(vec![0, 1])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::PrometheusMetrics) => RelationDesc::builder()
+                .with_column("metric_name", SqlScalarType::String.nullable(false))
+                .with_column("metric_type", SqlScalarType::String.nullable(false))
+                .with_column(
+                    "labels",
+                    SqlScalarType::Map {
+                        value_type: Box::new(SqlScalarType::String),
+                        custom_id: None,
+                    }
+                    .nullable(false),
+                )
+                .with_column("value", SqlScalarType::Float64.nullable(false))
+                .with_column("help", SqlScalarType::String.nullable(false))
+                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .finish(),
         }
     }
