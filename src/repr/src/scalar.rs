@@ -2141,6 +2141,91 @@ impl_tuple_input_datum_type!(T0, T1);
 impl_tuple_input_datum_type!(T0, T1, T2);
 impl_tuple_input_datum_type!(T0, T1, T2, T3);
 impl_tuple_input_datum_type!(T0, T1, T2, T3, T4);
+impl_tuple_input_datum_type!(T0, T1, T2, T3, T4, T5);
+
+/// A wrapper type for variadic arguments that consumes the remaining iterator.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Variadic<T>(pub Vec<T>);
+
+impl<T> std::ops::Deref for Variadic<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T> IntoIterator for Variadic<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Variadic<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (&self.0).into_iter()
+    }
+}
+
+impl<'a, E, T: InputDatumType<'a, E>> InputDatumType<'a, E> for Variadic<T> {
+    fn nullable() -> bool {
+        true
+    }
+    fn try_from_result(_res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        unimplemented!("Variadic must be used via try_from_iter")
+    }
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        let mut res = Vec::with_capacity(iter.size_hint().0);
+        loop {
+            match T::try_from_iter(iter) {
+                Ok(t) => res.push(t),
+                Err(Ok(None)) => break,
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(Variadic(res))
+    }
+}
+
+/// Wrapper to distinguish "argument may not be present" from `Option<T>` (nullable).
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct OptionalArg<T>(pub Option<T>);
+
+impl<T> std::ops::Deref for OptionalArg<T> {
+    type Target = Option<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<'a, E, T: InputDatumType<'a, E>> InputDatumType<'a, E> for OptionalArg<T> {
+    fn nullable() -> bool {
+        T::nullable()
+    }
+    fn try_from_result(_res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        unimplemented!("OptionalArg must be used via try_from_iter")
+    }
+    fn try_from_iter(
+        iter: &mut impl Iterator<Item = Result<Datum<'a>, E>>,
+    ) -> Result<Self, Result<Option<Datum<'a>>, E>> {
+        match iter.next() {
+            Some(datum) => {
+                let val = T::try_from_result(datum).map_err(|r| r.map(Some))?;
+                Ok(OptionalArg(Some(val)))
+            }
+            None => Ok(OptionalArg(None)),
+        }
+    }
+}
 
 /// A wrapper type that excludes `NULL` values, even if `B` allows them.
 ///
