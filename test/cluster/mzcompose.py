@@ -6515,3 +6515,69 @@ def workflow_test_optimizer_feature_override_after_restart(c: Composition) -> No
         plan2 = c.sql_query("EXPLAIN MATERIALIZED VIEW mv2")[0][0]
 
         assert plan1 == plan2, f"before={plan1}\nafter={plan2}"
+
+
+def workflow_test_expression_cache_on_ddl(c: Composition) -> None:
+    """
+    Test that expression cache entries created during DDL are reused on
+    environmentd restart.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_eager_delta_joins": "false",
+            },
+            environment_extra=[
+                "MZ_STARTUP_LOG_FILTER=mz_adapter::coord=debug,info",
+            ],
+        ),
+    ):
+        c.up("materialized")
+
+        # Create a cluster with an optimizer feature override, to test that
+        # the expression cache correctly stores per-cluster features.
+        c.sql(
+            """
+            CREATE CLUSTER test_cache (SIZE 'scale=1,workers=1')
+            FEATURES (ENABLE EAGER DELTA JOINS = true);
+            GRANT ALL ON CLUSTER test_cache TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            """
+            SET cluster = test_cache;
+
+            CREATE TABLE t (a int);
+            CREATE DEFAULT INDEX ON t;
+            CREATE MATERIALIZED VIEW mv AS SELECT a + 1 AS b FROM t;
+
+            SELECT * FROM t;
+            SELECT * FROM mv;
+            """
+        )
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        # Wait for the dataflows to be ready after restart.
+        c.sql(
+            """
+            SET cluster = test_cache;
+            SELECT * FROM t;
+            SELECT * FROM mv;
+            """
+        )
+
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+
+        # We expect cache hits for the user index and the materialized view.
+        cache_hits = [
+            line
+            for line in logs.splitlines()
+            if re.search(r"global expression cache hit for User\(\d+\)", line)
+        ]
+        assert len(cache_hits) == 2, cache_hits
