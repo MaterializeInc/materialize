@@ -958,8 +958,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     }
 
     fn process_oneshot_ingestions(&mut self, response_tx: &ResponseSender) {
-        let mut to_remove = vec![];
-
         for (ingestion_id, ingestion_state) in &mut self.storage_state.oneshot_ingestions {
             loop {
                 match ingestion_state.results.try_recv() {
@@ -975,7 +973,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
                         break;
                     }
                     Err(TryRecvError::Disconnected) => {
-                        to_remove.push(*ingestion_id);
                         break;
                     }
                 }
