@@ -134,7 +134,7 @@ use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::global_id::TransientIdGen;
-use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, SqlRelationType, Timestamp};
 use mz_secrets::cache::CachingSecretsReader;
@@ -3050,7 +3050,11 @@ impl Coordinator {
         let mut instance_snapshots = BTreeMap::new();
         let mut uncached_expressions = BTreeMap::new();
 
-        let optimizer_config = OptimizerConfig::from(self.catalog().system_config());
+        let optimizer_config = |catalog: &Catalog, cluster_id| {
+            let system_config = catalog.system_config();
+            let overrides = catalog.get_cluster(cluster_id).config.features();
+            OptimizerConfig::from(system_config).override_from(&overrides)
+        };
 
         for entry in ordered_catalog_entries {
             match entry.item() {
@@ -3068,6 +3072,8 @@ impl Coordinator {
                     if compute_instance.contains_collection(&global_id) {
                         continue;
                     }
+
+                    let optimizer_config = optimizer_config(&self.catalog, idx.cluster_id);
 
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
@@ -3089,7 +3095,7 @@ impl Coordinator {
                                         self.owned_catalog(),
                                         compute_instance.clone(),
                                         global_id,
-                                        optimizer_config.clone(),
+                                        optimizer_config,
                                         self.optimizer_metrics(),
                                     );
 
@@ -3154,6 +3160,8 @@ impl Coordinator {
                         });
                     let global_id = mv.global_id_writes();
 
+                    let optimizer_config = optimizer_config(&self.catalog, mv.cluster_id);
+
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
                             Some(global_expressions)
@@ -3186,7 +3194,7 @@ impl Coordinator {
                                         mv.non_null_assertions.clone(),
                                         mv.refresh_schedule.clone(),
                                         debug_name,
-                                        optimizer_config.clone(),
+                                        optimizer_config,
                                         self.optimizer_metrics(),
                                         force_non_monotonic,
                                     );
@@ -3251,6 +3259,8 @@ impl Coordinator {
                                 .expect("compute instance exists")
                         });
                     let global_id = ct.global_id();
+
+                    let optimizer_config = optimizer_config(&self.catalog, ct.cluster_id);
 
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {

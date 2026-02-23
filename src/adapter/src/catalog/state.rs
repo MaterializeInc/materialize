@@ -55,7 +55,7 @@ use mz_repr::namespaces::{
     UNSTABLE_SCHEMAS,
 };
 use mz_repr::network_policy_id::NetworkPolicyId;
-use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
@@ -1328,8 +1328,13 @@ impl CatalogState {
                     .collect();
 
                 // Collect optimizer parameters.
+                let system_vars = session_catalog.system_vars();
+                let overrides = self
+                    .get_cluster(materialized_view.cluster_id)
+                    .config
+                    .features();
                 let optimizer_config =
-                    optimize::OptimizerConfig::from(session_catalog.system_vars());
+                    optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
                 let previous_exprs = previous_item.map(|item| match item {
                     CatalogItem::MaterializedView(materialized_view) => {
                         (materialized_view.raw_expr, materialized_view.optimized_expr)

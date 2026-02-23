@@ -6467,3 +6467,51 @@ def workflow_github_10086(c: Composition) -> None:
         """
     )[0][0]
     assert not upper_empty
+
+
+def workflow_test_optimizer_feature_override_after_restart(c: Composition) -> None:
+    """
+    Test that verifies that optimizer feature overrides survive envd restarts.
+    """
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "enable_eager_delta_joins": "false",
+            },
+        ),
+    ):
+        c.up("materialized")
+
+        c.sql(
+            """
+            CREATE CLUSTER test (SIZE 'scale=1,workers=1')
+                FEATURES (ENABLE EAGER DELTA JOINS = true);
+            GRANT ALL ON CLUSTER test TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql(
+            """
+            SET cluster = test;
+
+            CREATE TABLE t1 (x int, y int);
+            CREATE TABLE t2 (x int, y int);
+            CREATE TABLE t3 (x int, y int);
+            CREATE MATERIALIZED VIEW mv2 IN CLUSTER test AS
+                SELECT t1.y as f1, t2.y as f2, t3.y as f3
+                FROM t1, t2, t3
+                WHERE t1.x = t2.x AND t2.y = t3.y;
+            """
+        )
+
+        plan1 = c.sql_query("EXPLAIN MATERIALIZED VIEW mv2")[0][0]
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        plan2 = c.sql_query("EXPLAIN MATERIALIZED VIEW mv2")[0][0]
+
+        assert plan1 == plan2, f"before={plan1}\nafter={plan2}"
