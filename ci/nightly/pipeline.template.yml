@@ -1106,6 +1106,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=PreflightCheckRollback, "--seed=$BUILDKITE_JOB_ID"]
+        skip: "flaky due to database-issues#10095"
 
       - id: checks-upgrade-entire-mz-two-versions
         label: "Checks upgrade across two versions"
