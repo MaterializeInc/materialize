@@ -225,8 +225,12 @@ case "$cmd" in
             esac
         done
 
-        claude_dir=$HOME/.claude-docker
-        mkdir -p "$(pwd)/target-xcompile" ~/.kube "$claude_dir"
+        claude_dir=$HOME/.claude-builder
+        codex_dir=$HOME/.codex-builder
+        if [ -d "$HOME/.codex" ] && [ ! -e "$codex_dir" ]; then
+            cp -a "$HOME/.codex" "$codex_dir"
+        fi
+        mkdir -p "$(pwd)/target-xcompile" ~/.kube "$claude_dir" "$codex_dir"
 
         args=(
             --cidfile "$cid_file"
@@ -234,7 +238,8 @@ case "$cmd" in
             --init
             --volume "$(pwd)/target-xcompile:/mnt/build"
             --volume "$claude_dir:/tmp/.claude"
-            --volume "$HOME/.claude-docker.json:/tmp/.claude.json"
+            --volume "$HOME/.claude-builder.json:/tmp/.claude.json"
+            --volume "$codex_dir:/tmp/.codex"
             --volume "$workdir:$workdir"
             --workdir "$workdir"
             --env XDG_CACHE_HOME=/mnt/build/cache
