@@ -48,7 +48,8 @@ to manage access.
 
 Create an [IAM
 policy](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html)
-that allows full access to the S3 Tables API.
+that allows full access to your S3 Tables API.Replace `<S3 table bucket ARN>`
+with the ARN of your S3 table bucket:
 
 ```json
 {
@@ -57,13 +58,14 @@ that allows full access to the S3 Tables API.
         {
             "Effect": "Allow",
             "Action": "s3tables:*",
-            "Resource": "*"
+            "Resource": [
+                "<S3 table bucket ARN>"
+                "<S3 table bucket ARN>/table/*"
+            ]
         }
     ]
 }
 ```
-
-You can scope the `Resource` to your specific S3 Tables bucket ARN, if desired.
 
 ### Step 1B. Create an IAM role
 
@@ -73,7 +75,7 @@ Materialize can assume.
 
 1. For the **Trusted entity type**, specify **Custom trust policy** with the
 following:
-    - `Principal`: Uses the [Materialize Cloud IAM
+    - `Principal`: The example uses the [Materialize Cloud IAM
       principal](/sql/create-connection/#aws-permissions). For self-managed
       deployments and the Emulator, the principal will differ.
     - `ExternalId`: `"PENDING"` is a placeholder and will be updated after
@@ -127,13 +129,15 @@ storage:
     For more details on AWS connection options, see [`CREATE
     CONNECTION`](/sql/create-connection/#aws).
 
-1. Fetch the `external_id` for the connection:
+1. Fetch the `external_id` for your connection, replacing `<IAM role ARN>` with
+    your IAM role ARN:
 
    ```mzsql
    SELECT external_id
    FROM mz_internal.mz_aws_connections awsc
    JOIN mz_connections c ON awsc.id = c.id
-   WHERE c.name = 'aws_connection';
+   WHERE c.name = 'aws_connection'
+   AND awsc.assume_role_arn = '<iam-role-arn>';
    ```
 
    You will use the `external_id` to update the IAM role in the next step.
@@ -218,23 +222,13 @@ CREATE SINK <sink_name>
 
 For the full list of syntax options, see the [`CREATE SINK` reference](/sql/create-sink/iceberg).
 
-## Querying Iceberg tables
-
-Materialize commits a new snapshot to the Iceberg table at each `COMMIT
-INTERVAL`, making the data available to downstream query engines. You can query
-the Iceberg table from any system that supports Iceberg, including:
-
-- **Snowflake**: Use [Iceberg Tables](https://docs.snowflake.com/en/user-guide/tables-iceberg)
-- **Databricks**: Use the [Iceberg connector](https://docs.databricks.com/en/delta/clone-parquet.html)
-- **Spark**: Use [Apache Iceberg for Spark](https://iceberg.apache.org/docs/latest/spark-getting-started/)
-- **Trino/Presto**: Use the [Iceberg connector](https://trino.io/docs/current/connector/iceberg.html)
-
 ## Considerations
 
 ### Commit interval tradeoffs {#commit-interval-tradeoffs}
 
 The `COMMIT INTERVAL` setting controls how frequently Materialize commits
-snapshots to your Iceberg table. This involves tradeoffs:
+snapshots to your Iceberg table, making the data available to downstream query
+engines. This setting involves tradeoffs:
 
 | Shorter intervals (e.g., `10s`) | Longer intervals (e.g., `5m`) |
 |---------------------------------|-------------------------------|
