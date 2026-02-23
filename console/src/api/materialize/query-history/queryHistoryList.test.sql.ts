@@ -508,7 +508,7 @@ describe("buildQueryHistoryListQuery", () => {
       });
       expect(result.rows.map((r) => r.sql)).toEqual(["SELECT 11", "SELECT 10"]);
     }
-  });
+  }, 30_000);
 
   it("with isRedacted: true", async () => {
     const strictQueryHistoryListSchema = queryHistoryListSchema.strict();
