@@ -1,0 +1,10 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildArrangmentMemoryUsageQuery > builds a valid query when swap is disabled 1`] = `
+{
+  "parameters": [
+    "u123",
+  ],
+  "sql": "select "o"."id", "das"."size" as "size", ("das"."size"::float8 / 1024) * 100 as "memoryPercentage" from "mz_objects" as "o" inner join "mz_compute_exports" as "ce" on "ce"."export_id" = "o"."id" inner join "mz_dataflow_arrangement_sizes" as "das" on "das"."id" = "ce"."dataflow_id" where "o"."id" in ($1)",
+}
+`;
