@@ -14,7 +14,9 @@ use itertools::Itertools;
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::char;
 use mz_repr::adt::jsonb::JsonbRef;
-use mz_repr::adt::numeric::{NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION};
+use mz_repr::adt::numeric::{
+    NUMERIC_AGG_MAX_PRECISION, NUMERIC_DATUM_MAX_PRECISION, NumericStackStr,
+};
 use mz_repr::{CatalogItemId, ColumnName, Datum, RelationDesc, SqlColumnType, SqlScalarType};
 use serde_json::{Map, json};
 
@@ -128,7 +130,8 @@ impl ToJson for TypedDatum<'_> {
             SqlScalarType::Float32 => json!(datum.unwrap_float32()),
             SqlScalarType::Float64 => json!(datum.unwrap_float64()),
             SqlScalarType::Numeric { .. } => {
-                json!(datum.unwrap_numeric().0.to_standard_notation_string())
+                let buf = NumericStackStr::new(&datum.unwrap_numeric().0);
+                serde_json::Value::String(buf.as_str().to_owned())
             }
             // https://stackoverflow.com/questions/10286204/what-is-the-right-json-date-format
             SqlScalarType::Date => serde_json::Value::String(format!("{}", datum.unwrap_date())),
