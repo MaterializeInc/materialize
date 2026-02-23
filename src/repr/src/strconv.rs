@@ -354,24 +354,6 @@ where
     format_float(buf, f)
 }
 
-/// Use the following grammar to parse `s` into:
-///
-/// - `NaiveDate`
-/// - `NaiveTime`
-/// - Timezone string
-///
-/// `NaiveDate` and `NaiveTime` are appropriate to compute a `NaiveDateTime`,
-/// which can be used in conjunction with a timezone string to generate a
-/// `DateTime<Utc>`.
-///
-/// ```text
-/// <unquoted timestamp string> ::=
-///     <date value> <space> <time value> [ <time zone interval> ]
-/// <date value> ::=
-///     <years value> <minus sign> <months value> <minus sign> <days value>
-/// <time zone interval> ::=
-///     <sign> <hours value> <colon> <minutes value>
-/// ```
 // ---------------------------------------------------------------------------
 // Fast-path ISO 8601 timestamp/date/time parsers
 //
@@ -391,16 +373,17 @@ fn parse_2digit(buf: &[u8], off: usize) -> Option<u32> {
     if d0 > 9 || d1 > 9 {
         return None;
     }
-    Some(d0 as u32 * 10 + d1 as u32)
+    Some(u32::from(d0) * 10 + u32::from(d1))
 }
 
 /// Parse 4 ASCII digits at `buf[off..off+4]` as an i32 in [0, 9999].
+#[allow(clippy::as_conversions)] // u32 ≤ 9999 always fits in i32
 #[inline(always)]
 fn parse_4digit(buf: &[u8], off: usize) -> Option<i32> {
-    let d0 = buf[off].wrapping_sub(b'0') as u32;
-    let d1 = buf[off + 1].wrapping_sub(b'0') as u32;
-    let d2 = buf[off + 2].wrapping_sub(b'0') as u32;
-    let d3 = buf[off + 3].wrapping_sub(b'0') as u32;
+    let d0 = u32::from(buf[off].wrapping_sub(b'0'));
+    let d1 = u32::from(buf[off + 1].wrapping_sub(b'0'));
+    let d2 = u32::from(buf[off + 2].wrapping_sub(b'0'));
+    let d3 = u32::from(buf[off + 3].wrapping_sub(b'0'));
     if d0 > 9 || d1 > 9 || d2 > 9 || d3 > 9 {
         return None;
     }
@@ -420,7 +403,7 @@ fn parse_frac_nanos(buf: &[u8], start: usize, end: usize) -> Option<u32> {
         if d > 9 {
             return None;
         }
-        frac = frac * 10 + d as u32;
+        frac = frac * 10 + u32::from(d);
     }
     // Pad to nanoseconds: multiply by 10^(9 - frac_len)
     static NANOS_SCALE: [u32; 10] = [
@@ -445,6 +428,9 @@ fn try_parse_date_bytes(buf: &[u8]) -> Option<(NaiveDate, usize)> {
         return None;
     }
     let year = parse_4digit(buf, 0)?;
+    if year == 0 {
+        return None; // Year 0 is not valid; fall back to general parser for error message
+    }
     if buf[4] != b'-' {
         return None;
     }
@@ -472,10 +458,10 @@ fn try_parse_time_bytes(buf: &[u8], off: usize) -> Option<(NaiveTime, usize)> {
     if buf[off + 5] != b':' {
         return None;
     }
-    let second = parse_2digit(buf, off + 6)?;
+    let mut second = parse_2digit(buf, off + 6)?;
     let mut pos = off + 8;
 
-    let nanos = if pos < buf.len() && buf[pos] == b'.' {
+    let mut nanos = if pos < buf.len() && buf[pos] == b'.' {
         pos += 1; // skip '.'
         let frac_start = pos;
         // Scan digits
@@ -487,12 +473,20 @@ fn try_parse_time_bytes(buf: &[u8], off: usize) -> Option<(NaiveTime, usize)> {
         0
     };
 
+    // Handle leap seconds: chrono represents second=60 as second=59 with
+    // nanos >= 1_000_000_000.
+    if second == 60 {
+        second = 59;
+        nanos = nanos.saturating_add(1_000_000_000);
+    }
+
     let time = NaiveTime::from_hms_nano_opt(hour, minute, second, nanos)?;
     Some((time, pos))
 }
 
 /// Try to parse a fixed-offset timezone like "+00", "+00:00", "-05", "-05:30"
 /// from `buf` at offset `off`. Returns `(FixedOffset, next_offset)`.
+#[allow(clippy::as_conversions)] // u32 ≤ 99 always fits in i32
 #[inline]
 fn try_parse_tz_offset(buf: &[u8], off: usize) -> Option<(chrono::FixedOffset, usize)> {
     if off >= buf.len() {
@@ -508,6 +502,9 @@ fn try_parse_tz_offset(buf: &[u8], off: usize) -> Option<(chrono::FixedOffset, u
         return None;
     }
     let tz_hours = parse_2digit(buf, pos)? as i32;
+    if tz_hours > 15 {
+        return None; // Invalid timezone hour; fall back to general parser for error message
+    }
     let mut end = pos + 2;
 
     let tz_minutes = if end < buf.len() && buf[end] == b':' {
@@ -516,11 +513,17 @@ fn try_parse_tz_offset(buf: &[u8], off: usize) -> Option<(chrono::FixedOffset, u
             return None;
         }
         let m = parse_2digit(buf, end)? as i32;
+        if m >= 60 {
+            return None; // Invalid timezone minute; fall back to general parser for error message
+        }
         end += 2;
         m
     } else if end + 2 <= buf.len() {
         // Try compact format like "+0530" (no colon)
         if let Some(m) = parse_2digit(buf, end) {
+            if m >= 60 {
+                return None;
+            }
             end += 2;
             m as i32
         } else {
@@ -557,7 +560,7 @@ fn try_parse_timestamp_fast(s: &str) -> Option<NaiveDateTime> {
     Some(date.and_time(time))
 }
 
-/// Fast-path: try to parse "YYYY-MM-DD HH:MM:SS[.fff...]{+|-}HH[:MM]" as DateTime<Utc>.
+/// Fast-path: try to parse `"YYYY-MM-DD HH:MM:SS[.fff...]{+|-}HH[:MM]"` as `DateTime<Utc>`.
 /// Returns None if the format doesn't match (falls back to general parser).
 #[inline]
 fn try_parse_timestamptz_fast(s: &str) -> Option<DateTime<Utc>> {
@@ -664,6 +667,24 @@ pub fn parse_time_general(s: &str) -> Result<NaiveTime, ParseError> {
         .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
 
+/// Use the following grammar to parse `s` into:
+///
+/// - `NaiveDate`
+/// - `NaiveTime`
+/// - Timezone string
+///
+/// `NaiveDate` and `NaiveTime` are appropriate to compute a `NaiveDateTime`,
+/// which can be used in conjunction with a timezone string to generate a
+/// `DateTime<Utc>`.
+///
+/// ```text
+/// <unquoted timestamp string> ::=
+///     <date value> <space> <time value> [ <time zone interval> ]
+/// <date value> ::=
+///     <years value> <minus sign> <months value> <minus sign> <days value>
+/// <time zone interval> ::=
+///     <sign> <hours value> <colon> <minutes value>
+/// ```
 fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, Timezone), String> {
     if s.is_empty() {
         return Err("timestamp string is empty".into());
@@ -754,16 +775,23 @@ pub fn format_time<F>(buf: &mut F, t: NaiveTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    // Chrono represents leap seconds as second=59, nanos >= 1_000_000_000.
+    let nanos = t.nanosecond();
+    let (second, frac_nanos) = if nanos >= 1_000_000_000 {
+        (t.second() + 1, nanos - 1_000_000_000)
+    } else {
+        (t.second(), nanos)
+    };
     // Build "HH:MM:SS" directly in a stack buffer (8 bytes).
     let mut tmp = [0u8; 8];
     write_u2(&mut tmp, 0, t.hour());
     tmp[2] = b':';
     write_u2(&mut tmp, 3, t.minute());
     tmp[5] = b':';
-    write_u2(&mut tmp, 6, t.second());
+    write_u2(&mut tmp, 6, second);
     // SAFETY: all bytes are ASCII digits or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, t.nanosecond());
+    format_nanos_to_micros(buf, frac_nanos);
     Nestable::Yes
 }
 
@@ -787,6 +815,14 @@ pub fn format_timestamp<F>(buf: &mut F, ts: &NaiveDateTime) -> Nestable
 where
     F: FormatBuffer,
 {
+    // Chrono represents leap seconds as second=59, nanos >= 1_000_000_000.
+    let nanos = ts.nanosecond();
+    let second = if nanos >= 1_000_000_000 {
+        ts.second() + 1
+    } else {
+        ts.second()
+    };
+    let frac_nanos = ts.and_utc().timestamp_subsec_nanos();
     let (year_ad, year) = ts.year_ce();
     write_year(buf, year);
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
@@ -800,10 +836,10 @@ where
     tmp[9] = b':';
     write_u2(&mut tmp, 10, ts.minute());
     tmp[12] = b':';
-    write_u2(&mut tmp, 13, ts.second());
+    write_u2(&mut tmp, 13, second);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, ts.and_utc().timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, frac_nanos);
     if !year_ad {
         buf.write_str(" BC");
     }
@@ -852,6 +888,13 @@ pub fn format_timestamptz<F>(buf: &mut F, ts: &DateTime<Utc>) -> Nestable
 where
     F: FormatBuffer,
 {
+    // Chrono represents leap seconds as second=59, nanos >= 1_000_000_000.
+    let nanos = ts.nanosecond();
+    let (second, frac_nanos) = if nanos >= 1_000_000_000 {
+        (ts.second() + 1, nanos - 1_000_000_000)
+    } else {
+        (ts.second(), nanos)
+    };
     let (year_ad, year) = ts.year_ce();
     write_year(buf, year);
     // Build "-MM-DD HH:MM:SS" in a stack buffer (15 bytes).
@@ -865,10 +908,10 @@ where
     tmp[9] = b':';
     write_u2(&mut tmp, 10, ts.minute());
     tmp[12] = b':';
-    write_u2(&mut tmp, 13, ts.second());
+    write_u2(&mut tmp, 13, second);
     // SAFETY: all bytes are ASCII digits, '-', ' ', or ':'.
     buf.write_str(unsafe { std::str::from_utf8_unchecked(&tmp) });
-    format_nanos_to_micros(buf, ts.timestamp_subsec_nanos());
+    format_nanos_to_micros(buf, frac_nanos);
     buf.write_str("+00");
     if !year_ad {
         buf.write_str(" BC");
@@ -1102,6 +1145,7 @@ where
 }
 
 /// Writes a 2-digit zero-padded value (0-99) into `buf` at `offset`.
+#[allow(clippy::as_conversions)] // u32 single digit (0-9) always fits in u8
 #[inline(always)]
 fn write_u2(buf: &mut [u8], offset: usize, val: u32) {
     buf[offset] = b'0' + (val / 10) as u8;
@@ -1109,6 +1153,7 @@ fn write_u2(buf: &mut [u8], offset: usize, val: u32) {
 }
 
 /// Writes a year with at least 4-digit zero-padding directly to a FormatBuffer.
+#[allow(clippy::as_conversions)] // u32 single digit (0-9) always fits in u8
 #[inline]
 fn write_year<F: FormatBuffer>(buf: &mut F, year: u32) {
     // Common case: 4-digit year (covers 1000-9999).
@@ -1127,6 +1172,7 @@ fn write_year<F: FormatBuffer>(buf: &mut F, year: u32) {
     }
 }
 
+#[allow(clippy::as_conversions)] // u32 single digit (0-9) always fits in u8
 fn format_nanos_to_micros<F>(buf: &mut F, nanos: u32)
 where
     F: FormatBuffer,
