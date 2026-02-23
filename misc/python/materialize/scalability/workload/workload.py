@@ -26,7 +26,7 @@ class Workload:
     def execute_operation(
         self,
         operation: Operation,
-        cursor: Cursor,
+        cursor: Cursor | None,
         worker_id: int,
         transaction_index: int,
         verbose: bool,

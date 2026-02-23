@@ -29,6 +29,7 @@ from materialize.scalability.result.scalability_result import BenchmarkResult
 from materialize.scalability.result.workload_result import WorkloadResult
 from materialize.scalability.schema.schema import Schema
 from materialize.scalability.workload.workload import Workload, WorkloadWithContext
+from materialize.scalability.workload.workload_markers import ConnectionWorkload
 from materialize.scalability.workload.workloads.connection_workloads import *  # noqa: F401 F403
 from materialize.scalability.workload.workloads.ddl_workloads import *  # noqa: F401 F403
 from materialize.scalability.workload.workloads.dml_dql_workloads import *  # noqa: F401 F403
@@ -190,10 +191,17 @@ class BenchmarkExecutor:
                 init_operation, init_cursor, -1, -1, self.config.verbose
             )
 
-        print(
-            f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
-        )
-        cursor_pool = self._create_cursor_pool(concurrency, endpoint)
+        use_cursor_pool = not isinstance(workload, ConnectionWorkload)
+        cursor_pool = None
+        if use_cursor_pool:
+            print(
+                f"Creating a cursor pool with {concurrency} entries against endpoint: {endpoint.url()}"
+            )
+            cursor_pool = self._create_cursor_pool(concurrency, endpoint)
+        else:
+            print(
+                "Skipping cursor pool creation for connection workload to avoid extra idle connections."
+            )
 
         print(
             f"Benchmarking workload '{workload.name()}' at concurrency {concurrency} ..."
@@ -201,10 +209,33 @@ class BenchmarkExecutor:
         operations = workload.operations()
 
         global next_worker_id
-        next_worker_id = 0
         local = threading.local()
         lock = threading.Lock()
 
+        warmup_count = max(1, min(32, int(count / 10)))
+        print(f"Warming up with {warmup_count} operations ...")
+        next_worker_id = 0
+        with futures.ThreadPoolExecutor(
+            concurrency, initializer=self.initialize_worker, initargs=(local, lock)
+        ) as executor:
+            list(
+                executor.map(
+                    self.execute_operation,
+                    [
+                        (
+                            workload,
+                            concurrency,
+                            local,
+                            cursor_pool,
+                            operations[i % len(operations)],
+                            int(i / len(operations)),
+                        )
+                        for i in range(warmup_count)
+                    ],
+                )
+            )
+
+        next_worker_id = 0
         start = time.time()
         with futures.ThreadPoolExecutor(
             concurrency, initializer=self.initialize_worker, initargs=(local, lock)
@@ -260,14 +291,20 @@ class BenchmarkExecutor:
         return DfTotals(df_total), DfDetails(df_detail)
 
     def execute_operation(
-        self, args: tuple[Workload, int, threading.local, list[Cursor], Operation, int]
+        self,
+        args: tuple[
+            Workload, int, threading.local, list[Cursor] | None, Operation, int
+        ],
     ) -> dict[str, Any]:
         workload, concurrency, local, cursor_pool, operation, transaction_index = args
         worker_id = local.worker_id
-        assert (
-            len(cursor_pool) >= worker_id + 1
-        ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {worker_id}"
-        cursor = cursor_pool[worker_id]
+        if cursor_pool is None:
+            cursor = None
+        else:
+            assert (
+                len(cursor_pool) >= worker_id + 1
+            ), f"len(cursor_pool) is {len(cursor_pool)} but local.worker_id is {worker_id}"
+            cursor = cursor_pool[worker_id]
 
         start = time.time()
         workload.execute_operation(
