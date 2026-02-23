@@ -1206,6 +1206,59 @@ fn test_cancel_long_running_query() {
         .expect("simple query succeeds after cancellation");
 }
 
+// Test that frontend-sequenced read-then-write statements honor pgwire cancel
+// requests and do not run to completion after cancellation.
+#[mz_ore::test]
+fn test_cancel_frontend_read_then_write_long_running_query() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let cancel_token = client.cancel_token();
+
+    client
+        .batch_execute("CREATE TABLE t (a TEXT, ts INT)")
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES ('hello', 10)")
+        .unwrap();
+
+    let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel();
+    let cancel_thread = thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(200));
+        match shutdown_rx.try_recv() {
+            Ok(()) => return,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                let _ = cancel_token.cancel_query(postgres::NoTls);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+        }
+    });
+
+    match client.batch_execute(
+        "INSERT INTO t SELECT a, CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 0 END AS ts FROM t",
+    ) {
+        Err(e) if e.code() == Some(&SqlState::QUERY_CANCELED) => {}
+        Err(e) => panic!("expected error SqlState::QUERY_CANCELED, but got {e:?}"),
+        Ok(_) => panic!("expected error SqlState::QUERY_CANCELED, but query succeeded"),
+    }
+
+    shutdown_tx.send(()).unwrap();
+    cancel_thread.join().unwrap();
+
+    let rows = client
+        .query_one("SELECT count(*) FROM t", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 1, "cancelled statement should not have committed writes");
+}
+
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
     // Accounts for the presence of introspection subscribe dataflows by ignoring those.

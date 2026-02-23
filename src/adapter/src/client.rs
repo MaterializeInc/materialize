@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use anyhow::bail;
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
-use futures::{Stream, StreamExt};
+use futures::{FutureExt, Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::Authenticated;
@@ -724,6 +724,7 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        let cancel_future = cancel_future.map(|_| ()).shared();
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
@@ -743,7 +744,11 @@ impl SessionClient {
 
         // Attempt read-then-write sequencing in the session task.
         if let Some(resp) = self
-            .try_frontend_read_then_write(&portal_name, &mut outer_ctx_extra)
+            .try_frontend_read_then_write_with_cancel(
+                &portal_name,
+                &mut outer_ctx_extra,
+                cancel_future.clone(),
+            )
             .await?
         {
             debug!("frontend read-then-write succeeded");
@@ -762,7 +767,9 @@ impl SessionClient {
                     tx,
                     outer_ctx_extra,
                 },
-                cancel_future,
+                cancel_future
+                    .clone()
+                    .map(|_| std::io::Error::new(std::io::ErrorKind::Other, "connection closed")),
             )
             .await?;
         Ok((response, execute_started))
@@ -1173,6 +1180,33 @@ impl SessionClient {
                 .await
         } else {
             Ok(None)
+        }
+    }
+
+    async fn try_frontend_read_then_write_with_cancel(
+        &mut self,
+        portal_name: &str,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
+        cancel_future: impl Future<Output = ()> + Send,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        let conn_id = self.session().conn_id().clone();
+        let inner_client = self.inner().clone();
+        let mut cancel_future = pin::pin!(cancel_future);
+        let mut frontend_read_then_write =
+            pin::pin!(self.try_frontend_read_then_write(portal_name, outer_ctx_extra));
+
+        let mut cancelled = false;
+
+        loop {
+            tokio::select! {
+                response = &mut frontend_read_then_write => return response,
+                _ = &mut cancel_future, if !cancelled => {
+                    cancelled = true;
+                    inner_client.send(Command::PrivilegedCancelRequest {
+                        conn_id: conn_id.clone(),
+                    });
+                }
+            }
         }
     }
 
