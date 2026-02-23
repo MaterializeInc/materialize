@@ -163,8 +163,8 @@ impl Context {
             balancer.external_certificate_name(),
             balancer.external_certificate_secret_name(),
             None,
-            CertificatePrivateKeyAlgorithm::Rsa,
-            Some(4096),
+            CertificatePrivateKeyAlgorithm::Ed25519,
+            None,
         )
     }
 
