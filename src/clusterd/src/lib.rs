@@ -41,7 +41,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
-use tracing::{error, info};
+use tracing::{Instrument, error, info, info_span};
 
 mod usage_metrics;
 
@@ -393,7 +393,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             Duration::MAX,
             storage_client_builder,
             grpc_server_metrics.for_server("storage"),
-        ),
+        )
+        .instrument(info_span!("ctp", name = "storage")),
     );
 
     // Start compute server.
@@ -423,7 +424,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             Duration::MAX,
             compute_client_builder,
             grpc_server_metrics.for_server("compute"),
-        ),
+        )
+        .instrument(info_span!("ctp", name = "compute")),
     );
 
     // TODO: unify storage and compute servers to use one timely cluster.

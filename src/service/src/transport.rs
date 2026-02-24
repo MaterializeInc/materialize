@@ -38,7 +38,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot, watch};
-use tracing::{debug, info, trace, warn};
+use tracing::{Instrument, debug, info, trace, warn};
 
 use crate::client::{GenericClient, Partitionable, Partitioned};
 
@@ -175,19 +175,24 @@ where
         let metrics = metrics.clone();
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
-        let handle = mz_ore::task::spawn(|| "ctp::connection", async move {
-            let Err(error) = serve_connection(
-                stream,
-                handler,
-                version,
-                server_fqdn,
-                idle_timeout,
-                cancel_rx,
-                metrics,
-            )
-            .await;
-            info!("ctp: connection failed: {error}");
-        });
+        let span = tracing::Span::current();
+        let handle = mz_ore::task::spawn(
+            || "ctp::connection",
+            async move {
+                let Err(error) = serve_connection(
+                    stream,
+                    handler,
+                    version,
+                    server_fqdn,
+                    idle_timeout,
+                    cancel_rx,
+                    metrics,
+                )
+                .await;
+                info!("ctp: connection failed: {error}");
+            }
+            .instrument(span),
+        );
 
         connection_task = Some((handle, cancel_tx));
     }
@@ -295,13 +300,15 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         // produced an error.
         let (error_tx, error_rx) = watch::channel("connection closed".into());
 
+        let span = tracing::Span::current();
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
-            Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone()),
+            Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone())
+                .instrument(span.clone()),
         );
         let recv_task = mz_ore::task::spawn(
             || "ctp::recv",
-            Self::run_recv_task(reader, in_tx, error_tx, metrics),
+            Self::run_recv_task(reader, in_tx, error_tx, metrics).instrument(span),
         );
 
         Ok(Self {
