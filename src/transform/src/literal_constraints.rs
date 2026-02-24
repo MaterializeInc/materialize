@@ -30,7 +30,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::vec::swap_remove_multiple;
-use mz_repr::{Diff, GlobalId, ReprRelationType, Row, SqlColumnType, SqlRelationType};
+use mz_repr::{Diff, GlobalId, ReprRelationType, Row, SqlColumnType};
 
 use crate::TransformCtx;
 use crate::canonicalize_mfp::CanonicalizeMfp;
@@ -172,7 +172,7 @@ impl LiteralConstraints {
                     if possible_vals.is_empty() {
                         // Even better than what we were hoping for: Found contradicting
                         // literal constraints, so the whole relation is empty.
-                        relation.take_safely(Some(SqlRelationType::from_repr(&inp_typ)));
+                        relation.take_safely_repr(Some(inp_typ.clone()));
                     } else {
                         // The common case: We need to build the join which is the main point of
                         // this transform.

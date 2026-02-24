@@ -1774,6 +1774,27 @@ impl MirRelationExpr {
         self.take_safely(Some(SqlRelationType::new(typ)))
     }
 
+    /// Like [`Self::take_safely`], but accepts a [`ReprRelationType`].
+    ///
+    /// This is the preferred entry point for optimizer transforms, where repr
+    /// types are the native currency. Internally converts to [`SqlRelationType`]
+    /// and delegates to [`Self::take_safely`].
+    pub fn take_safely_repr(&mut self, typ: Option<ReprRelationType>) -> MirRelationExpr {
+        self.take_safely(typ.map(|t| SqlRelationType::from_repr(&t)))
+    }
+
+    /// Like [`Self::take_safely_with_col_types`], but accepts `Vec<ReprColumnType>`.
+    ///
+    /// This is the preferred entry point for optimizer transforms, where repr
+    /// types are the native currency. Internally converts to [`SqlColumnType`]
+    /// and delegates to [`Self::take_safely_with_col_types`].
+    pub fn take_safely_with_repr_col_types(
+        &mut self,
+        typ: Vec<ReprColumnType>,
+    ) -> MirRelationExpr {
+        self.take_safely_with_col_types(typ.iter().map(SqlColumnType::from_repr).collect())
+    }
+
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
     ///
     /// This should only be used if `self` is about to be dropped or otherwise overwritten.

@@ -597,7 +597,7 @@ impl PredicatePushdown {
                             .count()
                             > 1
                         {
-                            relation.take_safely(Some(mz_repr::SqlRelationType::from_repr(&relation.repr_typ_with_input_types(&input_types))));
+                            relation.take_safely_repr(Some(relation.repr_typ_with_input_types(&input_types)));
                             return Ok(());
                         }
 

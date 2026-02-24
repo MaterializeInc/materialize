@@ -146,7 +146,7 @@ impl EquivalencePropagation {
         let expr_equivalences = if let Some(e) = expr_equivalences {
             e
         } else {
-            expr.take_safely_with_col_types(expr_type.unwrap().iter().map(mz_repr::SqlColumnType::from_repr).collect());
+            expr.take_safely_with_repr_col_types(expr_type.unwrap().clone());
             return;
         };
 
@@ -161,7 +161,7 @@ impl EquivalencePropagation {
 
         outer_equivalences.minimize(expr_type.map(|x| &x[..]));
         if outer_equivalences.unsatisfiable() {
-            expr.take_safely_with_col_types(expr_type.unwrap().iter().map(mz_repr::SqlColumnType::from_repr).collect());
+            expr.take_safely_with_repr_col_types(expr_type.unwrap().clone());
             return;
         }
 
