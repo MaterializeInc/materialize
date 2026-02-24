@@ -1130,6 +1130,123 @@ class StorageClass(Modification):
         retry(check_pods, 5)
 
 
+class ClusterdCpu(Modification):
+    # The default cluster (s2) uses the "25cc" size.
+    DEFAULT_SIZE_NAME = "25cc"
+
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            None,
+            # These values were chosen to be different from the defaults,
+            # with the cpu_request lower than the limit,
+            # and to be small enough to fit in developer laptops.
+            {"cpu_limit": 1.5},
+            {"cpu_request": 0.25},
+            {"cpu_limit": 1.5, "cpu_request": 0.25},
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is None:
+            return
+
+        default_size = definition["operator"]["operator"]["clusters"]["sizes"][
+            self.DEFAULT_SIZE_NAME
+        ]
+
+        default_size.pop("cpu_limit", None)
+        default_size.pop("cpu_request", None)
+        for key, val in self.value.items():
+            default_size[key] = val
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        environmentd_supports_cpu_request = version >= MzVersion.parse_mz(
+            "v26.14.0-dev.0"
+        )
+
+        environmentd = get_environmentd_data()
+        args = environmentd["items"][0]["spec"]["containers"][0]["args"]
+        cluster_replica_sizes_arg = next(
+            (arg for arg in args if arg.startswith("--cluster-replica-sizes=")),
+            None,
+        )
+        assert (
+            cluster_replica_sizes_arg is not None
+        ), f"Expected --cluster-replica-sizes in environmentd args, but only found: {args}"
+
+        cluster_replica_sizes = json.loads(cluster_replica_sizes_arg.split("=", 1)[1])
+        default_size = cluster_replica_sizes[self.DEFAULT_SIZE_NAME]
+
+        # Verify the args passed to environmentd are what we expect.
+
+        if self.value is None or "cpu_limit" not in self.value:
+            # expect the value from the helm chart
+            expected_arg_cpu_limit = "0.5"
+        else:
+            expected_arg_cpu_limit = self.value["cpu_limit"]
+
+        if self.value is None or "cpu_request" not in self.value:
+            # expect the value from the helm chart
+            expected_arg_cpu_request = None
+        else:
+            expected_arg_cpu_request = self.value["cpu_request"]
+
+        # compare as strings to avoid float issues
+        assert str(default_size.get("cpu_request")) == str(expected_arg_cpu_request), (
+            f"Expected arg cpu request {expected_arg_cpu_request}, "
+            f"but got {default_size.get('cpu_request')}"
+        )
+        assert str(default_size.get("cpu_limit")) == str(expected_arg_cpu_limit), (
+            f"Expected arg cpu limit {expected_arg_cpu_limit}, "
+            f"but got {default_size.get('cpu_limit')}"
+        )
+
+        # Verify clusterd pods have correct CPU resources.
+
+        def cpu_to_k8s_quantity(cpu: float | None) -> str | None:
+            if cpu is None:
+                return None
+            return f"{int(cpu * 1000)}m"
+
+        expected_pod_cpu_limit = cpu_to_k8s_quantity(default_size.get("cpu_limit"))
+        if environmentd_supports_cpu_request:
+            expected_pod_cpu_request = cpu_to_k8s_quantity(
+                # We fall back to cpu_limit if we have no request,
+                # so that the pod gets some guaranteed resources.
+                default_size.get("cpu_request", default_size.get("cpu_limit")),
+            )
+        else:
+            expected_pod_cpu_request = expected_pod_cpu_limit
+
+        labels = {
+            "cluster.environmentd.materialize.cloud/type": "cluster",
+            "cluster.environmentd.materialize.cloud/cluster-id": "s2",
+            "cluster.environmentd.materialize.cloud/replica-id": "s1",
+            "materialize.cloud/organization-name": "12345678-1234-1234-1234-123456789012",
+        }
+
+        def check_pods() -> None:
+            clusterd = get_pod_data(labels)["items"][0]
+            resources = clusterd["spec"]["containers"][0]["resources"]
+            actual_cpu_request = resources.get("requests", {}).get("cpu")
+            actual_cpu_limit = resources.get("limits", {}).get("cpu")
+            assert actual_cpu_request == expected_pod_cpu_request, (
+                f"Expected pod cpu request {expected_pod_cpu_request}, "
+                f"but got {actual_cpu_request}: {resources}"
+            )
+            assert actual_cpu_limit == expected_pod_cpu_limit, (
+                f"Expected pod cpu limit {expected_pod_cpu_limit}, "
+                f"but got {actual_cpu_limit}: {resources}"
+            )
+
+        retry(check_pods, 120)
+
+
 class EnvironmentdResources(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:

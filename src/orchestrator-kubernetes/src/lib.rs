@@ -563,6 +563,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             memory_limit,
             memory_request,
             cpu_limit,
+            cpu_request,
             scale,
             labels: labels_in,
             annotations: annotations_in,
@@ -633,6 +634,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             requests.insert(
                 "cpu".into(),
                 Quantity(format!("{}m", cpu_limit.as_millicpus())),
+            );
+        }
+        if let Some(cpu_request) = cpu_request {
+            requests.insert(
+                "cpu".into(),
+                Quantity(format!("{}m", cpu_request.as_millicpus())),
             );
         }
         let service = K8sService {
