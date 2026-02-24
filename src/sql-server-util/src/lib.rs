@@ -404,7 +404,7 @@ impl<'a> Transaction<'a> {
             )))?;
         }
 
-        let stmt = format!("SAVE TRANSACTION [{savepoint_name}]");
+        let stmt = format!("SAVE TRANSACTION {}", quote_identifier(savepoint_name));
         let _result = self.client.simple_query(stmt).await?;
         Ok(())
     }
@@ -439,7 +439,9 @@ impl<'a> Transaction<'a> {
         // in SELECT using the WITH keyword.  This query does not need to return any rows to lock the table,
         // hence the 1=0, which is something short that always evaluates to false in this universe.
         let query = format!(
-            "{SET_READ_COMMITTED}\nSELECT * FROM [{schema}].[{table}] WITH (TABLOCK, HOLDLOCK) WHERE 1=0;"
+            "{SET_READ_COMMITTED}\nSELECT * FROM {schema}.{table} WITH (TABLOCK, HOLDLOCK) WHERE 1=0;",
+            schema = quote_identifier(schema),
+            table = quote_identifier(table)
         );
         let _result = self.client.simple_query(query).await?;
         Ok(())
