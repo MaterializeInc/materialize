@@ -3008,64 +3008,37 @@ fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -
     })
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_string<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a.as_bytes();
-    digest_inner(to_digest, b, temp_storage)
+#[sqlfunc(sqlname = "digest")]
+fn digest_string(to_digest: &str, digest_fn: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(to_digest.as_bytes(), digest_fn)
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_bytes<'a>(a: &[u8], b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a;
-    digest_inner(to_digest, b, temp_storage)
+#[sqlfunc(sqlname = "digest")]
+fn digest_bytes(to_digest: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(to_digest, digest_fn)
 }
 
-fn digest_inner<'a>(
-    bytes: &[u8],
-    digest_fn: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let bytes = match digest_fn {
-        "md5" => Md5::digest(bytes).to_vec(),
-        "sha1" => Sha1::digest(bytes).to_vec(),
-        "sha224" => Sha224::digest(bytes).to_vec(),
-        "sha256" => Sha256::digest(bytes).to_vec(),
-        "sha384" => Sha384::digest(bytes).to_vec(),
-        "sha512" => Sha512::digest(bytes).to_vec(),
-        other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
-    };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+fn digest_inner(bytes: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
+    match digest_fn {
+        "md5" => Ok(Md5::digest(bytes).to_vec()),
+        "sha1" => Ok(Sha1::digest(bytes).to_vec()),
+        "sha224" => Ok(Sha224::digest(bytes).to_vec()),
+        "sha256" => Ok(Sha256::digest(bytes).to_vec()),
+        "sha384" => Ok(Sha384::digest(bytes).to_vec()),
+        "sha512" => Ok(Sha512::digest(bytes).to_vec()),
+        other => Err(EvalError::InvalidHashAlgorithm(other.into())),
+    }
 }
 
-#[sqlfunc(
-    output_type = "String",
-    sqlname = "mz_render_typmod",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn mz_render_typmod<'a>(
-    oid: u32,
-    typmod: i32,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let s = match Type::from_oid_and_typmod(oid, typmod) {
+#[sqlfunc]
+fn mz_render_typmod(oid: u32, typmod: i32) -> String {
+    match Type::from_oid_and_typmod(oid, typmod) {
         Ok(typ) => typ.constraint().display_or("").to_string(),
         // Match dubious PostgreSQL behavior of outputting the unmodified
         // `typmod` when positive if the type OID/typmod is invalid.
         Err(_) if typmod >= 0 => format!("({typmod})"),
         Err(_) => "".into(),
-    };
-    Ok(Datum::String(temp_storage.push_string(s)))
+    }
 }
 
 #[cfg(test)]
