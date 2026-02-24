@@ -41,8 +41,8 @@ use mz_repr::adt::range::Range;
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, InputDatumType, OutputDatumType, Row,
-    RowArena, SqlScalarType, strconv,
+    ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, InputDatumType, Row, RowArena,
+    SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -1538,9 +1538,8 @@ range_fn!(adjacent, adjacent, "-|-");
 fn range_union<'a>(
     l: Range<Datum<'a>>,
     r: Range<Datum<'a>>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    l.union(&r)?.into_result(temp_storage)
+) -> Result<Range<Datum<'a>>, EvalError> {
+    Ok(l.union(&r)?)
 }
 
 #[sqlfunc(
@@ -1550,12 +1549,8 @@ fn range_union<'a>(
     propagates_nulls = true,
     introduces_nulls = false
 )]
-fn range_intersection<'a>(
-    l: Range<Datum<'a>>,
-    r: Range<Datum<'a>>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    l.intersection(&r).into_result(temp_storage)
+fn range_intersection<'a>(l: Range<Datum<'a>>, r: Range<Datum<'a>>) -> Range<Datum<'a>> {
+    l.intersection(&r)
 }
 
 #[sqlfunc(
@@ -1568,9 +1563,8 @@ fn range_intersection<'a>(
 fn range_difference<'a>(
     l: Range<Datum<'a>>,
     r: Range<Datum<'a>>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    l.difference(&r)?.into_result(temp_storage)
+) -> Result<Range<Datum<'a>>, EvalError> {
+    Ok(l.difference(&r)?)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "=", negate = "Some(NotEq.into())")]
@@ -2826,18 +2820,16 @@ fn array_contains_array_rev<'a>(a: Array<'a>, b: Array<'a>) -> bool {
     introduces_nulls = false
 )]
 fn array_array_concat<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
+    a: Option<Array<'a>>,
+    b: Option<Array<'a>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    if a.is_null() {
+) -> Result<Option<Array<'a>>, EvalError> {
+    let Some(a_array) = a else {
         return Ok(b);
-    } else if b.is_null() {
+    };
+    let Some(b_array) = b else {
         return Ok(a);
-    }
-
-    let a_array = a.unwrap_array();
-    let b_array = b.unwrap_array();
+    };
 
     let a_dims: Vec<ArrayDimension> = a_array.dims().into_iter().collect();
     let b_dims: Vec<ArrayDimension> = b_array.dims().into_iter().collect();
@@ -2926,7 +2918,8 @@ fn array_array_concat<'a>(
 
     let elems = a_array.elements().iter().chain(b_array.elements().iter());
 
-    Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
+    let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?;
+    Ok(Some(datum.unwrap_array()))
 }
 
 #[sqlfunc(
@@ -2936,17 +2929,20 @@ fn array_array_concat<'a>(
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    if a.is_null() {
+fn list_list_concat<'a>(
+    a: Option<DatumList<'a>>,
+    b: Option<DatumList<'a>>,
+    temp_storage: &'a RowArena,
+) -> Option<DatumList<'a>> {
+    let Some(a) = a else {
         return b;
-    } else if b.is_null() {
-        return a;
-    }
+    };
+    let Some(b) = b else {
+        return Some(a);
+    };
 
-    let a = a.unwrap_list().iter();
-    let b = b.unwrap_list().iter();
-
-    temp_storage.make_datum(|packer| packer.push_list(a.chain(b)))
+    let datum = temp_storage.make_datum(|packer| packer.push_list(a.iter().chain(b.iter())));
+    Some(datum.unwrap_list())
 }
 
 #[sqlfunc(
@@ -2956,17 +2952,22 @@ fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) 
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
+fn list_element_concat<'a>(
+    a: Option<DatumList<'a>>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> DatumList<'a> {
+    let datum = temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
-            if !a.is_null() {
-                for elem in a.unwrap_list().iter() {
+            if let Some(a) = a {
+                for elem in a.iter() {
                     packer.push(elem);
                 }
             }
             packer.push(b);
         })
-    })
+    });
+    datum.unwrap_list()
 }
 
 // Note that the output type corresponds to the _second_ parameter's input type.
@@ -2977,17 +2978,22 @@ fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
+fn element_list_concat<'a>(
+    a: Datum<'a>,
+    b: Option<DatumList<'a>>,
+    temp_storage: &'a RowArena,
+) -> DatumList<'a> {
+    let datum = temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
             packer.push(a);
-            if !b.is_null() {
-                for elem in b.unwrap_list().iter() {
+            if let Some(b) = b {
+                for elem in b.iter() {
                     packer.push(elem);
                 }
             }
         })
-    })
+    });
+    datum.unwrap_list()
 }
 
 #[sqlfunc(
