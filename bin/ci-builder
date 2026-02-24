@@ -126,10 +126,11 @@ build() {
         --build-arg "RUST_CPU_TARGET=$rust_cpu_target" \
         --build-arg "RUST_TARGET_FEATURES=$rust_target_features" \
         --tag materialize/ci-builder:"$tag" \
-        --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
         --tag materialize/ci-builder:"$cache_tag" \
         --target $docker_target \
         "$@" ci/builder
+        # TODO: Reenable when ghcr 503 error is fixed
+        # --tag ghcr.io/materializeinc/materialize/ci-builder:"$tag" \
 }
 
 shasum=sha1sum
@@ -168,9 +169,10 @@ print(hash.decode())
 cache_tag=cache-$flavor-$rust_version-$arch_go
 
 image_registry="materialize"
-if is_truthy "${CI:-0}" || is_truthy "${MZ_GHCR:-0}"; then
-    image_registry="ghcr.io/materializeinc/materialize"
-fi
+# TODO: Reenable when ghcr 503 error is fixed
+# if is_truthy "${CI:-0}" || is_truthy "${MZ_GHCR:-0}"; then
+#     image_registry="ghcr.io/materializeinc/materialize"
+# fi
 
 case "$cmd" in
     build)
