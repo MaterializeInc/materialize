@@ -20,6 +20,8 @@ set -euo pipefail
 "$(dirname "$0")"/ci-builder run stable --no-secrets bash -lc '
     export HOME=/tmp
     export NPM_CONFIG_UPDATE_NOTIFIER=false npm_config_update_notifier=false NO_UPDATE_NOTIFIER=1
-    (npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill materialize-docs) >/dev/null 2>&1 || true
+    if [ ! -e "/tmp/.claude/skills/materialize-docs" ]; then
+        (npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill materialize-docs) >/dev/null 2>&1 || true
+    fi
     exec npx -q -y @anthropic-ai/claude-code@latest --dangerously-skip-permissions "$@"
 ' -- "$@"
