@@ -15,20 +15,23 @@ use tokio_postgres::Client;
 use tokio_postgres::types::Oid;
 
 use crate::desc::{PostgresColumnDesc, PostgresKeyDesc, PostgresSchemaDesc, PostgresTableDesc};
-use crate::{PostgresError, simple_query_opt};
+use crate::{PostgresError, query, simple_query_opt};
 
 pub async fn get_schemas(client: &Client) -> Result<Vec<PostgresSchemaDesc>, PostgresError> {
-    Ok(client
-        .query("SELECT oid, nspname, nspowner FROM pg_namespace", &[])
-        .await?
-        .into_iter()
-        .map(|row| {
-            let oid: Oid = row.get("oid");
-            let name: String = row.get("nspname");
-            let owner: Oid = row.get("nspowner");
-            PostgresSchemaDesc { oid, name, owner }
-        })
-        .collect::<Vec<_>>())
+    Ok(query(
+        client,
+        crate::sql!("SELECT oid, nspname, nspowner FROM pg_namespace"),
+        &[],
+    )
+    .await?
+    .into_iter()
+    .map(|row| {
+        let oid: Oid = row.get("oid");
+        let name: String = row.get("nspname");
+        let owner: Oid = row.get("nspowner");
+        PostgresSchemaDesc { oid, name, owner }
+    })
+    .collect::<Vec<_>>())
 }
 
 /// Get the major version of the PostgreSQL server.
@@ -36,8 +39,11 @@ pub async fn get_pg_major_version(client: &Client) -> Result<u32, PostgresError>
     // server_version_num is an integer like 140005 for version 14.5
     // NOTE: We use the statement SELECT instead of SHOW because older Aurora
     // versions don't support SHOW via a replication channel.
-    let query = "SELECT current_setting('server_version_num')";
-    let row = simple_query_opt(client, query).await?;
+    let row = simple_query_opt(
+        client,
+        crate::sql!("SELECT current_setting('server_version_num')"),
+    )
+    .await?;
     let version_num: u32 = row
         .and_then(|r| r.get("current_setting").map(|s| s.parse().ok()))
         .flatten()
@@ -68,19 +74,19 @@ pub async fn publication_info(
 ) -> Result<BTreeMap<Oid, PostgresTableDesc>, PostgresError> {
     let server_major_version = get_pg_major_version(client).await?;
 
-    client
-        .query(
-            "SELECT oid FROM pg_publication WHERE pubname = $1",
-            &[&publication],
-        )
-        .await
-        .map_err(PostgresError::from)?
-        .get(0)
-        .ok_or_else(|| PostgresError::PublicationMissing(publication.to_string()))?;
+    query(
+        client,
+        crate::sql!("SELECT oid FROM pg_publication WHERE pubname = $1"),
+        &[&publication],
+    )
+    .await?
+    .get(0)
+    .ok_or_else(|| PostgresError::PublicationMissing(publication.to_string()))?;
 
     let tables = if let Some(oids) = oids {
-        client
-            .query(
+        query(
+            client,
+            crate::sql!(
                 "SELECT
                     c.oid, p.schemaname, p.tablename
                 FROM
@@ -90,13 +96,15 @@ pub async fn publication_info(
                             c.relname = p.tablename AND n.nspname = p.schemaname
                 WHERE
                     p.pubname = $1
-                    AND c.oid = ANY ($2)",
-                &[&publication, &oids],
-            )
-            .await
+                    AND c.oid = ANY ($2)"
+            ),
+            &[&publication, &oids],
+        )
+        .await
     } else {
-        client
-            .query(
+        query(
+            client,
+            crate::sql!(
                 "SELECT
                     c.oid, p.schemaname, p.tablename
                 FROM
@@ -105,23 +113,19 @@ pub async fn publication_info(
                     JOIN pg_publication_tables AS p ON
                             c.relname = p.tablename AND n.nspname = p.schemaname
                 WHERE
-                    p.pubname = $1",
-                &[&publication],
-            )
-            .await
+                    p.pubname = $1"
+            ),
+            &[&publication],
+        )
+        .await
     }?;
 
     // The Postgres replication protocol does not support GENERATED columns
     // so we exclude them from this query. But not all Postgres-like
     // databases have the `pg_attribute.attgenerated` column.
-    let attgenerated = if server_major_version >= 12 {
-        "a.attgenerated = ''"
-    } else {
-        "true"
-    };
-
-    let pg_columns = format!(
-        "
+    let pg_columns = if server_major_version >= 12 {
+        crate::sql!(
+            "
         SELECT
             a.attrelid AS table_oid,
             a.attname AS name,
@@ -137,10 +141,33 @@ pub async fn publication_info(
             AND a.attnum = ANY (b.conkey)
         WHERE a.attnum > 0::pg_catalog.int2
             AND NOT a.attisdropped
-            AND {attgenerated}
+            AND a.attgenerated = ''
             AND a.attrelid = ANY ($1)
         ORDER BY a.attnum"
-    );
+        )
+    } else {
+        crate::sql!(
+            "
+        SELECT
+            a.attrelid AS table_oid,
+            a.attname AS name,
+            a.atttypid AS typoid,
+            a.attnum AS colnum,
+            a.atttypmod AS typmod,
+            a.attnotnull AS not_null,
+            b.oid IS NOT NULL AS primary_key
+        FROM pg_catalog.pg_attribute a
+        LEFT JOIN pg_catalog.pg_constraint b
+            ON a.attrelid = b.conrelid
+            AND b.contype = 'p'
+            AND a.attnum = ANY (b.conkey)
+        WHERE a.attnum > 0::pg_catalog.int2
+            AND NOT a.attisdropped
+            AND true
+            AND a.attrelid = ANY ($1)
+        ORDER BY a.attnum"
+        )
+    };
 
     let table_oids = tables
         .iter()
@@ -148,7 +175,7 @@ pub async fn publication_info(
         .collect::<Vec<Oid>>();
 
     let mut columns: BTreeMap<Oid, Vec<_>> = BTreeMap::new();
-    for row in client.query(&pg_columns, &[&table_oids]).await? {
+    for row in query(client, pg_columns, &[&table_oids]).await? {
         let table_oid: Oid = row.get("table_oid");
         let name: String = row.get("name");
         let type_oid = row.get("typoid");
@@ -171,20 +198,16 @@ pub async fn publication_info(
     // PG 15 adds UNIQUE NULLS NOT DISTINCT, which would let us use `UNIQUE` constraints over
     // nullable columns as keys; i.e. aligns a PG index's NULL handling with an arrangement's
     // keys. For more info, see https://www.postgresql.org/about/featurematrix/detail/392/
-    let nulls_not_distinct = if server_major_version >= 15 {
-        "pg_index.indnullsnotdistinct"
-    } else {
-        "false"
-    };
-    let pg_keys = format!(
-        "
+    let pg_keys = if server_major_version >= 15 {
+        crate::sql!(
+            "
         SELECT
             pg_constraint.conrelid AS table_oid,
             pg_constraint.oid,
             pg_constraint.conkey,
             pg_constraint.conname,
             pg_constraint.contype = 'p' AS is_primary,
-            {nulls_not_distinct} AS nulls_not_distinct
+            pg_index.indnullsnotdistinct AS nulls_not_distinct
         FROM
             pg_constraint
                 JOIN
@@ -194,10 +217,31 @@ pub async fn publication_info(
             pg_constraint.conrelid = ANY ($1)
                 AND
             pg_constraint.contype = ANY (ARRAY['p', 'u']);"
-    );
+        )
+    } else {
+        crate::sql!(
+            "
+        SELECT
+            pg_constraint.conrelid AS table_oid,
+            pg_constraint.oid,
+            pg_constraint.conkey,
+            pg_constraint.conname,
+            pg_constraint.contype = 'p' AS is_primary,
+            false AS nulls_not_distinct
+        FROM
+            pg_constraint
+                JOIN
+                    pg_index
+                    ON pg_index.indexrelid = pg_constraint.conindid
+        WHERE
+            pg_constraint.conrelid = ANY ($1)
+                AND
+            pg_constraint.contype = ANY (ARRAY['p', 'u']);"
+        )
+    };
 
     let mut keys: BTreeMap<Oid, BTreeSet<_>> = BTreeMap::new();
-    for row in client.query(&pg_keys, &[&table_oids]).await? {
+    for row in query(client, pg_keys, &[&table_oids]).await? {
         let table_oid: Oid = row.get("table_oid");
         let oid: Oid = row.get("oid");
         let cols: Vec<i16> = row.get("conkey");

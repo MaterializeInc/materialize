@@ -9,7 +9,6 @@
 
 use std::str::FromStr;
 
-use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use tokio_postgres::{
     Client,
     types::{Oid, PgLsn},
@@ -17,7 +16,7 @@ use tokio_postgres::{
 
 use mz_ssh_util::tunnel_manager::SshTunnelManager;
 
-use crate::{Config, PostgresError, simple_query_opt};
+use crate::{Config, PostgresError, Sql, query, query_one, simple_query, simple_query_opt};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WalLevel {
@@ -59,31 +58,33 @@ fn test_wal_level_max() {
 }
 
 pub async fn get_wal_level(client: &Client) -> Result<WalLevel, PostgresError> {
-    let wal_level = client.query_one("SHOW wal_level", &[]).await?;
+    let wal_level = query_one(client, crate::sql!("SHOW wal_level"), &[]).await?;
     let wal_level: String = wal_level.get("wal_level");
     Ok(WalLevel::from_str(&wal_level)?)
 }
 
 pub async fn get_max_wal_senders(client: &Client) -> Result<i64, PostgresError> {
-    let max_wal_senders = client
-        .query_one(
-            "SELECT CAST(current_setting('max_wal_senders') AS int8) AS max_wal_senders",
-            &[],
-        )
-        .await?;
+    let max_wal_senders = query_one(
+        client,
+        crate::sql!("SELECT CAST(current_setting('max_wal_senders') AS int8) AS max_wal_senders"),
+        &[],
+    )
+    .await?;
     Ok(max_wal_senders.get("max_wal_senders"))
 }
 
 pub async fn available_replication_slots(client: &Client) -> Result<i64, PostgresError> {
-    let available_replication_slots = client
-        .query_one(
+    let available_replication_slots = query_one(
+        client,
+        crate::sql!(
             "SELECT
             CAST(current_setting('max_replication_slots') AS int8)
               - (SELECT count(*) FROM pg_catalog.pg_replication_slots)
-              AS available_replication_slots;",
-            &[],
-        )
-        .await?;
+              AS available_replication_slots;"
+        ),
+        &[],
+    )
+    .await?;
 
     let available_replication_slots: i64 =
         available_replication_slots.get("available_replication_slots");
@@ -95,12 +96,12 @@ pub async fn available_replication_slots(client: &Client) -> Result<i64, Postgre
 ///
 /// See <https://www.postgresql.org/docs/current/ddl-rowsecurity.html>
 pub async fn bypass_rls_attribute(client: &Client) -> Result<bool, PostgresError> {
-    let rls_attribute = client
-        .query_one(
-            "SELECT rolbypassrls FROM pg_roles WHERE rolname = CURRENT_USER;",
-            &[],
-        )
-        .await?;
+    let rls_attribute = query_one(
+        client,
+        crate::sql!("SELECT rolbypassrls FROM pg_roles WHERE rolname = CURRENT_USER;"),
+        &[],
+    )
+    .await?;
     Ok(rls_attribute.get("rolbypassrls"))
 }
 
@@ -118,8 +119,9 @@ pub async fn validate_no_rls_policies(
     if table_oids.is_empty() {
         return Ok(());
     }
-    let tables_with_rls_for_user = client
-        .query(
+    let tables_with_rls_for_user = query(
+        client,
+        crate::sql!(
             "SELECT
                     format('%I.%I', pc.relnamespace::regnamespace, pc.relname) AS qualified_name
                 FROM pg_policy pp
@@ -127,11 +129,11 @@ pub async fn validate_no_rls_policies(
                 WHERE
                     polrelid = ANY($1::oid[])
                     AND
-                    (0 = ANY(polroles) OR CURRENT_USER::regrole::oid = ANY(polroles));",
-            &[&table_oids],
-        )
-        .await
-        .map_err(PostgresError::from)?;
+                    (0 = ANY(polroles) OR CURRENT_USER::regrole::oid = ANY(polroles));"
+        ),
+        &[&table_oids],
+    )
+    .await?;
 
     let mut tables_with_rls_for_user = tables_with_rls_for_user
         .into_iter()
@@ -158,12 +160,12 @@ pub async fn drop_replication_slots(
         .await?;
     let replication_client = config.connect_replication(ssh_tunnel_manager).await?;
     for (slot, should_wait) in slots {
-        let rows = client
-            .query(
-                "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
-                &[&slot],
-            )
-            .await?;
+        let rows = query(
+            &*client,
+            crate::sql!("SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT"),
+            &[&slot],
+        )
+        .await?;
         match &*rows {
             [] => {
                 // DROP_REPLICATION_SLOT will error if the slot does not exist
@@ -181,16 +183,17 @@ pub async fn drop_replication_slots(
                 // active backend and drop the slot.
                 let active_pid: Option<i32> = row.get("active_pid");
                 if let Some(active_pid) = active_pid {
-                    client
-                        .simple_query(&format!("SELECT pg_terminate_backend({active_pid})"))
-                        .await?;
+                    let query = crate::sql!("SELECT pg_terminate_backend({})", active_pid);
+                    simple_query(&*client, query).await?;
                 }
 
-                let wait_str = if *should_wait { " WAIT" } else { "" };
-                let slot = Ident::new_unchecked(*slot).to_ast_string_simple();
-                replication_client
-                    .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
-                    .await?;
+                let wait = if *should_wait {
+                    crate::sql!(" WAIT")
+                } else {
+                    crate::sql!("")
+                };
+                let query = crate::sql!("DROP_REPLICATION_SLOT {}{}", Sql::ident(slot), wait);
+                simple_query(&*replication_client, query).await?;
             }
             _ => {
                 return Err(PostgresError::Generic(anyhow::anyhow!(
@@ -204,8 +207,11 @@ pub async fn drop_replication_slots(
 }
 
 pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
-    if let Some(r) =
-        simple_query_opt(client, "SELECT timeline_id FROM pg_control_checkpoint()").await?
+    if let Some(r) = simple_query_opt(
+        client,
+        crate::sql!("SELECT timeline_id FROM pg_control_checkpoint()"),
+    )
+    .await?
     {
         r.get("timeline_id")
             .expect("Returns a row with a timeline ID")
@@ -224,7 +230,7 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
 }
 
 pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {
-    let row = client.query_one("SELECT pg_current_wal_lsn()", &[]).await?;
+    let row = query_one(client, crate::sql!("SELECT pg_current_wal_lsn()"), &[]).await?;
     let lsn: PgLsn = row.get(0);
 
     Ok(lsn)
