@@ -49,6 +49,8 @@ pub enum RelationCategory {
     Retained,
     /// Other relations that we want to do a SELECT * FROM on.
     Basic,
+    /// A custom query that doesn't map to a single relation.
+    Custom { sql: &'static str },
 }
 
 #[derive(Debug, Clone)]
@@ -661,7 +663,7 @@ pub async fn query_relation(
     }
 
     match relation_category {
-        RelationCategory::Basic => {
+        RelationCategory::Basic | RelationCategory::Custom { .. } => {
             let file_path = format_file_path(base_path, None);
             let file_path_name = file_path.join(relation_name).with_extension("csv");
             tokio::fs::create_dir_all(&file_path).await?;
@@ -756,6 +758,25 @@ impl SystemCatalogDumper {
 
         let relation_name = relation.name.to_string();
 
+        // For custom queries, create a temporary view so the retry loop
+        // can treat them identically to basic relations.
+        if let RelationCategory::Custom { sql } = &relation.category {
+            let pg_client_lock = pg_client.lock().await;
+            pg_client_lock
+                .execute(
+                    &format!(
+                        "CREATE OR REPLACE TEMPORARY VIEW {} AS {}",
+                        relation.name, sql
+                    ),
+                    &[],
+                )
+                .await
+                .context(format!(
+                    "Failed to create temporary view for {}",
+                    relation.name
+                ))?;
+        }
+
         if let Err(err) = retry::Retry::default()
             .max_duration(PG_QUERY_TIMEOUT)
             .initial_backoff(Duration::from_secs(2))
@@ -843,7 +864,9 @@ impl SystemCatalogDumper {
             .filter(|relation| {
                 matches!(
                     relation.category,
-                    RelationCategory::Basic | RelationCategory::Retained
+                    RelationCategory::Basic
+                        | RelationCategory::Retained
+                        | RelationCategory::Custom { .. }
                 )
             })
             .map(|relation| (relation, None::<&ClusterReplica>));
