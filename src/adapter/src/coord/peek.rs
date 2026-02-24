@@ -509,10 +509,15 @@ pub fn create_fast_path_plan<T: Timestamp>(
                     let (_maps, filters, projection) = safe_mfp.as_map_filter_project();
 
                     let persist_fast_path_order_relation_typ = if persist_fast_path_order {
-                        dataflow_plan
-                            .source_imports
-                            .get(get_id)
-                            .map(|s| s.desc.typ.clone())
+                        Some(
+                            dataflow_plan
+                                .source_imports
+                                .get(get_id)
+                                .expect("Get's ID is also imported")
+                                .desc
+                                .typ
+                                .clone(),
+                        )
                     } else {
                         None
                     };
