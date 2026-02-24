@@ -432,6 +432,113 @@ static RELATIONS: &[Relation] = &[
         name: "mz_kafka_sinks",
         category: RelationCategory::Basic,
     },
+    // Custom queries
+    Relation {
+        name: "daily_replica_credit_usage",
+        category: RelationCategory::Custom {
+            sql: r#"
+-- Capture replica create and drop events from the audit log
+with replica_events as (
+    select
+        details ->> 'replica_id' as replica_id,
+        details ->> 'replica_name' as replica_name,
+        details ->> 'cluster_name' as cluster_name,
+        details ->> 'logical_size' as replica_size,
+        event_type,
+        occurred_at
+    from mz_catalog.mz_audit_events
+    where
+        object_type = 'cluster-replica'
+        and event_type in ('create', 'drop')
+        and details ->> 'replica_id' like 'u%'
+),
+
+-- Pair each replica creation with its corresponding drop to determine lifespan
+replica_lifespans as (
+    select
+        c.replica_id,
+        c.replica_name,
+        c.cluster_name,
+        c.replica_size,
+        c.occurred_at as created_at,
+        min(d.occurred_at) as dropped_at
+    from replica_events as c
+    left join replica_events as d
+        on  c.replica_id = d.replica_id
+        and d.event_type = 'drop'
+        and c.occurred_at < d.occurred_at
+    where c.event_type = 'create'
+    group by
+        c.replica_id,
+        c.replica_name,
+        c.cluster_name,
+        c.replica_size,
+        c.occurred_at
+),
+
+-- Break replica lifespans into per-day slices and compute seconds online per day
+daily_slices as (
+    select
+        l.replica_id,
+        l.replica_name,
+        l.cluster_name,
+        l.replica_size,
+        gs.day_start::date as usage_date,
+        greatest(
+            0::numeric,
+            extract(
+                epoch from
+                    least(coalesce(l.dropped_at, now()), gs.day_start + interval '1 day')
+                  - greatest(l.created_at, gs.day_start)
+            )::numeric
+        ) as seconds_online
+    from replica_lifespans as l
+    cross join lateral generate_series(
+        date_trunc('day', l.created_at),
+        date_trunc('day', coalesce(l.dropped_at, now())),
+        interval '1 day'
+    ) as gs(day_start)
+),
+
+-- Resolve replica heap limits from configured size definitions
+size_heap as (
+    select
+        size,
+        memory_bytes + disk_bytes as heap_limit
+    from mz_catalog.mz_cluster_replica_sizes
+    where disk_bytes is not null and disk_bytes > 0
+),
+
+-- Resolve replica heap limits from runtime metrics,
+-- since heap_limit is only discovered when the replica comes online
+metrics_heap as (
+    select distinct on (replica_id)
+        replica_id,
+        coalesce(heap_limit, memory_bytes + disk_bytes) as heap_limit
+    from mz_internal.mz_cluster_replica_metrics_history
+)
+
+-- Aggregate daily usage, report daily footprint, and compute
+-- M.1 credit equivalency (53 GiB-hour = 1.5 credits), billed per second
+select
+    s.usage_date,
+    mz_environment_id() as env_id,
+
+    sum(coalesce(sh.heap_limit, mh.heap_limit)) as total_heap_limit,
+
+    sum(coalesce(sh.heap_limit, mh.heap_limit) * s.seconds_online)
+        / (53.0 * 1024 * 1024 * 1024 * 3600.0)
+        * 1.5
+        as credit_equivalency
+from daily_slices as s
+left join size_heap as sh on s.replica_size = sh.size
+left join metrics_heap as mh on s.replica_id = mh.replica_id
+where s.seconds_online > 0
+group by s.usage_date
+order by s.usage_date;
+"#,
+        },
+    },
 ];
 
 static PG_CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
