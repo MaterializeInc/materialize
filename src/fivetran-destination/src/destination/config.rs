@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_postgres_util::{query_one, sql};
 use openssl::ssl::{SslConnector, SslMethod};
 use openssl::x509::X509;
 use openssl::x509::store::X509StoreBuilder;
@@ -111,13 +112,13 @@ async fn test_connect(config: BTreeMap<String, String>) -> Result<(), OpError> {
 
 async fn test_permissions(config: BTreeMap<String, String>) -> Result<(), OpError> {
     let (dbname, client) = connect(config).await?;
-    let row = client
-        .query_one(
-            "SELECT has_database_privilege($1, 'CREATE') OR mz_is_superuser() AS has_create",
-            &[&dbname],
-        )
-        .await
-        .context("querying privileges")?;
+    let row = query_one(
+        &client,
+        sql!("SELECT has_database_privilege($1, 'CREATE') OR mz_is_superuser() AS has_create"),
+        &[&dbname],
+    )
+    .await
+    .context("querying privileges")?;
     let has_create: bool = row.get("has_create");
 
     if !has_create {

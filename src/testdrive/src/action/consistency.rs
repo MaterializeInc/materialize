@@ -19,6 +19,7 @@ use crate::parser::{BuiltinCommand, LineReader, parse};
 use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
+use mz_postgres_util::{query_one, sql};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
@@ -276,8 +277,7 @@ async fn check_statement_logging(orig_state: &State) -> Result<(), anyhow::Error
         .await
         .context("connecting as mz_system to query enable_rbac_checks")?;
 
-    let row = client
-        .query_one("SHOW enable_rbac_checks", &[])
+    let row = query_one(&client, sql!("SHOW enable_rbac_checks"), &[])
         .await
         .context("querying enable_rbac_checks")?;
 

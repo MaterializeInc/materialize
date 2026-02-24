@@ -19,6 +19,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_pgrepr::{Interval, Jsonb, Numeric, UInt2, UInt4, UInt8};
+use mz_postgres_util::query_prepared;
 use mz_repr::adt::range::Range;
 use mz_sql_parser::ast::{Raw, Statement};
 use postgres_array::Array;
@@ -194,7 +195,7 @@ async fn try_run_sql(
 
     let query_with_timeout = tokio::time::timeout(
         state.timeout.clone(),
-        state.materialize.pgclient.query(&stmt, &[]),
+        query_prepared(&state.materialize.pgclient, &stmt, &[]),
     )
     .await;
 
@@ -505,6 +506,9 @@ async fn try_run_fail_sql(
     expected_detail: Option<&ErrorMatcher>,
     expected_hint: Option<&ErrorMatcher>,
 ) -> Result<(), anyhow::Error> {
+    // `query` is raw SQL from testdrive input and may include statements that
+    // cannot be represented as composable `Sql`.
+    #[allow(clippy::disallowed_methods)]
     match state.materialize.pgclient.query(query, &[]).await {
         Ok(_) => bail!("query succeeded, but expected {}", expected_error),
         Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {

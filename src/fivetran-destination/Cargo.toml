@@ -18,6 +18,7 @@ futures.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = false }
 mz-pgrepr = { path = "../pgrepr", default-features = false }
+mz-postgres-util = { path = "../postgres-util" }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 openssl.workspace = true
 postgres-openssl.workspace = true

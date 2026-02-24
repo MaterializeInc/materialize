@@ -89,6 +89,13 @@ impl Sql {
         Self(Cow::Borrowed(sql))
     }
 
+    /// Creates a SQL fragment from an arbitrary owned string, trusting the caller
+    /// that it is safe SQL. Prefer [`Sql::ident`] or [`Sql::literal`] when handling
+    /// untrusted input.
+    pub fn raw_unchecked(sql: String) -> Self {
+        Self(Cow::Owned(sql))
+    }
+
     /// Creates a SQL fragment by escaping a SQL identifier.
     pub fn ident(ident: &str) -> Self {
         // PostgreSQL identifiers are escaped by surrounding with double quotes
