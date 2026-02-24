@@ -29,7 +29,7 @@ use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, info_span};
 use uuid::Uuid;
 
 use crate::communication::initialize_networking;
@@ -166,6 +166,9 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The cluster response type.
     type Response: fmt::Debug + Send;
 
+    /// The name of this cluster ("compute" or "storage").
+    const NAME: &str;
+
     /// Run the given Timely worker.
     fn run_worker<A: Allocate + 'static>(
         &self,
@@ -269,9 +272,14 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
 
         let spec = self.clone();
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
-            let timely_worker_index = timely_worker.index();
+            let worker_idx = timely_worker.index();
+
+            // Per worker tracing span, lets us identify Timely clusters and workers in the logs.
+            let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
+            let _span_guard = span.enter();
+
             let _tokio_guard = tokio_executor.enter();
-            let client_rx = client_rxs.lock().unwrap()[timely_worker_index % config.workers]
+            let client_rx = client_rxs.lock().unwrap()[worker_idx % config.workers]
                 .take()
                 .unwrap();
             spec.run_worker(timely_worker, client_rx);

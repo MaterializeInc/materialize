@@ -220,6 +220,8 @@ impl ClusterSpec for Config {
     type Command = ComputeCommand;
     type Response = ComputeResponse;
 
+    const NAME: &str = "compute";
+
     fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,

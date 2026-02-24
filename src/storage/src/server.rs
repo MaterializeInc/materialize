@@ -93,6 +93,8 @@ impl ClusterSpec for Config {
     type Command = StorageCommand;
     type Response = StorageResponse;
 
+    const NAME: &str = "storage";
+
     fn run_worker<A: Allocate + 'static>(
         &self,
         timely_worker: &mut TimelyWorker<A>,
