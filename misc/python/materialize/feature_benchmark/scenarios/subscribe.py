@@ -147,6 +147,18 @@ class SubscribeNoSnapshotTable(Scenario):
     SCALE = 6  # Controls the size of the snapshot we skip over.
 
     def benchmark(self) -> MeasurementSource:
+        subscribes = "\n".join(
+            [
+                """
+             > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+             > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${mz_now};
+             > FETCH 1 c1 WITH (TIMEOUT = '10s');
+             <TIMESTAMP> 1 wow!
+             > COMMIT;"""
+                for _ in range(30)
+            ]
+        )
+
         return Td(
             f"""
              $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
@@ -166,11 +178,7 @@ class SubscribeNoSnapshotTable(Scenario):
              > INSERT INTO s1 VALUES ('wow!');
                /* A */
 
-             > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
-             > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${{mz_now}};
-             > FETCH 1 c1 WITH (TIMEOUT = '10s');
-             <TIMESTAMP> 1 wow!
-             > COMMIT;
+             {subscribes}
 
              > SELECT 1
                /* B */
