@@ -873,7 +873,7 @@ where
 
                 // Process the error, doing any state cleanup.
                 let error_response = err.into_response(Severity::Fatal);
-                let error_state = self.error(error_response).await;
+                let error_state = self.send_error_and_get_state(error_response).await;
 
                 // Terminate __after__ we do any cleanup.
                 self.adapter_client.terminate().await;
@@ -1049,7 +1049,9 @@ where
             .declare(EMPTY_PORTAL.to_string(), stmt, sql)
             .await
         {
-            return self.error(e.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(e.into_response(Severity::Error))
+                .await;
         }
         let portal = self
             .adapter_client
@@ -1062,7 +1064,7 @@ where
         let stmt_desc = portal.desc.clone();
         if !stmt_desc.param_types.is_empty() {
             return self
-                .error(ErrorResponse::error(
+                .send_error_and_get_state(ErrorResponse::error(
                     SqlState::UNDEFINED_PARAMETER,
                     "there is no parameter $1",
                 ))
@@ -1101,7 +1103,8 @@ where
             }
             Err(e) => {
                 self.send_pending_notices().await?;
-                self.error(e.into_response(Severity::Error)).await
+                self.send_error_and_get_state(e.into_response(Severity::Error))
+                    .await
             }
         };
 
@@ -1162,7 +1165,7 @@ where
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                self.error(err).await?;
+                self.send_error_and_get_state(err).await?;
                 return self.ready().await;
             }
         };
@@ -1227,7 +1230,7 @@ where
                     Ok(ty) => param_types.push(Some(ty)),
                     Err(err) => {
                         return self
-                            .error(ErrorResponse::error(
+                            .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::INVALID_PARAMETER_VALUE,
                                 err.to_string(),
                             ))
@@ -1237,7 +1240,7 @@ where
                 Err(_) if oid == 0 => param_types.push(None),
                 Err(e) => {
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::PROTOCOL_VIOLATION,
                             e.to_string(),
                         ))
@@ -1249,12 +1252,12 @@ where
         let stmts = match self.parse_sql(&sql) {
             Ok(stmts) => stmts,
             Err(err) => {
-                return self.error(err).await;
+                return self.send_error_and_get_state(err).await;
             }
         };
         if stmts.len() > 1 {
             return self
-                .error(ErrorResponse::error(
+                .send_error_and_get_state(ErrorResponse::error(
                     SqlState::INTERNAL_ERROR,
                     "cannot insert multiple commands into a prepared statement",
                 ))
@@ -1276,7 +1279,10 @@ where
                 self.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready)
             }
-            Err(e) => self.error(e.into_response(Severity::Error)).await,
+            Err(e) => {
+                self.send_error_and_get_state(e.into_response(Severity::Error))
+                    .await
+            }
         }
     }
 
@@ -1325,7 +1331,11 @@ where
             .await
         {
             Ok(stmt) => stmt,
-            Err(err) => return self.error(err.into_response(Severity::Error)).await,
+            Err(err) => {
+                return self
+                    .send_error_and_get_state(err.into_response(Severity::Error))
+                    .await;
+            }
         };
 
         let param_types = &stmt.desc().param_types;
@@ -1338,14 +1348,20 @@ where
                 expected = param_types.len()
             );
             return self
-                .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, message))
+                .send_error_and_get_state(ErrorResponse::error(
+                    SqlState::PROTOCOL_VIOLATION,
+                    message,
+                ))
                 .await;
         }
         let param_formats = match pad_formats(param_formats, raw_params.len()) {
             Ok(param_formats) => param_formats,
             Err(msg) => {
                 return self
-                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
                     .await;
             }
         };
@@ -1367,14 +1383,20 @@ where
                         Ok(datum) => datum,
                         Err(msg) => {
                             return self
-                                .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                                .send_error_and_get_state(ErrorResponse::error(
+                                    SqlState::INVALID_PARAMETER_VALUE,
+                                    msg,
+                                ))
                                 .await;
                         }
                     },
                     Err(err) => {
                         let msg = format!("unable to decode parameter: {}", err);
                         return self
-                            .error(ErrorResponse::error(SqlState::INVALID_PARAMETER_VALUE, msg))
+                            .send_error_and_get_state(ErrorResponse::error(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                msg,
+                            ))
                             .await;
                     }
                 },
@@ -1393,7 +1415,10 @@ where
             Ok(result_formats) => result_formats,
             Err(msg) => {
                 return self
-                    .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::PROTOCOL_VIOLATION,
+                        msg,
+                    ))
                     .await;
             }
         };
@@ -1414,7 +1439,7 @@ where
                     match (format, &ty.scalar_type) {
                         (Format::Binary, mz_repr::SqlScalarType::List { .. }) => {
                             return self
-                                .error(ErrorResponse::error(
+                                .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
                                     "binary encoding of list types is not implemented",
                                 ))
@@ -1422,7 +1447,7 @@ where
                         }
                         (Format::Binary, mz_repr::SqlScalarType::Map { .. }) => {
                             return self
-                                .error(ErrorResponse::error(
+                                .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
                                     "binary encoding of map types is not implemented",
                                 ))
@@ -1430,7 +1455,7 @@ where
                         }
                         (Format::Binary, mz_repr::SqlScalarType::AclItem) => {
                             return self
-                                .error(ErrorResponse::error(
+                                .send_error_and_get_state(ErrorResponse::error(
                                     SqlState::PROTOCOL_VIOLATION,
                                     "binary encoding of aclitem types does not exist",
                                 ))
@@ -1455,7 +1480,9 @@ where
             result_formats,
             state_revision,
         ) {
-            return self.error(err.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(err.into_response(Severity::Error))
+                .await;
         }
 
         self.send(BackendMessage::BindComplete).await?;
@@ -1493,7 +1520,10 @@ where
                         );
                     }
                     return self
-                        .error(ErrorResponse::error(SqlState::INVALID_CURSOR_NAME, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::INVALID_CURSOR_NAME,
+                            msg,
+                        ))
                         .await;
                 }
             };
@@ -1544,7 +1574,8 @@ where
                         }
                         Err(e) => {
                             self.send_pending_notices().await?;
-                            self.error(e.into_response(Severity::Error)).await
+                            self.send_error_and_get_state(e.into_response(Severity::Error))
+                                .await
                         }
                     }
                 }
@@ -1640,7 +1671,7 @@ where
                             },
                         );
                     }
-                    self.error(ErrorResponse::error(
+                    self.send_error_and_get_state(ErrorResponse::error(
                         SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
                         error,
                     ))
@@ -1659,7 +1690,11 @@ where
 
         let stmt = match self.adapter_client.get_prepared_statement(name).await {
             Ok(stmt) => stmt,
-            Err(err) => return self.error(err.into_response(Severity::Error)).await,
+            Err(err) => {
+                return self
+                    .send_error_and_get_state(err.into_response(Severity::Error))
+                    .await;
+            }
         };
         // Cloning to avoid a mutable borrow issue because `send` also uses `adapter_client`
         let parameter_desc = BackendMessage::ParameterDescription(
@@ -1693,7 +1728,7 @@ where
                 Ok(State::Ready)
             }
             None => {
-                self.error(ErrorResponse::error(
+                self.send_error_and_get_state(ErrorResponse::error(
                     SqlState::INVALID_CURSOR_NAME,
                     format!("portal {} does not exist", name.quoted()),
                 ))
@@ -1764,7 +1799,10 @@ where
                         },
                     );
                     return self
-                        .error(ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            msg,
+                        ))
                         .await;
                 }
                 ExecuteCount::Count(count)
@@ -1778,7 +1816,10 @@ where
                     },
                 );
                 return self
-                    .error(ErrorResponse::error(SqlState::FEATURE_NOT_SUPPORTED, msg))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        msg,
+                    ))
                     .await;
             }
             (ExecuteCount::All, FetchDirection::ForwardAll) => ExecuteCount::All,
@@ -2165,7 +2206,7 @@ where
                     }
                     _ => {
                         return self
-                            .error(ErrorResponse::error(
+                            .send_error_and_get_state(ErrorResponse::error(
                                 SqlState::INTERNAL_ERROR,
                                 "unsupported COPY response type".to_string(),
                             ))
@@ -2369,7 +2410,7 @@ where
                     if let Err(err) = verify_datum_desc(&row_desc, &mut batch_rows) {
                         let msg = err.to_string();
                         return self
-                            .error(err.into_response(Severity::Error))
+                            .send_error_and_get_state(err.into_response(Severity::Error))
                             .await
                             .map(|state| (state, SendRowsEndedReason::Errored { error: msg }));
                     }
@@ -2424,13 +2465,16 @@ where
                 }
                 FetchResult::Error(text) => {
                     return self
-                        .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::INTERNAL_ERROR,
+                            text.clone(),
+                        ))
                         .await
                         .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                 }
                 FetchResult::Canceled => {
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             "canceling statement due to user request",
                         ))
@@ -2523,7 +2567,10 @@ where
             CopyFormat::Parquet => {
                 let text = "Parquet format is not supported".to_string();
                 return self
-                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
+                    .send_error_and_get_state(ErrorResponse::error(
+                        SqlState::INTERNAL_ERROR,
+                        text.clone(),
+                    ))
                     .await
                     .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
             }
@@ -2566,13 +2613,15 @@ where
                 batch = stream.recv() => match batch {
                     None => break,
                     Some(PeekResponseUnary::Error(text)) => {
+                        let err =
+                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
                         return self
-                            .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone()))
-                        .await
-                        .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                            .send_error_and_get_state(err)
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
                     }
                     Some(PeekResponseUnary::Canceled) => {
-                        return self.error(ErrorResponse::error(
+                        return self.send_error_and_get_state(ErrorResponse::error(
                                 SqlState::QUERY_CANCELED,
                                 "canceling statement due to user request",
                             ))
@@ -2730,7 +2779,9 @@ where
                         error: e.to_string(),
                     },
                 );
-                return self.error(e.into_response(Severity::Error)).await;
+                return self
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
             }
         };
 
@@ -2794,7 +2845,7 @@ where
                     drop(writer);
                     self.conn.set_copy_mode(false);
                     return self
-                        .error(ErrorResponse::error(
+                        .send_error_and_get_state(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
                             format!("COPY from stdin failed: {}", err),
                         ))
@@ -2812,7 +2863,10 @@ where
                     drop(writer);
                     self.conn.set_copy_mode(false);
                     return self
-                        .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                        .send_error_and_get_state(ErrorResponse::error(
+                            SqlState::PROTOCOL_VIOLATION,
+                            msg,
+                        ))
                         .await;
                 }
                 None => {
@@ -2845,7 +2899,10 @@ where
                         drop(writer);
                         self.conn.set_copy_mode(false);
                         return self
-                            .error(ErrorResponse::error(SqlState::PROTOCOL_VIOLATION, msg))
+                            .send_error_and_get_state(ErrorResponse::error(
+                                SqlState::PROTOCOL_VIOLATION,
+                                msg,
+                            ))
                             .await;
                     }
                     None => {
@@ -2875,7 +2932,9 @@ where
                         error: e.to_string(),
                     },
                 );
-                return self.error(e.into_response(Severity::Error)).await;
+                return self
+                    .send_error_and_get_state(e.into_response(Severity::Error))
+                    .await;
             }
             Err(_) => {
                 let msg = "COPY FROM STDIN: background batch builder tasks dropped";
@@ -2886,7 +2945,7 @@ where
                     },
                 );
                 return self
-                    .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
+                    .send_error_and_get_state(ErrorResponse::error(SqlState::INTERNAL_ERROR, msg))
                     .await;
             }
         };
@@ -2902,7 +2961,9 @@ where
                     error: e.to_string(),
                 },
             );
-            return self.error(e.into_response(Severity::Error)).await;
+            return self
+                .send_error_and_get_state(e.into_response(Severity::Error))
+                .await;
         }
 
         let tag = format!("COPY {}", row_count);
@@ -2924,7 +2985,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
+    async fn send_error_and_get_state(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         assert!(err.severity.is_error());
         debug!(
             "cid={} error code={}",
