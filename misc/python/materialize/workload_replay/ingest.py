@@ -585,6 +585,7 @@ def _decode_packed_timestamp(binary_data: bytes) -> str:
 def _arrow_val_to_text(val: Any, col_type: str | None = None) -> str | None:
     """Convert a pyarrow-decoded Python value to PostgreSQL COPY text."""
     import datetime
+    import uuid
 
     if val is None:
         return None
@@ -600,6 +601,8 @@ def _arrow_val_to_text(val: Any, col_type: str | None = None) -> str | None:
     if isinstance(val, str):
         return val
     if isinstance(val, bytes):
+        if col_type is not None and col_type.lower() == "uuid" and len(val) == 16:
+            return str(uuid.UUID(bytes=val))
         return "\\x" + val.hex()
     if isinstance(val, list):
         # Check for map (list of {key, val} dicts).
@@ -671,6 +674,17 @@ def _jdn_to_date_string(jdn: int) -> str:
         bc_year = 1 - year
         return f"{bc_year:04d}-{month:02d}-{day:02d} BC"
     return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _is_timestamp_col_type(col_type: str | None) -> bool:
+    if col_type is None:
+        return False
+    t = col_type.lower()
+    return t in (
+        "timestamp",
+        "timestamp without time zone",
+        "timestamp with time zone",
+    )
 
 
 @overload
@@ -750,7 +764,10 @@ def parse_parquet_file(
                     if val is None:
                         row.append(None)
                     elif (
-                        col_idx in ts_cols and isinstance(val, bytes) and len(val) == 16
+                        col_idx in ts_cols
+                        and isinstance(val, bytes)
+                        and len(val) == 16
+                        and (col_type is None or _is_timestamp_col_type(col_type))
                     ):
                         row.append(_decode_packed_timestamp(val))
                     else:
@@ -786,6 +803,7 @@ def parse_parquet_file(
                     col_idx in ts_cols_flat
                     and isinstance(val, bytes)
                     and len(val) == 16
+                    and (col_type is None or _is_timestamp_col_type(col_type))
                 ):
                     row.append(_decode_packed_timestamp(val))
                 else:
@@ -840,7 +858,12 @@ def iter_parquet_batches(
                 )
                 if val is None:
                     row.append(None)
-                elif col_idx in ts_cols and isinstance(val, bytes) and len(val) == 16:
+                elif (
+                    col_idx in ts_cols
+                    and isinstance(val, bytes)
+                    and len(val) == 16
+                    and (col_type is None or _is_timestamp_col_type(col_type))
+                ):
                     row.append(_decode_packed_timestamp(val))
                 else:
                     row.append(_arrow_val_to_text(val, col_type=col_type))
@@ -947,6 +970,11 @@ def ingest_captured_rows_mz_table(
 ) -> None:
     """COPY captured rows into a Materialize table."""
     col_names = [col["name"] for col in meta["columns"]]
+    if not col_names:
+        raise RuntimeError(
+            "No column metadata found for captured object "
+            f"{meta['database']}.{meta['schema']}.{meta['name']}"
+        )
 
     copy_stmt = SQL("COPY {}.{}.{} ({}) FROM STDIN").format(
         Identifier(meta["database"]),
@@ -971,6 +999,11 @@ def ingest_captured_rows_postgres(
     _, ref_schema, ref_table = get_postgres_reference_db_schema_table(child_obj)
 
     col_names = [col["name"] for col in meta["columns"]]
+    if not col_names:
+        raise RuntimeError(
+            "No column metadata found for captured object "
+            f"{meta['database']}.{meta['schema']}.{meta['name']}"
+        )
 
     copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN").format(
         Identifier(ref_schema),
@@ -994,6 +1027,11 @@ def ingest_captured_rows_mysql(
     _, ref_table = get_mysql_reference_db_table(child_obj)
 
     col_names = [col["name"] for col in meta["columns"]]
+    if not col_names:
+        raise RuntimeError(
+            "No column metadata found for captured object "
+            f"{meta['database']}.{meta['schema']}.{meta['name']}"
+        )
     placeholders = ", ".join(["%s"] * len(col_names))
     col_list = ", ".join(f"`{name}`" for name in col_names)
     stmt = f"INSERT INTO `{ref_table}` ({col_list}) VALUES ({placeholders})"

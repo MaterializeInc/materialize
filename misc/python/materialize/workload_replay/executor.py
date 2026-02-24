@@ -136,9 +136,23 @@ def test(
             start_time = time.time()
             if captured_initial_data_dir:
                 print("Using captured initial data")
-                created_data = import_captured_data_initial(
-                    c, workload, captured_initial_data_dir, factor_initial_data, seed
-                )
+                if early_initial_data:
+                    created_data = import_captured_data_initial(
+                        c,
+                        workload,
+                        captured_initial_data_dir,
+                        factor_initial_data,
+                        seed,
+                        requires_mz=False,
+                    )
+                else:
+                    created_data = import_captured_data_initial(
+                        c,
+                        workload,
+                        captured_initial_data_dir,
+                        factor_initial_data,
+                        seed,
+                    )
             else:
                 created_data = create_initial_data_external(
                     c,
@@ -150,7 +164,17 @@ def test(
                 obj_start = time.time()
                 run_create_objects_part_2(c, services, workload, verbose)
                 stats["object_creation"] += time.time() - obj_start
-            if not captured_initial_data_dir:
+            if captured_initial_data_dir and early_initial_data:
+                created_data_requiring_mz = import_captured_data_initial(
+                    c,
+                    workload,
+                    captured_initial_data_dir,
+                    factor_initial_data,
+                    seed,
+                    requires_mz=True,
+                )
+                created_data = created_data or created_data_requiring_mz
+            elif not captured_initial_data_dir:
                 created_data_requiring_mz = create_initial_data_requiring_mz(
                     c,
                     workload,
@@ -186,6 +210,7 @@ def test(
                     ON o.id = h.object_id
                   WHERE NOT h.hydrated
                     AND o.name NOT LIKE 'mz_%'
+                    AND o.id NOT IN (SELECT id FROM mz_sinks)
 
                   UNION ALL
 
@@ -195,6 +220,7 @@ def test(
                     ON o.id = h.object_id
                   WHERE NOT h.hydrated
                     AND o.name NOT LIKE 'mz_%'
+                    AND o.id NOT IN (SELECT id FROM mz_sinks)
                 ) x
                 ORDER BY 1;"""
             )
@@ -222,6 +248,7 @@ def test(
             FROM mz_internal.mz_materialization_lag l
             JOIN mz_objects o ON o.id = l.object_id
             WHERE o.name NOT LIKE 'mz_%'
+              AND o.id NOT IN (SELECT id FROM mz_sinks)
               AND (l.global_lag IS NULL OR l.global_lag > INTERVAL '10 seconds')
             ORDER BY l.global_lag DESC NULLS FIRST
             LIMIT 5;"""

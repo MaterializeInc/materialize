@@ -721,12 +721,21 @@ def run_create_objects_part_2(
             break
 
     print("Creating indexes")
+    skipped_unknown_cluster = 0
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for index in items["indexes"].values():
-                c.sql(
-                    index["create_sql"],
-                    user="mz_system",
-                    port=6877,
-                    print_statement=verbose,
-                )
+                try:
+                    c.sql(
+                        index["create_sql"],
+                        user="mz_system",
+                        port=6877,
+                        print_statement=verbose,
+                    )
+                except psycopg.Error as e:
+                    if "unknown cluster" in str(e).lower():
+                        skipped_unknown_cluster += 1
+                        continue
+                    raise
+    if skipped_unknown_cluster:
+        print(f"Warning: skipped {skipped_unknown_cluster} indexes on unknown clusters")

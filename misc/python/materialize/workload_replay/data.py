@@ -531,6 +531,17 @@ def _lookup_fqn(
                 meta["columns"] = child.get("columns", [])
                 return meta, source
 
+    # Source children are keyed by fully-qualified name and can live under a
+    # source in a different schema than the child's schema (e.g. Postgres
+    # source in s-0 with child in public). If not found above, search all
+    # schemas in the same database by exact FQN.
+    for other_schema_items in workload.get("databases", {}).get(db, {}).values():
+        for source in other_schema_items.get("sources", {}).values():
+            children = source.get("children", {})
+            if fqn in children:
+                meta["columns"] = children[fqn].get("columns", [])
+                return meta, source
+
     # Check standalone sources (no children).
     obj = items.get("sources", {}).get(name)
     if obj:
@@ -549,6 +560,14 @@ def _sample_rows(
         return rows
     n = max(1, int(len(rows) * factor))
     return rng.sample(rows, n)
+
+
+def _captured_object_requires_mz(source_obj: dict[str, Any] | None) -> bool:
+    """Whether importing this captured object requires the MZ object to exist."""
+    if source_obj is None:
+        # Standalone tables are imported via COPY into Materialize.
+        return True
+    return source_obj.get("type") == "webhook"
 
 
 def _import_non_kafka_object(
@@ -581,11 +600,14 @@ def import_captured_data_initial(
     data_dir: str,
     factor: float = 1.0,
     seed: str | int = 0,
+    requires_mz: bool | None = None,
 ) -> bool:
     """Import initial captured data (Parquet) into upstream systems or MZ tables.
 
     Kafka objects are processed serially (already parallel internally).
     Non-Kafka objects are imported in parallel (max 4 concurrent threads).
+    If `requires_mz` is set, only import objects that either do or don't require
+    Materialize objects to have been created first.
     """
     parquet_files = _list_parquet_fqns(data_dir)
     if not parquet_files:
@@ -597,6 +619,11 @@ def import_captured_data_initial(
     # Phase 1: Kafka objects (serial, already parallel internally).
     for fqn, data_path in parquet_files:
         meta, source_obj = _lookup_fqn(fqn, workload)
+        if (
+            requires_mz is not None
+            and _captured_object_requires_mz(source_obj) != requires_mz
+        ):
+            continue
         total_rows = get_parquet_row_count(data_path)
         if total_rows == 0:
             continue
@@ -676,7 +703,6 @@ def _replay_continuous_object(
     )
     timestamps = sorted(rows_by_timestamp.keys())
     if not timestamps:
-        print(f"  {fqn}: no continuous data rows, skipping")
         return
 
     rng = random.Random(seed)

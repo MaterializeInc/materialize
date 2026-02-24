@@ -58,12 +58,14 @@ Captures the current state and activity of a live Materialize instance.
 
 **Usage:**
 ```bash
-bin/mz-workload-capture <mz_url> [OPTIONS]
+bin/mz-workload-capture <postgres_url_or_docker_container> [OPTIONS]
 ```
 
 **Options:**
 | Option | Description | Default |
 |--------|-------------|---------|
+| positional `target` | Materialize SQL URL (`postgres://...`) or docker container name | none |
+| `--mz-url` | Materialize SQL URL (alternative to positional URL) | none |
 | `-o, --output` | Path to write the workload (YAML file or directory) | `workload_<timestamp>` |
 | `--time` | Duration of query/ingestion history in seconds | 360 |
 | `--capture-data` | Capture actual data via SQL into TSV files | disabled |
@@ -85,6 +87,12 @@ bin/mz-workload-capture postgres://mz_system:materialize@127.0.0.1/materialize \
   --output workload_prod \
   --time 600 \
   --max-subscribe-connections 16
+
+# Capture from a local docker container without an explicit postgres:// URL
+bin/mz-workload-capture materialized \
+  --capture-data \
+  --output workload_prod \
+  --time 600
 ```
 
 ### Data Capture Directory Structure

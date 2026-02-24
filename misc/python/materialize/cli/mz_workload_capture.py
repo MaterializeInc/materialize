@@ -17,6 +17,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, LiteralString
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 import psycopg
 import yaml
@@ -302,6 +303,73 @@ def _persistcli_cmd(jobs_image: str, container: str | None) -> list[str]:
     return cmd
 
 
+def _normalize_consensus_uri_for_container(consensus_uri: str) -> str:
+    """Rewrite unix-socket consensus URIs for sidecar persistcli usage.
+
+    When persistcli runs in a separate container (`docker run`), unix-socket paths
+    like `%2Fvar%2Frun%2Fpostgresql` from environmentd are not available there.
+    In that case, use loopback TCP in the shared network namespace instead.
+    """
+    parsed = urlsplit(consensus_uri)
+    host = parsed.hostname
+    if not host:
+        return consensus_uri
+
+    decoded_host = unquote(host)
+    if not decoded_host.startswith("/"):
+        return consensus_uri
+
+    auth = ""
+    if parsed.username:
+        auth = parsed.username
+        if parsed.password is not None:
+            auth += f":{parsed.password}"
+        auth += "@"
+    port = parsed.port or 26257
+    netloc = f"{auth}127.0.0.1:{port}"
+    path = parsed.path or "/"
+    return urlunsplit((parsed.scheme, netloc, path, parsed.query, parsed.fragment))
+
+
+def _looks_like_url(value: str) -> bool:
+    return "://" in value
+
+
+def _discover_mz_url_from_docker_container(container: str) -> str:
+    """Build a best-effort SQL URL from docker port mappings.
+
+    Assumes local development defaults (mz_system/materialize user+password).
+    """
+    for internal_port in ("6875/tcp", "6875"):
+        result = subprocess.run(
+            ["docker", "port", container, internal_port],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            continue
+
+        # Typical output lines:
+        # 0.0.0.0:6875
+        # :::6875
+        # 127.0.0.1:50001
+        first_line = result.stdout.splitlines()[0].strip()
+        if ":" not in first_line:
+            continue
+        host, port = first_line.rsplit(":", 1)
+        host = host.strip("[]")
+        if not host or host == "0.0.0.0" or host == "::":
+            host = "127.0.0.1"
+        if not port.isdigit():
+            continue
+        return f"postgresql://mz_system:materialize@{host}:{port}/materialize"
+
+    raise RuntimeError(
+        f"Could not determine SQL endpoint from docker container '{container}'. "
+        "Pass --mz-url explicitly."
+    )
+
+
 def _capture_initial_data_persist(
     jobs_image: str,
     blob_uri: str,
@@ -357,32 +425,37 @@ def _capture_initial_data_persist(
                     stderr=subprocess.PIPE,
                     timeout=600,
                 )
-            stderr_text = (
-                result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
-            )
-            if stderr_text:
-                print(stderr_text, file=sys.stderr, end="")
-            if result.returncode != 0:
-                print(
-                    f"  Warning: persistcli failed for {fqn}",
-                    file=sys.stderr,
-                )
-                if os.path.exists(host_path):
-                    os.remove(host_path)
-                continue
-            # Parse the as_of from stderr: "Reading shard ... at as_of=<N> ..."
-            m = re.search(r"as_of=(\d+)", stderr_text)
-            if m:
-                as_of_map[shard_id] = int(m.group(1))
-            # Remove empty files (shard had no surviving data).
-            if os.path.exists(host_path) and os.path.getsize(host_path) == 0:
-                os.remove(host_path)
-        except subprocess.TimeoutExpired:
-            print(f"  Warning: persistcli timed out for {fqn}", file=sys.stderr)
+        except subprocess.TimeoutExpired as e:
             if os.path.exists(host_path):
                 os.remove(host_path)
+            raise RuntimeError(
+                f"persistcli timed out for {fqn} (shard {shard_id}) after {e.timeout}s"
+            ) from e
         except Exception as e:
-            print(f"  Warning: error capturing {fqn}: {e}", file=sys.stderr)
+            if os.path.exists(host_path):
+                os.remove(host_path)
+            raise RuntimeError(f"error capturing {fqn} (shard {shard_id}): {e}") from e
+
+        stderr_text = (
+            result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        )
+        if stderr_text:
+            print(stderr_text, file=sys.stderr, end="")
+        if result.returncode != 0:
+            if os.path.exists(host_path):
+                os.remove(host_path)
+            detail = stderr_text.strip().splitlines()
+            reason = detail[-1] if detail else "unknown error"
+            raise RuntimeError(
+                f"persistcli failed for {fqn} (shard {shard_id}): {reason}"
+            )
+        # Parse the as_of from stderr: "Reading shard ... at as_of=<N> ..."
+        m = re.search(r"as_of=(\d+)", stderr_text)
+        if m:
+            as_of_map[shard_id] = int(m.group(1))
+        # Remove empty files (shard had no surviving data).
+        if os.path.exists(host_path) and os.path.getsize(host_path) == 0:
+            os.remove(host_path)
 
     return as_of_map
 
@@ -453,37 +526,36 @@ def _capture_continuous_data_persist(
                     stderr=subprocess.PIPE,
                     timeout=600,
                 )
-            stderr_text = (
-                result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
-            )
-            if stderr_text:
-                print(stderr_text, file=sys.stderr, end="")
-            if result.returncode != 0:
-                print(
-                    f"  Warning: persistcli failed for {fqn}",
-                    file=sys.stderr,
-                )
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                continue
-            # Remove empty files (no changes since initial snapshot).
-            if os.path.exists(output_path) and os.path.getsize(output_path) == 0:
-                os.remove(output_path)
-                print(f"  {fqn}: no changes", file=sys.stderr)
-            else:
-                print(f"  {fqn}: captured changes", file=sys.stderr)
-        except subprocess.TimeoutExpired:
-            print(
-                f"  Warning: persistcli timed out for {fqn}",
-                file=sys.stderr,
-            )
+        except subprocess.TimeoutExpired as e:
             if os.path.exists(output_path):
                 os.remove(output_path)
+            raise RuntimeError(
+                f"persistcli timed out for {fqn} (shard {shard_id}) after {e.timeout}s"
+            ) from e
         except Exception as e:
-            print(
-                f"  Warning: error capturing {fqn}: {e}",
-                file=sys.stderr,
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise RuntimeError(f"error capturing {fqn} (shard {shard_id}): {e}") from e
+
+        stderr_text = (
+            result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        )
+        if stderr_text:
+            print(stderr_text, file=sys.stderr, end="")
+        if result.returncode != 0:
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            detail = stderr_text.strip().splitlines()
+            reason = detail[-1] if detail else "unknown error"
+            raise RuntimeError(
+                f"persistcli failed for {fqn} (shard {shard_id}): {reason}"
             )
+        # Remove empty files (no changes since initial snapshot).
+        if os.path.exists(output_path) and os.path.getsize(output_path) == 0:
+            os.remove(output_path)
+            print(f"  {fqn}: no changes", file=sys.stderr)
+        else:
+            print(f"  {fqn}: captured changes", file=sys.stderr)
 
     print("  Continuous data capture complete", file=sys.stderr)
 
@@ -495,7 +567,17 @@ def main() -> int:
         description="Records a workload profile from a running Materialize instance (without actual data)",
     )
 
-    parser.add_argument("mz_url", type=str)
+    parser.add_argument(
+        "target",
+        nargs="?",
+        type=str,
+        help="Materialize SQL URL (postgres://...) or Docker container name",
+    )
+    parser.add_argument(
+        "--mz-url",
+        type=str,
+        help="Materialize SQL URL (alternative to positional postgres://...)",
+    )
     # Default cluster to use
     parser.add_argument("--cluster", type=str, default="mz_catalog_server")
     parser.add_argument(
@@ -540,7 +622,45 @@ def main() -> int:
     global VERBOSE
     VERBOSE = args.verbose
 
-    conn = psycopg.connect(args.mz_url)
+    mz_url = args.mz_url
+    container = args.docker_container
+
+    if args.target:
+        if _looks_like_url(args.target):
+            if mz_url:
+                print(
+                    "Error: SQL URL provided both positionally and via --mz-url",
+                    file=sys.stderr,
+                )
+                return 1
+            mz_url = args.target
+        else:
+            if container and container != args.target:
+                print(
+                    "Error: container provided both positionally and via --docker-container, but values differ",
+                    file=sys.stderr,
+                )
+                return 1
+            container = args.target
+
+    if not mz_url and not container:
+        print(
+            "Error: provide either a SQL URL (postgres://...) or a docker container name",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not mz_url and container:
+        try:
+            mz_url = _discover_mz_url_from_docker_container(container)
+            print(f"Using auto-discovered SQL URL: {mz_url}", file=sys.stderr)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+
+    assert mz_url is not None
+    args.docker_container = container
+    conn = psycopg.connect(mz_url)
     conn.autocommit = True
     with conn.cursor() as cur:
         try:
@@ -563,6 +683,64 @@ def main() -> int:
         "queries": [],
         "mz_workload_version": "1.0.0",
     }
+    printed_recent_ddls = False
+
+    def print_recent_ddls() -> None:
+        nonlocal printed_recent_ddls
+        if printed_recent_ddls:
+            return
+        try:
+            ddl_rows = query(
+                conn,
+                "SELECT began_at, statement_type, sql FROM mz_internal.mz_recent_activity_log "
+                "WHERE statement_type LIKE 'create_%' "
+                "OR statement_type LIKE 'alter_%' "
+                "OR statement_type LIKE 'drop_%' "
+                "ORDER BY began_at DESC LIMIT 25",
+            )
+            if ddl_rows:
+                print(
+                    "Recent DDL statements (most recent first):",
+                    file=sys.stderr,
+                )
+                for began_at, statement_type, ddl_sql in ddl_rows:
+                    print(
+                        f"  [{began_at}] {statement_type}: {ddl_sql}",
+                        file=sys.stderr,
+                    )
+            else:
+                print(
+                    "No recent DDL statements found in mz_recent_activity_log.",
+                    file=sys.stderr,
+                )
+        except Exception as e:
+            print(
+                f"Warning: failed to fetch recent DDL statements: {e}", file=sys.stderr
+            )
+        finally:
+            printed_recent_ddls = True
+
+    def show_create_or_none(
+        object_label: str,
+        show_create_sql: SQL | Composed,
+    ) -> str | None:
+        try:
+            rows = query(conn, show_create_sql)
+        except psycopg.Error as e:
+            print(
+                f"Warning: skipping {object_label}: SHOW CREATE failed: {e}",
+                file=sys.stderr,
+            )
+            print_recent_ddls()
+            return None
+        if not rows:
+            print(
+                f"Warning: skipping {object_label}: SHOW CREATE returned no rows",
+                file=sys.stderr,
+            )
+            print_recent_ddls()
+            return None
+        return rows[0][0]
 
     with timed("Fetching settings"):
         settings = {}
@@ -576,12 +754,14 @@ def main() -> int:
         ):
             workload["clusters"][cluster] = {"managed": managed}
             if managed:
-                workload["clusters"][cluster]["create_sql"] = query(
-                    conn,
+                create_sql = show_create_or_none(
+                    f"cluster {cluster}",
                     SQL("SELECT create_sql FROM (SHOW CREATE CLUSTER {})").format(
                         Identifier(cluster)
                     ),
-                )[0][0]
+                )
+                if create_sql is not None:
+                    workload["clusters"][cluster]["create_sql"] = create_sql
 
     with timed("Fetching databases"):
         for (db,) in query(conn, "SELECT name FROM mz_databases"):
@@ -608,12 +788,14 @@ def main() -> int:
             conn,
             "SELECT mz_types.name, mz_schemas.name, mz_databases.name FROM mz_types JOIN mz_schemas ON mz_types.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"type {db}.{schema}.{typ}",
                 SQL("SELECT create_sql FROM (SHOW CREATE TYPE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(typ)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][db][schema]["types"][typ] = {"create_sql": create_sql}
 
     with timed("Fetching connections"):
@@ -621,12 +803,14 @@ def main() -> int:
             conn,
             "SELECT mz_connections.name, mz_schemas.name, mz_databases.name, mz_connections.type FROM mz_connections JOIN mz_schemas ON mz_connections.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"connection {db}.{schema}.{connection}",
                 SQL("SELECT create_sql FROM (SHOW CREATE CONNECTION {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(connection)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][db][schema]["connections"][connection] = {
                 "create_sql": create_sql,
                 "type": typ,
@@ -637,12 +821,14 @@ def main() -> int:
             conn,
             "SELECT mz_sources.id, mz_sources.name, mz_schemas.name, mz_databases.name, mz_sources.type FROM mz_sources JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE type not in ('subsource', 'progress')",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"source {db}.{schema}.{source}",
                 SQL("SELECT create_sql FROM (SHOW CREATE SOURCE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(source)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             obj = {
                 "create_sql": create_sql,
                 "type": typ,
@@ -682,12 +868,14 @@ def main() -> int:
             conn,
             "SELECT mz_sources.id, mz_sources.name, mz_schemas.name, mz_databases.name, mz_sources.type, source.name, mz_schemas2.name, mz_databases2.name FROM mz_sources JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id JOIN mz_internal.mz_object_dependencies ON object_id = mz_sources.id JOIN mz_sources AS source ON referenced_object_id = source.id JOIN mz_schemas AS mz_schemas2 ON source.schema_id = mz_schemas2.id JOIN mz_databases AS mz_databases2 ON mz_schemas2.database_id = mz_databases2.id WHERE mz_sources.type = 'subsource'",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"subsource {db}.{schema}.{subsource}",
                 SQL("SELECT create_sql FROM (SHOW CREATE SOURCE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(subsource)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             columns = []
             obj = {
                 "create_sql": create_sql,
@@ -716,21 +904,31 @@ def main() -> int:
             if columns:
                 obj["columns"] = columns
 
-            workload["databases"][source_db][source_schema]["sources"][
-                source
-            ].setdefault("children", {})[f"{db}.{schema}.{subsource}"] = obj
+            try:
+                source_obj = workload["databases"][source_db][source_schema]["sources"][
+                    source
+                ]
+            except KeyError:
+                print(
+                    f"Warning: skipping subsource {db}.{schema}.{subsource}: parent source {source_db}.{source_schema}.{source} is missing",
+                    file=sys.stderr,
+                )
+                continue
+            source_obj.setdefault("children", {})[f"{db}.{schema}.{subsource}"] = obj
 
     with timed("Fetching tables"):
         for table, schema, db, id in query(
             conn,
             "SELECT mz_tables.name, mz_schemas.name, mz_databases.name, mz_tables.id FROM mz_tables JOIN mz_schemas ON mz_tables.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"table {db}.{schema}.{table}",
                 SQL("SELECT create_sql FROM (SHOW CREATE TABLE {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(table)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             columns = []
             for column, typ, nullable, default in query(
                 conn,
@@ -754,19 +952,27 @@ def main() -> int:
             }
 
             if "FROM SOURCE" in create_sql:
-                source, source_schema, source_db = query(
-                    conn,
-                    SQL(
-                        "SELECT mz_sources.name, mz_schemas.name, mz_databases.name FROM mz_internal.mz_object_dependencies JOIN mz_sources ON referenced_object_id = mz_sources.id JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE object_id = {}"
-                    ).format(Literal(id)),
-                )[0]
+                try:
+                    source, source_schema, source_db = query(
+                        conn,
+                        SQL(
+                            "SELECT mz_sources.name, mz_schemas.name, mz_databases.name FROM mz_internal.mz_object_dependencies JOIN mz_sources ON referenced_object_id = mz_sources.id JOIN mz_schemas ON mz_sources.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id WHERE object_id = {}"
+                        ).format(Literal(id)),
+                    )[0]
+                    source_obj = workload["databases"][source_db][source_schema][
+                        "sources"
+                    ][source]
+                except Exception as e:
+                    print(
+                        f"Warning: skipping source-derived table {db}.{schema}.{table}: {e}",
+                        file=sys.stderr,
+                    )
+                    continue
                 obj["type"] = "table"
                 obj["schema"] = schema
                 obj["database"] = db
                 obj["name"] = table
-                workload["databases"][source_db][source_schema]["sources"][
-                    source
-                ].setdefault("children", {})[f"{db}.{schema}.{table}"] = obj
+                source_obj.setdefault("children", {})[f"{db}.{schema}.{table}"] = obj
             else:
                 try:
                     obj["rows"] = query(
@@ -784,14 +990,16 @@ def main() -> int:
             conn,
             "SELECT mz_views.id, mz_views.name, mz_schemas.name, mz_databases.name FROM mz_views JOIN mz_schemas ON mz_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"view {db}.{schema}.{view}",
                 SQL("SELECT create_sql FROM (SHOW CREATE VIEW {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(view)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
 
-            obj = {"create_sql": create_sql}
+            obj: dict[str, Any] = {"create_sql": create_sql}
 
             columns = []
             for column, nullable, column_type, default in query(
@@ -819,13 +1027,15 @@ def main() -> int:
             conn,
             "SELECT mz_materialized_views.id, mz_materialized_views.name, mz_schemas.name, mz_databases.name FROM mz_materialized_views JOIN mz_schemas ON mz_materialized_views.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"materialized view {db}.{schema}.{mv}",
                 SQL(
                     "SELECT create_sql FROM (SHOW CREATE MATERIALIZED VIEW {}.{}.{})"
                 ).format(Identifier(db), Identifier(schema), Identifier(mv)),
-            )[0][0]
-            obj = {"create_sql": create_sql}
+            )
+            if create_sql is None:
+                continue
+            obj: dict[str, Any] = {"create_sql": create_sql}
 
             columns = []
             for column, nullable, column_type, default in query(
@@ -853,12 +1063,14 @@ def main() -> int:
             conn,
             "SELECT mz_sinks.name, mz_schemas.name, mz_databases.name, mz_sinks.type FROM mz_sinks JOIN mz_schemas ON mz_sinks.schema_id = mz_schemas.id JOIN mz_databases ON mz_schemas.database_id = mz_databases.id",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"sink {db}.{schema}.{sink}",
                 SQL("SELECT create_sql FROM (SHOW CREATE SINK {}.{}.{})").format(
                     Identifier(db), Identifier(schema), Identifier(sink)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][db][schema]["sinks"][sink] = {
                 "create_sql": create_sql,
                 "type": typ,
@@ -869,12 +1081,14 @@ def main() -> int:
             conn,
             "SELECT mz_indexes.name, schema_name, database_name FROM mz_indexes JOIN mz_internal.mz_object_fully_qualified_names AS ofqn ON on_id = ofqn.id WHERE schema_name NOT IN ('mz_catalog', 'mz_internal', 'mz_introspection')",
         ):
-            create_sql = query(
-                conn,
+            create_sql = show_create_or_none(
+                f"index {database}.{schema}.{index}",
                 SQL("SELECT create_sql FROM (SHOW CREATE INDEX {}.{}.{})").format(
                     Identifier(database), Identifier(schema), Identifier(index)
                 ),
-            )[0][0]
+            )
+            if create_sql is None:
+                continue
             workload["databases"][database][schema]["indexes"][index] = {
                 "create_sql": create_sql
             }
@@ -1022,6 +1236,22 @@ def main() -> int:
             )
             return 1
 
+        if container and consensus_uri:
+            normalized_consensus_uri = _normalize_consensus_uri_for_container(
+                consensus_uri
+            )
+            if normalized_consensus_uri != consensus_uri:
+                print(
+                    "Consensus URI uses a unix socket path; rewriting to loopback TCP for sidecar persistcli",
+                    file=sys.stderr,
+                )
+                print(f"Original consensus URI: {consensus_uri}", file=sys.stderr)
+                print(
+                    f"Rewritten consensus URI: {normalized_consensus_uri}",
+                    file=sys.stderr,
+                )
+                consensus_uri = normalized_consensus_uri
+
         print(f"Blob URI: {blob_uri}", file=sys.stderr)
         print(f"Consensus URI: {consensus_uri}", file=sys.stderr)
 
@@ -1055,15 +1285,19 @@ def main() -> int:
 
         with timed("Capturing initial data from persist"):
             initial_data_dir = os.path.join(output_dir, "initial_data")
-            as_of_map = _capture_initial_data_persist(
-                jobs_image,
-                blob_uri,
-                consensus_uri,
-                capturable_objects,
-                shard_map,
-                initial_data_dir,
-                container=container,
-            )
+            try:
+                as_of_map = _capture_initial_data_persist(
+                    jobs_image,
+                    blob_uri,
+                    consensus_uri,
+                    capturable_objects,
+                    shard_map,
+                    initial_data_dir,
+                    container=container,
+                )
+            except RuntimeError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
 
         capture_start_ts = time.time()
 
@@ -1073,16 +1307,20 @@ def main() -> int:
 
         with timed("Capturing continuous data from persist"):
             continuous_data_dir = os.path.join(output_dir, "continuous_data")
-            _capture_continuous_data_persist(
-                jobs_image,
-                blob_uri,
-                consensus_uri,
-                capturable_objects,
-                shard_map,
-                continuous_data_dir,
-                as_of_map=as_of_map,
-                container=container,
-            )
+            try:
+                _capture_continuous_data_persist(
+                    jobs_image,
+                    blob_uri,
+                    consensus_uri,
+                    capturable_objects,
+                    shard_map,
+                    continuous_data_dir,
+                    as_of_map=as_of_map,
+                    container=container,
+                )
+            except RuntimeError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
 
         capture_end_ts = time.time()
 
