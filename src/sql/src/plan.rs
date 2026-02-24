@@ -38,7 +38,7 @@ use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{
-    CollectionPlan, ColumnOrder, MapFilterProject, MirRelationExpr, MirScalarExpr, ReduceContext,
+    CollectionPlan, ColumnOrder, MapFilterProject, MirRelationExpr, MirScalarExpr,
     RowSetFinishing,
 };
 use mz_ore::now::{self, NOW_ZERO};
@@ -1593,7 +1593,7 @@ impl WebhookValidation {
         let reduce_task = mz_ore::task::spawn_blocking(
             || "webhook-validation-reduce",
             move || {
-                expression_.reduce(&desc_.typ().column_types, ReduceContext::Sql);
+                expression_.reduce(&desc_.typ().column_types);
                 expression_
             },
         );

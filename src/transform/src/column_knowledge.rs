@@ -15,8 +15,7 @@ use itertools::{Itertools, zip_eq};
 use mz_expr::JoinImplementation::IndexedFilter;
 use mz_expr::visit::Visit;
 use mz_expr::{
-    EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, ReduceContext,
-    UnaryFunc, func,
+    EvalError, LetRecLimit, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT, UnaryFunc, func,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard};
@@ -769,9 +768,6 @@ fn optimize(
     column_knowledge: &[DatumKnowledge],
     knowledge_stack: &mut Vec<DatumKnowledge>,
 ) -> Result<DatumKnowledge, TransformError> {
-    // `reduce()` still takes `&[SqlColumnType]`, so convert once up front.
-    let sql_column_types: Vec<SqlColumnType> =
-        column_types.iter().map(SqlColumnType::from_repr).collect();
     // Storage for `DatumKnowledge` being propagated up through the
     // `MirScalarExpr`. When a node is visited, pop off as many `DatumKnowledge`
     // as the number of children the node has, and then push the
@@ -806,7 +802,7 @@ fn optimize(
                 MirScalarExpr::CallUnary { func, expr: _ } => {
                     let knowledge = knowledge_stack.pop().unwrap();
                     if matches!(&knowledge, DatumKnowledge::Lit { .. }) {
-                        e.reduce(&sql_column_types, ReduceContext::Optimizer);
+                        e.reduce_repr(column_types);
                     } else if func == &UnaryFunc::IsNull(func::IsNull) && !knowledge.nullable() {
                         *e = MirScalarExpr::literal_false();
                     };
@@ -823,7 +819,7 @@ fn optimize(
                         matches!(knowledge1, DatumKnowledge::Lit { .. }),
                         matches!(knowledge2, DatumKnowledge::Lit { .. }),
                     ] {
-                        e.reduce(&sql_column_types, ReduceContext::Optimizer);
+                        e.reduce_repr(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }
@@ -834,7 +830,7 @@ fn optimize(
                         .drain(knowledge_stack.len() - exprs.len()..)
                         .any(|k| matches!(k, DatumKnowledge::Lit { .. }))
                     {
-                        e.reduce(&sql_column_types, ReduceContext::Optimizer);
+                        e.reduce_repr(column_types);
                     }
                     DatumKnowledge::from(&*e)
                 }

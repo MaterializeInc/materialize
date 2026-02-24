@@ -23,11 +23,10 @@ use itertools::Itertools;
 pub use projection_extraction::ProjectionExtraction;
 pub use topk_elision::TopKElision;
 
-use mz_expr::{MirRelationExpr, ReduceContext};
-
+use mz_expr::MirRelationExpr;
 use crate::TransformCtx;
 use crate::analysis::{DerivedBuilder, ReprRelationType};
-use mz_repr::SqlColumnType;
+use mz_repr::ReprColumnType;
 
 /// A transform that visits each AST node and reduces scalar expressions.
 #[derive(Debug)]
@@ -70,53 +69,44 @@ impl crate::Transform for ReduceScalars {
                     // Has expressions, but we aren't brave enough to reduce these yet.
                 }
                 MirRelationExpr::Filter { predicates, .. } => {
-                    let input_type: Vec<SqlColumnType> = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
                         .value::<ReprRelationType>()
                         .expect("ReprRelationType required")
                         .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(SqlColumnType::from_repr)
-                        .collect();
+                        .unwrap();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_type, ReduceContext::Optimizer);
+                        predicate.reduce_repr(input_type);
                     }
                     predicates.retain(|p| !p.is_literal_true());
                 }
                 MirRelationExpr::FlatMap { exprs, .. } => {
-                    let input_type: Vec<SqlColumnType> = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
                         .value::<ReprRelationType>()
                         .expect("ReprRelationType required")
                         .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(SqlColumnType::from_repr)
-                        .collect();
+                        .unwrap();
                     for expr in exprs.iter_mut() {
-                        expr.reduce(&input_type, ReduceContext::Optimizer);
+                        expr.reduce_repr(input_type);
                     }
                 }
                 MirRelationExpr::Map { scalars, .. } => {
                     // Use the output type, to incorporate the types of `scalars` as they land.
-                    let output_type: Vec<SqlColumnType> = view
+                    let output_type: &Vec<ReprColumnType> = view
                         .value::<ReprRelationType>()
                         .expect("ReprRelationType required")
                         .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(SqlColumnType::from_repr)
-                        .collect();
+                        .unwrap();
                     let input_arity = output_type.len() - scalars.len();
                     for (index, scalar) in scalars.iter_mut().enumerate() {
-                        scalar.reduce(&output_type[..input_arity + index], ReduceContext::Optimizer);
+                        scalar.reduce_repr(&output_type[..input_arity + index]);
                     }
                 }
                 MirRelationExpr::Join { equivalences, .. } => {
                     let mut children: Vec<_> = view.children_rev().collect::<Vec<_>>();
                     children.reverse();
-                    let input_types: Vec<SqlColumnType> = children
+                    let input_types: Vec<ReprColumnType> = children
                         .iter()
                         .flat_map(|c| {
                             c.value::<ReprRelationType>()
@@ -124,13 +114,12 @@ impl crate::Transform for ReduceScalars {
                                 .as_ref()
                                 .unwrap()
                                 .iter()
-                                .map(SqlColumnType::from_repr)
+                                .cloned()
                         })
                         .collect();
-
                     for class in equivalences.iter_mut() {
                         for expr in class.iter_mut() {
-                            expr.reduce(&input_types[..], ReduceContext::Optimizer);
+                            expr.reduce_repr(&input_types[..]);
                         }
                         class.sort();
                         class.dedup();
@@ -144,34 +133,28 @@ impl crate::Transform for ReduceScalars {
                     aggregates,
                     ..
                 } => {
-                    let input_type: Vec<SqlColumnType> = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
                         .value::<ReprRelationType>()
                         .expect("ReprRelationType required")
                         .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(SqlColumnType::from_repr)
-                        .collect();
+                        .unwrap();
                     for key in group_key.iter_mut() {
-                        key.reduce(&input_type, ReduceContext::Optimizer);
+                        key.reduce_repr(input_type);
                     }
                     for aggregate in aggregates.iter_mut() {
-                        aggregate.expr.reduce(&input_type, ReduceContext::Optimizer);
+                        aggregate.expr.reduce_repr(input_type);
                     }
                 }
                 MirRelationExpr::TopK { limit, .. } => {
-                    let input_type: Vec<SqlColumnType> = view
+                    let input_type: &Vec<ReprColumnType> = view
                         .last_child()
                         .value::<ReprRelationType>()
                         .expect("ReprRelationType required")
                         .as_ref()
-                        .unwrap()
-                        .iter()
-                        .map(SqlColumnType::from_repr)
-                        .collect();
+                        .unwrap();
                     if let Some(limit) = limit {
-                        limit.reduce(&input_type, ReduceContext::Optimizer);
+                        limit.reduce_repr(input_type);
                     }
                 }
             }

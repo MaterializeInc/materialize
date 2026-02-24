@@ -33,18 +33,6 @@ use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{Datum, ReprColumnType, Row, RowArena, SqlColumnType, SqlScalarType};
 
-/// Context for [`MirScalarExpr::reduce`] that controls whether types are
-/// canonicalized via repr round-tripping.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReduceContext {
-    /// SQL-level context: preserve user-facing types (e.g., `VarChar`, `RegProc`).
-    /// Used before the optimizer, when working with types as written by the user.
-    Sql,
-    /// Optimizer context: canonicalize types by round-tripping through repr types
-    /// (e.g., `RegProc` → `UInt32`, `VarChar` → `String`).
-    /// Used inside the optimizer pipeline, after `ReprizeSqlTypes` has run.
-    Optimizer,
-}
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
@@ -731,7 +719,7 @@ impl MirScalarExpr {
     /// Also performs partial canonicalization on the expression.
     ///
     /// ```rust
-    /// use mz_expr::{MirScalarExpr, ReduceContext};
+    /// use mz_expr::MirScalarExpr;
     /// use mz_repr::{SqlColumnType, Datum, SqlScalarType};
     ///
     /// let expr_0 = MirScalarExpr::column(0);
@@ -745,22 +733,14 @@ impl MirScalarExpr {
     ///     .if_then_else(expr_0, expr_t.clone());
     ///
     /// let input_type = vec![SqlScalarType::Int32.nullable(false)];
-    /// test.reduce(&input_type, ReduceContext::Sql);
+    /// test.reduce(&input_type);
     /// assert_eq!(test, expr_t);
     /// ```
-    pub fn reduce(&mut self, column_types: &[SqlColumnType], context: ReduceContext) {
-        // In the optimizer, canonicalize types by round-tripping through repr types.
-        // This ensures consistency after ReprizeSqlTypes has run.
-        let owned_column_types;
-        let column_types = if context == ReduceContext::Optimizer {
-            owned_column_types = column_types
-                .iter()
-                .map(|ct| SqlColumnType::from_repr(&ReprColumnType::from(ct)))
-                .collect::<Vec<_>>();
-            &owned_column_types[..]
-        } else {
-            column_types
-        };
+    /// Reduce the expression to a simpler form, using the provided SQL column types.
+    ///
+    /// For use in optimizer transforms where repr column types are available,
+    /// prefer [`Self::reduce_repr`] which accepts `&[ReprColumnType]` directly.
+    pub fn reduce(&mut self, column_types: &[SqlColumnType]) {
         let temp_storage = &RowArena::new();
         let eval = |e: &MirScalarExpr| {
             MirScalarExpr::literal(e.eval(&[], temp_storage), e.typ(column_types).scalar_type)
@@ -1655,6 +1635,17 @@ impl MirScalarExpr {
         }
 
         /* #endregion */
+    }
+
+    /// Like [`Self::reduce`], but accepts repr column types directly.
+    ///
+    /// This is the preferred entry point for optimizer transforms, where
+    /// repr column types are the native currency. Internally it converts
+    /// to [`SqlColumnType`] and delegates to [`Self::reduce`].
+    pub fn reduce_repr(&mut self, column_types: &[ReprColumnType]) {
+        let sql_column_types: Vec<SqlColumnType> =
+            column_types.iter().map(SqlColumnType::from_repr).collect();
+        self.reduce(&sql_column_types);
     }
 
     /// Decompose an IsNull expression into a disjunction of
@@ -3456,7 +3447,7 @@ mod tests {
 
         for tc in test_cases {
             let mut actual = tc.input.clone();
-            actual.reduce(&relation_type, ReduceContext::Sql);
+            actual.reduce(&relation_type);
             assert!(
                 actual == tc.output,
                 "input: {}\nactual: {}\nexpected: {}",

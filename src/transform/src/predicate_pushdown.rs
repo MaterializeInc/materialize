@@ -90,11 +90,11 @@ use mz_expr::func::variadic::And;
 use mz_expr::visit::{Visit, VisitChildren};
 use mz_expr::{
     AggregateFunc, Id, JoinInputMapper, LocalId, MirRelationExpr, MirScalarExpr, RECURSION_LIMIT,
-    ReduceContext, VariadicFunc, func,
+    VariadicFunc, func,
 };
 use mz_ore::soft_assert_eq_no_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{Datum, ReprColumnType, SqlColumnType, SqlScalarType};
+use mz_repr::{Datum, ReprColumnType, SqlScalarType};
 
 use crate::{TransformCtx, TransformError};
 
@@ -164,10 +164,8 @@ impl PredicatePushdown {
                     // Reduce the predicates to determine as best as possible
                     // whether they are literal errors before working with them.
                     let input_type = input.repr_typ();
-                    let input_sql_col_types: Vec<SqlColumnType> =
-                        input_type.column_types.iter().map(SqlColumnType::from_repr).collect();
                     for predicate in predicates.iter_mut() {
-                        predicate.reduce(&input_sql_col_types, ReduceContext::Optimizer);
+                        predicate.reduce_repr(&input_type.column_types);
                     }
 
                     // It can be helpful to know if there are any non-literal errors,
@@ -1202,9 +1200,7 @@ impl PredicatePushdown {
         mut s: MirScalarExpr,
         column_types: &[ReprColumnType],
     ) -> Vec<MirScalarExpr> {
-        let sql_column_types: Vec<SqlColumnType> =
-            column_types.iter().map(SqlColumnType::from_repr).collect();
-        s.reduce(&sql_column_types, ReduceContext::Optimizer);
+        s.reduce_repr(column_types);
 
         if let MirScalarExpr::CallVariadic {
             func: VariadicFunc::And(_),
