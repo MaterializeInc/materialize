@@ -189,8 +189,18 @@ pub async fn run_upload(
     mut cmd: BuiltinCommand,
     state: &State,
 ) -> Result<ControlFlow, anyhow::Error> {
-    let key = cmd.args.string("key")?;
     let bucket = cmd.args.string("bucket")?;
+    let count: Option<usize> = cmd.args.opt_parse("count")?;
+
+    let keys: Vec<String> = if let Some(count) = count {
+        // Bulk mode uses `key-prefix` + `i` + optional `key-suffix`,
+        let prefix = cmd.args.string("key-prefix")?;
+        let suffix = cmd.args.opt_string("key-suffix").unwrap_or_default();
+        (0..count).map(|i| format!("{prefix}{i}{suffix}")).collect()
+    } else {
+        // Single-file mode uses `key`.
+        vec![cmd.args.string("key")?]
+    };
 
     let compression = build_compression(&mut cmd)?;
     let content = build_contents(&mut cmd)?;
@@ -218,17 +228,22 @@ pub async fn run_upload(
         .await
         .context("compressing")?;
 
-    println!("Uploading file to S3 bucket {bucket}/{key}");
-
-    // Upload the file to S3.
-    aws_client
-        .put_object()
-        .bucket(&bucket)
-        .key(&key)
-        .body(content.into())
-        .send()
-        .await
-        .context("s3 put")?;
+    // Upload the file(s) to S3.
+    println!(
+        "Uploading {} files to S3 bucket, starting with '{bucket}/{}'",
+        keys.len(),
+        keys.first().map(String::as_str).unwrap_or("<none>")
+    );
+    for key in &keys {
+        aws_client
+            .put_object()
+            .bucket(&bucket)
+            .key(key)
+            .body(content.clone().into())
+            .send()
+            .await
+            .context("s3 put")?;
+    }
 
     Ok(ControlFlow::Continue)
 }

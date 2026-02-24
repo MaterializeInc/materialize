@@ -223,3 +223,15 @@ zstd 500
 > SELECT * FROM t4;
 none 100
 none 100
+
+# Test pagination: upload >1000 objects to force multiple ListObjectsV2 pages.
+
+$ s3-file-upload bucket=copytos3 key-prefix=pagination/ key-suffix=.csv count=1001
+data,value
+
+> CREATE TABLE t_pagination (a text, b text);
+
+> COPY INTO t_pagination FROM 's3://copytos3/pagination' (FORMAT CSV, AWS CONNECTION = aws_conn);
+
+> SELECT COUNT(*) FROM t_pagination;
+1001

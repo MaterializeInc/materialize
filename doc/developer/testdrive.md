@@ -739,6 +739,15 @@ Deletes the specified file from within the temporary directory.
 
 ## Actions on S3
 
+#### `$ s3-file-upload bucket=... key=...`
+
+Upload a single file to an S3 bucket. The body of the directive is the file content.
+
+#### `$ s3-file-upload bucket=... key-prefix=... count=N`
+
+Upload N files to an S3 bucket, with keys `{key-prefix}0` through `{key-prefix}{N-1}`.
+Use `key-suffix=...` (e.g. `key-suffix=.csv`) to append an extension to each key.
+
 #### `$ s3-verify-data address=s3://...`
 
 Verify the data at a specific S3 address.
