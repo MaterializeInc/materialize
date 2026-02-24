@@ -87,7 +87,8 @@ use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
-use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use mz_sql_parser::ast::Ident;
+use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::errors::DataflowError;
@@ -684,10 +685,10 @@ async fn raw_stream<'a>(
     // following the timely upper semantics.
     let lsn = PgLsn::from(resume_lsn.offset);
     let query = format!(
-        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" '{}')"#,
+        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" {})"#,
         Ident::new_unchecked(slot).to_ast_string_simple(),
         lsn,
-        publication,
+        escaped_string_literal(publication),
     );
     let copy_stream = match replication_client.copy_both_simple(&query).await {
         Ok(copy_stream) => copy_stream,

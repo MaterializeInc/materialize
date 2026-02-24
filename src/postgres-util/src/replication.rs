@@ -8,6 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::str::FromStr;
+
+use mz_sql_parser::ast::{Ident, display::AstDisplay};
 use tokio_postgres::{
     Client,
     types::{Oid, PgLsn},
@@ -185,6 +187,7 @@ pub async fn drop_replication_slots(
                 }
 
                 let wait_str = if *should_wait { " WAIT" } else { "" };
+                let slot = Ident::new_unchecked(*slot).to_ast_string_simple();
                 replication_client
                     .simple_query(&format!("DROP_REPLICATION_SLOT {slot}{wait_str}"))
                     .await?;
