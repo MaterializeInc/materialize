@@ -10,38 +10,9 @@
 # Base image for the FoundationDB-backed materialized Docker image.
 # This is the FDB counterpart of materialized-base (which uses PostgreSQL).
 
-# Package a pinned version of the console into the image, for ease of getting
-# started with Materialize. It's okay if this console lags a bit behind what's
-# deployed to production, but the version needs to be bumped whenever features
-# that the console depends upon are removed (to a version of the console that
-# doesn't depend on those features).
-FROM materialize/console:26.13.0-dev.0 AS console
+MZFROM materialized-common-base
 
-MZFROM ubuntu-base
-
-ARG CI_SANITIZER=none
-
-RUN groupadd --system --gid=999 materialize \
-    && useradd --system --gid=999 --uid=999 --create-home materialize \
-    && apt-get update \
-    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends \
-        ca-certificates \
-        curl \
-        gettext-base \
-        nginx \
-        openssh-client \
-        tini \
-    && if [ "$CI_SANITIZER" != "none" ]; then \
-        TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -qy install --no-install-recommends llvm; \
-       fi \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    # Remove nginx docs and unnecessary files \
-    && rm -rf /usr/share/doc/nginx* \
-    && rm -rf /usr/share/nginx/modules-available \
-    && mkdir -p /mzdata /scratch /var/lib/nginx /var/log/nginx \
-    && touch /run/nginx.pid \
-    && chown -R materialize /mzdata /scratch /var/lib/nginx /var/log/nginx /run/nginx.pid
+USER root
 
 ARG ARCH_GCC
 RUN arch_fdb=$(echo "$ARCH_GCC" | sed -e "s/x86_64/amd64/") \
@@ -55,16 +26,5 @@ RUN arch_fdb=$(echo "$ARCH_GCC" | sed -e "s/x86_64/amd64/") \
     && if [ "$ARCH_GCC" = "aarch64" ]; then echo '0a00c8d94ae2e5ce4123334b604b205015d39edc707b7cc8401ec6fc798ce9e3 foundationdb-server.deb' | sha256sum --check; fi \
     && dpkg -i foundationdb-server.deb \
     && rm foundationdb-server.deb
-
-COPY --from=console /usr/share/nginx/html /usr/share/nginx/html
-COPY console_nginx.template /etc/nginx/templates/default.conf.template
-
-# Configure the console to listen on port 6874 and proxy API requests through to
-# the Materialize instance that will be started and listening for requests on
-# port 6876.
-RUN MZ_ENDPOINT=http://localhost:6876 \
-    MZ_NGINX_LISTENER_CONFIG="listen 6874;" \
-    envsubst '${MZ_ENDPOINT} ${MZ_NGINX_LISTENER_CONFIG}' < /etc/nginx/templates/default.conf.template > /etc/nginx/sites-enabled/default \
-    && rm /etc/nginx/templates/default.conf.template
 
 USER materialize
