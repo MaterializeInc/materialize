@@ -73,4 +73,6 @@ pub use crate::scalar::{
     arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};
-pub use crate::update::{Rows, SharedSlice, UpdateCollection, UpdateCollectionBuilder};
+pub use crate::update::{
+    Rows, RowsBuilder, SharedSlice, UpdateCollection, UpdateCollectionBuilder,
+};
