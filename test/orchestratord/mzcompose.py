@@ -1631,7 +1631,8 @@ def workflow_documentation_defaults(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
         )
 
-        for i in range(240):
+        # This should finish quickly, see https://github.com/MaterializeInc/database-issues/issues/10099
+        for i in range(120):
             try:
                 data = json.loads(
                     spawn.capture(
