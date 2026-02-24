@@ -17,6 +17,7 @@ use std::{iter, mem};
 
 use base64::prelude::*;
 use byteorder::{ByteOrder, NetworkEndian};
+use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
@@ -2790,11 +2791,21 @@ where
 
         // Batch size for splitting raw data across parallel workers (~32MB).
         const BATCH_SIZE: usize = 32 * 1024 * 1024;
+        let max_copy_from_row_size = self
+            .adapter_client
+            .get_system_vars()
+            .await
+            .max_copy_from_row_size()
+            .try_into()
+            .unwrap_or(usize::MAX);
 
         let mut data = Vec::new();
+        let mut row_scanner = CopyRowScanner::new(&params);
         let num_workers = writer.batch_txs.len();
         let mut next_worker: usize = 0;
         let mut saw_copy_done = false;
+        let mut saw_end_marker = false;
+        let mut copy_from_error: Option<(SqlState, String)> = None;
 
         // Receive loop: accumulate CopyData, split at row boundaries,
         // round-robin raw chunks to parallel batch builder workers.
@@ -2802,18 +2813,43 @@ where
             let message = self.conn.recv().await?;
             match message {
                 Some(FrontendMessage::CopyData(buf)) => {
+                    if saw_end_marker {
+                        // Per PostgreSQL COPY behavior, ignore all bytes after
+                        // the end-of-copy marker until CopyDone.
+                        continue;
+                    }
                     data.extend(buf);
+                    row_scanner.scan_new_bytes(&data);
 
-                    // When buffer exceeds batch size, split at last newline
+                    if let Some(end_pos) = row_scanner.end_marker_end() {
+                        data.truncate(end_pos);
+                        row_scanner.on_truncate(end_pos);
+                        saw_end_marker = true;
+                    }
+
+                    // Guard against pathological single rows that never terminate.
+                    if row_scanner.current_row_size(data.len()) > max_copy_from_row_size {
+                        copy_from_error = Some((
+                            SqlState::INSUFFICIENT_RESOURCES,
+                            format!(
+                                "COPY FROM STDIN row exceeded max_copy_from_row_size \
+                                 ({max_copy_from_row_size} bytes)"
+                            ),
+                        ));
+                        break;
+                    }
+
+                    // When buffer exceeds batch size, split at the last complete row
                     // and send the complete rows chunk to the next worker.
                     let mut send_failed = false;
                     while data.len() >= BATCH_SIZE {
-                        let split_pos = match data.iter().rposition(|&b| b == b'\n') {
-                            Some(pos) => pos + 1,
+                        let split_pos = match row_scanner.last_row_end() {
+                            Some(pos) => pos,
                             None => break, // no complete row yet
                         };
                         let remainder = data.split_off(split_pos);
                         let chunk = std::mem::replace(&mut data, remainder);
+                        row_scanner.on_split(split_pos);
                         if writer.batch_txs[next_worker].send(chunk).await.is_err() {
                             send_failed = true;
                             break;
@@ -2912,6 +2948,18 @@ where
                     }
                 }
             }
+        }
+
+        if let Some((code, msg)) = copy_from_error {
+            self.adapter_client.retire_execute(
+                std::mem::take(ctx_extra),
+                StatementEndedExecutionReason::Errored { error: msg.clone() },
+            );
+            drop(writer);
+            self.conn.set_copy_mode(false);
+            return self
+                .send_error_and_get_state(ErrorResponse::error(code, msg))
+                .await;
         }
 
         self.conn.set_copy_mode(false);
@@ -3150,6 +3198,173 @@ enum FetchResult {
     Canceled,
     Error(String),
     Notice(AdapterNotice),
+}
+
+#[derive(Debug)]
+struct CopyRowScanner {
+    scan_pos: usize,
+    last_row_end: Option<usize>,
+    end_marker_end: Option<usize>,
+    csv: Option<CsvScanState>,
+}
+
+#[derive(Debug)]
+struct CsvScanState {
+    reader: csv_core::Reader,
+    output: Vec<u8>,
+    ends: Vec<usize>,
+    record: Vec<u8>,
+    record_ends: Vec<usize>,
+    skip_first_record: bool,
+}
+
+impl CopyRowScanner {
+    fn new(params: &CopyFormatParams<'_>) -> Self {
+        let csv = match params {
+            CopyFormatParams::Csv(CopyCsvFormatParams {
+                delimiter,
+                quote,
+                escape,
+                header,
+                ..
+            }) => Some(CsvScanState::new(*delimiter, *quote, *escape, *header)),
+            _ => None,
+        };
+
+        CopyRowScanner {
+            scan_pos: 0,
+            last_row_end: None,
+            end_marker_end: None,
+            csv,
+        }
+    }
+
+    fn scan_new_bytes(&mut self, data: &[u8]) {
+        if self.scan_pos >= data.len() {
+            return;
+        }
+
+        if let Some(csv) = self.csv.as_mut() {
+            let mut input = &data[self.scan_pos..];
+            let mut consumed = 0usize;
+            while !input.is_empty() {
+                let (result, n_input, n_output, n_ends) =
+                    csv.reader
+                        .read_record(input, &mut csv.output, &mut csv.ends);
+                consumed += n_input;
+                input = &input[n_input..];
+                if !csv.output.is_empty() {
+                    csv.record.extend_from_slice(&csv.output[..n_output]);
+                }
+                if !csv.ends.is_empty() {
+                    csv.record_ends.extend_from_slice(&csv.ends[..n_ends]);
+                }
+
+                match result {
+                    ReadRecordResult::InputEmpty => break,
+                    ReadRecordResult::OutputFull => {
+                        if n_input == 0 {
+                            csv.output
+                                .resize(csv.output.len().saturating_mul(2).max(1), 0);
+                        }
+                    }
+                    ReadRecordResult::OutputEndsFull => {
+                        if n_input == 0 {
+                            csv.ends.resize(csv.ends.len().saturating_mul(2).max(1), 0);
+                        }
+                    }
+                    ReadRecordResult::Record | ReadRecordResult::End => {
+                        let row_end = self.scan_pos + consumed;
+                        self.last_row_end = Some(row_end);
+                        if self.end_marker_end.is_none() {
+                            let is_marker = if csv.skip_first_record {
+                                csv.skip_first_record = false;
+                                false
+                            } else if csv.record_ends.len() == 1 {
+                                let end = csv.record_ends[0];
+                                end == 2 && csv.record.get(0..end) == Some(b"\\.")
+                            } else {
+                                false
+                            };
+                            if is_marker {
+                                self.end_marker_end = Some(row_end);
+                                break;
+                            }
+                        }
+                        csv.record.clear();
+                        csv.record_ends.clear();
+                    }
+                }
+            }
+        } else {
+            let mut row_start = self.last_row_end.unwrap_or(0);
+            for (offset, b) in data[self.scan_pos..].iter().enumerate() {
+                if *b == b'\n' {
+                    let row_end = self.scan_pos + offset + 1;
+                    self.last_row_end = Some(row_end);
+                    if self.end_marker_end.is_none() {
+                        let row = &data[row_start..row_end];
+                        if row.get(0..2) == Some(b"\\.") {
+                            self.end_marker_end = Some(row_end);
+                            break;
+                        }
+                    }
+                    row_start = row_end;
+                }
+            }
+        }
+
+        self.scan_pos = data.len();
+    }
+
+    fn last_row_end(&self) -> Option<usize> {
+        self.last_row_end
+    }
+
+    fn end_marker_end(&self) -> Option<usize> {
+        self.end_marker_end
+    }
+
+    fn current_row_size(&self, data_len: usize) -> usize {
+        data_len.saturating_sub(self.last_row_end.unwrap_or(0))
+    }
+
+    fn on_split(&mut self, split_pos: usize) {
+        self.scan_pos = self.scan_pos.saturating_sub(split_pos);
+        self.last_row_end = None;
+        self.end_marker_end = self
+            .end_marker_end
+            .and_then(|end| end.checked_sub(split_pos));
+    }
+
+    fn on_truncate(&mut self, new_len: usize) {
+        self.scan_pos = self.scan_pos.min(new_len);
+        self.last_row_end = self.last_row_end.filter(|&end| end <= new_len);
+        self.end_marker_end = self.end_marker_end.filter(|&end| end <= new_len);
+    }
+}
+
+impl CsvScanState {
+    fn new(delimiter: u8, quote: u8, escape: u8, header: bool) -> Self {
+        let (double_quote, escape) = if quote == escape {
+            (true, None)
+        } else {
+            (false, Some(escape))
+        };
+        CsvScanState {
+            reader: csv_core::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .quote(quote)
+                .double_quote(double_quote)
+                .escape(escape)
+                .build(),
+            output: vec![0; 1],
+            ends: vec![0; 1],
+            record: Vec::new(),
+            record_ends: Vec::new(),
+            skip_first_record: header,
+        }
+    }
 }
 
 #[cfg(test)]

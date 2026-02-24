@@ -592,6 +592,13 @@ pub static MAX_QUERY_RESULT_SIZE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static MAX_COPY_FROM_ROW_SIZE: VarDefinition = VarDefinition::new(
+    "max_copy_from_row_size",
+    value!(ByteSize; ByteSize::mb(128)),
+    "The maximum size in bytes for a single COPY FROM STDIN row (Materialize).",
+    true,
+);
+
 pub static MAX_IDENTIFIER_LENGTH: VarDefinition = VarDefinition::new(
     "max_identifier_length",
     value!(usize; mz_sql_lexer::lexer::MAX_IDENTIFIER_LENGTH),

@@ -55,6 +55,32 @@ DataRow {"fields":["7","seven\n8,eight\n"]}
 CommandComplete {"tag":"SELECT 7"}
 ReadyForQuery {"status":"I"}
 
+# Valid multiline CSV field: newline in quoted field must not terminate row.
+send
+Query {"query": "DELETE FROM t"}
+Query {"query": "COPY t FROM STDIN WITH (FORMAT CSV)"}
+CopyData "1,\"hello\n"
+CopyData "world\"\n2,two\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DELETE 7"}
+ReadyForQuery {"status":"I"}
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","hello\nworld"]}
+DataRow {"fields":["2","two"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}
+
 # Change options. Note that:
 # - After receiving terminating char, no other data should be accepted
 # - Quoted end of copy markers are still processed as end of copy markers
@@ -79,7 +105,7 @@ ReadyForQuery
 ReadyForQuery
 ReadyForQuery
 ----
-CommandComplete {"tag":"DELETE 7"}
+CommandComplete {"tag":"DELETE 2"}
 ReadyForQuery {"status":"I"}
 CopyIn {"format":"text","column_formats":["text","text"]}
 CommandComplete {"tag":"COPY 6"}

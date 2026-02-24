@@ -38,6 +38,10 @@ use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::session::{Session, TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
+/// Finalize persist batches periodically during COPY FROM STDIN to avoid
+/// unbounded in-memory growth in a single giant batch.
+const COPY_FROM_STDIN_MAX_BATCH_BYTES: usize = 32 * 1024 * 1024;
+
 impl Coordinator {
     pub(crate) async fn sequence_copy_from(
         &mut self,
@@ -406,7 +410,9 @@ impl Coordinator {
         let mut worker_handles = Vec::with_capacity(num_workers);
 
         for worker_id in 0..num_workers {
-            let (batch_tx, batch_rx) = mpsc::channel::<Vec<u8>>(4);
+            // Keep in-flight buffering tight: at most one chunk queued per
+            // worker in addition to the currently-processed chunk.
+            let (batch_tx, batch_rx) = mpsc::channel::<Vec<u8>>(1);
             batch_txs.push(batch_tx);
 
             let persist_client = persist_client.clone();
@@ -446,8 +452,8 @@ impl Coordinator {
 
                 for handle in worker_handles {
                     match handle.await {
-                        Ok((proto_batch, count)) => {
-                            all_batches.push(proto_batch);
+                        Ok((proto_batches, count)) => {
+                            all_batches.extend(proto_batches);
                             total_rows += count;
                         }
                         Err(e) => {
@@ -468,7 +474,7 @@ impl Coordinator {
     }
 
     /// Background task: receives raw byte chunks, decodes rows, and builds
-    /// a persist batch. One instance runs per parallel worker.
+    /// persist batches. One instance runs per parallel worker.
     async fn copy_from_stdin_batch_builder(
         persist_client: mz_persist_client::PersistClient,
         shard_id: mz_persist_client::ShardId,
@@ -479,7 +485,7 @@ impl Coordinator {
         column_types: Arc<[mz_pgrepr::Type]>,
         params: CopyFormatParams<'static>,
         mut batch_rx: mpsc::Receiver<Vec<u8>>,
-    ) -> Result<(ProtoBatch, u64), AdapterError> {
+    ) -> Result<(Vec<ProtoBatch>, u64), AdapterError> {
         let persist_diagnostics = Diagnostics {
             shard_name: collection_id.to_string(),
             handle_purpose: "CopyFromStdin::batch_builder".to_string(),
@@ -500,6 +506,9 @@ impl Coordinator {
         let upper = Antichain::from_elem(lower.step_forward());
         let mut batch_builder = write_handle.builder(Antichain::from_elem(lower));
         let mut row_count: u64 = 0;
+        let mut row_count_in_batch: u64 = 0;
+        let mut batch_bytes: usize = 0;
+        let mut proto_batches = Vec::new();
 
         while let Some(raw_bytes) = batch_rx.recv().await {
             // Decode raw bytes into rows.
@@ -527,16 +536,31 @@ impl Coordinator {
                     .await
                     .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist add: {e}")))?;
                 row_count += 1;
+                row_count_in_batch += 1;
+            }
+
+            batch_bytes = batch_bytes.saturating_add(raw_bytes.len());
+            if batch_bytes >= COPY_FROM_STDIN_MAX_BATCH_BYTES {
+                let batch = batch_builder.finish(upper.clone()).await.map_err(|e| {
+                    AdapterError::Unstructured(anyhow::anyhow!("persist finish: {e}"))
+                })?;
+                proto_batches.push(batch.into_transmittable_batch());
+
+                batch_builder = write_handle.builder(Antichain::from_elem(lower));
+                row_count_in_batch = 0;
+                batch_bytes = 0;
             }
         }
 
-        let batch = batch_builder
-            .finish(upper)
-            .await
-            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist finish: {e}")))?;
+        if row_count_in_batch > 0 || proto_batches.is_empty() {
+            let batch = batch_builder
+                .finish(upper)
+                .await
+                .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("persist finish: {e}")))?;
+            proto_batches.push(batch.into_transmittable_batch());
+        }
 
-        let proto_batch = batch.into_transmittable_batch();
-        Ok((proto_batch, row_count))
+        Ok((proto_batches, row_count))
     }
 
     pub(crate) fn commit_staged_batches(

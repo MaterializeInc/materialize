@@ -40,6 +40,7 @@ integer_datetimes                        on                      "Reports whethe
 IntervalStyle                            postgres                "Sets the display format for interval values (PostgreSQL)."
 is_superuser                             off                     "Reports whether the current session is a superuser (PostgreSQL)."
 max_aws_privatelink_connections          0                       "The maximum number of AWS PrivateLink connections in the region, across all schemas (Materialize)."
+max_copy_from_row_size                   128MB                   "The maximum size in bytes for a single COPY FROM STDIN row (Materialize)."
 max_clusters                             25                      "The maximum number of clusters in the region (Materialize)."
 max_connections                          5000                    "The maximum number of concurrent connections (PostgreSQL)."
 max_continual_tasks                      100                     "The maximum number of continual tasks in the region, across all schemas (Materialize)."

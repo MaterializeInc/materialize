@@ -7503,6 +7503,7 @@ dependencies = [
  "byteorder",
  "bytes",
  "bytesize",
+ "csv-core",
  "enum-kinds",
  "futures",
  "itertools 0.14.0",
